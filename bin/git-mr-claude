@@ -274,7 +274,7 @@ if [ "$mode" = --run ]; then
     # (git-callers-fix), once it has landed. Not waited for either.
     fx=$(git-callers-fix --file "$callers")
     if [ -n "$fx" ]; then jq -r '.fixes[] | [.caller, "\(.where): \(.fix)"] | @tsv' "$fx" > "$d/fixes.tsv"; else : > "$d/fixes.tsv"; fi
-    # Past fifteen importing packages git-callers finds the callers and
+    # Past two hundred importing packages git-callers finds the callers and
     # checks none of them.
     unchecked=$(cat "${callers%.tsv}.unchecked" 2>/dev/null)
     awk -F'\t' -v unchecked="$unchecked" '

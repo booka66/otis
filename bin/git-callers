@@ -26,8 +26,9 @@
 # one package's tsconfig, and callers live upstream, so for each changed file
 # one git grep for its import specifier (its package's name and its path
 # under src, as the packages' exports map it) says which packages import it,
-# and every file that imports it is opened too, or past fifteen packages one
-# file from each (share/lsp-references.mjs runs the session). Each reference is placed in the declaration around it by
+# and every file that imports it is opened too, a few packages at a time,
+# or past two hundred packages one file from each (share/lsp-references.mjs
+# runs the session). Each reference is placed in the declaration around it by
 # ast-grep, on seam's rules, so the row is a signature. References inside changed symbols are
 # left out, since the tree has those; so are import lines, which no
 # declaration holds.
@@ -80,7 +81,7 @@ dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)
 # A cache is for good, its shas never changing, so one an older finder wrote
 # (fewer columns, or found from a checkout without modules) goes when the
 # finder changes: the directory carries the version it was written by.
-version=7
+version=8
 if [ "$(cat "$dir/version" 2>/dev/null)" != "$version" ]; then
   rm -rf "$dir"; mkdir -p "$dir" && printf '%s\n' "$version" > "$dir/version"
 fi
@@ -262,24 +263,41 @@ while read -r p; do
   printf '%s\t%s\n' "$p" "$tmp/text.$i"
   grep -qxF "$p" "$tmp/changed" || continue
   spec=$(git-callers --spec "$p")
-  [ -n "$spec" ] && printf '%s"\n%s'"'"'\n' "$spec" "$spec"
+  [ -n "$spec" ] && printf 'P\t%s"\t%s\nP\t%s'"'"'\t%s\n' "$spec" "$p" "$spec" "$p"
 done < "$tmp/touched" > "$tmp/open.changed" 2>/dev/null
-grep -v '["'"'"']$' "$tmp/open.changed" > "$tmp/open"
-grep '["'"'"']$' "$tmp/open.changed" > "$tmp/patterns"
-# The importers: by the package specifier from anywhere, and, within the
-# changed file's own package, by a relative path, which names the file
-# after a slash ("./lib", "../db/lib").
-: > "$tmp/importers"
-[ -s "$tmp/patterns" ] && git grep -l -F -f "$tmp/patterns" -- '*.ts' '*.tsx' 2>/dev/null >> "$tmp/importers"
+: > "$tmp/open"; : > "$tmp/patterns"
+awk -F'\t' -v o="$tmp/open" -v q="$tmp/patterns" 'BEGIN { OFS = "\t" }
+  $1 == "P" { print $2, $3 > q; next } { print > o }' "$tmp/open.changed"
+# The importers, each with the changed file it imports, since a batch asks
+# only about the changed files its own packages import: by the package
+# specifier from anywhere, and, within the changed file's own package, by a
+# relative path, which names the file after a slash ("./lib", "../db/lib").
+# One grep for every specifier at once, printing what it matched, says which
+# changed file each hit is for.
+: > "$tmp/imports"
+if [ -s "$tmp/patterns" ]; then
+  cut -f1 "$tmp/patterns" > "$tmp/patterns.text"
+  git grep -o -F -f "$tmp/patterns.text" -- '*.ts' '*.tsx' 2>/dev/null |
+    awk -F'\t' 'BEGIN { OFS = "\t" }
+      FILENAME == ARGV[1] { of[$1] = $2; next }
+      # git grep prints the path, a colon and what it matched, which holds none.
+      { i = match($0, /:[^:]*$/); m = substr($0, i + 1)
+        if (m in of) print substr($0, 1, i - 1), of[m] }' "$tmp/patterns" - >> "$tmp/imports"
+fi
 while read -r p; do
   n=${p##*/}; n=${n%.tsx}; n=${n%.ts}
   d=$(dirname "$p"); while [ ! -f "$d/package.json" ]; do case $d in .|/) break ;; esac; d=$(dirname "$d"); done
-  git grep -l -F -e "/$n\"" -e "/$n'" -- "$d" 2>/dev/null | grep '\.tsx\{0,1\}$'
-done < "$tmp/changed" >> "$tmp/importers"
-sort -u "$tmp/importers" | grep -vxF -f "$tmp/touched" > "$tmp/importers.new"; mv "$tmp/importers.new" "$tmp/importers"
-# Each importer's package. Past a few packages the check is off: a change
-# to a file the whole monorepo imports (an enum everything reads) would
-# type-check every package twice in one tsgo, tens of gigabytes for an hour.
+  git grep -l -F -e "/$n\"" -e "/$n'" -- "$d" 2>/dev/null |
+    awk -v p="$p" 'BEGIN { OFS = "\t" } /\.tsx?$/ { print $0, p }'
+done < "$tmp/changed" >> "$tmp/imports"
+# A file the change touches is in the tree already, so it is no caller.
+sort -u "$tmp/imports" | awk -F'\t' 'FILENAME == ARGV[1] { t[$0] = 1; next } !($1 in t)' "$tmp/touched" - > "$tmp/imports.new"
+mv "$tmp/imports.new" "$tmp/imports"
+cut -f1 "$tmp/imports" | sort -u > "$tmp/importers"
+# Each importer's package. The session holds a few packages at a time, so
+# memory is not what limits it; time is, a second or two a package. Past
+# two hundred the check is off: a change to a file the whole monorepo
+# imports (an enum everything reads) would be most of an hour.
 # One file from each package is still opened, which loads it for the
 # references, and the cache says it went unchecked ($key.unchecked, the
 # package count), so a caller with no errors there is not read as fine.
@@ -290,17 +308,18 @@ done < "$tmp/importers" > "$tmp/importers.pkg"
 npkg=$(cut -f1 "$tmp/importers.pkg" | sort -u | wc -l | tr -d ' ')
 check=1
 rm -f "$dir/$key.unchecked"
-if [ "$npkg" -gt 15 ]; then
+if [ "$npkg" -gt 200 ]; then
   check=0
   awk -F'\t' '!seen[$1]++ { print $2 }' "$tmp/importers.pkg" > "$tmp/importers"
+  awk -F'\t' 'FILENAME == ARGV[1] { k[$0] = 1; next } ($1 in k)' "$tmp/importers" "$tmp/imports" > "$tmp/imports.new"
+  mv "$tmp/imports.new" "$tmp/imports"
   printf '%s\n' "$npkg" > "$dir/$key.unchecked"
 fi
-sed 's/$/\t/' "$tmp/importers" >> "$tmp/open"
 
 # The session, with the check.
-jq -Rn --arg root "$root" --arg check "$check" --rawfile q "$tmp/queries" --rawfile o "$tmp/open" --rawfile b "$tmp/base" --rawfile i "$tmp/importers" '
+jq -Rn --arg root "$root" --arg check "$check" --rawfile q "$tmp/queries" --rawfile o "$tmp/open" --rawfile b "$tmp/base" --rawfile i "$tmp/imports" '
   { root: $root, check: ($check == "1"),
-    importers: [$i | split("\n")[] | select(. != "")],
+    importers: [$i | split("\n")[] | select(. != "") | split("\t") | { path: .[0], of: .[1] }] | group_by(.path) | map({ path: .[0].path, of: map(.of) }),
     open: [$o | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: (.[1] // "" | select(. != "")) }],
     base: [$b | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }],
     queries: [$q | split("\n")[] | select(. != "") | split("\t") | { id: .[0], path: .[1], line: (.[2] | tonumber), name: .[3] }] }' > "$tmp/job"
