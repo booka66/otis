@@ -123,14 +123,15 @@ function gk_numstat_path(p,   pre, mid, post) {
 # before it has drawn, and COLUMNS is not exported, so fall back to the
 # terminal.
 #
-# Mirrors git-fzf's preview-window rule. fzf's "<110(...)" alternative triggers
+# Mirrors git-fzf's preview-window rule. fzf's "<66(...)" alternative triggers
 # on the width of the PREVIEW WINDOW, not the terminal (fzf(1): "used only when
 # the size of the preview window is below a certain threshold"), and the
-# preview takes 55%. So the preview only sits beside the list from 200 columns
-# up; under that it stacks underneath and the list gets the whole width.
+# preview takes 55%. So the preview sits beside the list from 120 columns up,
+# and only under that does it stack underneath and leave the list the whole
+# width. Written as fzf's own arithmetic so the two stay the same rule.
 function gk_list_width(cols) {
   if (cols + 0 <= 0) cols = 100
-  return (int(cols * 55 / 100) < 110) ? cols - 6 : int(cols * 45 / 100) - 4
+  return (int(cols * 55 / 100) < 66) ? cols - 6 : int(cols * 45 / 100) - 4
 }
 
 # A signature in w columns. awk counts bytes here (the callers run LC_ALL=C,

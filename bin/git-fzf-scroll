@@ -7,7 +7,7 @@
 #
 # Every move is relative (preview-down, preview-up). fzf's absolute offset
 # (change-preview-window +N) looked simpler but does nothing while the preview
-# is stacked under the list, since that layout comes from the <110(...)
+# is stacked under the list, since that layout comes from the <66(...)
 # alternative. off.<item> is the line at the top of the preview, kept in step with
 # every move sent.
 #

@@ -316,7 +316,7 @@ gl() {
       --bind "start:reload(git-log-list $args)" \
       --preview 'git-preview-commit --tests-toggle {2}' \
       --bind 't:execute-silent(git-test-files toggle)+refresh-preview' \
-      --preview-window '<110(down,75%,border-top,wrap)' \
+      --preview-window '<66(down,75%,border-top,wrap)' \
       --bind 'enter:execute(git-symbols {2})' \
       --bind 'o:execute(git-commit-open {2})' \
       --bind "f:transform[git-log-do fixup {2} \"reload(git-log-list $args)\"]" \

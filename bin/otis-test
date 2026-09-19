@@ -58,7 +58,8 @@ expect rowfmt/stat "$(awk_fn 'gk_stat(4, 12, 2, 2)')" "+ 4 -12"
 expect rowfmt/stat-blank "$(awk_fn 'gk_stat("", "", 2, 2)')" "       "
 expect rowfmt/numstat-rename "$(awk_fn 'gk_numstat_path("dir/{old => new}.ts")')" "dir/new.ts"
 expect rowfmt/numstat-plain "$(awk_fn 'gk_numstat_path("old.ts => new.ts")')" "new.ts"
-expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(100)')" "94"
+expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(110)')" "104"
+expect rowfmt/width-side-by-side "$(awk_fn 'gk_list_width(120)')" "50"
 expect rowfmt/width-wide "$(awk_fn 'gk_list_width(220)')" "95"
 
 # --- share/otis.jq
@@ -80,7 +81,10 @@ expect md/fence-kept "$(md_fn '```ts\037const a: Array<string> = [];\037```')" "
 # --- a throwaway repo for the scripts that read git
 tmp=$(mktemp -d) && tmp=$(cd "$tmp" && pwd -P) || exit 1
 trap 'rm -rf "$tmp"' EXIT
-export HOME=$tmp XDG_CACHE_HOME=$tmp/cache GIT_CONFIG_GLOBAL=$tmp/gitconfig FZF_COLUMNS=100
+# 220 columns: the pickers sit side by side from 120 up (git-fzf), so the row
+# scripts get 45% of this, the same budget the rows had back when a 100-column
+# terminal still gave the list all of itself.
+export HOME=$tmp XDG_CACHE_HOME=$tmp/cache GIT_CONFIG_GLOBAL=$tmp/gitconfig FZF_COLUMNS=220
 git init -q -b main "$tmp/origin" && (
   cd "$tmp/origin" && git config user.email t@t && git config user.name t &&
   printf 'a\n' > a.ts && printf 'b\n' > b.spec.ts && mkdir -p src && printf 'c\n' > src/c.ts &&

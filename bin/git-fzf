@@ -131,7 +131,7 @@ printf '%s\\n' \"\$i\" > '$st/focus'; if [ -e '$st/bg.pending' ]; then git-fzf-b
 } | awk -v f=\"$st/lines.\$i\" '{ print } END { print NR > f }'; [ -s \"$st/off.\$i\" ] && git-fzf-scroll loaded \"\$i\" >/dev/null 2>&1 & fi")
 else
   # hidden twice: the narrow-terminal layout replaces the options, so it needs its own.
-  args+=(--preview "git-fzf-help show" --preview-window 'hidden,<110(down,60%,border-top,wrap,hidden)')
+  args+=(--preview "git-fzf-help show" --preview-window 'hidden,<66(down,60%,border-top,wrap,hidden)')
 fi
 
 # fzf's own colors (the prompt, the pointer, the line under the cursor,
@@ -158,8 +158,12 @@ fi
 # the query can be live either way.
 esc="if [ \"\$FZF_PROMPT\" = 'search> ' ]; then echo 'rebind($unbindable)+change-prompt($prompt)'; elif [ -n {q} ]; then echo clear-query; else echo abort; fi"
 
-# Side by side when there is room, stacked below when the terminal is narrow,
-# so neither the list nor the diff gets squeezed into 40 columns.
+# Side by side, and stacked below only when the terminal is too narrow to hold
+# both. fzf measures a "<N(...)" threshold against the PREVIEW window rather
+# than the terminal (fzf(1): "the size of the preview window"), and the preview
+# takes 55%, so <66 keeps the two side by side down to 120 columns, where the
+# diff still has about 60, and stacks them only under that.
+# share/rowfmt.awk's gk_list_width mirrors this rule for the rows.
 # Full screen, not --height: fzf then uses the alternate screen, so the list
 # never lands in scrollback and the terminal is restored cleanly on exit.
 # Bindings and previews run in zsh whatever your login shell is: fzf would
@@ -168,7 +172,7 @@ esc="if [ \"\$FZF_PROMPT\" = 'search> ' ]; then echo 'rebind($unbindable)+change
 fzf --prompt="$prompt" \
   --with-shell 'zsh -fc' \
   --reverse $listen \
-  --preview-window='right,55%,border-left,wrap,<110(down,60%,border-top,wrap)' \
+  --preview-window='right,55%,border-left,wrap,<66(down,60%,border-top,wrap)' \
   --bind 'j:down,k:up,g:first,G:last,q:abort' \
   --bind 'focus:unbind(focus)+transform-footer(git-fzf-footer)' \
   --bind "start:unbind(focus)+transform-footer(git-fzf-footer)$search$start_actions" \
