@@ -25,10 +25,6 @@
 #   verifyCheckIn  minutes between the judge's looks at what V's tester is doing, 0 for never: otis.verifyCheckIn, else 5
 #   cursorModel  the model V's Cursor Cloud tester runs, an id from Cursor's GET /v1/models with its parameters after a colon
 #                (gpt-5.6-luna:reasoning=high): otis.cursorModel, else Cursor's default
-#   phone        the Bandwidth number that stands in for the customer in V, which the tester drives: otis.phone
-#   phoneAccount the Bandwidth account that number belongs to, its id: otis.phoneAccount
-#   phoneApp     the Bandwidth messaging application that number is on, its id: otis.phoneApp
-#   phoneInbox   the Hookdeck source that application's callbacks land in (src_...): otis.phoneInbox
 #   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
 #                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
 #   worktrees    where otis puts its worktrees, under the main checkout: otis.worktrees
@@ -47,7 +43,7 @@
 # with an exit status, so they are asked on their own.
 #
 # A team keeps what is true of its repo for everyone (its CI's gate and deploy
-# jobs, its Datadog env, its Cursor environment, its phone) in .otis at the
+# jobs, its Datadog env, its Cursor environment) in .otis at the
 # repo's top, in git config's format, committed:
 #
 #   [otis]
@@ -60,7 +56,7 @@
 shared() {
   case $1 in
     host | project | mainBranch | gateJob | deployEnv | deployJob | rollbackJob | datadogEnv | readyLabel | \
-      cursorEnv | cursorModel | verifyCheckIn | checkInModel | verifyRetro | phone | phoneAccount | phoneApp | phoneInbox) ;;
+      cursorEnv | cursorModel | verifyCheckIn | checkInModel | verifyRetro) ;;
     *) return 1 ;;
   esac
   if [ -z "$repofile" ]; then
@@ -76,7 +72,7 @@ layered() {
 }
 cfg() { layered --get "$1"; }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro phone phoneAccount phoneApp phoneInbox claudeCommands worktrees editor lessons gitlab'
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommands worktrees editor lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -137,10 +133,6 @@ one() {
     verifyCheckIn) cfg verifyCheckIn || echo 5 ;;
     checkInModel) cfg checkInModel ;;
     verifyRetro) [ "$(layered '--type=bool --get' verifyRetro || echo true)" = true ] ;;
-    phone) cfg phone ;;
-    phoneAccount) cfg phoneAccount ;;
-    phoneApp) cfg phoneApp ;;
-    phoneInbox) cfg phoneInbox ;;
     claudeCommands) git config --get-all otis.claudeCommand 2>/dev/null | grep -v '^$' ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;

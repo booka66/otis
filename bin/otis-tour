@@ -916,7 +916,7 @@ part_verify_run() {
   key i "act on the retrospective: a fix run whose proposals edit the verify-env brief; B puts them on a branch of their own"
   print
   say "Nothing else is posted to GitLab. The tester is told not to commit or push; that is a prompt, not a guarantee."
-  say "What the tester knows about your repo, how to run the environment, how to get into the app and where secrets come from, is the repo's .agents/skills/verify-env/SKILL.md. A real phone number can stand in for the customer (otis.phone, through Bandwidth); otis-config describes the settings it needs."
+  say "What the tester knows about your repo, how to run the environment, how to get into the app and where secrets come from, is the repo's .agents/skills/verify-env/SKILL.md. Whatever else the tester may use there, a real phone standing in for the customer among them, the brief is where it says so."
   pause
 }
 
