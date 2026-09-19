@@ -277,13 +277,17 @@ if [ "$mode" = --run ]; then
     # Past two hundred importing packages git-callers finds the callers and
     # checks none of them.
     unchecked=$(cat "${callers%.tsv}.unchecked" 2>/dev/null)
-    awk -F'\t' -v unchecked="$unchecked" '
+    # And the packages the finding's budget never reached, whose callers are
+    # missing from the list rather than absent from the change's reach.
+    left=$(cat "${callers%.tsv}.partial" 2>/dev/null)
+    awk -F'\t' -v unchecked="$unchecked" -v left="$left" '
       FILENAME == ARGV[1] { fix[$1] = $2; next }
       BEGIN { if (unchecked != "") { print "# Callers elsewhere\n\nCode this change did not touch that uses a changed exported symbol, found by tsgo. " unchecked " packages import the changed files, too many to type check, so none of these callers was: whether the change breaks them is for you to judge, reading the ones that matter." } else
         print "# Callers elsewhere\n\nCode this change did not touch that uses a changed exported symbol, found by tsgo. Each caller was type checked with the changed files as the base has them, then as the change leaves them: ✗ is an error the change brings. An error the caller had already is not listed. A caller with no ✗ still type checks, which is not the same as still being right. Under a ✗, what the reviewer is shown as the fix, from another model, when it has one: where it belongs (the caller or the change) and what it is." }
       $1 != last { printf "\n## %s\n", ($1 == "-" ? "Errors the change brings outside any caller" : $1); last = $1 }
       { printf "- %s (%s), lines %s-%s%s\n    %s\n", $4, $11, $6, $7, ($1 == "-" ? "" : ", " $8 " call" ($8 == 1 ? "" : "s") " from line " $3), $5
-        if ($9 > 0) { k = split($12, e, "\036"); for (i = 1; i <= k; i++) print "  ✗ " $2 ":" e[i]; if ($4 in fix) print "  proposed fix, in " fix[$4] } }' "$d/fixes.tsv" "$callers" > "$ctx/callers.md"
+        if ($9 > 0) { k = split($12, e, "\036"); for (i = 1; i <= k; i++) print "  ✗ " $2 ":" e[i]; if ($4 in fix) print "  proposed fix, in " fix[$4] } }
+      END { if (left != "") print "\nThe finding ran out of time with " left " packages left, so their callers are missing from this list: it is what was found, not all there is. The packages that import the most of the change were looked in first." }' "$d/fixes.tsv" "$callers" > "$ctx/callers.md"
     callers_ctx="- The callers elsewhere, what the change reaches without touching: $ctx/callers.md"
   elif [ ! -s "$table" ]; then
     callers_ctx="- seam could not read the change by symbol, so there is no symbol table and no callers list: find what calls a changed signature yourself, with Grep."

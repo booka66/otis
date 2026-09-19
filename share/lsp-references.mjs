@@ -133,10 +133,22 @@ for (const im of job.importers || []) {
   if (!byPkg.has(k)) byPkg.set(k, []);
   byPkg.get(k).push(f);
 }
-const pkgs = [...byPkg.values()];
+// The packages that import the most of the change first, so what the
+// budget below leaves out is the least of it: a package naming one changed
+// file is likelier to be an incidental import than one naming six.
+const pkgs = [...byPkg.values()].sort((a, b) => new Set(b.flatMap((f) => f.of || [])).size - new Set(a.flatMap((f) => f.of || [])).size);
+// A change to a file the whole monorepo imports is a thousand projects to
+// load, most of an hour of them. The count of packages says nothing about
+// how long they take, so the run is given a quarter of an hour and stops
+// between batches once it is spent, keeping what it found; the packages it
+// never reached are its last line, for the reader to be told of.
+const BUDGET = 900000;
+const started = Date.now();
 const seenRefs = new Set();
 const checked = new Set();
+let left = 0;
 for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
+  if (i > 0 && Date.now() - started > BUDGET) { left = pkgs.length - i; break; }
   const opened = [];
   const load = (p) => {
     if (texts.has(p) || opened.includes(p)) return;
@@ -192,6 +204,7 @@ for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
   }
   for (const p of opened) close(p);
 }
+if (left > 0) out.push(["U", left].join("\t"));
 clearTimeout(die);
 process.stdout.write(out.join("\n") + (out.length ? "\n" : ""));
 lsp.kill();

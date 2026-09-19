@@ -301,13 +301,15 @@ cut -f1 "$tmp/imports" | sort -u > "$tmp/importers"
 # One file from each package is still opened, which loads it for the
 # references, and the cache says it went unchecked ($key.unchecked, the
 # package count), so a caller with no errors there is not read as fine.
+# A run that spends its budget before the last package stops there and says
+# how many it never reached ($key.partial).
 while read -r p; do
   d=$(dirname "$p"); while [ ! -f "$d/package.json" ]; do case $d in .|/) break ;; esac; d=$(dirname "$d"); done
   printf '%s\t%s\n' "$d" "$p"
 done < "$tmp/importers" > "$tmp/importers.pkg"
 npkg=$(cut -f1 "$tmp/importers.pkg" | sort -u | wc -l | tr -d ' ')
 check=1
-rm -f "$dir/$key.unchecked"
+rm -f "$dir/$key.unchecked" "$dir/$key.partial"
 if [ "$npkg" -gt 200 ]; then
   check=0
   awk -F'\t' '!seen[$1]++ { print $2 }' "$tmp/importers.pkg" > "$tmp/importers"
@@ -326,6 +328,10 @@ jq -Rn --arg root "$root" --arg check "$check" --rawfile q "$tmp/queries" --rawf
 node "$share/lsp-references.mjs" < "$tmp/job" > "$tmp/out" 2>>"$dir/$key.err" || { : > "$file"; exit 0; }
 grep '^R' "$tmp/out" | cut -f2- > "$tmp/refs"
 grep '^D' "$tmp/out" | cut -f2- > "$tmp/diags"
+# The packages the run's budget never reached, if it ran out: what is not
+# in the list because nothing looked, as against nothing being there.
+awk -F'\t' '$1 == "U" { print $2 }' "$tmp/out" > "$tmp/left"
+[ -s "$tmp/left" ] && cp "$tmp/left" "$dir/$key.partial"
 [ -s "$tmp/refs" ] || { : > "$file"; exit 0; }
 
 # The declaration around each reference and each error. A touched file is

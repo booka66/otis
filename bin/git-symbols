@@ -1294,6 +1294,9 @@ if [ "$mode" = --rows ]; then
     # are there, what they break is not.
     [ -z "$finding" ] && read -r npkg 2>/dev/null < "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.unchecked" &&
       note="$note · $(printf "${GK_ATTENTION}callers not type-checked: %s packages import the change${GK_R}" "$npkg")"
+    # And the packages the finding never reached before its time was up.
+    [ -z "$finding" ] && read -r nleft 2>/dev/null < "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.partial" &&
+      note="$note · $(printf "${GK_ATTENTION}%s packages never looked in${GK_R}" "$nleft")"
     [ -n "$fixing" ] && note="$note · $(printf "${GK_ATTENTION}Claude is fixing what it breaks${GK_R}")"
     [ -n "$rechecking" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is checking your fixes${GK_R}")"
   elif ! command -v seam >/dev/null 2>&1; then
