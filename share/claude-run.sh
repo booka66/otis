@@ -77,18 +77,52 @@ costs() {
 
 orphaned() { [ -s "$1/cmd" ] && [ ! -s "$1/status" ] && [ -r "$1/pid" ] && ! kill -0 "$(cat "$1/pid")" 2>/dev/null; }
 
+# note_signal: a run that is killed leaves the signal and the time in $d/log.
+# A killed process says nothing at all: its log and Claude's transcript simply
+# stop, and whether it was the terminal going away, a picker taking its
+# children with it or something else is lost. This is not a status, so the run
+# is still an orphan for resume to pick up; a SIGKILL still says nothing.
+note_signal() {
+  trap 'printf "killed by SIGHUP at %s\n" "$(date +%T)" >> "$d/log"; exit 129' HUP
+  trap 'printf "killed by SIGINT at %s\n" "$(date +%T)" >> "$d/log"; exit 130' INT
+  trap 'printf "killed by SIGTERM at %s\n" "$(date +%T)" >> "$d/log"; exit 143' TERM
+}
+
 # resume <dir>: start an orphaned run again, where it was started, to pick up
 # from its last finished step. mkdir is the lock, so two pickers drawing at
 # once start it once; a lock older than a minute was left by one that died.
+#
+# A run whose process dies every time would be started again forever, so a
+# life that added nothing to the progress is counted as one that got nowhere,
+# and after three of those in a row the run is failed instead. Any progress at
+# all clears the count, so a run the laptop keeps killing over days still
+# picks up; it is only a run that cannot get through its first breath that
+# gives up. dir/lives holds that count and how long the progress was when the
+# last life began. c in git-claude-view clears it: a resume you asked for is
+# never turned down.
 resume() {
   [ -n "$(find "$1/resuming" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$1/resuming" 2>/dev/null
   mkdir "$1/resuming" 2>/dev/null || return 0
   if orphaned "$1"; then
-    where=$(cat "$1/cwd" 2>/dev/null)
-    [ -d "$where" ] || where=$(git-worktree-path main)
-    jq -nc --arg t "picking up where it left off" '{type: "otis", text: $t}' >> "$1/events.jsonl"
-    # cmd holds the argv one a line (a branch name can hold shell syntax).
     dir=$1
+    lives=$(cat "$dir/lives" 2>/dev/null)
+    if [ "${lives##* }" = "$(wc -c < "$dir/events.jsonl" 2>/dev/null | tr -d ' ')" ]
+      then dead=$((${lives%% *} + 1)); else dead=1; fi
+    if [ "$dead" -gt 3 ]; then
+      jq -nc --arg t "started again three times and got nowhere; giving up (c here tries once more)" \
+        '{type: "otis", text: $t}' >> "$dir/events.jsonl"
+      echo failed > "$dir/status"
+      date +%s > "$dir/ended"
+      alert "$(cat "$dir/title" 2>/dev/null || echo "Claude's run")" \
+        "its process kept dying; giving up" failed
+      rmdir "$dir/resuming"
+      return 0
+    fi
+    where=$(cat "$dir/cwd" 2>/dev/null)
+    [ -d "$where" ] || where=$(git-worktree-path main)
+    jq -nc --arg t "picking up where it left off" '{type: "otis", text: $t}' >> "$dir/events.jsonl"
+    printf '%s %s\n' "$dead" "$(wc -c < "$dir/events.jsonl" | tr -d ' ')" > "$dir/lives"
+    # cmd holds the argv one a line (a branch name can hold shell syntax).
     (cd "$where" && IFS='
 ' && set -f && set -- $(cat "$dir/cmd") && nohup "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
   fi

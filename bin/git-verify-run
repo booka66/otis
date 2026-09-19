@@ -57,6 +57,7 @@ finish() {
   tell_picker refresh-preview
   exit 0
 }
+note_signal
 
 # cursor <method> <path> [json]: Cursor's API. The response on stdout, and
 # exit 1 with its error body there instead when it fails. The JSON content

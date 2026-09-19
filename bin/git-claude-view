@@ -215,7 +215,7 @@ case $1 in
     running "$d" && exec git-fzf-note "still running"
     [ "$(cat "$d/status" 2>/dev/null)" = failed ] || exec git-fzf-note "only a run that failed picks up again; r runs it again"
     [ -s "$d/cmd" ] || exec git-fzf-note "this one cannot pick up again; r runs it again"
-    rm -f "$d/status" "$d/ended"
+    rm -f "$d/status" "$d/ended" "$d/lives"
     resume "$d"
     [ -e "$GIT_FZF_STATE/detail" ] && v=1 || v=0
     echo "reload(git-claude-view --stream '$d' $v)" ;;

@@ -176,6 +176,7 @@ if [ "$mode" = --run ]; then
     tell_picker "$reload"
     exit 0
   }
+  note_signal
 
   say "asking GitLab for !$iid ..."
   mr=$(glab api "$api" 2>&1) || finish failed "could not ask GitLab for !$iid: $(oneline "$mr")"

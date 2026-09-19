@@ -272,6 +272,7 @@ if [ "$mode" = --run ]; then
     fi
     exit 0
   }
+  note_signal
 
   # A worktree of its own, from the pool, at your branch's commit.
   wt=$(git-claude-worktree take fix "$d" "$head" 2> "$d/wt.err") || { wt=; finish failed "$(cat "$d/wt.err")"; }

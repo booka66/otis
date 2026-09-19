@@ -11,7 +11,8 @@
 # each in its own, and the pool never grows past what has run at once, up to
 # four of a kind: a fifth run is told to wait. A slot is held by a lock naming
 # its run; a lock whose run is over, or gone, was left by a crash and is taken
-# over.
+# over, and a lock naming the run that is asking is that run's own, from
+# before it was killed.
 #
 # take prints the worktree's path, clean and detached at <commit>, or says
 # why not on stderr and exits 1. release frees the slot; the worktree stays.
@@ -23,19 +24,32 @@ case $1 in
   take)
     kind=$2 run=$3 commit=$4
     mkdir -p "$slots"
-    n=1
+    # The pool in the order to try it. A lock naming the run that is asking is
+    # that run's own, held since before it was killed, so it goes first: a run
+    # picking up takes back the slot it already has, wherever in the pool that
+    # is, rather than a second one. Without this a run killed four times holds
+    # the whole pool and its fifth life is turned away by its own corpses.
+    n=1 names=
     while [ "$n" -le 4 ]; do
       name=claude-$kind
       [ "$n" -gt 1 ] && name=$name-$n
-      lock=$slots/$name
       n=$((n + 1))
+      if [ "$(cat "$slots/$name/run" 2>/dev/null)" = "$run" ]; then names="$name $names"; else names="$names $name"; fi
+    done
+    for name in $names; do
+      lock=$slots/$name
       if ! mkdir "$lock" 2>/dev/null; then
         other=$(cat "$lock/run" 2>/dev/null)
-        [ -n "$other" ] && running "$other" && continue
-        # No run named yet: a take this very moment, unless the lock is old.
-        [ -z "$other" ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && continue
-        rm -rf "$lock"
-        mkdir "$lock" 2>/dev/null || continue
+        # Its own it simply takes: only one process is ever alive for a run (r
+        # and c in git-claude-view both refuse while it is going, and resume
+        # starts only an orphan), so there is no one to take it from.
+        if [ "$other" != "$run" ]; then
+          [ -n "$other" ] && running "$other" && continue
+          # No run named yet: a take this very moment, unless the lock is old.
+          [ -z "$other" ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && continue
+          rm -rf "$lock"
+          mkdir "$lock" 2>/dev/null || continue
+        fi
       fi
       printf '%s\n' "$run" > "$lock/run"
       wt=$(git-worktree-path named "$name")

@@ -967,5 +967,52 @@ answer y gam
 expect gam/stages-and-amends "$(git show HEAD:s.ts) $(git rev-list --count main..HEAD) $(git status --porcelain)" "s2 1 "
 git switch -q main && git branch -qD solo
 
+# --- git-claude-worktree, share/claude-run.sh: the pool of worktrees Claude's
+# runs take one from, and a run whose process keeps dying. A live pid is this
+# test's own; a dead one has already been waited for.
+pool=$tmp/repo/.claude/worktrees
+one=$tmp/repo/.git/gmr-fix/one two=$tmp/repo/.git/gmr-fix/two
+mkdir -p "$one" "$two" && printf '%s\n' $$ > "$one/pid" && printf '%s\n' $$ > "$two/pid"
+expect slots/first "$(git-claude-worktree take fix "$one" HEAD)" "$pool/claude-fix"
+expect slots/next-run-next-slot "$(git-claude-worktree take fix "$two" HEAD)" "$pool/claude-fix-2"
+# A run asking twice was killed and picked up: it takes back the slot it holds
+# rather than a second one, even with an earlier slot free.
+git-claude-worktree release "$pool/claude-fix"
+expect slots/picked-up-keeps-its-own "$(git-claude-worktree take fix "$two" HEAD)" "$pool/claude-fix-2"
+expect slots/freed-slot-reused "$(git-claude-worktree take fix "$one" HEAD)" "$pool/claude-fix"
+# A slot whose run is over is taken over; four going at once is the ceiling.
+printf 'done\n' > "$two/status"
+three=$tmp/repo/.git/gmr-fix/three && mkdir -p "$three" && printf '%s\n' $$ > "$three/pid"
+expect slots/over-is-taken-over "$(git-claude-worktree take fix "$three" HEAD)" "$pool/claude-fix-2"
+for r in four five six; do mkdir -p "$tmp/repo/.git/gmr-fix/$r" && printf '%s\n' $$ > "$tmp/repo/.git/gmr-fix/$r/pid"; done
+git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/four" HEAD >/dev/null
+git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/five" HEAD >/dev/null
+expect slots/full "$(git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/six" HEAD 2>&1 >/dev/null)" \
+  "four fix runs are going already; wait for one to finish"
+rm -rf "$tmp/repo/.git/otis-claude-slots" "$pool"
+git worktree prune
+
+# A run started again that adds nothing to its progress got nowhere; the
+# fourth such life gives up instead of being started forever. The stub keeps
+# the alert off this machine's screen.
+mkdir -p "$tmp/stub" && printf '#!/bin/sh\nexit 0\n' > "$tmp/stub/otis-notify" && chmod +x "$tmp/stub/otis-notify"
+# a run <dir> ready to pick up, and killed <dir>: its process gone again.
+a_run() { mkdir -p "$1" && printf 'true\n' > "$1/cmd" && printf '%s\n' "$tmp/repo" > "$1/cwd" && : > "$1/events.jsonl"; }
+killed() { sh -c 'exit 0' & p=$!; wait "$p" 2>/dev/null; printf '%s\n' "$p" > "$1/pid"; }
+picks_up() { ( PATH=$tmp/stub:$PATH; . "$share/claude-run.sh" && resume "$1" ); }
+dies=$tmp/repo/.git/gmr-fix/dies && a_run "$dies"
+for _ in 1 2 3 4; do killed "$dies"; picks_up "$dies"; done
+expect resume/gives-up "$(cat "$dies/status" 2>/dev/null)" "failed"
+expect resume/says-why "$(jq -r 'select(.type == "otis") | .text' "$dies/events.jsonl" | tail -1)" \
+  "started again three times and got nowhere; giving up (c here tries once more)"
+expect resume/tried-three-times "$(grep -c 'picking up where it left off' "$dies/events.jsonl")" "3"
+# Progress clears the count, so a run the laptop keeps killing still picks up.
+lives=$tmp/repo/.git/gmr-fix/lives && a_run "$lives"
+for _ in 1 2 3 4 5; do
+  killed "$lives"; picks_up "$lives"
+  jq -nc '{type: "otis", text: "got somewhere"}' >> "$lives/events.jsonl"
+done
+expect resume/progress-clears-the-count "$(cat "$lives/status" 2>/dev/null)" ""
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]
