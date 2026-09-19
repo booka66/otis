@@ -1,0 +1,13 @@
+#!/bin/sh
+# git-reset-to <mixed | soft | hard> <sha>: reset HEAD to a commit from gl.
+# hard asks first, since it is the only one of the three that throws away
+# uncommitted work. Only a failure stops to be read; success goes straight back.
+mode=$1 sha=$2
+[ -n "$sha" ] || exit 0
+git-lock || { printf 'press enter\n'; read -r _; exit 1; }
+case $mode in
+  hard)  git-confirm "hard reset to $sha discards ALL uncommitted changes. proceed?" || exit 0
+         out=$(git reset --hard "$sha" 2>&1) ;;
+  soft)  out=$(git reset --soft "$sha" 2>&1) ;;
+  *)     out=$(git reset "$sha" 2>&1) ;;
+esac || { printf '%s\nreset failed. press enter\n' "$out"; read -r _; exit 1; }

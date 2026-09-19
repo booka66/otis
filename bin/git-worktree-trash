@@ -1,0 +1,63 @@
+#!/bin/sh
+# git-worktree-trash <path>: remove a clean worktree the way otis does, by
+# moving it to the Trash instead of deleting it.
+# git-worktree-trash --list: the ones still in there, for otis's dashboard. gw's d, enter on a branch in
+# gb and gmr (_g_free_branch), and git-worktree-sweep all come here.
+#
+# git worktree remove refuses a tree with edits or untracked files, and this
+# refuses on the same terms, in git's words, so callers read one message. But
+# what git would delete along with the directory, the ignored files, stays: a
+# .env copied in, a local database, a build. The directory goes to ~/.Trash on
+# macOS or the XDG trash on Linux, named after the worktree and the moment,
+# with its .git file taken out so nothing mistakes it for a checkout, and its
+# entry under the main checkout's .git/worktrees goes. Without a trash
+# directory (neither exists and cannot be made), or when the directory is
+# already gone, git removes it.
+note=$(git rev-parse --path-format=absolute --git-common-dir)/otis-trash.tsv
+
+# --list: one line a worktree still in the trash, tab separated: when it went,
+# where it is now, where it was, and its branch. What you have emptied is
+# forgotten as we go, so the count is what the trash actually holds, and a
+# worktree you dragged back out stops being listed too.
+if [ "$1" = --list ]; then
+  [ -s "$note" ] || exit 0
+  while IFS='	' read -r at dst src branch; do
+    [ -d "$dst" ] && printf '%s\t%s\t%s\t%s\n' "$at" "$dst" "$src" "$branch"
+  done < "$note" > "$note.$$"
+  # The dashboard asks every few seconds, and a rewrite that races an append
+  # would lose what was just trashed, so it only writes when something has
+  # actually gone from the trash.
+  if cmp -s "$note.$$" "$note"; then rm -f "$note.$$"; else mv "$note.$$" "$note"; fi
+  cat "$note"
+  exit 0
+fi
+
+p=$1
+[ -n "$p" ] || { echo 'usage: git-worktree-trash <path> | --list' >&2; exit 2; }
+[ -d "$p" ] || exec git worktree remove "$p"
+p=$(cd "$p" && pwd)
+[ "$p" != "$(git-worktree-path main)" ] || { printf "fatal: '%s' is a main working tree\n" "$p" >&2; exit 1; }
+if [ -n "$(git -C "$p" --no-optional-locks status --porcelain --ignore-submodules=none)" ]; then
+  printf "fatal: '%s' contains modified or untracked files, use --force to delete it\n" "$p" >&2
+  exit 1
+fi
+admin=$(git -C "$p" rev-parse --absolute-git-dir)
+case $admin in */worktrees/*) ;; *) printf "fatal: '%s' is not a linked worktree\n" "$p" >&2; exit 1 ;; esac
+# The rest of git's terms: a locked worktree stays, and one with submodules
+# keeps their repositories in $admin, which would go for good below.
+[ -e "$admin/locked" ] && { printf "fatal: cannot remove a locked working tree, lock reason: %s\n" "$(cat "$admin/locked")" >&2; exit 1; }
+[ -d "$admin/modules" ] && { printf "fatal: working trees containing submodules cannot be moved or removed\n" >&2; exit 1; }
+case $(uname) in
+  Darwin) trash=$HOME/.Trash ;;
+  *) trash=${XDG_DATA_HOME:-$HOME/.local/share}/Trash/files ;;
+esac
+mkdir -p "$trash" 2>/dev/null || exec git worktree remove "$p"
+dst=$trash/${p##*/}-$(date +%Y%m%d-%H%M%S)
+branch=$(git -C "$p" branch --show-current 2>/dev/null)
+mv "$p" "$dst" || exit 1
+rm -f "$dst/.git"
+rm -rf "$admin"
+# What went, so otis can say the trash has something in it without guessing
+# which of your trash is a worktree of this repo's, and so putting one back is
+# a matter of reading a line rather than remembering.
+printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$dst" "$p" "$branch" >> "$note"

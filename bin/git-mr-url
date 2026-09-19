@@ -1,0 +1,12 @@
+#!/bin/sh
+# git-mr-url <iid>: an MR's web link, built from the origin remote (no request).
+[ -n "$1" ] || exit 1
+url=$(git remote get-url origin) || exit 1
+case $url in
+  *://*) rest=${url#*://}; rest=${rest#*@} ;;
+  *@*:*) rest=${url#*@}; rest=$(printf '%s' "$rest" | sed 's#:#/#') ;;
+  *) exit 1 ;;
+esac
+host=${rest%%/*}; host=${host%%:*}
+repo=${rest#*/}; repo=${repo%.git}
+printf 'https://%s/%s/-/merge_requests/%s\n' "$host" "$repo" "$1"

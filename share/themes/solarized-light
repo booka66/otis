@@ -1,0 +1,22 @@
+# Solarized light.
+attention=38;2;181;137;0
+good=38;2;133;153;0
+bad=38;2;220;50;47
+elsewhere=38;2;38;139;210
+yours=38;2;203;75;22
+text=38;2;101;123;131
+context=38;2;147;161;161
+faint=38;2;201;195;174
+main=38;2;42;161;152
+codebg=48;2;238;232;213
+errbg=48;2;251;227;221
+delta_syntax=Solarized (light)
+bat=Solarized (light)
+file=#268bd2
+rule=#c9c3ae
+minus=#f6dcd2
+plus=#e6ecc4
+minus_emph=#eeb9a8
+plus_emph=#d3de96
+light=1
+glow=light

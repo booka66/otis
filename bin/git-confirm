@@ -1,0 +1,14 @@
+#!/bin/sh
+# git-confirm <question>: ask [y/N] and take one keypress, no enter. Exit 0 only
+# for y.
+printf '%s [y/N] ' "$1"
+# Switch off line mode and echo for one key, then switch them back on. Under
+# fzf, macOS stty can warn that "stdout appears redirected" while still
+# applying the change, so its stderr is dropped.
+# stty names the terminal with -f on macOS and -F on Linux.
+tty_mode() { stty -f /dev/tty "$@" </dev/null 2>/dev/null || stty -F /dev/tty "$@" </dev/null 2>/dev/null; }
+tty_mode -icanon -echo min 1
+answer=$(dd bs=1 count=1 </dev/tty 2>/dev/null)
+tty_mode icanon echo
+printf '%s\n' "$answer"
+[ "$answer" = y ]

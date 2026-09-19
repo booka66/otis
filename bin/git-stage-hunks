@@ -1,0 +1,15 @@
+#!/bin/sh
+# git-stage-hunks <status> <path>: pick which hunks of one changed file to
+# stage, with git add -p. gah's enter and ga's p. The path is relative to the
+# repo root, so this runs from there.
+#
+# An untracked file has no hunks until git knows of it, so it is added as
+# intent-to-add first, which makes its content one hunk to take or split. If
+# none of it is staged in the end, it goes back to untracked.
+st=$1 p=$2
+[ -n "$p" ] || exit 0
+cd "$(git rev-parse --show-toplevel)" || exit 1
+[ "$st" = '??' ] && git add -N -- "$p"
+git add -p -- "$p"
+[ "$st" = '??' ] && git diff --cached --quiet -- "$p" && git reset -q -- "$p"
+exit 0

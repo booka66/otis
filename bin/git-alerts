@@ -1,0 +1,99 @@
+#!/bin/sh
+# git-alerts: what happened on GitLab since the last run, one alert per line as
+# a tab-separated title and body, for the alerts in git.zsh (otis-notify):
+#   - someone requested your review (a review_requested todo)
+#   - GitLab can no longer merge one of your MRs (an unmergeable todo)
+#   - someone mentioned or addressed you (a mentioned or directly_addressed
+#     todo), except on your open MRs, whose comments alert already
+#   - someone commented on one of your open MRs, bots included (any note that
+#     is not a system note and not yours), one alert per MR and person however
+#     many comments came in; a bot goes by its name, since its username is a
+#     generated project_<id>_bot_<hash>
+#   - someone approved one of your open MRs (GitLab records that as the system
+#     note "approved this merge request")
+#   - the head pipeline of one of your open MRs failed on more than approval
+#     gates (otis-config gateJobs), which is waiting, not failing
+#   - one of your merged MRs went live, or production was rolled back
+# One GraphQL query, across every project, for the first five. Note and todo
+# ids only grow, so the state keeps the highest of each seen so far, beside the
+# failed pipelines, merged MR states and rollback seen last, so nothing alerts
+# twice. The first run records them and alerts on nothing, so a backlog never
+# floods in. Only an MR's last 30 notes are looked at, which a minute between
+# runs leaves plenty of room for.
+#
+# Deploys come from git-ci-merged, which has to run inside the repo; it records
+# where that is whenever gmr runs it. Until then, those alerts wait. It goes
+# through gmr's cache (git-cached-json --sync), so while gmr is open and keeping
+# it fresh, the alerts ask GitLab nothing more, and a failed run alerts on
+# nothing, keeping the last states.
+dir=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias
+state=$dir/alerts-state.json
+mkdir -p "$dir"
+
+json=$(glab api graphql -f query='query { currentUser { username
+  todos(state: pending, action: [review_requested, unmergeable, mentioned, directly_addressed], first: 50) { nodes {
+    id action targetType body author { username name bot } target { ... on MergeRequest { id iid title } ... on Issue { iid } ... on WorkItem { iid } } } }
+  authoredMergeRequests(state: opened, first: 100) { nodes { id iid title
+    headPipeline { id status jobs(statuses: [FAILED], retried: false, first: 50) { nodes { name allowFailure } } }
+    notes(last: 30) { nodes { id system body author { username name bot } } } } } } }' 2>/dev/null) || exit 1
+
+merged=null
+if [ -r "$dir/ci-repo" ] && cache=$(cd "$(cat "$dir/ci-repo")" && git-cached-json --sync ci-merged 60 -- git-ci-merged 2>/dev/null); then
+  merged=$(cat "$cache")
+fi
+
+old=$(cat "$state" 2>/dev/null)
+
+# The new state comes out first, then the alerts.
+out=$(printf '%s' "$json" | jq -er --argjson old "${old:-null}" --argjson merged "$merged" --argjson gates "$(otis-config gateJobs)" '
+  def num: split("/") | last | tonumber;
+  def flat: gsub("[\\s;\\p{Cc}]+"; " ") | ltrimstr(" ") | .[0:160];
+  # Bots open with hidden <!-- markers --> and markdown; keep the words.
+  def words: gsub("<!--[\\s\\S]*?-->"; "") | gsub("<[^>]*>"; "") | gsub("[#*`>]+"; "") | flat;
+  def who: if .bot then .name else .username end;
+  .data.currentUser as $u |
+  ($old // {}) as $o |
+  [$u.todos.nodes[] | .id |= num] as $todos |
+  [$u.authoredMergeRequests.nodes[] | . as $mr | .notes.nodes[]
+    | select(.author.username != $u.username)
+    | select((.system | not) or .body == "approved this merge request")
+    | .id |= num | .mr = $mr] as $notes |
+  # Failed as git-mr-list counts it: not when every failed job that may not fail is a gate.
+  [$u.authoredMergeRequests.nodes[] | select(.headPipeline.status == "FAILED")
+    | ([.headPipeline.jobs.nodes[] | select(.allowFailure | not)]) as $f
+    | select(($f | length) == 0 or any($f[]; .name | IN($gates[]) | not))
+    | . + {failedJobs: [$f[] | .name | select(IN($gates[]) | not)]}] as $failed |
+  ($merged != null) as $ci |
+  {note: ([$o.note // 0, ($notes | map(.id) | max // 0)] | max),
+   todo: ([$o.todo // 0, ($todos | map(.id) | max // 0)] | max),
+   failed: ($failed | map(.headPipeline.id)),
+   merged: (if $ci then $merged.mrs | map({(.iid): .state}) | add // {} else $o.merged end),
+   rollback: (if $ci then $merged.rollback.url // $o.rollback else $o.rollback end)} | tojson,
+  (if $old == null then empty else
+    ($todos[] | select(.id > $o.todo)
+      # A mention can be on a commit or anything else without an iid.
+      | (if .target.iid == null then .targetType | ascii_downcase
+         elif .targetType == "MERGEREQUEST" then "!" + .target.iid else "#" + .target.iid end) as $ref
+      | if .action == "review_requested" then "review requested\t\(.author.username) asked you to review \($ref) \(.target.title | flat)"
+        elif .action == "unmergeable" then "\($ref) can no longer merge\t\(.target.title | flat)"
+        elif (.target.id as $t | any($u.authoredMergeRequests.nodes[]; .id == $t)) then empty
+        else "\(.author | who) mentioned you on \($ref)\t\(.body | words)" end),
+    ($notes | map(select(.id > $o.note)) | group_by([.mr.id, .author.username, .system])[]
+      | (.[0].author | who) as $who | .[0].mr as $mr
+      | if .[0].system then "!\($mr.iid) approved\t\($who) approved \($mr.title | flat)"
+        elif length == 1 then "!\($mr.iid) \($mr.title | flat)\t\($who): \(.[0].body | words)"
+        else "\($who): \(length) comments on !\($mr.iid)\t\(.[0].body | words)" end),
+    ($failed[] | select($o.failed and (.headPipeline.id | IN($o.failed[]) | not))
+      | "!\(.iid) pipeline failed\t\(.title | flat): \(.failedJobs | join(", ") | if . == "" then "see the pipeline" else . end)"),
+    (if $ci and $o.merged then
+      ($merged.mrs[] | select(.state == "live" and $o.merged[.iid] and $o.merged[.iid] != "live")
+        | "!\(.iid) is live\t\(.title | flat)"),
+      ($merged.rollback | select(. != null and .url != $o.rollback)
+        | "production rolled back\tto the build of \(.sha[0:8]) (pipeline #\(.version))"
+          + ([$merged.mrs[] | select(.state == "rolledback") | "!" + .iid] | if length > 0 then ", without " + join(" ") else "" end))
+    else empty end)
+  end)') || exit 1
+
+printf '%s\n' "$out" | head -1 > "$state"
+printf '%s\n' "$out" | tail -n +2 | grep -v '^$'
+exit 0

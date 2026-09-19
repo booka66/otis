@@ -1,0 +1,192 @@
+#!/bin/sh
+# git-ci-merged: your MRs merged in the last week and whether each is live, as
+# JSON for gmr's merged section. git-mr-list caches it through git-cached-json.
+#
+# An MR is live once a successful production deploy ran on a main commit that
+# has its merge commit, which is a git ancestry check. A deploy of any later
+# commit counts, as it should: GitLab cancels superseded main pipelines, so an
+# MR's own pipeline often never deploys. Each MR gets a state:
+#   live        the latest deploy has it; the first deploy after the merge that
+#               had it says when it went out, looked up once and kept in the git
+#               dir, since a shipped MR stays shipped (unless a rollback undoes it)
+#   deploying   a running deploy has it
+#   queued      a deploy that passed its tests and waits on the deploy lock has
+#               it, so it goes out when the running deploy finishes (the newest
+#               ready deploy goes first, and any later commit has this one)
+#   rolledback  production was rolled back to a build without it; the next
+#               deploy of a later commit brings it back
+#   waiting     none of those; its own main pipeline and that pipeline's deploy
+#               job say where it is
+#   branch      merged into another branch (a stack) that has not reached main
+# An MR merged into another MR's branch reaches main when that MR merges after
+# it, so its state is that MR's (via). Squash merges mean its own merge commit
+# never becomes an ancestor of main.
+#
+# Deploys are GitLab deployments of one job to one environment, set below. A
+# rollback is another job on the same environment and deploy lock, played on
+# the latest main commit with the pipeline number (iid) of the build to
+# restore as its version input, so while it is the newest deploy, production
+# runs that build's commit, not the one the rollback ran on. The environment
+# and job names are otis-config's (git config, or the repo's .otis).
+env=$(otis-config deployEnv) job=$(otis-config deployJob) rollback_job=$(otis-config rollbackJob)
+main=$(otis-config main) url=$(otis-config url)
+days=7
+share=$(cd "$(dirname "$0")/../share" && pwd)
+
+repo=$(otis-config project)
+since=$(jq -rn --argjson days "$days" 'now - $days * 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")')
+mrs=$(glab api graphql -f repo="$repo" -f query='query($repo: String!) { currentUser {
+  authoredMergeRequests(state: merged, first: 20, projectPath: $repo, sort: MERGED_AT_DESC) { nodes {
+    iid title sourceBranch targetBranch mergedAt mergeCommitSha webUrl } } } }' |
+  jq -e --arg since "$since" '[.data.currentUser.authoredMergeRequests.nodes[] | select(.mergedAt >= $since)]') || exit 1
+
+# Production in one query: the newest successful deploys or rollbacks
+# (migrations share the environment, hence 20), and the deploy job of recent
+# main pipelines, which says which deploys are running or waiting on the lock.
+# Deploys come out as {sha, at, pipeline, url, status}.
+prod=$(glab api graphql -f repo="$repo" -f env="$env" -f job="$job" -f main="$main" -f query='query($repo: ID!, $env: String!, $job: String!, $main: String!) { project(fullPath: $repo) {
+  environment(name: $env) { deployments(statuses: [SUCCESS], orderBy: {finishedAt: DESC}, first: 20) { nodes {
+    sha finishedAt job { id name webPath pipeline { id } } } } }
+  pipelines(ref: $main, source: "push", first: 20) { nodes { id sha job(name: $job) { status createdAt queuedAt startedAt webPath } } } } }' |
+  jq -e -L "$share" --arg job "$job" --arg rollback "$rollback_job" --arg url "$url" 'include "otis"; .data.project |
+    {latest: ([.environment.deployments.nodes[] | select(.job.name | IN($job, $rollback))
+       | {sha, at: .finishedAt, pipeline: (.job.pipeline.id | gid), url: ($url + .job.webPath),
+          status: "success", job: .job.name, id: .job.id}][0]),
+     deploys: [.pipelines.nodes[] | select(.job) | {sha, pipeline: (.id | gid), url: ($url + .job.webPath),
+       status: (.job.status | ascii_downcase), at: (.job.startedAt // .job.queuedAt // .job.createdAt)}]}') || exit 1
+running=$(printf '%s' "$prod" | jq '[.deploys[] | select(.status | IN("running", "pending", "preparing"))]')
+queued=$(printf '%s' "$prod" | jq '[.deploys[] | select(.status == "waiting_for_resource")]')
+latest=$(printf '%s' "$prod" | jq '.latest')
+
+# A rollback's build: its version input, then that pipeline's commit.
+rollback=null
+if [ "$(printf '%s' "$latest" | jq -r .job)" = "$rollback_job" ]; then
+  version=$(glab api graphql -f repo="$repo" -f id="$(printf '%s' "$latest" | jq -r .id)" -f query='query($repo: ID!, $id: JobID!) {
+    project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' |
+    jq -er '.data.project.job.inputs[] | select(.name == "version") | .value | tostring') || exit 1
+  restored=$(glab api graphql -f repo="$repo" -f iid="$version" -f query='query($repo: ID!, $iid: ID!) {
+    project(fullPath: $repo) { pipeline(iid: $iid) { sha } } }' | jq -er '.data.project.pipeline.sha') || exit 1
+  rollback=$(printf '%s' "$latest" | jq --arg version "$version" --arg restored "$restored" '. + {on: .sha, sha: $restored, version: $version}')
+  latest=$rollback
+fi
+
+# iid, when it reached main, the commit that brought it there (empty while its
+# stack has not), and the MR it went in with if it was stacked. Empty fields go
+# last, since read collapses adjacent tabs.
+targets=$(printf '%s' "$mrs" | jq -r '.[] | [.iid, .targetBranch, .mergedAt, .mergeCommitSha] | @tsv' |
+  while IFS="$(printf '\t')" read -r iid target merged sha; do
+    via=
+    while [ "$target" != "$main" ]; do
+      base=$(glab api graphql -f repo="$repo" -f branch="$target" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $after: Time!) {
+        project(fullPath: $repo) { mergeRequests(state: merged, sourceBranches: [$branch], mergedAfter: $after, sort: MERGED_AT_ASC, first: 1) {
+          nodes { iid targetBranch mergeCommitSha mergedAt } } } }') || exit 1
+      next=$(printf '%s' "$base" | jq -r '.data.project.mergeRequests.nodes[0] // empty | [.iid, .targetBranch, .mergedAt, .mergeCommitSha] | @tsv')
+      [ -n "$next" ] || { sha= via=; break; }
+      IFS="$(printf '\t')" read -r via target merged sha <<EOF
+$next
+EOF
+    done
+    printf '%s\t%s\t%s\t%s\n' "$iid" "$merged" "$sha" "$via"
+  done) || exit 1
+
+# The ancestry checks need main's recent commits here. Without them every check
+# fails and live MRs would read as waiting, so a fetch that leaves any missing
+# fails the run instead, which keeps the last good data and shows why.
+git fetch --quiet --no-tags origin "$main"
+missing=$({ printf '%s' "$targets" | cut -f3; printf '%s' "$prod" | jq -r '.deploys[].sha'
+  printf '%s %s' "$latest" "$rollback" | jq -r '.sha // empty, .on // empty'; } |
+  grep . | git cat-file --batch-check | awk '$2 == "missing" { print $1 }')
+if [ -n "$missing" ]; then
+  printf 'commits missing after git fetch origin %s: %s\n' "$main" "$(echo $missing)" >&2
+  exit 1
+fi
+
+has() { git merge-base --is-ancestor "$1" "$2" 2>/dev/null; }
+shipped="$(git rev-parse --git-common-dir)/git-alias-cache/ci-shipped.json"
+mkdir -p "$(dirname "$shipped")"
+[ -s "$shipped" ] || echo '{}' > "$shipped"
+# record <iid> <json>: a per-process temp and a rename, so runs that overlap
+# never write a half file.
+record() {
+  tmp=$(mktemp "$shipped.XXXXXX") &&
+    jq --arg iid "$1" --argjson d "$2" '.[$iid] = $d' "$shipped" > "$tmp" && mv "$tmp" "$shipped"
+}
+live_sha=$(printf '%s' "$latest" | jq -r '.sha // empty')
+rolled_on=$(printf '%s' "$rollback" | jq -r '.on // empty')
+rolled_at=$(printf '%s' "$rollback" | jq -r '.at // empty')
+running_shas=$(printf '%s' "$running" | jq -r '.[].sha')
+queued_shas=$(printf '%s' "$queued" | jq -r '.[].sha')
+# iid, state, for deploying or queued the index of the deploy that has it, and via.
+states=$(printf '%s\n' "$targets" | grep . |
+  while IFS="$(printf '\t')" read -r iid merged sha via; do
+    if [ -z "$sha" ]; then
+      printf '%s\tbranch\t\t\n' "$iid"
+      continue
+    fi
+    if [ -n "$live_sha" ] && has "$sha" "$live_sha"; then
+      # Which deploy shipped it: the first one to finish after the merge (or
+      # after the rollback that undid it) that has it.
+      if [ "$(jq --arg iid "$iid" '.[$iid].sha != null' "$shipped")" = false ]; then
+        from=$(jq -r --arg iid "$iid" '.[$iid].after // empty' "$shipped")
+        after=$(glab api "projects/:fullpath/deployments?environment=$env&status=success&order_by=finished_at&sort=asc&per_page=50&finished_after=${from:-$merged}" |
+          jq -e --arg job "$job" '[.[] | select(.deployable.name == $job)
+            | {sha, at: .deployable.finished_at, pipeline: (.deployable.pipeline.id | tostring), url: .deployable.web_url, status: .deployable.status}]') &&
+          for d in $(printf '%s' "$after" | jq -r '.[].sha'); do
+            has "$sha" "$d" || continue
+            record "$iid" "$(printf '%s' "$after" | jq --arg sha "$d" '[.[] | select(.sha == $sha)][0]')"
+            break
+          done
+      fi
+      printf '%s\tlive\t\t%s\n' "$iid" "$via"
+      continue
+    fi
+    state=waiting hit=
+    for kind in deploying queued; do
+      shas=$running_shas
+      [ $kind = queued ] && shas=$queued_shas
+      i=0
+      for d in $shas; do
+        # After a rollback, a deploy of its commit or an older one refuses to run.
+        if has "$sha" "$d" && { [ -z "$rolled_on" ] || ! has "$d" "$rolled_on"; }; then state=$kind hit=$i; break 2; fi
+        i=$((i + 1))
+      done
+    done
+    if [ $state = waiting ] && [ -n "$rolled_on" ] && has "$sha" "$rolled_on"; then
+      state=rolledback
+      # When it goes live again, it is the first deploy after the rollback that says when.
+      [ "$(jq -r --arg iid "$iid" '.[$iid].after // empty' "$shipped")" = "$rolled_at" ] ||
+        record "$iid" "$(jq -n --arg at "$rolled_at" '{after: $at}')"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$iid" "$state" "$hit" "$via"
+  done)
+
+# Waiting MRs: the main pipeline of the commit that brings them and its deploy job, in one query.
+fields=$(printf '%s\n' "$states" | awk -F'\t' '$2 == "waiting" { print $1 }' | while read -r iid; do
+  sha=$(printf '%s\n' "$targets" | awk -F'\t' -v iid="$iid" '$1 == iid { print $3 }')
+  printf 'p%s: pipeline(sha: "%s") { id status path job(name: "%s") { status webPath } } ' "$iid" "$sha" "$job"
+done)
+pipes='{}'
+if [ -n "$fields" ]; then
+  pipes=$(glab api graphql -f repo="$repo" -f query="query(\$repo: ID!) { project(fullPath: \$repo) { $fields } }" |
+    jq -e '.data.project') || exit 1
+fi
+
+# git-alerts runs from ~ and runs this script to notice MRs going live, so it
+# needs to know where a repo this works in is.
+alerts=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias
+mkdir -p "$alerts"
+dirname "$(git rev-parse --path-format=absolute --git-common-dir)" > "$alerts/ci-repo"
+
+jq -n --argjson mrs "$mrs" --argjson latest "$latest" --argjson running "$running" --argjson queued "$queued" \
+  --argjson rollback "$rollback" --argjson pipes "$pipes" --slurpfile shipped "$shipped" --arg states "$states" '
+  ($states | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: {state: .[1], i: .[2], via: .[3]}})
+    | from_entries) as $s |
+  { lastDeploy: $latest, running: $running[0], rollback: $rollback,
+    mrs: [$mrs[] | $s[.iid] as $st | . + {state: $st.state}
+      + (if $st.via != "" then {via: $st.via} else {} end)
+      + (if $st.state == "live" then (if $shipped[0][.iid].sha then {deploy: $shipped[0][.iid]} else {} end)
+         elif $st.state == "deploying" then {deploy: $running[$st.i | tonumber]}
+         elif $st.state == "queued" then {deploy: $queued[$st.i | tonumber]}
+         elif $st.state == "rolledback" then {deploy: $rollback}
+         elif $st.state == "waiting" then {pipeline: $pipes["p" + .iid]}
+         else {} end)] }'

@@ -1,0 +1,207 @@
+#!/bin/sh
+# git-commit-open <rev> [path [line]]
+# git-commit-open --files [--deleted] <rev>
+# git-commit-open --line <rev> <path>
+# Open a file that <rev> changed in nvim, at <line> when the caller knows it
+# (gmr's symbol view), else at the line its preview is scrolled to, or at the
+# file's first changed line when it is not scrolled.
+# <rev> is one commit, or a range like base..head for a whole MR. With several
+# files it shows a picker that stays open while nvim runs, so closing nvim lands
+# you on the same file with the preview scrolled where you left it; q goes back.
+# nvim opens the file as it is in this worktree, which for a commit may be
+# newer than the commit; a file the commit deleted opens as its parent (a
+# range's base) had it, read only (git-show-file), as does one it added that
+# is gone from the worktree since. --files prints the picker's list, test
+# files filtered, deleted files left out; with --deleted (gmr's file picker)
+# they are in it too, each followed by a tab and "deleted", and added ones by
+# "added". --line prints a file's first changed line, which gmr's r also
+# jumps to. From gmr, a deleted file opens as its base version, beside an
+# empty pane for what the MR left (share/mr-comments.lua), so its removed
+# lines can take comments.
+case $1 in
+  --files) files_only=1; shift ;;
+  --rows)  rows_only=1; shift ;;
+  --line)  line_only=1; shift ;;
+esac
+[ "$1" = --deleted ] && { deleted=1; shift; }
+# --all leaves test files in, for a caller that sections them itself.
+[ "$1" = --all ] && { allfiles=1; shift; }
+rev=$1
+[ -n "$rev" ] || exit 0
+share=$(cd "$(dirname "$0")/../share" && pwd)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+keep() { if [ -n "$allfiles" ]; then cat; else git-test-files filter 1; fi; }
+
+# One commit reads through git show, a range through git diff; the rest of the
+# script does not care which. Options go in "$@", an optional path in $path,
+# since the rev has to sit between the two. A merge commit's changes are its
+# diff against its first parent, what it brought in; git show would otherwise
+# list no files for it. Paths as they are, not "caf\303\251.txt".
+path=$2
+changes() {
+  case $rev in
+    *..*) git -c core.quotePath=false diff "$@" "$rev" ${path:+-- "$path"} ;;
+    *)    git -c core.quotePath=false show --format= --diff-merges=first-parent "$@" "$rev" ${path:+-- "$path"} ;;
+  esac
+}
+
+# The file line the preview is scrolled to, if it has been scrolled. git-fzf
+# remembers each row's preview offset (git-fzf-scroll), so re-rendering the
+# same preview at the same width and reading its gutter at that row says which
+# line you are looking at -- and enter opens there rather than at the file's
+# first change. Unscrolled, this says nothing and the first change wins.
+#
+# Re-rendered rather than recorded as the preview draws: the preview runs on
+# every cursor move, and this runs once, on the way into an editor.
+preview_line() {
+  [ -n "$GIT_FZF_STATE" ] || return 1
+  key=$(printf '%s' "$1" | tr '/' '%')
+  off=$(cat "$GIT_FZF_STATE/off.$key" 2>/dev/null) || return 1
+  [ "${off:-1}" -gt 1 ] 2>/dev/null || return 1
+  FZF_PREVIEW_COLUMNS=$(cat "$GIT_FZF_STATE/cols" 2>/dev/null)
+  export FZF_PREVIEW_COLUMNS
+  if [ -n "$GMR_IID" ]; then
+    git-mr-file-preview "$GMR_IID" "$GMR_RANGE" "$1"
+  else
+    git-preview-commit "$rev" "$1"
+  fi 2>/dev/null | git-preview-at "$off"
+}
+
+first_line() {
+  changes -U0 | awk '/^@@/ { split($3, a, ","); n = substr(a[1], 2) + 0; print (n > 0 ? n : 1); exit }'
+}
+
+# before: what the changes are measured from, where a deleted file still is: a
+# commit's first parent, a range's base (its merge base with three dots).
+# after: the commit itself, or a range's head, where an added file is.
+before() {
+  case $rev in
+    *...*) git merge-base "${rev%%...*}" "${rev##*...}" ;;
+    *..*)  printf '%s\n' "${rev%%..*}" ;;
+    *)     printf '%s^\n' "$rev" ;;
+  esac
+}
+after() { printf '%s\n' "${rev##*..}"; }
+
+# plain_line: the line the preview is scrolled to when it shows the file
+# itself rather than a diff (git-preview-commit's added and deleted views):
+# two header lines, then one row a line.
+plain_line() {
+  off=$(cat "$GIT_FZF_STATE/off.$(printf '%s' "$1" | tr '/' '%')" 2>/dev/null)
+  [ "${off:-1}" -gt 2 ] 2>/dev/null && echo $((off - 2))
+}
+
+if [ -n "$line_only" ]; then
+  line=$(first_line)
+  echo "${line:-1}"
+  exit 0
+fi
+
+if [ -n "$files_only" ]; then
+  if [ -n "$deleted" ]; then
+    # No rename pairing: a moved file lists as its old path deleted and its new
+    # one added, matching the per-path diffs the previews show.
+    changes --name-status --no-renames | awk -F'\t' '{ print $2 (($1 == "D") ? "\tdeleted" : ($1 == "A") ? "\tadded" : "") }' | keep
+  else
+    changes --name-only --diff-filter=d | keep
+  fi
+  exit 0
+fi
+
+# The picker's rows: the same shape ga uses, so the file list of a commit, of
+# gdm's whole branch and of an MR under review all read alike. How big each
+# file's change is, then the path with its directory dimmed and shortened to
+# the pane; then the path, its state (added, deleted or nothing, which
+# git-test-files sections by) and the path again as the row's identity. A
+# range diffs two trees, so the numstat never takes the index lock.
+if [ -n "$rows_only" ]; then
+  cols=${FZF_COLUMNS:-0}
+  [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
+  [ -n "$cols" ] || cols=100
+  ns=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/numstat.$$
+  changes --numstat -M > "$ns" 2>/dev/null
+  changes --name-status --no-renames |
+    awk -F'\t' '{ print $2 (($1 == "D") ? "\tdeleted" : ($1 == "A") ? "\tadded" : "") }' |
+    awk -F'\t' -v ns="$ns" -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+      BEGIN {
+        while ((getline line < ns) > 0) {
+          if (split(line, f, "\t") < 3 || f[1] !~ /^[0-9]+$/) continue
+          p = gk_numstat_path(f[3]); add[p] = f[1]; del[p] = f[2]
+        }
+        close(ns)
+      }
+      NF {
+        n++; path[n] = $1; state[n] = $2
+        if (gk_digits(add[$1]) > wa) wa = gk_digits(add[$1])
+        if (gk_digits(del[$1]) > wd) wd = gk_digits(del[$1])
+      }
+      END {
+        budget = gk_list_width(cols) - (wa + wd + 9)
+        if (budget < 22) budget = 22
+        for (i = 1; i <= n; i++) {
+          p = path[i]
+          print gk_stat(add[p], del[p], wa, wd) " " gk_bar(add[p], del[p]) "  " \
+            gk_path(p, budget, state[i] == "deleted" ? GK_CONTEXT : GK_TEXT) "\t" p "\t" state[i] "\t" p
+        }
+      }' | git-test-files filter --section 2 --state 3
+  rm -f "$ns"
+  exit 0
+fi
+
+if [ -n "$2" ]; then
+  # From a review: the worktree may still be moving onto the MR.
+  git-mr-wait || exit 0
+  if [ ! -e "$2" ] && [ -n "$GMR_IID" ] && [ -n "$NVIM_DIFF_BASE" ] && git cat-file -e "$NVIM_DIFF_BASE:$2" 2>/dev/null; then
+    # An empty placeholder only so nvim starts on a file, not a dashboard; the
+    # panes replace it.
+    placeholder=$(mktemp)
+    GMR_DELETED=$2 GMR_PLACEHOLDER=$placeholder nvim -c "luafile $share/mr-comments.lua" -- "$placeholder"
+    rm -f "$placeholder"
+    exit 0
+  fi
+  # gmr's preview is always the diff (its row on a deletion is an old-side
+  # line); elsewhere an added or deleted file's is the file itself.
+  st=$(changes --name-status --no-renames | awk -F'\t' '$2 == p { print $1 }' p="$2")
+  at=$3
+  case $at in *[!0-9]*) at= ;; esac
+  if [ "$st" = D ]; then
+    if [ -n "$at" ]; then line=$at; elif [ -n "$GMR_IID" ]; then line=$(preview_line "$2"); else line=$(plain_line "$2"); fi
+    exec git-show-file "$(before):$2" "$2" "${line:-1}"
+  fi
+  if [ ! -e "$2" ]; then
+    [ "$st" = A ] && exec git-show-file "$(after):$2" "$2" "${at:-$( [ -n "$GMR_IID" ] && preview_line "$2" || plain_line "$2" || echo 1)}"
+    printf '%s is gone from the working tree now. press enter\n' "$2"
+    read -r _
+    exit 0
+  fi
+  if [ -n "$at" ]; then line=$at; elif [ "$st" = A ] && [ -z "$GMR_IID" ]; then line=$(plain_line "$2"); else line=$(preview_line "$2"); fi
+  [ -n "$line" ] || line=$(first_line)
+  # From gmr's review picker: the MR's comments inline, and keys to add more.
+  [ -n "$GMR_IID" ] && exec nvim "+${line:-1}" -c "luafile $share/mr-comments.lua" -- "$2"
+  exec otis-edit "+${line:-1}" -- "$2"
+fi
+
+files=$(changes --name-only --no-renames)
+if [ -z "$files" ]; then
+  printf '%s changes no files. press enter\n' "$rev"
+  read -r _
+  exit 0
+fi
+
+if [ "$(printf '%s\n' "$files" | wc -l)" -eq 1 ]; then
+  exec "$0" "$rev" "$files"
+fi
+
+# s and git-symbols' f switch between the two views: opened from the symbol
+# view, s goes back to it rather than stacking another.
+symbols="execute(OTIS_UNDER=files git-symbols $rev)"
+[ "$OTIS_UNDER" = symbols ] && symbols=abort
+git-fzf "open from $rev " 'enter=open in editor,s=by symbol,t=tests/config/generated,y=copy path' \
+  --ansi --delimiter='\t' --with-nth=1 --id-nth=4 \
+  --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
+  --bind "start:reload(git-commit-open --rows $rev)" \
+  --bind "t:execute-silent(git-test-files toggle)+reload(git-commit-open --rows $rev)" \
+  --bind "enter:execute(git-commit-open $rev {2})" \
+  --bind "s:$symbols" \
+  --preview "git-preview-commit $rev {2}" </dev/null >/dev/null
+exit 0

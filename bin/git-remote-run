@@ -1,0 +1,155 @@
+#!/bin/sh
+# git-remote-run <command...>: run a command against this checkout's contents
+# somewhere else — a Coder workspace, a dev box — and bring back what it
+# changed. For the work a laptop is bad at: this repo's Bazel lint, type checks
+# and tests, which are minutes of cold analysis here and seconds where the
+# build cache is warm.
+#
+#   git config otis.remote <ssh host>     where to run it (coder config-ssh
+#                                         writes hosts like coder.my-workspace)
+#   git config otis.remotePath <path>     that host's checkout of this repo
+#
+# What runs there is exactly what is here now: the tracked files as they stand,
+# staged or not, plus anything untracked that is not ignored, as one commit
+# pushed straight to that checkout (never to origin) and checked out detached.
+# That checkout must have nothing uncommitted of its own, since it is moved;
+# untracked files there are left alone.
+# Bazel is left in one place, so its analysis cache stays warm; a worktree per
+# run would pay for that again each time.
+#
+# The command runs from the top of that checkout, with GIT_BASE_REF passed
+# through and, when the caller sets OTIS_CHANGED_FILES, that file copied over
+# and the variable pointed at the copy. An ssh command reads no login files, so
+# ~/.claude/env over there is sourced first when it exists: tokens the command
+# needs (a CLAUDE_CODE_OAUTH_TOKEN, so claude never stops to ask for a login)
+# belong in it. Keep your copy in ~/.claude/remote-env here, mode 600, and a
+# host that does not have it yet is given it on the first run, so a workspace
+# you have never used works without a login. It is a long-lived token in every
+# workspace it reaches: revoke it in your account settings if one is lost. Its output streams back as it goes and
+# its exit status is this script's. Anything it changed comes back as a patch
+# applied to your checkout, so a lint that fixes files fixes them here too.
+# What comes back is what the command wrote: changed tracked files, and files
+# it created that are not ignored. Untracked files that were already sitting
+# in that checkout stay there.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+host=$(git config --get otis.remote)
+path=$(git config --get otis.remotePath)
+[ -n "$host" ] && [ -n "$path" ] || {
+  printf 'git-remote-run: set otis.remote (an ssh host) and otis.remotePath (its checkout of this repo)\n' >&2
+  exit 2
+}
+[ $# -gt 0 ] || { printf 'git-remote-run: nothing to run\n' >&2; exit 2; }
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+# This checkout as one commit, without touching your index or branch.
+GIT_INDEX_FILE=$tmp/index git read-tree HEAD || exit 1
+GIT_INDEX_FILE=$tmp/index git add -A || exit 1
+tree=$(GIT_INDEX_FILE=$tmp/index git write-tree) || exit 1
+commit=$(git commit-tree "$tree" -p HEAD -m "otis remote run") || exit 1
+
+# A workspace that has not been given the token yet gets it now, once.
+if [ -r "$HOME/.claude/remote-env" ] && ! ssh "$host" '[ -r ~/.claude/env ]' 2>/dev/null; then
+  printf "${GK_CONTEXT}giving %s what it needs to run claude ...${GK_R}\n" "$host"
+  ssh "$host" 'umask 077; mkdir -p ~/.claude; cat > ~/.claude/env
+    grep -qs claude/env ~/.bashrc 2>/dev/null || echo "[ -r ~/.claude/env ] && . ~/.claude/env" >> ~/.bashrc' \
+    < "$HOME/.claude/remote-env" || printf 'git-remote-run: could not set up %s\n' "$host" >&2
+fi
+
+# Runs go side by side (fix runs, reviews, a fold's lint), so each sends its
+# own ref and gets its own patch back, and the far side takes turns.
+id=$$-$(date +%s)
+printf "${GK_CONTEXT}sending this checkout to %s ...${GK_R}\n" "$host"
+git push --quiet --force "ssh://$host/$path" "$commit:refs/otis/run/$id" || {
+  printf 'git-remote-run: could not push to %s:%s\n' "$host" "$path" >&2
+  exit 1
+}
+changed=
+if [ -n "$OTIS_CHANGED_FILES" ] && [ -r "$OTIS_CHANGED_FILES" ]; then
+  changed=$(cat "$OTIS_CHANGED_FILES")
+fi
+
+# Everything the far side does, in one go: check the checkout is free, move it
+# to what was sent, run the command, and leave what changed in a patch. It all
+# goes over stdin, since anything on ssh's command line is parsed again there.
+quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+{
+  printf 'OTIS_PATH=%s\n' "$(quote "$path")"
+  printf 'OTIS_ID=%s\n' "$id"
+  printf 'OTIS_BASE_REF=%s\n' "$(quote "$GIT_BASE_REF")"
+  printf 'OTIS_CHANGED=%s\n' "$(quote "$changed")"
+  printf 'OTIS_COMMAND=%s\n' "$(quote "$*")"
+  cat <<'REMOTE'
+set -e
+cd "$OTIS_PATH"
+# One run at a time moves this checkout; a lock whose holder is gone (a
+# dropped connection) is taken over.
+lock=.git/otis-remote.lock waited=
+until mkdir "$lock" 2>/dev/null; do
+  pid=$(cat "$lock/pid" 2>/dev/null) || true
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$lock"; continue; fi
+  [ -n "$waited" ] || { echo "git-remote-run: waiting for another run in $OTIS_PATH ..." >&2; waited=1; }
+  sleep 1
+done
+echo $$ > "$lock/pid"
+trap 'git update-ref -d "refs/otis/run/$OTIS_ID" 2>/dev/null; rm -rf "$lock"' EXIT
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "git-remote-run: $OTIS_PATH has uncommitted changes; commit or clear them" >&2
+  exit 2
+fi
+git checkout --quiet --detach "refs/otis/run/$OTIS_ID"
+if [ -n "$OTIS_CHANGED" ]; then
+  printf '%s\n' "$OTIS_CHANGED" > .git/otis-changed-files
+  OTIS_CHANGED_FILES="$PWD/.git/otis-changed-files"
+  export OTIS_CHANGED_FILES
+fi
+GIT_BASE_REF=$OTIS_BASE_REF
+export GIT_BASE_REF
+# An ssh command runs no login files, so what claude needs in its environment
+# (a CLAUDE_CODE_OAUTH_TOKEN) goes in ~/.claude/env, and only claude gets it:
+# a check Claude asked for through the gate must not see the token.
+case $OTIS_COMMAND in
+  claude|claude\ *) [ -r "$HOME/.claude/env" ] && . "$HOME/.claude/env" ;;
+esac
+git ls-files --others --exclude-standard | sort > .git/otis-untracked-before
+set +e
+sh -c "$OTIS_COMMAND"
+status=$?
+set -e
+# Files the command made (bazel run refresh writes new package.json and
+# tsconfig.json) count as changes; what that checkout already had lying around
+# does not.
+git ls-files --others --exclude-standard | sort > .git/otis-untracked-after
+comm -13 .git/otis-untracked-before .git/otis-untracked-after > .git/otis-untracked-new
+[ -s .git/otis-untracked-new ] && xargs -r -a .git/otis-untracked-new git add -N
+# Only what the command changed: files it wrote, tracked or new, and never
+# what that checkout happened to have lying around already. Then
+# put them back, so the next run finds the checkout free; the patch is what
+# carries them home.
+git diff --binary HEAD > ".git/otis-result-$OTIS_ID.patch"
+git checkout --quiet -- .
+[ -s .git/otis-untracked-new ] && xargs -r -a .git/otis-untracked-new rm -f
+git reset --quiet
+exit $status
+REMOTE
+} > "$tmp/remote.sh"
+ssh "$host" sh -s < "$tmp/remote.sh"
+status=$?
+
+# What it changed, back onto your checkout.
+ssh "$host" "cd $(quote "$path") && cat .git/otis-result-$id.patch && rm -f .git/otis-result-$id.patch" > "$tmp/result.patch" 2>/dev/null
+if [ -s "$tmp/result.patch" ]; then
+  # Plain first: --3way stages what it applies, and a caller watching for
+  # unstaged changes (git-mr-fix, for lint fixes) would miss them.
+  if git apply "$tmp/result.patch" 2>/dev/null || git apply --3way "$tmp/result.patch"; then
+    printf "${GK_ATTENTION}%s changed files here too${GK_R}\n" "$host"
+  else
+    cp "$tmp/result.patch" "$(git rev-parse --git-path otis-remote.patch)"
+    printf 'git-remote-run: could not apply what it changed; the patch is at %s\n' \
+      "$(git rev-parse --git-path otis-remote.patch)" >&2
+    [ "$status" -eq 0 ] && status=1
+  fi
+fi
+exit $status

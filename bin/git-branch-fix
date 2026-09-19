@@ -1,0 +1,44 @@
+#!/bin/sh
+# git-branch-fix <branch> [iid]: gb's C. Claude reads what the branch changes and
+# proposes fixes, the same way it does on one of your MRs (git-mr-fix) minus
+# the half that needs one: nothing to answer, nothing to reply to. Catching
+# things before anyone else reads the branch is the cheaper time to catch them.
+#
+# Only the branch you are on. Folding rebases and pushes, and arranging that
+# for a branch checked out somewhere else, or nowhere, is not something to do
+# behind a keypress; git-mr-fix's fold refuses it anyway, so this says it up
+# front rather than after a run.
+#
+# A branch with an MR can have a run filed under the MR's iid too, started from
+# gmr. The row says what either has (git-branch-list), so C opens the run the
+# row is talking about, in the row's order: one working, then fixes waiting on
+# the branch, then on the MR. Only with neither does it offer a new run.
+b=$1 iid=$2
+[ -n "$b" ] || exit 0
+pause() { printf '%s. press enter\n' "$1"; read -r _; exit 0; }
+
+here=$(git branch --show-current)
+[ -n "$here" ] || pause "C proposes fixes for the branch you are on, and HEAD is detached"
+[ "$b" = "$here" ] ||
+  pause "C proposes fixes for the branch you are on; enter switches to $b first, then C"
+command -v claude >/dev/null || pause "this needs Claude Code (claude)"
+
+base=$(otis-config base)
+[ "$base" != HEAD ] || pause "no $(otis-config main) here to compare against"
+[ "$(git rev-list --count "$base..HEAD")" -gt 0 ] ||
+  pause "$b has nothing past $base for Claude to read"
+
+# b-<name>, slashes as %: a key that can never be mistaken for an MR's iid, and
+# that gmr's rows skip, since only MRs have rows there.
+key="b-$(printf '%s' "$b" | tr '/' '%')"
+if [ -n "$iid" ]; then
+  use=$(git-mr-fix --marks | jq -r --arg b "$key" --arg m "$iid" '
+    if .[$b].fixing then $b elif .[$m].fixing then $m
+    elif (.[$b].fixes // 0) > 0 then $b elif (.[$m].fixes // 0) > 0 then $m
+    else $b end')
+  if [ "$use" = "$iid" ]; then
+    run="$(git rev-parse --path-format=absolute --git-common-dir)/gmr-fix/$iid"
+    exec git-mr-fix "$iid" "$(cat "$run/range")"
+  fi
+fi
+exec git-mr-fix "$key" "$base..HEAD"

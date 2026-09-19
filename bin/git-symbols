@@ -1,0 +1,1365 @@
+#!/bin/sh
+# git-symbols <rev>                          a change read by symbol, not by file
+# git-symbols --rows <rev>                   its list
+# git-symbols --preview <rev> <path> <side> <start> <end> [row id]   one symbol's diff
+# git-symbols --open <id>                    show what a row uses
+# git-symbols --close <id> [<reload command...>]
+#                                            hide it, from the row or from anything under it; with the
+#                                            reload command, h's transform: the fzf actions that put the
+#                                            cursor on the row closed and reload
+# git-symbols --open-all <rev>, --close-all  L and H: everything, or nothing
+# git-symbols --flip                         b: bottom up, or back to top down
+# git-symbols --uses <id> <start> <side>     i: the row's preview between its diff and what it uses
+# git-symbols --stage <path> <side> <start> <end> <old start> <old end> <staged> <unstaged>
+#                                            ga's space: stage the symbol, or unstage it
+# git-symbols --edit <path> <line>           ga's enter
+# git-symbols --viewed <rev> <toggle|add> <row id>
+#                                            v: the row and everything under it viewed, or, all of it
+#                                            viewed already, none; add: the row alone, a review's enter
+# git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
+#                                            the file line the row's preview is scrolled to, else <line>:
+#                                            enter opens there, where you are
+#
+# <rev> is one commit (gl), base..head (an MR under review, which git-mr-files
+# says by exporting GMR_IID), base...head (gdm's branch) or the word worktree
+# (ga: what is changed against HEAD, staged or not, untracked files too).
+#
+# The same diff as the file picker, read the way you would explain it: what
+# the change does, by name, as a tree. The top level is the changed symbols
+# that nothing else changed mentions: the entry points, each with its
+# signature rather than its file, and what happened to it: added, removed,
+# signature changed, or only its body. l opens one to what it uses, the
+# changed symbols its text mentions in the order it mentions them, and a
+# class to its changed members too; h closes it, from the row or from
+# anything under it. So a one-line export that hands the work to a helper is
+# the row, and the helper is one keypress down. A row under another carries
+# ⇢ before its fold when the mention is new to this change: rewiring, where
+# the rest is behavior. b turns the tree over: the sinks first, the changed
+# symbols that use no other, each opening to what uses it, so the new pieces
+# come before the plumbing that hands them along. Under a changed exported
+# symbol, one more row, dim: its callers elsewhere, the code this change did
+# not touch that uses it, from tsgo through git-callers, which opens to them
+# as signatures; their preview is the caller whole with the calls underlined,
+# and enter opens it. The files that are not code
+# the way this reads it (schema, sql, config) follow as plain file rows.
+# Enter opens nvim on the symbol, with the MR's comments in a review. The
+# preview is the whole symbol as the change leaves it, its changed lines
+# marked, with the file's real line numbers, rather than the hunks and three
+# lines around each.
+#
+# v marks a row viewed and everything under it with it, so v on a root is
+# the whole of what it reaches; v again, once all of it is, clears it. The
+# mark is the symbol's, not the row's: a helper read under one root is
+# viewed under every other it shows under, and a closed row says how much
+# of it is left. A viewed row is dim, and L leaves closed what is all read.
+# The mark lasts until the symbol's diff changes (vstore below). In a review
+# a file is marked viewed once every symbol in it is.
+#
+# In ga each row also says whether the symbol's change is staged, unstaged or
+# both, in the two status cells ga's file rows have, and space stages one
+# symbol or, once nothing of it is left unstaged, unstages it: the file's
+# diff is cut down to the symbol's lines, the way the preview is, and applied
+# to the index, so a function can be committed on its own out of a file that
+# has three other things going on. Its lines in the index are found by
+# shifting the worktree's through the unstaged hunks above it (shift below).
+#
+# None of it comes from a model, and none of it is worked out here: the table
+# is seam's (seam <rev>, and seam's README says its columns), which parses both
+# sides of every changed file it has a language for with ast-grep and reads
+# git diff -U0 for the lines that moved. This is its first renderer. otis
+# hands it its own file kinds (git-test-files kinds), so the picker and the
+# table agree on what a test file is. That is well under a second for a large
+# MR and the same answer every time. Once built the table is kept for the
+# picker's life ($GIT_FZF_STATE), so opening a class is a re-render, not a
+# re-parse; the worktree's is rebuilt on every reload, since that is what a
+# reload is for.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd)
+. "$share/palette.sh"
+# Each file's mtime to the nanosecond, one a line: stat says it differently
+# on Linux (-c %.9Y) and macOS (-f %Fm). Whole seconds would key a cache on
+# a file that changed within the second it was read (F, then its preview).
+if stat -c %Y / >/dev/null 2>&1; then mtimes() { stat -c %.9Y "$@"; }; else mtimes() { stat -f %Fm "$@"; }; fi
+mode=
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--peeks|--uses|--stage|--edit|--at|--viewed) mode=$1; shift ;; esac
+
+st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
+
+case $mode in
+  --close-all) rm -f "$st/open"; exit 0 ;;
+  # S: the shape of the change in the preview, where ? puts the help. A flag
+  # rather than a pager, so it sits beside the rows it is about and the next
+  # keypress takes it away again.
+  --shape) if [ -e "$st/shape" ]; then rm -f "$st/shape"; else : > "$st/shape"; fi; exit 0 ;;
+  # p: the peeks, the notes under each changed name the preview uses, off
+  # and on again. The names stay marked.
+  --peeks) if [ -e "$st/nopeeks" ]; then rm -f "$st/nopeeks"; else : > "$st/nopeeks"; fi; exit 0 ;;
+  # Bottom up: the sinks first, each opening to what uses it. A row's place
+  # in the tree is its id, so what was open is closed by the flip.
+  --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
+  # Every row with something under it, at every depth: the render says which
+  # as it walks, given OPEN_ALL, and writes them down where l would.
+  --open-all) OPEN_ALL=1 git-symbols --rows "$1" > /dev/null; exit 0 ;;
+  # i: a symbol row'"'"'s preview between its diff and what it uses, whole. One
+  # row at a time; the last goes back to its diff. Each view keeps its own
+  # scroll: the diff'"'"'s position is put aside while the uses show (the
+  # key is git-fzf'"'"'s: / as %, the last 200 characters).
+  --uses)
+    rid=$1
+    [ -n "$rid" ] && [ -n "$2" ] && [ "$3" != file ] || exit 0
+    key() { k=$(printf '%s' "$1" | tr '/' '%'); while [ ${#k} -gt 200 ]; do k=${k#?}; done; }
+    was=$(cat "$st/uses-for" 2>/dev/null)
+    if [ -n "$was" ]; then
+      key "$was"; rm -f "$st/off.$k" "$st/uses-for"
+      if [ -e "$st/off.$k.diff" ]; then mv "$st/off.$k.diff" "$st/off.$k"; fi
+      [ "$was" = "$rid" ] && exit 0
+    fi
+    key "$rid"
+    if [ -e "$st/off.$k" ]; then mv "$st/off.$k" "$st/off.$k.diff"; fi
+    printf '%s\n' "$rid" > "$st/uses-for"
+    exit 0 ;;
+  --open)
+    [ -n "$1" ] || exit 0
+    grep -qxF -- "$1" "$st/open" 2>/dev/null || printf '%s\n' "$1" >> "$st/open"
+    exit 0 ;;
+  --close)
+    # h on an open row closes it; on anything else, closes the row it is
+    # under: a row's id is its parent's with ">symbol" or "+member" after it,
+    # so the parent is the cut at whichever of the two comes last. Given the
+    # reload command, this is h's transform, and prints the actions: the
+    # cursor onto the row that closes, found in the last rows shown, then
+    # the reload; the row keeps its place, since only what was under it goes.
+    row=$1; shift
+    [ -n "$row" ] && [ -e "$st/open" ] || { [ $# -gt 0 ] && printf 'reload(%s)\n' "$*"; exit 0; }
+    id=$row
+    if ! grep -qxF -- "$id" "$st/open"; then
+      # A member's + comes after the #; one before it is the path's
+      # (SvelteKit's +page.ts).
+      a=${id%>*} b=
+      case $id in *#*+*) case ${id##*#} in *+*) b=${id%+*} ;; esac ;; esac
+      [ "$a" = "$id" ] && a=
+      if [ ${#a} -gt ${#b} ]; then id=$a; else id=$b; fi
+    fi
+    grep -vxF -- "$id" "$st/open" > "$st/open.new"; mv "$st/open.new" "$st/open"
+    if [ $# -gt 0 ]; then
+      at=$(awk -F'\t' -v id="$id" '$12 == id { print NR; exit }' "$st/rows.last" 2>/dev/null)
+      printf '%s\n' "${at:+pos($at)+}reload($*)"
+    fi
+    exit 0 ;;
+esac
+
+# Reading a -U0 or -U999999 diff, the same reader seam classifies a change
+# with (seam --awk hunks): per file, which new lines came (add), which old
+# lines went (del), where a deletion sits in new numbering (delat) and an
+# insertion in old numbering (addat), and for each old line that went, the new
+# line where the change now sits (at). Keyed by `which` too, for a program
+# reading two diffs. The preview and staging need it; the table it comes with
+# already has it applied.
+hunk_awk=$(seam --awk hunks)
+
+# cut_awk: the lines of one hunk that fall inside [s, e] on `side`, with a
+# header for what is left, so delta numbers them as the file does and git
+# apply takes them as a patch. The input is a -U999999 diff: the file as one
+# hunk with every line in it. A change from the other side belongs to the
+# symbol when it sits between two of its lines, not after its last: what
+# follows a removed symbol is usually the next symbol, whole.
+cut_awk='
+  !inhunk && /^@@/ { inhunk = 1; split($2, a, ","); o = substr(a[1], 2) + 0; split($3, b, ","); n = substr(b[1], 2) + 0; next }
+  !inhunk { print; next }
+  /^\\/ { if (last) line[++kept] = $0; next }
+  {
+    c = substr($0, 1, 1)
+    keep = 0
+    if (c == " ")      { keep = (side == "new") ? (n >= s && n <= e) : (o >= s && o <= e); lo = o; ln = n; o++; n++ }
+    else if (c == "-") { keep = (side == "new") ? (n > s && n <= e) : (o >= s && o <= e); lo = o; ln = n; o++ }
+    else if (c == "+") { keep = (side == "new") ? (n >= s && n <= e) : (o > s && o <= e); lo = o; ln = n; n++ }
+    else next
+    last = keep
+    if (!keep) next
+    if (!kept) { O = lo; N = ln; oc = 0; nc = 0 }
+    line[++kept] = $0
+    if (c != "+") oc++
+    if (c != "-") nc++
+  }
+  END {
+    if (!kept) exit
+    # A side with nothing kept names the line before, as git does; 0 for none.
+    # The note rides on the header, where delta draws a function name, in
+    # quotes: delta highlights the header as code, and a string is one color
+    # where bare words would light up as keywords.
+    printf "@@ -%d,%d +%d,%d @@%s\n", (oc ? O : (O > 1 ? O - 1 : 0)), oc, (nc ? N : (N > 1 ? N - 1 : 0)), nc, (note != "" ? " \"" note "\"" : "")
+    for (i = 1; i <= kept; i++) print line[i]
+  }'
+
+# unclaimed_awk: the lines of a -U999999 diff no symbol claims, as hunks: each
+# unclaimed change with three lines of context either side, and none of it
+# across a claimed change or a blank one, which a hunk here never shows. The
+# first file is the claimed ranges, side, start and end, one a line.
+unclaimed_awk='
+  FILENAME == ARGV[1] { nr++; RS_[nr] = $1; RA[nr] = $2 + 0; RZ[nr] = $3 + 0; next }
+  function claimed(side, l,   r) { for (r = 1; r <= nr; r++) if (RS_[r] == side && RA[r] <= l && l <= RZ[r]) return 1; return 0 }
+  function flush(   i) {
+    printf "@@ -%d,%d +%d,%d @@\n", (oc ? O : (O > 1 ? O - 1 : 0)), oc, (nc ? N : (N > 1 ? N - 1 : 0)), nc
+    for (i = 1; i <= k; i++) print line[i]
+    h = 0
+  }
+  !inhunk && /^@@/ { inhunk = 1; split($0, w, " "); split(w[2], a, ","); o = substr(a[1], 2) + 0; split(w[3], b, ","); n = substr(b[1], 2) + 0; next }
+  !inhunk { print; next }
+  /^\\/ { if (m) NL[m] = $0; next }
+  {
+    c = substr($0, 1, 1)
+    if (c == " ")      { t = "c"; lo = o; ln = n; o++; n++ }
+    else if (c == "-") { t = (claimed("old", o) || $0 ~ /^-[ \t]*$/) ? "x" : "k"; lo = o; ln = n; o++ }
+    else if (c == "+") { t = (claimed("new", n) || $0 ~ /^\+[ \t]*$/) ? "x" : "k"; lo = o; ln = n; n++ }
+    else next
+    m++; T[m] = t; LO[m] = lo; LN[m] = ln; L[m] = $0
+  }
+  END {
+    for (i = 1; i <= m; i++) if (T[i] == "k") {
+      keep[i] = 1
+      for (j = i - 1; j >= 1 && j >= i - 3 && T[j] == "c"; j--) keep[j] = 1
+      for (j = i + 1; j <= m && j <= i + 3 && T[j] == "c"; j++) keep[j] = 1
+    }
+    for (i = 1; i <= m; i++) {
+      if (!(i in keep)) { if (h) flush(); continue }
+      if (!h) { h = 1; O = LO[i]; N = LN[i]; oc = 0; nc = 0; k = 0 }
+      line[++k] = L[i]; if (i in NL) line[++k] = NL[i]
+      c = substr(L[i], 1, 1)
+      if (c != "+") oc++
+      if (c != "-") nc++
+    }
+    if (h) flush()
+  }'
+
+# mark_awk: mark, in delta'"'"'s output (bat'"'"'s for a caller), each mention
+# of a name in NOTES: the changed symbols the previewed one uses, which are
+# the rows about to open under it top down and the rows just read above it
+# bottom up. Matched on the visible text, with the color codes skipped, so a
+# name inside a colored token is found, and not after a dot, as the graph
+# counts a use, unless the dot is a spread'"'"'s. A name is drawn bold,
+# underlined and in GK_ATTENTION, over the diff'"'"'s background, and the color
+# the line had is put back after it: every code since the last reset, again.
+# NOTES is a name a line, then, tab separated, its signature, what the change
+# did to it, and Claude'"'"'s gloss in the eighth field and what it says the
+# symbol does in the ninth. A name with a signature gets a row under
+# the line that first mentions it, at the line's indent, saying what it is:
+# the signature with the name lit and the change, then what it does and,
+# in italics, the gloss, each on a line of its own, wrapped to the pane (w) on the code background over as many rows
+# as that takes. The rows
+# keep the gutter'"'"'s bars and have no line number, so git-preview-at and a
+# review'"'"'s threads take them as part of the line above. Run LC_ALL=C after share/rowfmt.awk.
+mark_awk='
+  function sgr(s,   out, r) {
+    out = ""
+    while (match(s, /\033\[[0-9;]*m/)) { r = substr(s, RSTART, RLENGTH); out = (r == "\033[0m" || r == "\033[m") ? "" : out r; s = substr(s, RSTART + RLENGTH) }
+    return out
+  }
+  function dw(s) { gsub(/[\200-\277]/, "", s); return length(s) }
+  # Every outermost {…} in s emptied: an object type, in a signature.
+  function braces(s,   i, d, c, from) {
+    d = 0
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (c == "{" && d++ == 0) from = i
+      else if (c == "}" && d > 0 && --d == 0) { s = substr(s, 1, from) "\342\200\246" substr(s, i); i = from + 3 }
+    }
+    return s
+  }
+  # Words of s onto the note, in color c, gap spaces before the first, or
+  # on a line of their own with gap -1. A word that starts with name n has
+  # the name in GK_ATTENTION.
+  function noteadd(s, c, gap, n,   ws, m, i) {
+    m = split(s, ws, " ")
+    for (i = 1; i <= m; i++) {
+      nw++; nwp[nw] = ws[i]; nwc[nw] = c; nwg[nw] = i == 1 ? gap : 1
+      nws[nw] = (n != "" && index(ws[i], n) == 1) ? GK_ATTENTION n c substr(ws[i], length(n) + 1) : c ws[i]
+      if (nws[nw] != c ws[i]) n = ""
+    }
+  }
+  function noterow(pre, k,   last, off, t, j, gut, code, out, i, pad, room, sig, bg, lines, nl, len, lw, bw, row) {
+    last = 0; off = 0; t = pre
+    while ((j = index(t, "\342\224\202")) > 0) { last = off + j; off += j + 2; t = substr(t, j + 3) }
+    gut = last ? substr(pre, 1, last + 2) : ""; code = substr(pre, length(gut) + 1)
+    out = ""
+    for (i = 1; i <= length(gut); i++) {
+      if (substr(gut, i, 3) == "\342\224\202") { out = out GK_FAINT "\342\224\202" GK_R; i += 2 }
+      else if (substr(gut, i, 1) !~ /[\200-\277]/) out = out " "
+    }
+    # At the line'"'"'s indent, so the notes under one line stack in a column.
+    match(code, /^ */); pad = RLENGTH
+    room = w - dw(gut) - pad - 4
+    if (room < 16) return ""
+    # The signature on the first line with the change, since the whole of it
+    # is i away: object types go to {…} first, so the parameters keep their
+    # names, then what gk_sig gives up.
+    sig = head[k]; if (sig ~ /^(abstract )?class /) sig = gk_elide_rest(sig)
+    gsub(/, *\)/, ")", sig)
+    j = room - dw(chg[k]) - 2
+    if (dw(sig) > j) sig = gk_sig(braces(sig), j)
+    nw = 0
+    # The change is one word to the wrap, joined by no-break spaces.
+    t = chg[k]; gsub(/ /, "\302\240", t)
+    noteadd(sig, GK_CONTEXT, 0, names[k]); noteadd(t, "\033[3m" GK_CONTEXT, 2, "")
+    if (does[k] != "") noteadd(does[k], "\033[23m" GK_TEXT, -1, "")
+    if (gloss[k] != "") noteadd(gloss[k], "\033[3m" GK_TEXT, -1, "")
+    # Wrapped to the room, a word longer than a line broken where it runs out.
+    nl = 1; lines[1] = ""; len = 0; lw[1] = 0
+    for (i = 1; i <= nw; i++) {
+      t = nwp[i]
+      if (len && (nwg[i] < 0 || len + nwg[i] + dw(t) > room)) { lw[nl] = len; nl++; lines[nl] = ""; len = 0 }
+      else if (len) { lines[nl] = lines[nl] gk_rep(" ", nwg[i]); len += nwg[i] }
+      if (dw(t) <= room) { lines[nl] = lines[nl] nws[i]; len += dw(t); continue }
+      while (dw(t) > room) { j = substr(t, 1, room); sub(/[\300-\367][\200-\277]*$/, "", j); lines[nl] = lines[nl] nwc[i] j; lw[nl] = dw(j); t = substr(t, length(j) + 1); nl++; lines[nl] = "" }
+      lines[nl] = lines[nl] nwc[i] t; len += dw(t)
+    }
+    lw[nl] = len; bw = room
+    # On the code background, the pane wide, so the notes under a line are
+    # one panel: the colors in it change only the foreground, so the
+    # background holds to the end.
+    bg = "\033[" (ENVIRON["OTIS_T_CODEBG"] != "" ? ENVIRON["OTIS_T_CODEBG"] : "48;5;236") "m"
+    row = ""
+    for (i = 1; i <= nl; i++)
+      row = row (i > 1 ? "\n" : "") out gk_rep(" ", pad) bg " " (i == 1 ? GK_ATTENTION "\342\206\263 " : "  ") lines[i] gk_rep(" ", bw - lw[i]) " " GK_R
+    return row
+  }
+  FILENAME == ARGV[1] { split($0, f, "\t"); if (f[1] != "" && !(f[1] in idx)) { idx[f[1]] = ++nn; names[nn] = f[1]; head[nn] = f[2]; chg[nn] = f[3]; gloss[nn] = f[8]; does[nn] = f[9] }; next }
+  {
+    raw = $0; vis = ""; nv = 0; i = 1
+    while (i <= length(raw)) {
+      if (substr(raw, i, 1) == "\033" && match(substr(raw, i), /^\033\[[0-9;]*m/)) { i += RLENGTH; continue }
+      vis = vis substr(raw, i, 1); at[++nv] = i; i++
+    }
+    nh = 0
+    for (k = 1; k <= nn; k++) {
+      nm = names[k]; gsub(/\$/, "\\$", nm)
+      re = "(^|[^A-Za-z0-9_$.]|\\.\\.\\.)" nm "([^A-Za-z0-9_$ \\t:?]|[ \\t]+[^ \\t:?]|[ \\t]*$)"
+      from = 1
+      while (from <= nv && match(substr(vis, from), re)) {
+        st = from + RSTART - 1; if (substr(vis, st, 3) == "...") st += 3; else if (substr(vis, st, 1) !~ /[A-Za-z0-9_$]/) st++
+        en = st + length(names[k]) - 1
+        hs[++nh] = at[st]; he[nh] = at[en]; hv[nh] = st; hk[nh] = k
+        from = en + 1
+      }
+    }
+    for (x = 1; x <= nh; x++) for (y = x + 1; y <= nh; y++) if (hs[y] > hs[x]) {
+      t = hs[x]; hs[x] = hs[y]; hs[y] = t; t = he[x]; he[x] = he[y]; he[y] = t
+      t = hv[x]; hv[x] = hv[y]; hv[y] = t; t = hk[x]; hk[x] = hk[y]; hk[y] = t
+    }
+    orig = raw
+    for (x = 1; x <= nh; x++) {
+      nm = substr(raw, hs[x], he[x] - hs[x] + 1); gsub(/\033\[[0-9;]*m/, "", nm)
+      raw = substr(raw, 1, hs[x] - 1) "\033[1;4;" (ENVIRON["OTIS_T_ATTENTION"] != "" ? ENVIRON["OTIS_T_ATTENTION"] : "33") "m" nm "\033[22;24m" sgr(substr(orig, 1, he[x])) substr(raw, he[x] + 1)
+    }
+    print raw
+    # Not in delta'"'"'s hunk header, "97: ...", whose box a note would break,
+    # nor under a comment: the name has its note under the next line of code
+    # that mentions it.
+    if (!peeks || vis ~ /^[0-9]+: /) next
+    t = vis; sub(/^.*\342\224\202/, "", t); sub(/^ *[0-9]+  /, "", t)
+    if (t ~ /^[ \t]*(\/\/|\/\*|\*([ \/]|$))/) next
+    for (x = nh; x >= 1; x--) {
+      k = hk[x]
+      if (head[k] == "" || (k in noted)) continue
+      noted[k] = 1; t = noterow(substr(vis, 1, hv[x] - 1), k)
+      if (t != "") print t
+    }
+  }'
+mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="$([ -e "$st/nopeeks" ] && echo 0 || echo 1)" "$(cat "$share/rowfmt.awk")$mark_awk" "$1" -; }
+
+rev=$1
+[ -n "$rev" ] || exit 2
+# base and head: the two trees. An end a range leaves out is HEAD, as it is for
+# git and for seam, so a hand-typed main.. is main..HEAD; an empty head here is
+# how the worktree is said, so without this it would read one as the other. The
+# worktree has no head commit: its files are read where they are, from the repo
+# root, where ga's paths start.
+empty() { git hash-object -t tree /dev/null; }
+case $rev in
+  worktree) base=$(git rev-parse -q --verify HEAD || empty); head=; cd "$(git rev-parse --show-toplevel)" || exit 1 ;;
+  *...*)    l=${rev%%...*} r=${rev##*...}
+            base=$(git merge-base "${l:-HEAD}" "${r:-HEAD}"); head=$(git rev-parse "${r:-HEAD}") ;;
+  *..*)     l=${rev%%..*} r=${rev##*..}; base=${l:-HEAD} head=${r:-HEAD} ;;
+  *)        head=$rev; base=$(git rev-parse -q --verify "$rev^" 2>/dev/null || empty) ;;
+esac
+tracked() { git ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
+# The worktree's diff against base for one path, untracked files included.
+wt_diff() {
+  if [ -e "$2" ] && ! tracked "$2"; then git diff --no-index "$1" /dev/null "$2"
+  else git --no-optional-locks diff-index --no-renames "$1" "$base" -- "$2"; fi
+}
+
+if [ "$mode" = --preview ]; then
+  path=$2 side=$3 s=$4 e=$5 rid=$6
+  # S is on: the whole score, drawn to the preview's width, instead of the
+  # row's diff. Not cached and not keyed by the row, since it is the same for
+  # every row and the table it reads may have just been rebuilt.
+  if [ -e "$st/shape" ] && [ -s "$st/symbols.tsv" ] && command -v seam >/dev/null 2>&1; then
+    COLUMNS=${FZF_PREVIEW_COLUMNS:-92} SEAM_COLOR=1 seam --score --table "$st/symbols.tsv" "$rev" 2>/dev/null
+    exit 0
+  fi
+  [ -n "$path" ] || exit 0
+  # A commit or range never changes, so its preview of a row is rendered
+  # once per picker and kept, keyed by the row, the width and the gloss and
+  # callers caches it drew from: a fold flips the row's text, and fzf then
+  # draws the preview again. The worktree's changes under you; it is not kept.
+  pv=
+  if [ -n "$head" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$GIT_FZF_STATE" ] && [ -s "$st/key" ] && [ -s "$st/cache-root" ]; then
+    read -r key < "$st/key"; read -r croot < "$st/cache-root"
+    read -r ckey < "$st/callers-key" 2>/dev/null
+    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" 2>/dev/null | tr '\n' ',')
+    pv=$st/pv.$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$([ -e "$st/up" ] && echo up)|$([ -e "$st/nopeeks" ] && echo nopeeks)|$([ "$(cat "$st/uses-for" 2>/dev/null)" = "$rid" ] && echo uses)|$FZF_PREVIEW_COLUMNS" | cksum | cut -d' ' -f1)
+    [ -s "$pv" ] && exec cat "$pv"
+    # The render goes to the file, and the file to the terminal at exit.
+    exec 3>&1
+    exec > "$pv.new"
+    trap 'mv -f "$pv.new" "$pv" 2>/dev/null; cat "$pv" 2>/dev/null >&3' EXIT
+  fi
+  # Claude's gloss goes on the diff's hunk header, where delta draws it in
+  # the header line above the symbol; what the symbol does, the change
+  # aside, goes above the diff, and for a root why to read it first under
+  # that (git-symbols-gloss). GIT_SYMBOLS_PLAIN is the gloss asking
+  # for the diff itself, with neither. A gloss the model filed under a bare
+  # name, without its path or class, still finds its symbol.
+  note=
+  # gloss_coming: Claude's gloss of this change is on its way, so a symbol it
+  # has not reached yet holds its place (a line where what it does goes)
+  # rather than pushing the diff down when it lands.
+  gloss_coming() {
+    { read -r gkey < "$st/key" && read -r groot < "$st/cache-root"; } 2>/dev/null &&
+      kill -0 "$(cat "$groot/symbols-gloss/$gkey.running" 2>/dev/null)" 2>/dev/null
+  }
+  gf=
+  [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && gf=$(git-symbols-gloss --file "$rev" "$st/symbols.tsv")
+  [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ -z "$gf" ] && [ "$side" != file ] && gloss_coming &&
+    printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
+  if [ -n "$gf" ]; then
+    sid=${rid##*>}; p=${sid%%#*}; n=${sid#"$p"}; sid=$p$(printf '%s' "$n" | sed 's/+/./')
+    # One jq: the gloss, what it does, and why, a line each.
+    { IFS= read -r note; IFS= read -r does; IFS= read -r why; } <<EOF
+$(jq -r --arg id "$sid" --arg name "${sid##*[#.]}" '
+      (first(.symbols[] | select(.id == $id)) // first(.symbols[] | select(.id == $name or (.id | endswith("#" + $name)) or (.id | endswith("." + $name)))) // {}) as $g
+      | ($g.gloss // ""), ($g.does // ""), (first(.order[] | select(.id == $id) | .why) // "")' "$gf" 2>/dev/null)
+EOF
+    [ -n "$does" ] && printf "${GK_TEXT}%s${GK_R}\n\n" "$does"
+    [ -z "$does" ] && [ "$side" != file ] && gloss_coming && printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
+    [ -n "$why" ] && printf "${GK_CONTEXT}%s${GK_R}\n\n" "$why"
+    # Under another symbol by a new call, what that call does, from Claude:
+    # the row says only "new call", since the gloss seldom fits beside a
+    # signature. The parent is the id before the last > in the row'"'"'s.
+    pid=${rid%>*}; [ "$pid" = "$rid" ] && pid=; pid=${pid##*>}
+    if [ -n "$pid" ]; then
+      if [ -e "$st/up" ]; then from=$sid to=$pid what="new caller of ${pid##*#}"; else from=$pid to=$sid what="new call from ${pid##*#}"; fi
+      eg=$(jq -r --arg f "$from" --arg t "$to" 'first(.edges[]? | select(.from == $f and .to == $t) | .gloss) // ""' "$gf" 2>/dev/null)
+      [ -n "$eg" ] && printf "${GK_CONTEXT}%s: %s${GK_R}\n\n" "$what" "$eg"
+    fi
+  fi
+  if [ "$side" = file ]; then
+    # A caller elsewhere: its lines as git-callers read the file, which is
+    # as the change leaves a file it touches (the disk copy may have moved
+    # on) and as the disk has any other; the called symbol underlined.
+    called=${rid%>callers>*}; sym=${called##*>}; called=${sym##*#}; called=${called#type }
+    # Its type errors against the change, from the callers cache (keyed
+    # without the worktree'"'"'s line numbers, so by its own key): the count in
+    # the header, and each one under its line, the way a review prints a
+    # thread under a line: the line on red, the message barred in red
+    # beside the code; the preview opens scrolled to the first, unless you
+    # have scrolled this row already.
+    errfile=$st/errs.$$
+    : > "$errfile"
+    errs=$( { read -r ckey < "$st/callers-key" || read -r ckey < "$st/key"; } && read -r croot < "$st/cache-root" && [ -s "$croot/callers/$ckey.tsv" ] &&
+      awk -F'\t' -v s="$sym" -v c="${rid##*>}" -v out="$errfile" '$1 == s && $4 == c && $9 > 0 { n = split($12, e, "\036"); for (i = 1; i <= n; i++) print e[i] > out; l = $10; sub(/:.*/, "", l); print $9 " type error" ($9 == 1 ? "" : "s") " against it" ($9 == 1 ? ", at line " : ", the first at line ") l; exit }' "$croot/callers/$ckey.tsv") 2>/dev/null
+    # Fixed in this checkout (git-callers --recheck): the file as the disk has
+    # it, with none of the errors left to draw.
+    if [ -n "$errs" ] && grep -qxF -- "$path" "$st/fixed" 2>/dev/null; then
+      errs= ; : > "$errfile"
+      printf "${GK_GOOD}%s${GK_R}\n\n" "fixed in your checkout, uncommitted: tsgo finds none of the change's errors in it as the disk has it"
+    elif [ "$called" = - ]; then printf "${GK_CONTEXT}%s${GK_R}%s\n\n" "calls nothing this change touches, and no longer type-checks against it" "${errs:+$(printf "${GK_BAD}: %s${GK_R}" "$errs")}"
+    else printf "${GK_CONTEXT}%s${GK_R}%s\n\n" "calls $called; this change does not touch it" "${errs:+$(printf "${GK_BAD}, and has %s${GK_R}" "$errs")}"; fi
+    # Under each error, Claude'"'"'s fix, once git-callers-fix has one: its
+    # sentence, then each edit as a diff (git-callers-fix --show).
+    fixfile=$st/fixes.$$ looking=
+    : > "$fixfile"
+    if [ -n "$errs" ]; then
+      git-callers-fix --show "$croot/callers/$ckey.tsv" "${rid##*>}" > "$fixfile" 2>/dev/null
+      [ -s "$fixfile" ] || [ "$(git-callers-fix --state "$croot/callers/$ckey.tsv")" != running ] || looking=1
+    fi
+    names=$st/names.$$
+    printf '%s\n' "$called" > "$names"
+    k=$(printf '%s' "$rid" | tr '/' '%'); while [ ${#k} -gt 200 ]; do k=${k#?}; done
+    { if [ -n "$head" ] && awk -F'\t' -v p="$path" '$1 == p { f = 1 } END { exit !f }' "$st/symbols.tsv" 2>/dev/null; then git show "$head:$path" 2>/dev/null
+      elif [ -f "$path" ]; then cat "$path"; else git show "$head:$path" 2>/dev/null; fi; } |
+      { BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --paging=never --wrap=never -l ts --line-range="$s:$e" --file-name "$path" 2>/dev/null || awk -v s="$s" -v e="$e" 'NR >= s && NR <= e { printf "%5d  %s\n", NR, $0 }'; } |
+      mark "$names" |
+      LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v at="$st/off.$k" -v have="$([ -s "$st/off.$k" ] && echo 1)" -v looking="$looking" "$(cat "$share/rowfmt.awk")"'
+        function dw(s) { gsub(/[\200-\277]/, "", s); return length(s) }
+        # A barred block at the code'"'"'s indent: the bar in bc, lead on its
+        # first line, the text beside it wrapped to the pane, each quoted type
+        # in GK_ATTENTION, so a mismatch reads as the two types it is about.
+        # An error is red and ✗; Claude'"'"'s fix under it is GK_YOURS and ✦.
+        function block(ind, bc, lead, m,   nw, wd, x, ln, room, nl, L, j, y, c, q, out) {
+          room = w - ind - 4; if (room < 24) room = 24
+          nw = split(m, wd, " "); ln = ""; nl = 0
+          for (x = 1; x <= nw; x++) { if (ln != "" && dw(ln " " wd[x]) > room) { L[++nl] = ln; ln = "" }; ln = (ln == "" ? "" : ln " ") wd[x] }
+          if (ln != "") L[++nl] = ln
+          for (j = 1; j <= nl; j++) {
+            out = ""
+            for (y = 1; y <= length(L[j]); y++) {
+              c = substr(L[j], y, 1)
+              if (c == "\047") { q = !q; out = out (q ? GK_ATTENTION c : c GK_R GK_TEXT) } else out = out c
+            }
+            print gk_rep(" ", ind) bc "\342\224\203 " (j == 1 ? lead : " ") GK_R " " GK_TEXT out GK_R; row++
+          }
+        }
+        # Claude'"'"'s fixes for line l: those it gave for l, and under the first
+        # error those for a line with no error of its own. Under its sentence,
+        # on the same bar, each edit: where it goes and whether F can make
+        # it, then its diff.
+        function fixes(ind, l,   x, y, n, it, f, c, bar) {
+          bar = gk_rep(" ", ind) GK_YOURS "\342\224\203" GK_R
+          for (x = 1; x <= nf; x++) {
+            if (fl[x] != l && ((fl[x] in msg) || l != firsterr)) continue
+            block(ind, GK_YOURS, "\342\234\246", (fw[x] == "change" ? "in the change: " : "") ft[x])
+            n = split(fe[x], it, "\n")
+            for (y = 1; y <= n; y++) {
+              if (substr(it[y], 1, 1) == "E") {
+                split(it[y], f, "\t")
+                print bar "   " GK_CONTEXT gk_fit(f[2], w - ind - 40) (f[3] ? ":" f[3] : "") GK_R \
+                  (f[4] == "ok" ? GK_FAINT " \302\267 F makes it" GK_R : f[4] == "made" ? GK_GOOD " \302\267 made, uncommitted" GK_R : f[4] == "gone" ? GK_BAD " \302\267 not in the file as it is here" GK_R : GK_BAD " \302\267 in the file more than once" GK_R); row++
+              } else {
+                c = substr(it[y], 3, 1)
+                print bar "   " (c == "-" ? GK_BAD : c == "+" ? GK_GOOD : GK_CONTEXT) gk_cut(substr(it[y], 3), w - ind - 5) GK_R; row++
+              }
+            }
+          }
+        }
+        FILENAME == ARGV[2] {
+          if (substr($0, 1, 2) == "F\t") { split($0, f, "\t"); nf++; fl[nf] = f[2] + 0; fw[nf] = f[3]; ft[nf] = substr($0, length(f[1] f[2] f[3]) + 4) }
+          else if (nf) fe[nf] = fe[nf] (fe[nf] == "" ? "" : "\n") $0
+          next
+        }
+        FILENAME == ARGV[1] { i = index($0, ": "); if (i) { l = substr($0, 1, i - 1) + 0; msg[l] = msg[l] (msg[l] == "" ? "" : "\n") substr($0, i + 2) }; next }
+        {
+          s = $0; gsub(/\033\[[0-9;]*[A-Za-z]/, "", s)
+          l = 0; if (match(s, /^ *[0-9]+ /)) l = substr(s, 1, RLENGTH) + 0
+          if (!(l in msg)) { print; row++; next }
+          # The line that fails, on a red ground the width of the pane, the
+          # ground put back after every reset in it.
+          t = $0; gsub(/\033\[0m/, "\033[0m" BG, t)
+          print BG t gk_rep(" ", w - dw(s)) GK_R; row++
+          if (!first) { first = row; if (!have) print (first > 3 ? first - 3 : 1) > at }
+          match(s, /^ *[0-9]+ +/); ind = RLENGTH; if (ind > w / 2) { match(s, /^ *[0-9]+ /); ind = RLENGTH }
+          if (!firsterr) firsterr = l
+          n = split(msg[l], m, "\n"); for (i = 1; i <= n; i++) block(ind, GK_BAD, "\342\234\227", m[i])
+          fixes(ind, l)
+          if (looking && l == firsterr) { print gk_rep(" ", ind) GK_YOURS "\342\224\203 \342\234\246" GK_R " " GK_FAINT "Claude is looking at it" GK_R; row++ }
+        }
+        BEGIN { BG = "\033[" (ENVIRON["OTIS_T_ERRBG"] != "" ? ENVIRON["OTIS_T_ERRBG"] : "48;5;52") "m" }' "$errfile" "$fixfile" -
+    rm -f "$names" "$errfile" "$fixfile"
+    exit 0
+  fi
+  if [ -z "$s" ]; then
+    # A file some symbol was read from: its diff cut to what no symbol
+    # claims, so the symbols above are not read again here. The claimed
+    # ranges are the table'"'"'s, both sides of a changed symbol.
+    if [ -s "$st/symbols.tsv" ] && awk -F'\t' -v p="$path" '$1 == p && $2 != "file" { f = 1 } END { exit !f }' "$st/symbols.tsv"; then
+      printf "${GK_CONTEXT}%s${GK_R}\n\n" "what no symbol claims; the rest is above, by symbol"
+      claimed=$st/claimed.$$
+      awk -F'\t' -v p="$path" 'BEGIN { OFS = "\t" } $1 == p && $2 != "file" { print $7, $8, $9; if ($7 == "new" && $14 != "") print "old", $14, $15 }' "$st/symbols.tsv" > "$claimed"
+      if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
+        awk -F'\t' "$unclaimed_awk" "$claimed" - | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else git-delta; fi
+      rm -f "$claimed"
+      exit 0
+    fi
+    # A file with no symbols: the file picker'"'"'s own preview.
+    if [ -n "$head" ]; then exec git-preview-commit --diff "$rev" "$path"; fi
+    exec git-preview-file "$(git status --porcelain -- "$path" | cut -c1-2)" "$path"
+  fi
+  # What the symbol uses, from the table, in the order it mentions them; a
+  # member takes its class'"'"'s. deps is a row each: name, signature, what
+  # the change did to it, id, side, start, end, Claude'"'"'s gloss and what it
+  # says the symbol does: mark_awk'"'"'s notes and i'"'"'s view. The two are last,
+  # since read drops an empty field, and the model gives both or neither. A type seam named "type X", for the
+  # const X it is typeof, is shown as the const, which is where what it is
+  # lives: seam reads the pair as one symbol and points uses at the type.
+  deps=$st/deps.$$
+  : > "$deps"
+  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ -s "$st/symbols.tsv" ]; then
+    sid=${rid##*>}; p=${sid%%#*}; n=${sid#"$p"}; sid=$p${n%%+*}
+    uses=$(awk -F'\t' -v id="$sid" '$2 != "file" && $4 == "" && $1 "#" $3 == id { n = split($18, u, "|"); for (i = 1; i <= n; i++) if (u[i] != "" && !seen[u[i]]++) print u[i] }' "$st/symbols.tsv")
+    if [ -n "$uses" ]; then
+      { [ -n "$gf" ] && jq -r --arg ids "$uses" '. as $g | $ids | split("\n")[] | select(. != "") | . as $id | (sub(".*#"; "") | sub("^type "; "")) as $name |
+          (first($g.symbols[] | select(.id == $id)) // first($g.symbols[] | select(.id == $name or (.id | endswith("#" + $name)))) // {}) as $s |
+          [$id, ($s.gloss // ""), ($s.does // "")] | @tsv' "$gf" 2>/dev/null; } |
+        USES=$uses awk -F'\t' 'FILENAME == "-" { gl[$1] = $2; dz[$1] = $3; next }
+          $2 != "file" && $4 == "" { id = $1 "#" $3; ch[id] = $6; sd[id] = $7; s[id] = $8; e[id] = $9; hd[id] = $13 }
+          END {
+            n = split(ENVIRON["USES"], want, "\n")
+            for (i = 1; i <= n; i++) {
+              id = want[i]; if (!(id in s)) continue
+              v = id; sub(/#type /, "#", v); a = id
+              if (v != id && (v in s) && sd[v] == sd[id]) { a = v; if (s[id] == e[v] + 1) e[v] = e[id] }
+              nm = id; sub(/.*#/, "", nm); sub(/^type /, "", nm)
+              what = (ch[a] == "added" || ch[a] == "removed") ? ch[a] : (ch[a] == "signature") ? "signature changed" : "body changed"
+              g = gl[id] != "" ? id : v
+              print nm "\t" hd[a] "\t" what "\t" id "\t" sd[a] "\t" s[a] "\t" e[a] "\t" gl[g] "\t" dz[g]
+            }
+          }' - "$st/symbols.tsv" > "$deps"
+    fi
+  fi
+  # i on the row: what it uses, in place of its own diff. Each name as the
+  # diff marks it, where it is and what the change did to it, what Claude
+  # says it does and its gloss, and its own diff.
+  if [ -s "$deps" ] && [ "$(cat "$st/uses-for" 2>/dev/null)" = "$rid" ]; then
+    printf "${GK_CONTEXT}what %s uses, in the order it mentions them · i for its diff${GK_R}\n" "${sid##*#}"
+    while IFS='	' read -r uname _ what uid uside us ue ugloss udoes; do
+      upath=${uid%%#*}
+      printf "\n\033[1;4m${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s:%s · %s${GK_R}\n" "$uname" "${upath##*/}" "$us" "$what"
+      [ -n "$udoes" ] && printf "${GK_TEXT}%s${GK_R}\n" "$udoes"
+      [ -n "$ugloss" ] && printf "${GK_CONTEXT}\033[3m%s${GK_R}\n" "$ugloss"
+      # Its diff, cut to it, as the preview draws the row's own: the whole
+      # definition as the change leaves it (or as it was, for a removed one),
+      # its changed lines marked, the path already said above.
+      if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$upath"; else wt_diff -U999999 "$upath"; fi 2>/dev/null |
+        awk -v side="$uside" -v s="$us" -v e="$ue" -v note="" "$cut_awk" | git-delta --file-style=omit
+    done < "$deps"
+    rm -f "$deps"
+    exit 0
+  fi
+  if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
+    awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" "$cut_awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else git-delta | mark "$deps"; fi
+  rm -f "$deps"
+  exit 0
+fi
+
+if [ "$mode" = --edit ]; then
+  path=$2 line=$3
+  [ -n "$path" ] || exit 0
+  exec git-file-open --at "${line:-1}" "$(git status --porcelain -- "$path" | cut -c1-2)" "$path"
+fi
+
+if [ "$mode" = --at ]; then
+  # Where you are: the preview's scroll position for this row (git-fzf-scroll
+  # keeps it under the row's id, / as % and the last 200 characters) and the
+  # preview itself, cached, read for the first changed line on the screen
+  # from that row, else the line at that row. A caller's preview is the
+  # file, not a diff, so it opens at its first error, else its first call.
+  path=$2 side=$3 s=$4 e=$5 rid=$6 line=$7
+  k=$(printf '%s' "$rid" | tr '/' '%'); while [ ${#k} -gt 200 ]; do k=${k#?}; done
+  off=$(cat "$st/off.$k" 2>/dev/null)
+  # In i'"'"'s view the preview is not the diff, so enter opens at the row.
+  if [ "${off:-1}" -gt 1 ] 2>/dev/null && [ -n "$s" ] && [ "$side" != file ] && [ "$(cat "$st/uses-for" 2>/dev/null)" != "$rid" ]; then
+    export FZF_PREVIEW_COLUMNS="$(cat "$st/cols" 2>/dev/null)"
+    at=$(if [ -n "$GMR_IID" ]; then git-mr-files --preview "$GMR_IID" "$rev" "$path" "$side" "$s" "$e" "$rid"
+         else git-symbols --preview "$rev" "$path" "$side" "$s" "$e" "$rid"; fi 2>/dev/null | git-preview-at --changed "$off" "$(cat "$st/plines" 2>/dev/null)")
+    [ -n "$at" ] && line=$at
+  fi
+  if [ "$side" = file ]; then
+    sym=${rid%>callers>*}; sym=${sym##*>}
+    at=$( { { read -r ckey < "$st/callers-key" || read -r ckey < "$st/key"; } && read -r croot < "$st/cache-root" &&
+      awk -F'\t' -v s="$sym" -v c="${rid##*>}" '$1 == s && $4 == c && $9 > 0 { l = $10; sub(/:.*/, "", l); print l; exit }' "$croot/callers/$ckey.tsv"; } 2>/dev/null)
+    [ -n "$at" ] && line=$at
+  fi
+  printf '%s\n' "${line:-1}"
+  exit 0
+fi
+
+if [ "$mode" = --stage ]; then
+  path=$2 side=$3 s=$4 e=$5 os=$6 oe=$7 staged=$8 unstaged=$9
+  [ -n "$path" ] && [ "$side" != file ] || exit 0
+  # A file with no symbols stages whole, as ga'"'"'s file panel would.
+  if [ -z "$s" ]; then
+    status=$(git status --porcelain -- "$path" | head -1 | cut -c1-2 | tr ' ' .)
+    git-stage-toggle "$status" "$path" > /dev/null
+    exit 0
+  fi
+  tmp=$(mktemp) || exit 1
+  trap 'rm -f "$tmp"' EXIT
+  if [ "$unstaged" = 1 ]; then
+    # Stage it: the worktree's diff against the index, cut to the symbol. An
+    # untracked file is put in the index empty first, so it has a diff.
+    tracked "$path" || git add -N -- "$path"
+    if [ "$side" = old ]; then
+      # A removed symbol still in the index: its index lines are its base lines
+      # shifted through what is staged.
+      set -- $(git --no-optional-locks diff-index --cached -U0 --no-renames "$base" -- "$path" |
+        awk -v f="$path" -v s="$s" -v e="$e" "$hunk_awk"'END { print shift("", f, "old", s), shift("", f, "old", e) }')
+      s=$1 e=$2
+    fi
+    git --no-optional-locks diff-files -U999999 --no-renames -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" "$cut_awk" > "$tmp"
+    # The cut leaves no context, and git apply anchors a hunk with none after
+    # it to the file's end unless told the line numbers are the whole story.
+    [ -s "$tmp" ] && git apply --cached --unidiff-zero "$tmp"
+  elif [ "$staged" = 1 ]; then
+    # Unstage it: the index's diff against base, cut to the symbol, reversed.
+    if [ "$side" = new ]; then
+      set -- $(git --no-optional-locks diff-files -U0 --no-renames -- "$path" |
+        awk -v f="$path" -v s="$s" -v e="$e" "$hunk_awk"'END { print shift("", f, "new", s), shift("", f, "new", e) }')
+      s=$1 e=$2
+    fi
+    git --no-optional-locks diff-index --cached -U999999 --no-renames "$base" -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" "$cut_awk" > "$tmp"
+    [ -s "$tmp" ] && git apply --cached -R --unidiff-zero "$tmp"
+  fi
+  exit 0
+fi
+
+if [ -n "$GIT_FZF_STATE" ]; then table=$GIT_FZF_STATE/symbols.tsv; else table=$(mktemp); fi
+
+# Viewed: v's marks, one store for the repo, a line each: the symbol's key
+# (its row id's last step: path#name, path#Class+member, or a file row's
+# path) and a hash of its diff, the lines the preview cuts to without the
+# header, so no line number is in it. A mark holds while the symbol's diff
+# does: across pushes and amends, from ga to the commit gl shows, and in any
+# change whose diff of that symbol is the same one; an edit to it clears it.
+# One store rather than one per change, since the hash is what says it is
+# the same thing to read.
+vstore=$(git rev-parse --path-format=absolute --git-common-dir)/otis-viewed
+# vspec_awk: from the table, key, path, side, start and end for each key in
+# the first file. A file row is its whole diff.
+vspec_awk='
+  FILENAME == ARGV[1] { want[$1] = 1; next }
+  { k = ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }
+  (k in want) && !(k in seen) { seen[k] = 1; print k "\t" $1 "\t" ($2 == "file" ? "new\t-1\t999999999" : $7 "\t" $8 "\t" $9) }'
+# vhash_awk: what each spec'"'"'s hash is taken over, from a -U999999 diff of
+# its files: the lines cut_awk keeps for it, into a file a spec in dir, named
+# by its number, for one cksum to hash them all (awk has no digest, and one
+# of its own is a thousand times slower). Run LC_ALL=C.
+vhash_awk='
+  function add(k, l) { print l > (dir "/" k) }
+  FILENAME == ARGV[1] { nk++; K[nk] = $1; S[nk] = $4 + 0; E[nk] = $5 + 0; SD[nk] = $3; byp[$2] = byp[$2] " " nk; next }
+  # A spec'"'"'s file is open while its path'"'"'s diff is read, and closed after,
+  # so no more are open at once than one file has symbols.
+  function done(   j) { for (j = 1; j <= nm; j++) close(dir "/" ks[j]); nm = 0 }
+  /^diff / { inhunk = 0; done(); next }
+  !inhunk && /^--- / { a = substr($0, 5); sub(/\t$/, "", a); sub(/^a\//, "", a); next }
+  !inhunk && /^\+\+\+ / { b = substr($0, 5); sub(/\t$/, "", b); if (b == "/dev/null") b = a; else sub(/^b\//, "", b); nm = split(byp[b], ks, " "); next }
+  !inhunk && /^@@/ { inhunk = 1; split($0, w, " "); split(w[2], x, ","); o = substr(x[1], 2) + 0; split(w[3], y, ","); n = substr(y[1], 2) + 0; next }
+  !inhunk { next }
+  /^\\/ { for (j = 1; j <= nm; j++) if (last[ks[j]]) add(ks[j], $0); next }
+  {
+    c = substr($0, 1, 1)
+    for (j = 1; j <= nm; j++) {
+      k = ks[j]; s = S[k]; e = E[k]; nw = SD[k] == "new"
+      if (c == " ")      keep = nw ? (n >= s && n <= e) : (o >= s && o <= e)
+      else if (c == "-") keep = nw ? (n > s && n <= e) : (o >= s && o <= e)
+      else if (c == "+") keep = nw ? (n >= s && n <= e) : (o > s && o <= e)
+      else keep = 0
+      last[k] = keep; if (keep) add(k, $0)
+    }
+    if (c == " ") { o++; n++ } else if (c == "-") o++; else if (c == "+") n++
+  }
+  END { done(); for (k = 1; k <= nk; k++) { f = dir "/" k; printf "" >> f; close(f); print k "\t" K[k] } }'
+# vhash <spec>: key<TAB>hash for each spec, from one diff of their files; the
+# worktree's untracked ones each against nothing.
+vhash() {
+  [ -s "$1" ] || return 0
+  vp=$st/vpaths.$$ vd=$st/vbufs.$$
+  cut -f2 "$1" | sort -u > "$vp"
+  mkdir -p "$vd"
+  { if [ -n "$head" ]; then tr '\n' '\0' < "$vp" | xargs -0 git diff -U999999 --no-renames "$base" "$head" --
+    else
+      tr '\n' '\0' < "$vp" | xargs -0 git --no-optional-locks diff-index -U999999 --no-renames "$base" --
+      git ls-files --others --exclude-standard | grep -Fx -f "$vp" | while IFS= read -r p; do git diff --no-index -U999999 /dev/null "$p"; done
+    fi; } 2>/dev/null | LC_ALL=C awk -F'\t' -v dir="$vd" "$vhash_awk" "$1" - > "$vd.keys"
+  # cksum says crc, size and name; the key goes back in by the name.
+  (cd "$vd" && cksum *) | awk -F'\t' 'FILENAME == ARGV[1] { key[$1] = $2; next } { split($0, c, " "); print key[c[3]] "\t" c[1] "-" c[2] }' "$vd.keys" -
+  rm -rf "$vp" "$vd" "$vd.keys"
+}
+# viewed <keys> <out>: of the keys (the first field of each line), the
+# symbols in the table whose mark still holds. A commit's or a range's
+# hashes never change, so they are kept for the picker's life, keyed by the
+# change, and only a key not yet hashed is.
+viewed() {
+  : > "$2"
+  [ -s "$vstore" ] || return 0
+  vs=$st/vspec.$$
+  awk -F'\t' "$vspec_awk" "$1" "$table" > "$vs"
+  if [ -n "$head" ] && [ -n "$OTIS_SYMBOLS_KEY" ]; then
+    vc=$st/vh.$OTIS_SYMBOLS_KEY
+    : >> "$vc"
+    awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$vc" "$vs" > "$vs.miss"
+    vhash "$vs.miss" >> "$vc"
+    rm -f "$vs.miss"
+  else
+    vc=$st/vh.$$
+    vhash "$vs" > "$vc"
+  fi
+  awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } FILENAME == ARGV[2] { m[$1] = $2; next } ($1 in want) && ($1 in m) && m[$1] == $2 { print $1 }' "$vs" "$vstore" "$vc" > "$2"
+  rm -f "$vs"; [ -z "$head" ] && rm -f "$vc"
+}
+
+if [ "$mode" = --viewed ]; then
+  verb=$2 rid=$3
+  # Not a heading, the spine, or callers elsewhere, which the change did not touch.
+  case $rid in ''|gk-*|*'>callers'|*'>callers>'*) exit 0 ;; esac
+  [ -s "$table" ] || exit 0
+  key=${rid##*>}
+  # What v takes: the row, and for toggle everything under it as the tree
+  # has it open or not: a class's members and the changed symbols it uses,
+  # bottom up (b) what uses it, all the way down.
+  keys=$st/vkeys.$$ now=$st/vnow.$$
+  awk -F'\t' -v k="$key" -v deep="$([ "$verb" = toggle ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" '
+    $2 == "file" { fr[$1] = 1; next }
+    { id = $1 "#" ($4 != "" ? $4 "+" : "") $3; ok[id] = 1; uses[id] = $18
+      if ($4 == "") top[id] = 1; else mem[$1 "#" $4] = mem[$1 "#" $4] "|" id }
+    END {
+      if (k in fr) { print k; exit }
+      if (!(k in ok)) exit
+      for (id in top) { n = split(uses[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] != "") users[u[i]] = users[u[i]] "|" id }
+      stack[++sp] = k
+      while (sp) {
+        id = stack[sp--]; if (id in seen) continue
+        seen[id] = 1; print id
+        if (!deep) continue
+        n = split(mem[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] != "") stack[++sp] = u[i]
+        n = split(up ? users[id] : uses[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] in top) stack[++sp] = u[i]
+      }
+    }' "$table" > "$keys"
+  [ -s "$keys" ] || { rm -f "$keys"; exit 0; }
+  awk -F'\t' "$vspec_awk" "$keys" "$table" | { cat > "$keys.spec"; vhash "$keys.spec"; } > "$now"
+  rm -f "$keys.spec"
+  : >> "$vstore"
+  # All of it viewed already: toggle clears it. Otherwise it all takes the
+  # diff as it is now.
+  all=$(awk -F'\t' 'FILENAME == ARGV[1] { h[$1] = $2; n++; next } ($1 in h) && h[$1] == $2 { c++ } END { print (c == n) }' "$now" "$vstore")
+  { awk -F'\t' 'FILENAME == ARGV[1] { d[$1] = 1; next } !($1 in d)' "$now" "$vstore"
+    [ "$verb" = toggle ] && [ "$all" = 1 ] || cat "$now"; } > "$vstore.new"
+  mv "$vstore.new" "$vstore"
+  # A review's file marks follow: a file is viewed once every symbol in it
+  # is, and its row for what no symbol claims if it has one.
+  if [ -n "$GMR_IID" ] && [ -n "$head" ]; then
+    read -r OTIS_SYMBOLS_KEY < "$st/key" 2>/dev/null
+    cut -f1 "$now" | sed 's/#.*//' | sort -u > "$keys.paths"
+    awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } ($1 in want) { print ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$keys.paths" "$table" > "$keys.all"
+    viewed "$keys.all" "$keys.done"
+    awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } FILENAME == ARGV[2] { done[$1] = 1; next }
+      ($1 in want) { k = ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3; if (!(k in done)) no[$1] = 1 }
+      END { for (p in want) print (p in no ? "remove" : "add") "\t" p }' "$keys.paths" "$keys.done" "$table" |
+      while IFS='	' read -r act p; do git-mr-viewed "$act" "$GMR_IID" "$head" "$p"; done
+    rm -f "$keys.paths" "$keys.all" "$keys.done"
+  fi
+  rm -f "$keys" "$now"
+  exit 0
+fi
+
+# build: the table, from seam, as it leaves it. otis passes its own file
+# kinds, which read what .gitattributes declares generated as well as the
+# path, so a picker that hides test files and a table that keeps them out of
+# the top level agree. Written to one side and moved into place, since the
+# picker may be reading the old one. What seam says when it fails is kept
+# for the footer, since the only other sign is a picker with no rows.
+build() {
+  if SEAM_KINDS="git-test-files kinds" seam "$rev" > "$table.new" 2> "$st/seam.err"; then
+    mv "$table.new" "$table"; rm -f "$st/seam.err"
+  fi
+}
+
+# highlight: the signatures as code, in the theme the preview'"'"'s diff uses.
+# The rows awk wraps each one in \036 marks; one bat call colors them all
+# (a process a row would be a second on a big MR), and they go back in place.
+# Without bat they are plain. A removed symbol comes with no marks: it stays
+# dim, as its rows read everywhere.
+# The signatures colored as TypeScript, by one bat over a file a row: a
+# signature is cut where it stops fitting, so most end inside a bracket or a
+# string, and as one file the second row would be colored as the inside of
+# the first. A file each starts each one clean.
+# Colored once: a signature seen in an earlier render is in $st/hl, and
+# bat runs only for the ones that are not, which after the first render is
+# usually none. Two-thirds of a reload was bat.
+highlight() {
+  if ! command -v bat >/dev/null 2>&1; then tr -d '\036'; return; fi
+  rows=$st/rows.$$ heads=$st/heads.$$ hl=$st/hl
+  cat > "$rows"
+  : >> "$hl"
+  mkdir -p "$heads"
+  awk -F'\036' -v d="$heads" 'FILENAME == ARGV[1] { have[$1] = 1; next } NF >= 3 && !($2 in have) && !($2 in seen) { seen[$2] = 1; f = d "/" sprintf("%06d", ++n); print $2 > f; close(f) }' "$hl" "$rows"
+  if [ -n "$(ls "$heads")" ]; then
+    cat "$heads"/* > "$heads.txt"
+    BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=plain --paging=never --wrap=never -l ts "$heads"/* > "$heads.col" 2>/dev/null
+    paste -d "$(printf '\036')" "$heads.txt" "$heads.col" >> "$hl"
+  fi
+  awk -F'\036' 'FILENAME == ARGV[1] { col[$1] = $2; next } NF >= 3 { print $1 col[$2] $3; next } { print }' "$hl" "$rows"
+  rm -rf "$rows" "$heads" "$heads.txt" "$heads.col"
+}
+
+if [ "$mode" = --rows ]; then
+  # The table is kept for the picker's life, but a range can name a moving
+  # ref (gci's base..HEAD): a commit made from nvim moves it, so the shas the
+  # table was built from are checked on every reload. The worktree always
+  # rebuilds; every reload of it is an edit.
+  if [ -n "$head" ]; then
+    # A range of full shas cannot move, and each git call here is 30ms; a
+    # short one is resolved, since the caches are keyed by the full sha.
+    case ${#base}${#head} in
+      4040) now="$base $head" ;;
+      *) now="$(git rev-parse "$base") $(git rev-parse "$head")" ;;
+    esac
+    if [ ! -s "$table" ] || [ "$(cat "$table.rev" 2>/dev/null)" != "$now" ]; then
+      build
+      printf '%s\n' "$now" > "$table.rev"
+    fi
+  elif [ -z "$OTIS_SYMBOLS_FOLD" ] || [ ! -s "$table" ]; then
+    # The worktree changes under you, so every reload of it rebuilds, but
+    # a fold key (l, h, L, H, b) changes nothing on disk and reloads with
+    # OTIS_SYMBOLS_FOLD set: the table it has is the table.
+    build
+  fi
+  # A worktree without node_modules gets main's mirrored, once, so tsgo
+  # works here for the callers and for nvim alike (otis-node-modules).
+  otis-node-modules >/dev/null 2>&1
+  # The change's key for the caches, and where they are, once for the gloss
+  # and the callers both, rather than a few git calls in each.
+  case $rev in
+    worktree) OTIS_SYMBOLS_KEY=$(cut -f1-13 "$table" | git hash-object --stdin) ;;
+    *..*) OTIS_SYMBOLS_KEY=${now% *}-${now#* } ;;
+    *) OTIS_SYMBOLS_KEY=${now#* } ;;
+  esac
+  # The cache root once per picker, and both left in the state for the
+  # preview, which runs on every move and has neither.
+  if [ -z "$OTIS_CACHE_ROOT" ]; then
+    if [ -n "$GIT_FZF_STATE" ] && [ -s "$st/cache-root" ]; then read -r OTIS_CACHE_ROOT < "$st/cache-root"
+    else OTIS_CACHE_ROOT=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache; [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_CACHE_ROOT" > "$st/cache-root"; fi
+  fi
+  # The callers' key leaves the worktree's line numbers out (git-callers).
+  case $rev in worktree) OTIS_CALLERS_KEY=$(cut -f1-7,13 "$table" | git hash-object --stdin) ;; *) OTIS_CALLERS_KEY=$OTIS_SYMBOLS_KEY ;; esac
+  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_SYMBOLS_KEY" > "$st/key" && printf '%s\n' "$OTIS_CALLERS_KEY" > "$st/callers-key"
+  export OTIS_SYMBOLS_KEY OTIS_CALLERS_KEY OTIS_CACHE_ROOT
+  # Claude's glosses, once they have landed (git-symbols-gloss), started
+  # here; g asks again for the worktree. The cache is looked for here, a
+  # file test, and the script is asked only when there is none to start it.
+  gf=; glossing=
+  if [ -s "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json" ] && grep -q '"does"' "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json"; then
+    gf=$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json
+  else
+    glossed=$(git-symbols-gloss "$rev" "$table")
+    case $glossed in running) glossing=1 ;; /*) gf=$glossed ;; esac
+  fi
+  # In a review (git-mr-files), the open threads and drafts on each symbol'"'"'s
+  # lines, as its file row shows them: OTIS_SYMBOL_MARKS is path, side,
+  # line, open or draft.
+  marks=${OTIS_SYMBOL_MARKS:-/dev/null}
+  [ -r "$marks" ] || marks=/dev/null
+  order=$st/order.$$ spine=
+  # Callers elsewhere (git-callers): the cache once found, a file test
+  # here; the script is asked only when there is none, to start it. A cache
+  # an older git-callers wrote is not read: the version it writes is read
+  # off its own version= line, so the two cannot drift apart.
+  callers=/dev/null finding=
+  if [ -e "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv" ] &&
+    [ "$(cat "$OTIS_CACHE_ROOT/callers/version" 2>/dev/null)" = "$(sed -n 's/^version=//p' "$root/bin/git-callers")" ]; then
+    [ -s "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv" ] && callers=$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv
+  else
+    found=$(git-callers "$rev" "$table")
+    case $found in running) finding=1 ;; /*) callers=$found ;; esac
+  fi
+  # Once a caller is broken, Claude'"'"'s fixes for it (git-callers-fix).
+  fixing=
+  [ "$callers" != /dev/null ] && [ "$(git-callers-fix "$rev" "$callers" "$table")" = running ] && fixing=1
+  # A commit's broken callers as this checkout has them, once a fix there
+  # (F, or nvim) has moved them off the commit (git-callers --recheck): the
+  # files tsgo finds none of the change's errors in, for the rows and the
+  # previews ($st/fixed).
+  fixed= rechecking=
+  if [ -n "$head" ] && [ "$callers" != /dev/null ]; then
+    rc=$(git-callers --recheck "$rev" "$table")
+    case $rc in running) rechecking=1 ;; /*) fixed=$(awk -F'\t' 'NR > 1 && $2 == 0 { print $1 }' "$rc") ;; esac
+  fi
+  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$fixed" > "$st/fixed.new" && { cmp -s "$st/fixed.new" "$st/fixed" && rm -f "$st/fixed.new" || mv "$st/fixed.new" "$st/fixed"; }
+  : > "$order"
+  # The gloss moves rows: its order puts the roots in reading order and its
+  # spine is lines at the top. So a picker keeps the layout it opened with,
+  # glossed or not, and a gloss landing while it is open shows in the
+  # previews (git-fzf-bg --landing), the order and spine the next time it
+  # opens: nothing moves under you.
+  layout=
+  if [ -n "$GIT_FZF_STATE" ]; then
+    layout=$st/layout.$OTIS_SYMBOLS_KEY
+    [ -s "$layout" ] || { [ -n "$gf" ] && echo glossed || echo plain; } > "$layout"
+    layout=$(cat "$layout")
+  fi
+  if [ -n "$gf" ] && [ "$layout" != plain ]; then
+    # One jq: the spine, then the order, a line each.
+    spine=$(jq -r '(.spine // ""), (.order[].id)' "$gf" 2>/dev/null | { IFS= read -r first; printf '%s' "$first"; cat > "$order"; })
+  fi
+  # Every glyph the rows draw, spelled out under ?: the picker's own cells
+  # first (ga's staging, a review's threads), then a row, then what sits
+  # under one.
+  if [ -n "$GIT_FZF_STATE" ]; then
+    {
+      if [ -z "$head" ]; then
+        printf "${GK_CONTEXT}two cells first, staged then unstaged${GK_R}\n"
+        printf "  ${GK_GOOD}M${GK_R}. staged   .${GK_BAD}M${GK_R} unstaged   ${GK_GOOD}M${GK_R}${GK_ATTENTION}M${GK_R} both, edited since staging   ${GK_GOOD}A${GK_R} added   ${GK_GOOD}D${GK_R} removed   ${GK_FAINT}.${GK_R} nothing   space stages the symbol, or unstages it\n\n"
+      fi
+      if [ -n "$GMR_IID" ]; then
+        printf "${GK_CONTEXT}threads on its lines${GK_R}\n"
+        printf "  ${GK_ELSEWHERE}\356\234\277 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or Claude's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
+      fi
+      printf "${GK_CONTEXT}a row${GK_R}\n"
+      printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body   ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
+      printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: open above already, so L leaves it closed; l opens it here too\n"
+      printf "  ${GK_GOOD}\342\234\223${GK_R} viewed, and the row dim: v marks a row and everything under it, and a symbol viewed under one row is viewed under every other; a mark lasts until the symbol's diff changes   ${GK_CONTEXT}3/5${GK_R} closed, three of the five symbols in it viewed\n"
+      printf "  ${GK_ATTENTION}\342\207\242${GK_R} a call new to this change: top down the row above newly uses it, bottom up it newly uses the row above\n"
+      printf "  the dim sentence at the top is Claude's one line on the change; under a root, its preview says why to read it first\n\n"
+      printf "${GK_CONTEXT}under a row${GK_R}\n"
+      printf "  top down what it uses that changed, in the order it mentions them, and a class its changed members; bottom up (b) what uses it\n"
+      printf "  in its preview what it uses is ${GK_ATTENTION}marked${GK_R}, and ${GK_ATTENTION}\342\206\263${GK_R} under the first mention says what that is; i shows them whole\n"
+      printf "  ${GK_CONTEXT}callers elsewhere${GK_R}: what uses the symbol that this change did not touch, from tsgo, by package; l opens it, enter opens one\n"
+      printf "  ${GK_BAD}\342\234\227${GK_R} a caller the change breaks: a type error in it that the base did not have; a last row lists what breaks without calling anything changed\n"
+      printf "  ${GK_YOURS}\342\234\246${GK_R} under an error in its preview, Claude's fix for it, whether it belongs in the caller or the change, and its edits; F makes them and saves them, uncommitted\n"
+    } > "$st/legend"
+  fi
+  cols=${FZF_COLUMNS:-0}
+  [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
+  [ -n "$cols" ] || cols=100
+  counts=$st/counts.$$
+  # What v has marked viewed that still holds, for the rows.
+  vw=$st/vw.$$
+  viewed "$vstore" "$vw"
+  # In a picker the spine is its header (git-fzf --header-from-state), not
+  # rows: the cursor never lands on it, and enter has nothing to open.
+  header=
+  [ -n "$GIT_FZF_STATE" ] && header=$st/header && : > "$header"
+  OPEN=$(cat "$st/open" 2>/dev/null) FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" "$(cat "$share/rowfmt.awk")"'
+    FILENAME == ARGV[2] { order[++norder] = $1; next }
+    FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
+    # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
+    FILENAME == ARGV[5] { vd[$1] = 1; next }
+    FILENAME == ARGV[4] { x = ++ncall[$1]; cp[$1, x] = $2; cl[$1, x] = $3; cid[$1, x] = $4; chead[$1, x] = $5; cs[$1, x] = $6; ce[$1, x] = $7; cerr[$1, x] = $9 + 0; cpk[$1, x] = $11; next }
+    # The open threads and drafts on a symbol: on its lines on its side, and
+    # on its base lines for the threads that sit on removed ones.
+    function on(k, p, side, s, e, os, oe) {
+      if (mp[k] != p) return 0
+      if (mside[k] == side && mline[k] >= s && mline[k] <= e) return 1
+      return side == "new" && mside[k] == "old" && os != "" && mline[k] >= os && mline[k] <= oe
+    }
+    # A closed row counts what is under it too, each thread once however
+    # many ways it is reached, so the count leads down to it: hit is the
+    # set, walk fills it from a row and all under it, tally counts a kind.
+    function hits(i,   k) {
+      for (k = 1; k <= nmarks; k++) if (on(k, row[i, 1], row[i, 7], row[i, 8], row[i, 9], row[i, 14], row[i, 15])) hit[k] = 1
+    }
+    function walk(i, deep,   p, name, nm, ms, nc, cs, x) {
+      if (i in walked) return
+      walked[i] = 1; hits(i)
+      if (!deep) return
+      p = row[i, 1]; name = row[i, 3]
+      nm = split(members[p "#" name], ms, " ")
+      for (x = 1; x <= nm; x++) if (ms[x] != "") walk(ms[x], 1)
+      nc = split(up ? users[p "#" name] : row[i, 18], cs, "|")
+      for (x = 1; x <= nc; x++) if (cs[x] in at_id) walk(at_id[cs[x]], 1)
+    }
+    # Viewed (v): a row'"'"'s key as the store has it, and how much of a row and
+    # what is under it is viewed: each symbol once however many ways it is
+    # reached, as v marks them.
+    function vkey(i) { return row[i, 2] == "file" ? row[i, 1] : row[i, 1] "#" (row[i, 4] != "" ? row[i, 4] "+" : "") row[i, 3] }
+    function vwalk(i,   p, name, nm, ms, nc, cs, x) {
+      if (i in vin) return
+      vin[i] = 1; vtot++; if (vkey(i) in vd) vdone++
+      p = row[i, 1]; name = row[i, 3]
+      nm = split(members[p "#" name], ms, " ")
+      for (x = 1; x <= nm; x++) if (ms[x] != "") vwalk(ms[x])
+      nc = split(up ? users[p "#" name] : row[i, 18], cs, "|")
+      for (x = 1; x <= nc; x++) if (cs[x] in at_id) vwalk(at_id[cs[x]])
+    }
+    # A viewed row reads dim: its counts lose their color too.
+    function dimmed(t) { gsub(/\033\[[0-9;]*m/, "", t); return GK_CONTEXT t GK_R }
+    function tally(kind,   k, c) { c = 0; for (k in hit) if (mkind[k] == kind) c++; return c }
+    function threads(o, d) { return (o ? GK_ELSEWHERE "\356\234\277" o GK_R : "  ") " " (d ? GK_YOURS "\342\234\216" d GK_R : "  ") " " }
+    function rule(text,   s) {
+      s = "\342\224\200\342\224\200 " text " "
+      while (length(s) < 62) s = s "\342\224\200"
+      return s
+    }
+    # A heading has the row shape (git-test-files does the same), its id last.
+    function heading(text, id) { print GK_FAINT rule(text) GK_R "\t\t\t\t\t\t\t\t\t\t\t" id }
+    function spineline(t) { if (header != "") print GK_CONTEXT t GK_R > header; else print GK_CONTEXT t GK_R "\t\t\t\t\t\t\t\t\t\t\tgk-spine" }
+    # The one change the counts cannot say: the signature moved.
+    function glyph(ch) { return (ch == "signature") ? GK_ATTENTION "~" GK_R " " : "  " }
+    # ga'"'"'s two status cells: staged, then unstaged, "." for nothing.
+    function cells(ch, st, un,   x) {
+      x = (ch == "added") ? "A" : (ch == "removed") ? "D" : "M"
+      return (st ? GK_GOOD x GK_R : GK_FAINT "." GK_R) (un ? (st ? GK_ATTENTION : GK_BAD) x GK_R : GK_FAINT "." GK_R) " "
+    }
+    function base(p,   k, a) { k = split(p, a, "/"); return a[k] }
+    BEGIN {
+      n = split(ENVIRON["OPEN"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1
+      n = split(ENVIRON["FIXED"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") fixedp[ids[i]] = 1
+    }
+    {
+      m++; for (f = 1; f <= 20; f++) row[m, f] = $f
+      if (gk_digits($11) > wa) wa = gk_digits($11)
+      if (gk_digits($12) > wd) wd = gk_digits($12)
+      if ($2 != "file" && $4 == "") { syms++; files[$1] = 1 }
+    }
+    END {
+      # The viewed cell is always there, marked or not, so the first v and the
+      # last one clearing do not move every row.
+      budget = gk_list_width(cols) - (wa + wd + 7) - (wt ? 3 : 0) - (mr ? 6 : 0) - 5
+      if (budget < 30) budget = 30
+      # The threads some symbol'"'"'s lines hold; a file row counts the rest.
+      for (k = 1; k <= nmarks; k++) for (i = 1; i <= m; i++) if (row[i, 2] != "file" && on(k, row[i, 1], row[i, 7], row[i, 8], row[i, 9], row[i, 14], row[i, 15])) { claimed[k] = 1; break }
+      # Rows by symbol id, and each class'"'"'s members, for the walk.
+      for (i = 1; i <= m; i++) {
+        if (row[i, 2] == "file") continue
+        if (row[i, 4] == "") at_id[row[i, 1] "#" row[i, 3]] = i
+        else { mk = row[i, 1] "#" row[i, 4]; members[mk] = members[mk] " " i }
+      }
+      # The spine, Claude'"'"'s one sentence on the change, wrapped to the
+      # list: the picker'"'"'s header, or first rows with no picker to head.
+      if (spine != "") {
+        nw = split(spine, words, " "); ln = ""
+        for (x = 1; x <= nw; x++) {
+          if (ln != "" && length(ln " " words[x]) > budget) { spineline(ln); ln = "" }
+          ln = (ln == "" ? "" : ln " ") words[x]
+        }
+        if (ln != "") spineline(ln)
+        if (header != "") close(header)
+      }
+      if (up) {
+        # Turned over: under a symbol, what uses it, by file and line; the
+        # roots are the sinks, and whatever no sink reaches (a cycle) gets
+        # one of its own, as the build does for the top.
+        for (i = 1; i <= m; i++) if (row[i, 2] != "file" && row[i, 4] == "") skey[i] = row[i, 1] sprintf("%08d", row[i, 8]) row[i, 7]
+        for (i = 1; i <= m; i++) {
+          if (row[i, 2] == "file" || row[i, 4] != "") continue
+          nc = split(row[i, 18], cs, "|")
+          for (x = 1; x <= nc; x++) if (cs[x] != "") { nus[cs[x]]++; us[cs[x], nus[cs[x]]] = i }
+        }
+        for (id in nus) {
+          for (x = 1; x <= nus[id]; x++) for (y = x + 1; y <= nus[id]; y++) if (skey[us[id, y]] < skey[us[id, x]]) { t = us[id, x]; us[id, x] = us[id, y]; us[id, y] = t }
+          for (x = 1; x <= nus[id]; x++) { i = us[id, x]; users[id] = users[id] (x > 1 ? "|" : "") row[i, 1] "#" row[i, 3] }
+        }
+        for (i = 1; i <= m; i++) if ((i in skey) && row[i, 18] == "") { sink[i] = 1; stack[++sp] = i }
+        for (;;) {
+          while (sp > 0) {
+            i = stack[sp--]; id = row[i, 1] "#" row[i, 3]
+            if (id in reach) continue
+            reach[id] = 1
+            nc = split(users[id], cs, "|"); for (x = 1; x <= nc; x++) if (cs[x] != "") stack[++sp] = at_id[cs[x]]
+          }
+          pick = 0
+          for (i = 1; i <= m; i++) if ((i in skey) && !((row[i, 1] "#" row[i, 3]) in reach) && (!pick || skey[i] < skey[pick])) pick = i
+          if (!pick) break
+          sink[pick] = 1; stack[++sp] = pick
+        }
+        for (;;) {
+          pick = 0
+          for (i = 1; i <= m; i++) if ((i in sink) && !(i in placed) && (!pick || skey[i] < skey[pick])) pick = i
+          if (!pick) break
+          placed[pick] = 1; roots++
+          show(pick, 0, row[pick, 1] "#" row[pick, 3], "|" row[pick, 1] "#" row[pick, 3] "|")
+        }
+      }
+      # The tree: each root, opened where you have opened it. A symbol used by
+      # two roots shows under both; one that uses itself, up the tree, does not
+      # show again below. Roots come in Claude'"'"'s reading order once it has
+      # given one, then any it left out, by file and line.
+      for (x = 1; x <= norder && !up; x++) if ((order[x] in at_id) && row[at_id[order[x]], 19] == 1 && !(order[x] in shown)) {
+        i = at_id[order[x]]; shown[order[x]] = 1; roots++
+        show(i, 0, order[x], "|" order[x] "|")
+      }
+      for (i = 1; i <= m && !up; i++) if (row[i, 2] != "file" && row[i, 4] == "" && row[i, 19] == 1 && !((row[i, 1] "#" row[i, 3]) in shown)) { roots++; show(i, 0, row[i, 1] "#" row[i, 3], "|" row[i, 1] "#" row[i, 3] "|") }
+      # What the change breaks without its calling anything changed: a type
+      # it changed reached them through something else. A row of its own.
+      if ("-" in ncall) callers("-", 0, "->callers")
+      for (i = 1; i <= m; i++) {
+        if (row[i, 2] != "file") continue
+        p = row[i, 1]; ch = row[i, 6]; add = row[i, 11]; del = row[i, 12]
+        if (!filed++) heading("files, and what no symbol claims", "gk-files-heading")
+        # A file row counts the threads on lines no symbol claims.
+        th = ""
+        if (mr) {
+          split("", hit)
+          for (k = 1; k <= nmarks; k++) if (mp[k] == p && !(k in claimed)) hit[k] = 1
+          th = threads(tally("open"), tally("draft"))
+        }
+        fv = p in vd
+        print (wt ? "   " : "") "  " (fv ? dimmed(gk_stat(add, del, wa, wd)) : gk_stat(add, del, wa, wd)) "      " th (fv ? GK_GOOD "\342\234\223" GK_R "    " : "     ") \
+          gk_path(p, budget - 4, (ch == "removed" || fv) ? GK_CONTEXT : GK_TEXT) \
+          "\t" p "\t1\tnew\t\t\t\t\t\t\t\t" p
+      }
+      print syms + 0, length(files), roots + 0 > counts
+    }
+    # show: one row, then, if it is open, its members and what it uses, a
+    # level in. The row'"'"'s id is its place in the tree, so the same symbol
+    # under two roots opens on its own.
+    # new edge: whether the row under a parent is there by a mention new to
+    # the change: top down the parent newly uses the child, bottom up the
+    # child newly uses the parent.
+    function newedge(parent, child) {
+      if (parent == 0 || row[child, 4] != "") return 0
+      if (up) return index("|" row[child, 20] "|", "|" row[parent, 1] "#" row[parent, 3] "|") > 0
+      return index("|" row[parent, 20] "|", "|" row[child, 1] "#" row[child, 3] "|") > 0
+    }
+    function show(i, depth, rid, anc, parent,   p, kind, name, par, ex, ch, side, s, e, at, add, del, head, os, oe, stg, un, \
+                  kids, nm, ms, x, cid, nc, cs, indent, room, fold, th, again, done, dim, vc, stat) {
+      p = row[i, 1]; kind = row[i, 2]; name = row[i, 3]; par = row[i, 4]; ex = row[i, 5]; ch = row[i, 6]
+      side = row[i, 7]; s = row[i, 8]; e = row[i, 9]; at = row[i, 10]; add = row[i, 11]; del = row[i, 12]; head = row[i, 13]
+      os = row[i, 14]; oe = row[i, 15]; stg = row[i, 16]; un = row[i, 17]
+      nm = split(members[p "#" name], ms, " ")
+      nc = split(up ? users[p "#" name] : row[i, 18], cs, "|")
+      kids = 0
+      for (x = 1; x <= nm; x++) if (ms[x] != "") kids++
+      for (x = 1; x <= nc; x++) if (cs[x] != "" && (cs[x] in at_id) && index(anc, "|" cs[x] "|") == 0) kids++
+      if (par == "" && ((p "#" name) in ncall)) kids++
+      indent = ""; for (x = 0; x < depth; x++) indent = indent "   "
+      # A new call sits in the gutter, ⇢ right before the fold, where the
+      # eye is; the right end of a row is where a signature gets cut.
+      if (newedge(parent, i)) indent = substr(indent, 1, length(indent) - 3) GK_ATTENTION "\342\207\242" GK_R "  "
+      # A symbol under two parents opens once: open-all opens its first
+      # occurrence, and a later one stays closed, its fold dim to say what
+      # is under it is above already. l on it still opens it.
+      again = kids && ((p "#" name) in opened)
+      # Viewed: the row ✓ and dim once it is, and, closed, all under it is
+      # too; a closed row with some of it viewed says how much. What is
+      # all viewed L leaves closed, as it does a row open above already.
+      split("", vin); vtot = 0; vdone = 0; vwalk(i)
+      done = vdone == vtot
+      dim = (vkey(i) in vd) && (done || (rid in open))
+      vc = dim ? GK_GOOD "\342\234\223" GK_R "    " : (kids && !(rid in open) && vdone) ? GK_CONTEXT gk_padr(vdone "/" vtot, 5) GK_R : "     "
+      if (all && kids && !again && !done && !(rid in open)) { open[rid] = 1; print rid >> openfile }
+      if (rid in open) opened[p "#" name] = 1
+      # The fold marker and how much is under it sit before the signature,
+      # where a tree draws them, never at the cut end of the row.
+      fold = kids ? ((again || done) && !(rid in open) ? GK_CONTEXT : GK_ATTENTION) ((rid in open) ? "\342\226\276" : "\342\226\270") GK_R GK_CONTEXT gk_padl(kids, 2) GK_R " " : "    "
+      room = budget - 3 * depth - 4
+      if (kind == "class") head = gk_elide_rest(head)
+      head = gk_sig((ex ? "export " : "") head, room)
+      # The signature, marked for highlight; a removed or viewed one plain and dim.
+      head = (ch == "removed" || dim) ? GK_CONTEXT head GK_R : "\036" head "\036"
+      th = ""
+      if (mr) {
+        split("", hit); split("", walked); walk(i, kids && !(rid in open))
+        th = threads(tally("open"), tally("draft"))
+      }
+      stat = glyph(ch) gk_stat(add, del, wa, wd); if (dim) stat = dimmed(stat)
+      print (wt ? cells(ch, stg, un) : "") stat "  " th vc indent fold head \
+        "\t" p "\t" at "\t" side "\t" s "\t" e "\t" os "\t" oe "\t" stg "\t" un "\t" kind "\t" rid
+      if (!(rid in open)) return
+      for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, 0)
+      for (x = 1; x <= nc; x++) {
+        cid = cs[x]
+        if (cid == "" || !(cid in at_id) || index(anc, "|" cid "|")) continue
+        show(at_id[cid], depth + 1, rid ">" cid, anc "|" cid "|", i)
+      }
+      if (par == "" && ((p "#" name) in ncall)) callers(p "#" name, depth + 1, rid ">callers")
+    }
+    # callers: the dim row under a symbol for its callers elsewhere, and,
+    # open, the callers themselves by package, a dim row naming each package
+    # (the deploy unit, so the blast radius in the shape people reason
+    # about) and under it a signature each, its file and lines in the fields
+    # for the preview and enter, the side "file" since no diff has them. A
+    # caller with a type error against the change carries ✗. Never opened
+    # by open-all, which is about the change.
+    # One fixed in this checkout (git-callers --recheck) carries a green ✓
+    # instead, and counts as fixed rather than broken.
+    function callers(id, depth, crid,   x, n, np, ns, ne, nfx, f, pk, indent, text, fold, th, head) {
+      n = ncall[id]; np = 0; ns = 0; ne = 0; nfx = 0
+      for (x = 1; x <= n; x++) {
+        f = cp[id, x]; pk = cpk[id, x]
+        if (!((crid, pk) in seenp)) { seenp[crid, pk] = 1; np++ }
+        if (f ~ /\.(spec|test)\.[jt]sx?$/) ns++
+        if (cerr[id, x]) { if (f in fixedp) nfx++; else ne++ }
+      }
+      indent = ""; for (x = 0; x < depth; x++) indent = indent "   "
+      th = mr ? "      " : ""
+      if (id == "-") text = (ne ? GK_BAD : GK_GOOD) n " broken elsewhere" GK_R GK_CONTEXT " without calling anything changed, in " np " package" (np == 1 ? "" : "s") (ns ? " \302\267 " ns " in specs" : "")
+      else text = n " caller" (n == 1 ? "" : "s") " elsewhere, in " np " package" (np == 1 ? "" : "s") (ns ? " \302\267 " ns " in specs" : "") \
+        (ne ? " \302\267 " GK_BAD ne " with type errors" GK_R GK_CONTEXT : "")
+      if (nfx) text = text " \302\267 " GK_GOOD nfx " fixed in your checkout" GK_R GK_CONTEXT
+      fold = GK_CONTEXT ((crid in open) ? "\342\226\276" : "\342\226\270") GK_R "   "
+      print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent fold GK_CONTEXT text GK_R "\t\t\t\t\t\t\t\t\t\tcallers\t" crid
+      if (!(crid in open)) return
+      pk = ""
+      for (x = 1; x <= n; x++) {
+        if (cpk[id, x] != pk) {
+          pk = cpk[id, x]
+          print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " GK_CONTEXT pk GK_R "\t\t\t\t\t\t\t\t\t\tpackage\t" crid ">" pk
+        }
+        head = chead[id, x]
+        if (head ~ /^(export )?(abstract )?class /) head = gk_elide_rest(head)
+        head = gk_sig(head, budget - 3 * (depth + 2) - 4)
+        print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " (cerr[id, x] ? ((cp[id, x] in fixedp) ? " " GK_GOOD "\342\234\223" GK_R " " : " " GK_BAD "\342\234\227" GK_R " ") : "   ") GK_CONTEXT head GK_R \
+          "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x]
+      }
+    }' "$table" "$order" "$marks" "$callers" "$vw" | highlight | git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
+  read -r syms nfiles roots < "$counts" 2>/dev/null
+  rm -f "$counts" "$order" "$vw"
+  [ -n "$GIT_FZF_STATE" ] || exit 0
+  if [ "${syms:-0}" -gt 0 ]; then
+    note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, %s to start from%s${GK_R}" "$syms" "$nfiles" "$([ "$nfiles" -eq 1 ] || echo s)" "$roots" "$([ -e "$st/up" ] && echo ', bottom up')")
+    if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
+    elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
+    [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
+    # Imported by too many packages to type-check (git-callers): the callers
+    # are there, what they break is not.
+    [ -z "$finding" ] && read -r npkg 2>/dev/null < "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.unchecked" &&
+      note="$note · $(printf "${GK_ATTENTION}callers not type-checked: %s packages import the change${GK_R}" "$npkg")"
+    [ -n "$fixing" ] && note="$note · $(printf "${GK_ATTENTION}Claude is fixing what it breaks${GK_R}")"
+    [ -n "$rechecking" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is checking your fixes${GK_R}")"
+  elif ! command -v seam >/dev/null 2>&1; then
+    note=$(printf "${GK_ATTENTION}seam is not on your PATH, so there are only files${GK_R}")
+  elif [ -e "$st/seam.err" ]; then
+    note=$(printf "${GK_BAD}seam failed: %s${GK_R}" "$(grep -m1 . "$st/seam.err" || echo "no message, exit status non-zero")")
+  elif ! command -v ast-grep >/dev/null 2>&1; then
+    note=$(printf "${GK_ATTENTION}ast-grep is not installed (brew install ast-grep), so there are only files${GK_R}")
+  else
+    note=$(printf "${GK_CONTEXT}nothing here is TypeScript, so there are only files${GK_R}")
+  fi
+  footer=$(cat "$GIT_FZF_STATE/footer" 2>/dev/null)
+  printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
+  exit 0
+fi
+
+# The picker. Nested in a file picker's execute, so q returns there. Row
+# fields after the display: path, line, side, start, end, base start, base
+# end, staged, unstaged, kind, id.
+list="git-symbols --rows $rev"
+# A fold key's reload: the worktree's skips the rebuild.
+fold=$list; [ -z "$head" ] && fold="OTIS_SYMBOLS_FOLD=1 $list"
+# f and the file picker's s switch between the two views. Opened from the file
+# picker, f goes back to it rather than opening another on top, or every trip
+# back and forth would be one more q on the way out.
+if [ "$OTIS_UNDER" = files ]; then files=abort
+elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $root/share/otis.zsh; _ga_files')+reload($list)+refresh-preview"
+else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
+if [ -z "$head" ]; then
+  # ga: this is the picker; f is its file panel, with hunks and discards.
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  set -- --track \
+    --bind "f:$files" \
+    --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
+    --bind "a:execute-silent(git add -A)+reload($list)+refresh-preview" \
+    --bind "U:execute-silent(git reset -q)+reload($list)+refresh-preview" \
+    --bind "u:reload($list)+refresh-preview" \
+    --bind "g:execute-silent(git-symbols-gloss worktree \$GIT_FZF_STATE/symbols.tsv)+reload($list)" \
+    --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
+    --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
+elif [ -n "$GMR_IID" ]; then
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,p=peeks on/off,t=tests/config/generated,q=back to files'
+  set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($fold)"
+else
+  # A commit or a branch: this is the picker, and f is the file list.
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  # nvim opens in the diff against the change's base, the hunks lit, as it
+  # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
+  set -- --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
+    --bind "f:$files" \
+    --bind "u:reload($list)+refresh-preview"
+fi
+git-fzf "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
+  --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
+  --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
+  --bind "l:execute-silent(git-symbols --open {12})+reload($fold)" \
+  --bind "h:transform(git-symbols --close {12} $fold)" \
+  --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
+  --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
+  --bind "b:execute-silent(git-symbols --flip)+reload($fold)" \
+  --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
+  --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \
+  --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
+  --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
+  --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
+  --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)+down" \
+  "$@" \
+  --preview "git-symbols --preview $rev {2} {4} {5} {6} {12}" </dev/null >/dev/null
+exit 0

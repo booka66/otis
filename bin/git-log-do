@@ -1,0 +1,29 @@
+#!/bin/sh
+# git-log-do <fixup | reword> <sha> <then>
+# gl's f and r, as fzf actions for a transform binding: a footer note when the
+# commit cannot take it, else the edit, then <then> (gl's reload). Either one
+# only touches this branch's own commits, past the base (otis-config base); git-commit-fixup
+# holds fixup's rules, which gfx shares. A failure waits for enter, so what went
+# wrong can be read before the picker comes back.
+action=$1 sha=$2 then=$3
+[ -n "$sha" ] || exit 0
+pause='|| { printf "press enter\n"; read -r _; }'
+
+case $action in
+  fixup)
+    why=$(git-commit-fixup --check "$sha" 2>&1) || exec git-fzf-note "$why"
+    echo "execute(git-commit-fixup $sha $pause)+$then"
+    ;;
+  reword)
+    base=$(otis-config base)
+    if ! git merge-base --is-ancestor "$sha" HEAD || git merge-base --is-ancestor "$sha" "$base"; then
+      exec git-fzf-note "$sha is not one of this branch's commits on top of $base"
+    fi
+    # The last commit rewords in place; an earlier one takes a rebase, which
+    # refuses to start over uncommitted changes.
+    if [ "$(git rev-parse "$sha")" != "$(git rev-parse HEAD)" ] && ! git diff --quiet HEAD --; then
+      exec git-fzf-note "uncommitted changes would stop the rebase; commit them, or gwip first"
+    fi
+    echo "execute(git-commit-edit --reword $sha $pause)+$then"
+    ;;
+esac

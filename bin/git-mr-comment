@@ -1,0 +1,46 @@
+#!/bin/sh
+# git-mr-comment <iid> <range> [path]
+# Open gitlab.nvim's reviewer for the MR checked out in this worktree
+# (git-mr-review puts it there), on the file highlighted in the picker at its
+# first changed line. The plugin takes a few seconds to start its server and
+# load the MR, so the first buffer says so; a buffer with text in it also keeps
+# the dashboard from opening in the meantime. The file and line go over the
+# environment so no path ever needs quoting inside Lua. gitlab.nvim brings its
+# own diff view, so no gitsigns auto-diff on top.
+iid=$1 range=$2 path=$3
+# --check: the review picker's r, as fzf actions. A detached review (your own
+# branch by that name exists, so gmr left it alone) gets a footer note instead.
+if [ "$1" = --check ]; then
+  shift
+  git-mr-wait quiet
+  if [ -z "$(git branch --show-current)" ]; then
+    exec git-fzf-note "your own branch for !$1 exists, so comment in the browser (w)"
+  fi
+  echo "execute(git-mr-comment $1 $2 {2})"
+  exit 0
+fi
+git-mr-wait || exit 0
+GMR_FILE=$path
+GMR_LINE=$([ -n "$path" ] && git-commit-open --line "$range" "$path")
+export GMR_FILE GMR_LINE
+exec env -u NVIM_DIFF_BASE nvim -c "lua vim.bo.buftype = 'nofile'
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'loading !$iid in gitlab.nvim ...', '', 'the review opens in its own tab in a few seconds. :qa when you are done.' })
+  require('gitlab').review()
+  -- review() returns before the reviewer exists; wait for its file list, then
+  -- jump the way the plugin jumps to a comment.
+  local file, line = vim.env.GMR_FILE, tonumber(vim.env.GMR_LINE) or 1
+  if file and file ~= '' then
+    local tries = 0
+    local timer = vim.uv.new_timer()
+    timer:start(200, 200, vim.schedule_wrap(function()
+      tries = tries + 1
+      local reviewer = require('gitlab.reviewer')
+      local view = reviewer.diffview
+      if reviewer.tabid and view and #view.panel:ordered_file_list() > 0 then
+        timer:stop()
+        require('diffview.async').void(function() reviewer.jump(file, file, line, true) end)()
+      elseif tries > 150 then
+        timer:stop()
+      end
+    end))
+  end"

@@ -1,0 +1,43 @@
+#!/bin/sh
+# git-mr-viewed add <iid> <rev> <path>      mark a file viewed in an MR
+# git-mr-viewed toggle <iid> <rev> <path>   flip it
+# git-mr-viewed remove <iid> <rev> <path>   unmark it
+# git-mr-viewed list <iid> <rev>            the viewed files, one per line
+#
+# The review file picker's check marks, like GitLab's "viewed". A mark holds
+# the file's blob, so it lasts across new pushes until the file itself changes,
+# and then it is gone. A file the MR deletes has no blob, so its mark holds
+# "deleted" and lasts while it stays deleted. Kept per MR in the git dir.
+action=$1 iid=$2 rev=$3 path=$4
+[ -n "$iid" ] && [ -n "$rev" ] || exit 0
+dir="$(git rev-parse --git-common-dir)/gmr-viewed"
+file="$dir/$iid"
+mkdir -p "$dir"
+touch "$file"
+
+blob() { git rev-parse -q --verify "$rev:$1" 2>/dev/null || echo deleted; }
+# Marks whose blob still matches the file at <rev>, as "blob<TAB>path".
+current() {
+  cut -f2 "$file" | sort -u | while IFS= read -r p; do
+    b=$(blob "$p") && grep -qxF "$b	$p" "$file" && printf '%s\t%s\n' "$b" "$p"
+  done
+}
+
+case $action in
+  list)
+    current | cut -f2
+    ;;
+  remove)
+    awk -F'\t' -v p="$path" '$2 != p' "$file" > "$file.new"; mv "$file.new" "$file"
+    ;;
+  add|toggle)
+    b=$(blob "$path") || exit 0
+    if grep -qxF "$b	$path" "$file"; then
+      [ "$action" = add ] && exit 0
+      grep -vxF "$b	$path" "$file" > "$file.new"
+    else
+      { awk -F'\t' -v p="$path" '$2 != p' "$file"; printf '%s\t%s\n' "$b" "$path"; } > "$file.new"
+    fi
+    mv "$file.new" "$file"
+    ;;
+esac

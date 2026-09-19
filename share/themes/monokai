@@ -1,0 +1,21 @@
+# Monokai.
+attention=38;2;230;219;116
+good=38;2;166;226;46
+bad=38;2;249;38;114
+elsewhere=38;2;102;217;239
+yours=38;2;253;151;31
+text=38;2;248;248;242
+context=38;2;117;113;94
+faint=38;2;73;72;62
+main=38;2;174;129;255
+codebg=48;2;62;61;50
+errbg=48;2;77;40;48
+delta_syntax=Monokai Extended
+bat=Monokai Extended
+file=#66d9ef
+rule=#49483e
+minus=#512832
+plus=#404d24
+minus_emph=#7b2742
+plus_emph=#5a7227
+glow=dark

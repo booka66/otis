@@ -1,0 +1,249 @@
+#!/bin/sh
+# git-callers-fix <rev> <callers> <table>     the cache file once Claude has looked; else "running", having
+#                                            started it in the background unless it already runs; nothing
+#                                            when no caller is broken, it is off or claude is not here
+# git-callers-fix --file <callers>            the cache file for these errors, if there is one
+# git-callers-fix --state <callers>           running, done, or none
+# git-callers-fix --prompt <rev> <callers> <table>   the prompt, for the eye and the tests
+# git-callers-fix --run <rev> <callers> <table>      the call itself
+# git-callers-fix --show <callers> <caller id>       its fixes for one caller, for the preview: a line
+#                                            F, line, where, sentence each, then per edit E, path, line,
+#                                            ok | gone | many, and its diff a line D each
+# git-callers-fix --apply <row id> <actions>         F, a transform: the row's edits made and saved,
+#                                            <actions>, and a note saying where; or a note why not
+#
+# A caller elsewhere that the change breaks (git-callers: a type error it did
+# not have at the base) shows its errors under their lines in the preview;
+# this adds, under each, what Claude would do about it: a sentence on the fix,
+# whether it belongs in the caller or in the change, and the edit to make, as
+# exact text replacements (a file, text found once in it, and what replaces
+# it), drawn as a diff. F makes them in this checkout, the one enter opens nvim
+# on, and stays in the picker: the files are saved, the list reloads, and the
+# preview marks each edit made. They are left uncommitted, for git diff to
+# show and git restore to take back.
+# An edit whose text is not in the file exactly once, because the file has
+# moved on or this checkout is not the change, is not made, and nor is any
+# other of that caller's: all of them or none.
+# One call for every broken caller of the change, through claude -p the way
+# the gloss runs (git-symbols-gloss): on stdin the commits' words, the diff of
+# each changed symbol a broken caller calls, and each caller's lines around
+# its errors, and it answers JSON against a schema. It may read the repo
+# (Read, Grep and Glob, nothing else), since the fix for a broken test is
+# often in a helper the error does not point at, like the layer it builds.
+# Nothing is edited and nothing is posted. Sonnet 5 (git config
+# otis.callersFixModel; off turns it off), since a type error through
+# Effect's layers is more than a gloss.
+#
+# Lazy like the gloss: git-symbols starts it when the callers land with a
+# broken one, and its landing refreshes the preview through git-fzf-bg. The
+# cache is keyed by the errors themselves, the broken rows of the callers
+# cache, so the same breakage is never asked about twice, and the worktree's
+# asks again only when its errors change.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+mode=
+case $1 in --file|--state|--prompt|--run|--show|--apply) mode=$1; shift ;; esac
+case $mode in
+  --file|--state) callers=$1 ;;
+  --show) callers=$1 cid=$2 ;;
+  --apply)
+    # The picker's callers cache, as its preview finds it.
+    rid=$1; shift; after=$*
+    case $rid in *'>callers>'*) ;; *) git-fzf-note "F makes Claude's fix to a broken caller, and this row is not one"; exit 0 ;; esac
+    cid=${rid##*>} st=$GIT_FZF_STATE
+    { read -r ckey < "$st/callers-key" || read -r ckey < "$st/key"; } 2>/dev/null
+    read -r croot < "$st/cache-root" 2>/dev/null
+    callers=$croot/callers/$ckey.tsv ;;
+  *) rev=$1 callers=$2 table=$3 ;;
+esac
+[ -s "$callers" ] || exit 0
+
+broken() { awk -F'\t' '$9 > 0' "$callers"; }
+[ -n "$(broken)" ] || exit 0
+dir=$(cd "$(dirname "$callers")/.." && pwd)/callers-fix
+# The version of the answer's shape goes in the key, so a cache of an older
+# shape is asked again rather than misread.
+key=$( { echo v2; broken | cut -f1,4,12; } | git hash-object --stdin)
+file=$dir/$key.json
+running=$dir/$key.running
+alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
+
+case $mode in
+  --file) [ -s "$file" ] && printf '%s\n' "$file"; exit 0 ;;
+  --state)
+    if alive; then echo running; elif [ -s "$file" ]; then echo done; else echo none; fi
+    exit 0 ;;
+esac
+
+# The edits Claude gave for one caller, each once (errors that share a fix
+# share its edit), as JSON a line; its path is from the repo's top.
+edits() { jq -c --arg c "$cid" '[.fixes[] | select(.caller == $c) | .edits[]] | unique[]' "$file"; }
+# field <json> <name>: one string of an edit, its trailing newlines kept.
+field() { v=$(printf '%s' "$1" | jq -j ".$2"; printf x); v=${v%x}; }
+# where <path> <text>: how many times the text is in the file, and the line
+# it first starts on.
+where() {
+  [ -n "$2" ] && [ -f "$1" ] || { echo 0 0; return; }
+  OLD=$2 awk 'BEGIN { RS = "\001"; o = ENVIRON["OLD"] }
+    { t = $0; at = 0
+      while ((i = index(t, o)) > 0) { if (!n++) { pre = substr($0, 1, at + i - 1); line = gsub(/\n/, "", pre) + 1 }; at += i; t = substr(t, i + 1) } }
+    END { print n + 0, line + 0 }' "$1"
+}
+
+if [ "$mode" = --show ]; then
+  [ -s "$file" ] || exit 0
+  cd "$(git rev-parse --show-toplevel)" || exit 0
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  # Each fix, and under the first one that gives it, each of its edits.
+  jq -c --arg c "$cid" '.fixes[] | select(.caller == $c)' "$file" | while IFS= read -r fx; do
+    printf '%s' "$fx" | jq -r '"F\t\(.line)\t\(.where)\t\(.fix | gsub("\n"; " "))"'
+    printf '%s' "$fx" | jq -c '.edits[]' | while IFS= read -r ed; do
+      grep -qxF -- "$ed" "$tmp/shown" 2>/dev/null && continue
+      printf '%s\n' "$ed" >> "$tmp/shown"
+      field "$ed" path; path=$v; field "$ed" old; printf '%s' "$v" > "$tmp/old"; old=$v; field "$ed" new; printf '%s' "$v" > "$tmp/new"
+      set -- $(where "$path" "$old")
+      case $1 in 1) state=ok ;; 0) state=gone ;; *) state=many ;; esac
+      # Gone because F made it: the new text is there, once, in its place.
+      if [ "$state" = gone ]; then
+        set -- $(where "$path" "$v")
+        [ "$1" = 1 ] && state=made
+      fi
+      printf 'E\t%s\t%s\t%s\n' "$path" "$2" "$state"
+      # Its diff, the lines it keeps around the change as context, less
+      # the indent all its lines share.
+      diff -U1 "$tmp/old" "$tmp/new" | awk 'NR > 2 && !/^@@/ && !/^\\/ { l[++n] = $0; t = substr($0, 2); if (t ~ /[^ \t]/) { match(t, /^ */); if (d == "" || RLENGTH < d) d = RLENGTH } }
+        END { for (i = 1; i <= n; i++) print "D\t" substr(l[i], 1, 1) substr(l[i], d + 2) }'
+    done
+  done
+  exit 0
+fi
+
+if [ "$mode" = --apply ]; then
+  [ -s "$file" ] || { git-fzf-note "Claude has no fix for this caller yet"; exit 0; }
+  cd "$(git rev-parse --show-toplevel)" || exit 0
+  list=$(edits)
+  [ -n "$list" ] || { git-fzf-note "Claude's fix for this caller is not an edit it could write down"; exit 0; }
+  # Every edit checked before any is made.
+  bad=$(printf '%s\n' "$list" | while IFS= read -r ed; do
+    field "$ed" path; path=$v; field "$ed" old
+    set -- $(where "$path" "$v")
+    case $1 in (1) ;; (0) printf '%s no longer has the text the fix replaces\n' "$path" ;; (*) printf '%s has the text the fix replaces more than once\n' "$path" ;; esac
+  done | head -1)
+  if [ -n "$bad" ]; then
+    # Every edit already there: F pressed twice.
+    made=$(printf '%s\n' "$list" | while IFS= read -r ed; do
+      field "$ed" path; path=$v; field "$ed" new
+      set -- $(where "$path" "$v"); [ "$1" = 1 ] || echo no
+    done)
+    [ -z "$made" ] && { git-fzf-note "Claude's fix for this caller is made already; git diff shows it"; exit 0; }
+    git-fzf-note "no edit made: $bad"; exit 0
+  fi
+  first=
+  printf '%s\n' "$list" | while IFS= read -r ed; do
+    field "$ed" path; path=$v; field "$ed" old; old=$v; field "$ed" new; new=$v
+    OLD=$old NEW=$new awk 'BEGIN { RS = "\001"; o = ENVIRON["OLD"] } { i = index($0, o); printf "%s", substr($0, 1, i - 1) ENVIRON["NEW"] substr($0, i + length(o)) }' "$path" > "$path.otis-fix" &&
+      cat "$path.otis-fix" > "$path"; rm -f "$path.otis-fix"
+  done
+  # A range's previews are kept by this directory's mtime (git-symbols), and
+  # the one here now has an edit to mark made.
+  touch "$dir"
+  paths=$(printf '%s\n' "$list" | jq -r .path | sort -u)
+  n=$(printf '%s\n' "$paths" | wc -l | tr -d ' ')
+  printf '%s\n' "made Claude's fix in $(printf '%s\n' "$paths" | head -1 | sed 's|.*/||')$([ "$n" -gt 1 ] && echo " and $((n - 1)) more") · uncommitted, git diff shows it" > "$GIT_FZF_STATE/note"
+  echo "${after:+$after+}rebind(focus)+transform-footer:git-fzf-footer"
+  exit 0
+fi
+[ -n "$rev" ] && [ -s "$table" ] || exit 0
+
+# The tree the callers were read from: the change's head, or the disk for
+# the worktree, as git-callers read them.
+case $rev in
+  worktree) head= ;;
+  *...*) r=${rev##*...}; head=${r:-HEAD} ;;
+  *..*) r=${rev##*..}; head=${r:-HEAD} ;;
+  *) head=$rev ;;
+esac
+show() { if [ -n "$head" ]; then git show "$head:$1" 2>/dev/null || cat "$1" 2>/dev/null; else cat "$1" 2>/dev/null; fi; }
+
+# The prompt: the change's words, what it did to each symbol a broken caller
+# calls, then each broken caller: its errors and its lines around them, from
+# thirty above the first to fifteen below the last, within the caller.
+prompt() {
+  cat <<'EOF'
+A code change broke code it did not touch: each caller below type-checked before the change and has these errors after it. For each error, say how to fix it in at most two short sentences, forty words at most: what the change did that broke it, and the edit to make, naming where it goes (the file and the function). Say whether the edit belongs in the caller or in the change (a caller that should adapt, or a change that took away something callers relied on). Give the edit in edits when a few lines do it, as exact replacements: path from the repository's top, old copied exactly from the file as it is (read it; whitespace and all) and found in it only once, with enough of the lines around the change to make it so, and new, what replaces it. An addition is an old that ends where it goes and a new that is the same with the added lines. Give every edit the fix needs to type-check, an import it uses included, each as its own edit. Never repeat the edit in the sentence; leave edits empty when no short edit does it. When several errors share one fix, give its edits once, on the first, and say so in a few words on the others, with no edits. When what is here is not enough to say, say what you would look at, in one sentence, with no edits; never guess at names you cannot see. Copy each caller id and line exactly as given. You may read files in the repository to find what the fix needs, such as a helper the caller builds its setup with; its files may be a little ahead of or behind the change, so trust the lines given here over what you read.
+
+EOF
+  case $rev in
+    worktree) printf 'The change is uncommitted work in the working tree.\n\n' ;;
+    *..*|*...*) printf 'The commits, newest first:\n'; git log --format='  %s' "$rev" 2>/dev/null | head -30; echo ;;
+    *) printf 'The commit:\n'; git log -1 --format='  %s%n%n%b' "$rev" 2>/dev/null | sed 's/^/  /' | head -40; echo ;;
+  esac
+  printf 'What the change did to the symbols the broken callers call:\n\n'
+  broken | cut -f1 | grep -v '^-$' | sort -u | while IFS= read -r sym; do
+    awk -F'\t' -v id="$sym" 'BEGIN { OFS = "\t" } $2 != "file" && $4 == "" && $1 "#" $3 == id { print $1, $7, $8, $9, $6; exit }' "$table" |
+      while IFS="$(printf '\t')" read -r p side s e change; do
+        printf '## %s (%s)\n' "$sym" "$change"
+        GIT_SYMBOLS_PLAIN=1 git-symbols --preview "$rev" "$p" "$side" "$s" "$e" 2>/dev/null |
+          awk '/^@@/ { on = 1; next } on { print "    " $0 }' | head -80
+        echo
+      done
+  done
+  printf 'The broken callers:\n\n'
+  broken | head -12 | while IFS="$(printf '\t')" read -r sym p _ cid _ s e _ _ _ _ errs; do
+    printf '## caller %s\n' "$cid"
+    [ "$sym" = - ] && printf 'calls nothing the change touched; a type it changed reached it another way\n' || printf 'calls %s\n' "$sym"
+    printf '%s\n' "$errs" | tr '\036' '\n' | sed 's/^/error at line /'
+    lo=$(printf '%s\n' "$errs" | tr '\036' '\n' | awk -F: -v s="$s" 'NR == 1 || $1 + 0 < m { m = $1 + 0 } END { m -= 30; print (m < s ? s : m) }')
+    hi=$(printf '%s\n' "$errs" | tr '\036' '\n' | awk -F: -v e="$e" '$1 + 0 > m { m = $1 + 0 } END { m += 15; print (m > e ? e : m) }')
+    [ $((hi - lo)) -gt 150 ] && hi=$((lo + 150))
+    printf 'lines %s-%s of %s:\n' "$lo" "$hi" "$p"
+    show "$p" | awk -v s="$lo" -v e="$hi" 'NR >= s && NR <= e { printf "    %5d  %s\n", NR, $0 } NR > e { exit }'
+    echo
+  done
+}
+
+[ "$mode" = --prompt ] && { prompt; exit 0; }
+
+model=$(git config --get otis.callersFixModel || echo claude-sonnet-5)
+if [ "$mode" != --run ]; then
+  [ -s "$file" ] && { printf '%s\n' "$file"; exit 0; }
+  alive && { echo running; exit 0; }
+  [ "$model" != off ] && command -v claude >/dev/null 2>&1 || exit 0
+  mkdir -p "$dir" || exit 0
+  # The callers cache and the table may be replaced while this runs.
+  cp "$callers" "$dir/$key.callers"; cp "$table" "$dir/$key.table"
+  nohup git-callers-fix --run "$rev" "$dir/$key.callers" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  echo $! > "$running"
+  echo running
+  exit 0
+fi
+
+# --run. One at a time for these errors: the lock is a directory.
+mkdir -p "$dir" || exit 0
+lock=$dir/$key.lock
+# The holder's pid is in the lock, not $running: the asker writes this run's
+# own pid there, so a lock a killed run left would look held for good.
+if ! mkdir "$lock" 2>/dev/null; then
+  kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null && exit 0
+  rm -rf "$lock"; mkdir "$lock" || exit 0
+fi
+echo $$ > "$lock/pid"
+echo $$ > "$running"
+p=$(mktemp)
+trap 'rm -rf "$running" "$lock" "$p" "$dir/$key.callers" "$dir/$key.table"' EXIT
+schema='{"type":"object","additionalProperties":false,"required":["fixes"],"properties":{
+  "fixes":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["caller","line","where","fix","edits"],
+    "properties":{"caller":{"type":"string"},"line":{"type":"integer"},"where":{"type":"string","enum":["caller","change"]},
+      "fix":{"type":"string"},"edits":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","old","new"],
+        "properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}}}}}}}}}'
+prompt > "$p"
+# From the repo's top, reading only.
+result=$(cd "$(git rev-parse --show-toplevel)" && claude -p --model "$model" --restricted --tools "Read,Grep,Glob" --strict-mcp-config --disable-slash-commands \
+  --no-session-persistence --permission-prompts none --output-format json --json-schema "$schema" < "$p" 2>>"$dir/$key.err")
+printf '%s' "$result" | jq -e '(.is_error | not) and .structured_output != null' >/dev/null 2>&1 || exit 0
+printf '%s' "$result" | jq '.structured_output' > "$file.new" && mv "$file.new" "$file"
+rm -f "$dir/$key.err"
+# The fixes show in the preview, so that is what is refreshed; a review
+# reloads its own list.
+if [ -n "$GMR_IID" ]; then git-fzf-bg --then refresh-preview git-mr-files --list "$GMR_IID" "$rev"
+else git-fzf-bg --then refresh-preview git-symbols --rows "$rev"; fi
+exit 0

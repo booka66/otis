@@ -1,0 +1,361 @@
+#!/bin/sh
+# otis-setup [--check]
+# Guided setup for otis on macOS or Linux, safe to run any time: it checks
+# what the pickers need and offers to install anything missing through
+# Homebrew (on either OS; without it, says how to get it), asks for your
+# branch prefix if you have none, which editor opens files, whether you want
+# Claude's lessons, and offers to add the one line your shell's startup file
+# needs (zsh, bash or fish). It changes nothing without a y/N, and with
+# --check it only reports.
+root=$(cd "$(dirname "$0")/.." && pwd)
+check_only=
+[ "$1" = --check ] && check_only=1
+# No terminal to ask on (ssh host otis-setup, a bootstrap script): report only.
+{ : </dev/tty; } 2>/dev/null || check_only=1
+
+if [ -t 1 ]; then
+  # In the theme's colors (otis-theme), as the pickers are.
+  eval "$("$root/bin/otis-theme" --env 2>/dev/null)"
+  ok="\033[${OTIS_T_GOOD}m" warn="\033[${OTIS_T_ATTENTION}m" bad="\033[${OTIS_T_BAD}m" dim="\033[${OTIS_T_CONTEXT}m" r='\033[0m'
+else
+  ok= warn= bad= dim= r=
+fi
+problems=0
+pass() { printf "  ${ok}ok${r}    %s ${dim}%s${r}\n" "$1" "$2"; }
+fail() { printf "  ${bad}need${r}  %s ${dim}%s${r}\n" "$1" "$2"; problems=$((problems + 1)); }
+note() { printf "  ${warn}note${r}  %s ${dim}%s${r}\n" "$1" "$2"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+os=$(uname)
+# What brew would install, collected as the checks go: required formulae,
+# optional ones, and casks (macOS only).
+want= want_opt= want_cask=
+need() { want="$want $1"; }
+nice() { want_opt="$want_opt $1"; }
+# How to get formula $1: brew where there is one (macOS or Linux), the
+# distro's way ($2) on Linux without it.
+install_hint() {
+  if have brew || [ "$os" = Darwin ]; then printf 'brew install %s' "$1"; else printf '%s' "$2"; fi
+}
+# Is version $1 at least $2? Both dotted numbers.
+at_least() {
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = "$2" ]
+}
+ask() {
+  printf '%s [y/N] ' "$1"
+  read -r answer </dev/tty
+  [ "$answer" = y ] || [ "$answer" = Y ]
+}
+
+printf 'otis in %s\n\n' "$root"
+printf 'required\n'
+
+if have zsh; then pass zsh "$(zsh --version | cut -d' ' -f2), which the commands run on; your own shell can be zsh, bash or fish"; else fail zsh "the commands run on it, whatever your own shell is; $(install_hint zsh 'apt install zsh, or your package manager')"; need zsh; fi
+
+if have git; then
+  v=$(git --version | sed -E 's/^git version ([0-9.]+).*/\1/')
+  if at_least "$v" 2.41; then pass git "$v"; else fail git "$v is too old; gb needs 2.41 or newer. $(install_hint git 'see https://git-scm.com/download/linux')"; need git; fi
+else
+  fail git "$(install_hint git 'apt install git')"; need git
+fi
+
+if have fzf; then
+  v=$(fzf --version | cut -d' ' -f1)
+  # Probe what the pickers use rather than trust a version number.
+  if printf 'x\n' | fzf --filter x --footer x --id-nth 1 --with-shell 'zsh -fc' --bind 'every(30):ignore' --bind 'load:transform-footer(true)' >/dev/null 2>&1; then
+    pass fzf "$v"
+  else
+    fail fzf "$v is too old (needs --footer, every() and transform-footer). $(install_hint fzf 'distro packages lag; get a release from https://github.com/junegunn/fzf/releases')"; need fzf
+  fi
+else
+  fail fzf "$(install_hint fzf 'get a release from https://github.com/junegunn/fzf/releases')"; need fzf
+fi
+
+if have jq; then
+  v=$(jq --version | sed -E 's/^jq-([0-9.]+).*/\1/')
+  if at_least "$v" 1.7; then pass jq "$v"; else fail jq "$v is too old; needs 1.7. $(install_hint jq 'see https://jqlang.github.io/jq/download/')"; need jq; fi
+else
+  fail jq "$(install_hint jq 'apt install jq')"; need jq
+fi
+
+if have nvim; then
+  v=$(nvim --version | head -1 | sed -E 's/^NVIM v([0-9.]+).*/\1/')
+  if at_least "$v" 0.10; then pass nvim "$v"; else fail nvim "$v is too old; reviews in nvim need 0.10. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; need neovim; fi
+else
+  fail nvim "reviews and file opening use nvim. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; need neovim
+fi
+
+# The GitLab host is otis.host where set (a self-hosted GitLab), else gitlab.com.
+host=$("$root/bin/otis-config" host 2>/dev/null || echo gitlab.com)
+if have glab; then
+  if glab auth status --hostname "$host" >/dev/null 2>&1; then
+    pass glab "$(glab --version | head -1 | cut -d' ' -f2), logged in to $host"
+  elif [ -z "$check_only" ] && ask "  glab is not logged in to $host, and every GitLab picker needs it; log in now?" &&
+    glab auth login --hostname "$host" </dev/tty && glab auth status --hostname "$host" >/dev/null 2>&1; then
+    pass glab "logged in to $host"
+  else
+    fail glab "installed but not logged in: run glab auth login --hostname $host"
+  fi
+else
+  fail glab "every GitLab picker uses it. $(install_hint glab 'see https://gitlab.com/gitlab-org/cli#installation'), then glab auth login"; need glab
+fi
+
+if have delta; then pass delta "$(delta --version | cut -d' ' -f2)"; else fail delta "diff previews. $(install_hint git-delta 'see https://dandavison.github.io/delta/installation.html')"; need git-delta; fi
+if have curl; then pass curl ""; else fail curl "pickers refresh through it. $(install_hint curl 'apt install curl')"; need curl; fi
+if have perl; then pass perl ""; else fail perl "commit message tidying. $(install_hint perl 'apt install perl')"; need perl; fi
+
+# A Nerd Font in the terminal: the glyph columns need one. Installed is all
+# that can be checked from here; the terminal's font is yours to pick.
+if [ "$os" = Darwin ]; then
+  fonts=$(ls ~/Library/Fonts /Library/Fonts 2>/dev/null)
+else
+  fonts=$(fc-list 2>/dev/null)
+fi
+if printf '%s' "$fonts" | grep -qi nerd; then
+  pass "Nerd Font" "installed; make sure your terminal uses it, or the glyph columns show as boxes"
+else
+  if [ "$os" = Darwin ]; then
+    fail "Nerd Font" "none installed; the glyph columns need one: brew install --cask font-jetbrains-mono-nerd-font, then pick it in your terminal's font settings"
+    want_cask="$want_cask font-jetbrains-mono-nerd-font"
+  else
+    fail "Nerd Font" "none installed; the glyph columns need one: https://www.nerdfonts.com/font-downloads, then pick it in your terminal's font settings"
+  fi
+fi
+
+printf '\noptional\n'
+if have ast-grep; then pass ast-grep "s in a review reads the MR by symbol"; else note ast-grep "reading a change by symbol needs it; without it only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')"; nice ast-grep; fi
+if have seam; then pass seam "s reads the change seam works out, by symbol"; else note seam "the symbol view is a renderer of seam's table; without it only files are listed. $(install_hint booka66/seam/seam 'git clone https://github.com/booka66/seam and put its bin on your PATH')"; nice booka66/seam/seam; fi
+if have claude; then pass claude "C, D and V have Claude review, fix, watch production and judge"; else note claude "C, D and V need Claude Code: curl -fsSL https://claude.ai/install.sh | bash, then claude to log in"; fi
+if have glow; then pass glow "MR descriptions render as markdown"; else note glow "MR descriptions show as plain text without it. $(install_hint glow 'see https://github.com/charmbracelet/glow')"; nice glow; fi
+if have bat; then pass bat "code blocks in MR comments are highlighted"; else note bat "code blocks in MR comments show unhighlighted without it. $(install_hint bat 'see https://github.com/sharkdp/bat')"; nice bat; fi
+if have ffmpeg; then pass ffmpeg "V's judge can see the tester's videos"; else note ffmpeg "only V uses it, to see the tester's videos. $(install_hint ffmpeg 'apt install ffmpeg')"; nice ffmpeg; fi
+if [ "$os" != Darwin ]; then
+  if have xdg-open; then pass xdg-open "w and p open links"; else note xdg-open "w and p print the link instead of opening it"; fi
+  if have wl-copy || have xclip || have xsel; then pass clipboard "y copies links"; else note clipboard "y needs wl-copy, xclip or xsel"; fi
+fi
+# Alerts work in any terminal; Ghostty's come from the terminal itself.
+case $TERM_PROGRAM in
+  ghostty) pass Ghostty "alerts for reviews, comments and approvals come from the terminal, and a click goes back to it" ;;
+  WezTerm|iTerm.app) pass "$TERM_PROGRAM" "alerts come from the terminal, and a click goes back to it" ;;
+  *)
+    if [ -n "$KITTY_WINDOW_ID" ]; then
+      pass kitty "alerts come from the terminal, and a click goes back to it"
+    elif [ "$os" = Darwin ] || have notify-send; then
+      note Ghostty "recommended: alerts come as system notifications here; in Ghostty they come from the terminal and a click goes back to it (brew install --cask ghostty)"
+    else
+      note alerts "no notify-send, so alerts print in the terminal; Ghostty, or notify-send (libnotify), makes them desktop notifications"
+    fi ;;
+esac
+
+# Install what is missing, through brew. Re-run afterwards so the checks
+# above see the result; OTIS_SETUP_INSTALLED stops a second offer.
+if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_opt$want_cask" ]; then
+  printf '\n'
+  if have brew; then
+    installed=
+    what=${want# }
+    [ -n "$want_cask" ] && what="${what:+$what and }a Nerd Font"
+    if [ -n "$what" ] && ask "  install what is needed with brew ($what)?"; then
+      { [ -z "$want" ] || brew install $want; } && { [ -z "$want_cask" ] || brew install --cask $want_cask; } && installed=1
+    fi
+    if [ -n "$want_opt" ] && ask "  and the optional ones (${want_opt# })?"; then
+      brew install $want_opt && installed=1
+    fi
+    if [ -n "$installed" ]; then
+      printf '\n'
+      OTIS_SETUP_INSTALLED=1 exec "$0" "$@"
+    fi
+  else
+    brew_install='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    printf '  Homebrew installs all of the above on macOS and Linux:\n    %s\n  ' "$brew_install"
+    if ask "install Homebrew now?"; then
+      if sh -c "$brew_install"; then
+        printf '\n  Homebrew is in. Do what its "Next steps" say to put brew on your PATH, then run otis-setup again.\n'
+        exit 1
+      fi
+    fi
+  fi
+fi
+
+printf '\nsettings\n'
+prefix=$(git config --global --get otis.branchPrefix)
+if [ -n "$prefix" ]; then
+  pass "branch prefix" "$prefix (gbn and gwn make $prefix/<name>)"
+elif [ -n "$check_only" ]; then
+  fail "branch prefix" "unset; gbn and gwn need it: git config --global otis.branchPrefix <your name>"
+else
+  guess=$(git config --get user.email | sed -E 's/@.*//; s/[^A-Za-z0-9._-].*//; s/\..*//')
+  printf '  gbn and gwn name new branches <prefix>/<name>. Your prefix'
+  [ -n "$guess" ] && printf ' [%s]' "$guess"
+  printf ': '
+  read -r prefix </dev/tty
+  prefix=${prefix:-$guess}
+  if [ -n "$prefix" ] && git check-ref-format --branch "$prefix/x" >/dev/null 2>&1; then
+    git config --global otis.branchPrefix "$prefix"
+    pass "branch prefix" "set to $prefix"
+  else
+    fail "branch prefix" "not set; later: git config --global otis.branchPrefix <your name>"
+  fi
+fi
+
+# The editor files open in (otis-edit): asked once. The guess is the editor
+# git already uses where one is set, else Cursor or VS Code where installed.
+editor=$(git config --global --get otis.editor)
+if [ -n "$OTIS_EDITOR" ]; then
+  pass editor "$OTIS_EDITOR, from OTIS_EDITOR"
+elif [ -n "$editor" ]; then
+  pass editor "$editor opens files (git config --global otis.editor)"
+elif [ -n "$check_only" ]; then
+  note editor "unset, so nvim opens files: git config --global otis.editor cursor (or code, zed, vim...) to change it"
+else
+  guess=$(git var GIT_EDITOR 2>/dev/null); guess=${guess%% *}; guess=${guess##*/}
+  case $guess in ''|vi|vim) guess= ;; esac
+  for e in cursor code; do [ -z "$guess" ] && have $e && guess=$e; done
+  guess=${guess:-nvim}
+  printf '  Files you open from the pickers open in your editor: cursor, code, zed, nvim, vim...
+  (a review with its comments inline is always nvim). Yours [%s]: ' "$guess"
+  read -r editor </dev/tty
+  editor=${editor:-$guess}
+  git config --global otis.editor "$editor"
+  pass editor "$editor (git config --global otis.editor changes it)"
+fi
+editor=${OTIS_EDITOR:-${editor:-nvim}}
+if ! have "${editor%% *}"; then
+  case ${editor%% *} in
+    cursor|code) fail editor "$editor is not on your PATH: in it, cmd-shift-P, then \"Shell Command: Install '${editor%% *}' command in PATH\"" ;;
+    *) fail editor "$editor is not on your PATH" ;;
+  esac
+fi
+# gcm and gam -e write the message in git's own editor. Nobody set, that is
+# vi, which is a trap for someone who picked Cursor above.
+case ${editor%% *} in
+  cursor|code|code-insiders|windsurf|codium|zed|subl)
+    if [ -z "$(git config --get core.editor)$GIT_EDITOR$VISUAL$EDITOR" ]; then
+      if [ -n "$check_only" ]; then
+        note "commit editor" "git would use vi for commit messages: git config --global core.editor \"${editor%% *} --wait\""
+      elif ask "  commit messages open in vi until git is told otherwise; use ${editor%% *} for them too?"; then
+        git config --global core.editor "${editor%% *} --wait"
+        pass "commit editor" "${editor%% *} --wait"
+      fi
+    fi ;;
+esac
+
+# The theme: asked once. Unset is terminal, the terminal's own colors, which
+# suits any terminal; otis-theme shows each of the others on otis's rows.
+theme=$(git config --global --get otis.theme)
+if [ -n "$theme" ]; then
+  pass theme "$theme (otis-theme picks another)"
+elif [ -n "$check_only" ]; then
+  note theme "unset, so otis uses your terminal's colors; otis-theme picks another (gruvbox, catppuccin, tokyo night, solarized)"
+else
+  printf '  otis uses your terminal'"'"'s colors, so it matches whatever theme you run.\n  '
+  if have fzf && ask "see the other themes (gruvbox, catppuccin, tokyo night, solarized) and pick one?" &&
+    PATH="$root/bin:$PATH" otis-theme >/dev/null; then
+    pass theme "$(git config --global --get otis.theme) (otis-theme picks another)"
+  else
+    git config --global otis.theme terminal
+    pass theme "terminal, your terminal's colors (otis-theme picks another)"
+  fi
+fi
+
+# Claude's lessons: a preference, so asked once and remembered either way.
+lessons=$(git config --global --type=bool --get otis.lessons 2>/dev/null)
+if [ "$lessons" = true ]; then
+  pass "lessons" "Claude's review comments and fixes each come with a lesson on the principle behind it, for you only (git config --global otis.lessons false turns it off)"
+elif [ "$lessons" = false ]; then
+  pass "lessons" "off; Claude's comments and fixes come with why, and no lesson (git config --global otis.lessons true turns it on)"
+elif [ -n "$check_only" ]; then
+  note "lessons" "unset, so off: git config --global otis.lessons true has Claude's comments and fixes each teach the principle behind it, for you only"
+else
+  printf '  Claude'"'"'s review comments and fixes always come with why it thinks so, for you only.\n  They can also each teach the principle behind it, from first principles, with where to read more.\n  '
+  if ask "want those lessons?"; then
+    git config --global otis.lessons true; pass "lessons" "on"
+  else
+    git config --global otis.lessons false; pass "lessons" "off (git config --global otis.lessons true turns it on)"
+  fi
+fi
+
+# The one line your shell needs, in the startup file of the shell you use.
+# bash on macOS starts as a login shell, which reads the first there is of
+# ~/.bash_profile, ~/.bash_login and ~/.profile: making a .bash_profile when
+# you keep your PATH in .profile would hide it.
+case ${SHELL##*/} in
+  bash) file=otis.bash
+    if [ "$os" = Darwin ]; then
+      rc=
+      for f in .bash_profile .bash_login .profile; do [ -f "$HOME/$f" ] && { rc=$HOME/$f; break; }; done
+      rc=${rc:-$HOME/.bash_profile}
+    else
+      rc=$HOME/.bashrc
+    fi ;;
+  fish) file=otis.fish; rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish ;;
+  *)    file=git.zsh; rc=${ZDOTDIR:-$HOME}/.zshrc ;;
+esac
+line="source \"$root/$file\""
+case $rc in "$HOME"/*) rcname="~/${rc#"$HOME"/}" ;; *) rcname=$rc ;; esac
+# Written out, or through $HOME or ~.
+rel=${root#"$HOME"/}
+if [ -f "$rc" ] && { grep -qF "$root/$file" "$rc" || grep -qF "\$HOME/$rel/$file" "$rc" || grep -qF "~/$rel/$file" "$rc"; }; then
+  pass "$rcname" "sources $file"
+elif old=$(grep -oE "[^ \"]*(git-alias|gkit|otis)/$file" "$rc" 2>/dev/null | head -1) && [ -n "$old" ]; then
+  case $old in "~/"*) old=$HOME/${old#\~/} ;; '$HOME/'*) old=$HOME/${old#\$HOME/} ;; esac
+  if [ -f "$old" ]; then
+    note "$rcname" "sources $old rather than this one; to use this one: $line"
+  else
+    fail "$rcname" "sources $old, which is gone; replace that line with: $line"
+  fi
+elif [ -n "$check_only" ]; then
+  fail "$rcname" "add: $line"
+else
+  printf '  %s needs one line: %s\n  ' "$rcname" "$line"
+  if ask "add it to the end of $rcname?"; then
+    mkdir -p "$(dirname "$rc")"
+    printf '\n# otis: git and GitLab pickers (%s)\n%s\n' "$root" "$line" >> "$rc"
+    pass "$rcname" "added; open a new terminal, or run: $line"
+  else
+    fail "$rcname" "not added; add yourself: $line"
+  fi
+fi
+# oh-my-zsh's git plugin defines gb, gl, ga, gcm and more; whichever is
+# sourced last wins, and otis's line has to be the later one.
+if [ "$file" = git.zsh ] && [ -f "$rc" ] && grep -qE '^plugins=.*[( ]git[ )]' "$rc" && grep -q oh-my-zsh.sh "$rc"; then
+  omz=$(grep -n oh-my-zsh.sh "$rc" | head -1 | cut -d: -f1)
+  gk=$({ grep -nF "$root/git.zsh" "$rc" || grep -nE '(git-alias|gkit|otis)/git\.zsh' "$rc"; } | head -1 | cut -d: -f1)
+  if [ -n "$gk" ] && [ "$gk" -lt "$omz" ]; then
+    fail "oh-my-zsh" "its git plugin defines gb, gl, ga, gcm and more, and is sourced after otis, so its aliases win; move the otis line below the oh-my-zsh.sh line"
+  else
+    note "oh-my-zsh" "its git plugin's gb, gl, ga, gcm and more are replaced by otis's, since otis is sourced after it"
+  fi
+fi
+if [ "$file" != git.zsh ]; then
+  note "prompt" "the background fetch, the prompt's ahead/behind, Ghostty alerts and the hourly worktree sweep come with zsh's line only, for now"
+fi
+
+printf '\nfeatures\n'
+remote=$(git config --get otis.remote 2>/dev/null)
+if [ -n "$remote" ]; then
+  pass "remote checks" "type checks and tests run on $remote (otis.remote)"
+else
+  note "remote checks" "Claude's reviews and fixes run the repo's checks only with a workspace to run them in, set per repo: git config otis.remote <ssh host> and otis.remotePath <its checkout> (a Coder workspace after coder config-ssh)"
+fi
+if [ -n "$CURSOR_API_KEY" ]; then
+  pass "Cursor Cloud" "CURSOR_API_KEY is set, so V can verify a change"
+else
+  note "Cursor Cloud" "V needs CURSOR_API_KEY exported in your shell (Cursor's dashboard, Integrations, API keys)"
+fi
+# Datadog's MCP server, from the repo this runs in or Claude Code's own
+# settings, the way git-mr-watch-run finds it.
+top=$(git rev-parse --show-toplevel 2>/dev/null)
+if { cat "${top:-/nonexistent}/.mcp.json" 2>/dev/null || echo '{}'; cat ~/.claude.json 2>/dev/null || echo '{}'; } |
+  jq -es '[.[0].mcpServers // {}, .[1].mcpServers // {}] | add | to_entries | any(.value.url // "" | test("://mcp\\.datadoghq\\."))' >/dev/null 2>&1; then
+  pass "Datadog" "Claude Code has Datadog's MCP server here, so D can watch production once claude is logged in to it (/mcp)"
+else
+  note "Datadog" "D watches production through Datadog's MCP server in Claude Code, from the repo's .mcp.json or ~/.claude.json; run otis-setup in the repo to check, and log in with /mcp"
+fi
+
+printf '\n'
+if [ "$problems" -eq 0 ]; then
+  printf "${ok}ready.${r} Open a new terminal, then in a repo: otis is the dashboard and the place to start, and gg lists every command.\n"
+else
+  printf "${warn}%s thing(s) to fix above,${r} then run otis-setup again.\n" "$problems"
+  exit 1
+fi

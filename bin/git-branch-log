@@ -1,0 +1,28 @@
+#!/bin/sh
+# git-branch-log <branch>: gb's c, the branch's own commits in gl.
+#
+# Its commits past the base (otis-config base), so the log is the branch rather than the whole
+# history behind it, and gl's keys work on them as usual: enter opens a file at
+# the line the preview is showing, y copies a sha, and on this branch's own
+# commits f folds staged changes in and r rewords.
+#
+# A branch with nothing past the base has no log worth opening, so it says that
+# instead of showing an empty picker.
+b=$1
+[ -n "$b" ] || exit 0
+
+base=$(otis-config base)
+[ "$base" != HEAD ] || { printf 'no %s to compare against. press enter\n' "$(otis-config main)"; read -r _; exit 0; }
+
+n=$(git rev-list --count "$base..$b" 2>/dev/null) || {
+  printf '%s is not a branch here. press enter\n' "$b"
+  read -r _
+  exit 0
+}
+if [ "$n" -eq 0 ]; then
+  printf '%s has nothing that %s does not. press enter\n' "$b" "$base"
+  read -r _
+  exit 0
+fi
+
+exec gl "$base..$b"

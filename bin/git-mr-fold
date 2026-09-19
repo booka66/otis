@@ -1,0 +1,392 @@
+#!/bin/sh
+# git-mr-fold <what>                           fold the fixes you accepted into your commits, push, reply
+# git-mr-fold --apply <what> <n | --accepted>  put a proposal (or every accepted one) in your
+#                                              checkout, uncommitted, to work on yourself
+# git-mr-fold --branch <what> [name]          the accepted ones on a branch of their own, off the
+#                                             base in a worktree of its own, one commit a fix, and
+#                                             the offer to push it and open its MR (B in the picker)
+#
+# The half of Claude's fixes (git-mr-fix) that writes to your branch, and on
+# an MR to GitLab; the run and its picker never do. <what> is the run's key:
+# an MR's iid, or b-<branch> with slashes as %. F, a and B in the picker.
+#
+# Folding needs a clean checkout. It tries every accepted patch against your
+# HEAD first (three-way, in a throwaway index), shows where each goes, and
+# asks. Then it lints, before a single commit is made: with otis.lintCommand
+# set, the accepted patches go into your working tree and that command runs
+# over them, here or, with otis.remote set, in the workspace that has a warm
+# build cache (git-remote-run), with GIT_BASE_REF as the MR's base and
+# OTIS_CHANGED_FILES a list of the files the fixes touch. Lint that fails
+# leaves your branch as it was, and its output goes to Claude when you run it
+# again (r), so it fixes what lint found; anything lint fixed itself rides
+# along as a "chore: apply lint fixes" commit. Then it applies the fixes in
+# order, each as a fixup of the newest of your MR's commits that last touched
+# the lines it changes (git blame), newest because an older commit may not
+# have the code a fix builds on; a fix of lines none of your commits wrote,
+# or of new files, becomes a new commit on top. One autosquash rebase folds
+# the fixups in. Then it asks to push (with gp's lease), then, on an MR, to
+# reply "Fixed in <commit>" on the threads it answers and resolve them.
+#
+# --apply is the lighter way: the patch goes into your working tree as
+# uncommitted changes, for when a proposal is a starting point rather than the
+# answer; edit it, then ga, gcm and gp as with any change of your own. Nothing
+# is committed, pushed or replied to, and --apply again on the same one takes
+# it back out while the files are as the patch left them.
+mode=fold
+[ "$1" = --apply ] && { mode=apply; shift; }
+[ "$1" = --branch ] && { mode=branch; shift; }
+key=$1
+[ -n "$key" ] || { echo 'usage: git-mr-fold <what> | --apply <what> <n | --accepted>' >&2; exit 2; }
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+. "$share/mr-fix.sh"
+# Your checkout's files, and B's branch, get your usual modes, not the
+# private ones Claude's run state is written with.
+umask "$otis_umask"
+[ -d "$d" ] || { printf 'no fixes from Claude for %s yet; C runs it. press enter\n' "$label"; read -r _; exit 0; }
+
+# Claude makes each fix on top of the ones before it, so one can change lines
+# an earlier one wrote and not go in, or come out, without it. Which fix
+# builds on which is guessed from the files they touch, and asked about only
+# when the fixes do not go in or come out by themselves.
+files_of() { for f; do awk '/^diff --git /{ f = $3; sub(/^a\//, "", f); print f }' "$(patch_of "$f")"; done; }
+# needs <n>...: the earlier fixes those build on, and the ones those build on,
+# that are in neither your checkout nor your commits.
+needs() {
+  files= m=$(printf '%s\n' "$@" | sort -n | tail -1)
+  while [ "$m" -gt 0 ]; do
+    if printf '%s\n' "$@" | grep -qx "$m"; then
+      files=$(printf '%s\n' "$files" "$(files_of "$m")" | sed '/^$/d')
+    elif [ -s "$d/$(nn "$m").patch" ] && ! grep -qx "$m" "$d/folded" "$d/applied" 2>/dev/null &&
+      files_of "$m" | grep -qxF "$files"; then
+      echo "$m"
+      files=$(printf '%s\n' "$files" "$(files_of "$m")" | sed '/^$/d')
+    fi
+    m=$((m - 1))
+  done | sort -n
+}
+# needed_by <n>: the later fixes in your checkout that build on it, and the
+# ones that build on those.
+needed_by() {
+  files=$(files_of "$1")
+  sort -n "$d/applied" | while read -r m; do
+    [ "$m" -gt "$1" ] && files_of "$m" | grep -qxF "$files" || continue
+    echo "$m"
+    files=$(printf '%s\n' "$files" "$(files_of "$m")")
+  done
+}
+# fits [-R] <n>...: whether the fixes go into your working tree one after
+# another (with -R, come out of it, newest first), tried in a copy of your
+# index with your changes staged; the copy keeps git add from hashing the repo.
+fits() {
+  r=; [ "$1" = -R ] && { r=-R; shift; }
+  i=$(mktemp)
+  cp "$(git rev-parse --git-path index)" "$i"
+  (export GIT_INDEX_FILE="$i"
+    git add -u &&
+    files_of "$@" | sort -u | while read -r f; do [ -e "$f" ] && printf '%s\n' "$f"; done |
+      git add --pathspec-from-file=- || exit 1
+    for f in $([ -n "$r" ] && printf '%s\n' "$@" | sort -rn || printf '%s\n' "$@"); do
+      git apply --cached $r "$(patch_of "$f")" || exit 1
+    done) >/dev/null 2>&1
+  ok=$?
+  rm -f "$i"
+  return $ok
+}
+# them <n>...: "fix 1" or "fixes 1, 2".
+them() { [ $# -eq 1 ] && printf 'fix %s' "$1" || printf 'fixes %s' "$(printf '%s' "$*" | sed 's/ /, /g')"; }
+
+# Patches name paths from the top of the repo; git apply in a subdirectory
+# skips the rest.
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+case $mode in
+apply)
+  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  b=$(git branch --show-current)
+  [ "$b" = "$(cat "$d/branch")" ] || { pause "apply with $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }
+  if [ "$2" = --accepted ]; then
+    todo=$(sort -n "$d/accepted" 2>/dev/null | while read -r n; do grep -qx "$n" "$d/folded" "$d/applied" "$d/branched" 2>/dev/null || echo "$n"; done)
+    [ -n "$todo" ] || { pause "nothing accepted to apply; space accepts, or a applies the one under the cursor"; exit 0; }
+  else
+    n=$2
+    [ -s "$d/$(nn "$n").patch" ] || { pause "Claude changed nothing for that one, so there is nothing to apply"; exit 0; }
+    grep -qx "$n" "$d/folded" 2>/dev/null && { pause "that one is folded into your commits already"; exit 0; }
+    if grep -qx "$n" "$d/applied" 2>/dev/null; then
+      # Back out, newest first, with whatever in your checkout builds on it,
+      # while the files are still as the patches left them.
+      out=$n
+      if ! fits -R "$n"; then
+        later=$(needed_by "$n")
+        if [ -n "$later" ] && fits -R $n $later; then
+          git-confirm "$(them $later) in your checkout build$([ "$(echo $later | wc -w)" -eq 1 ] && echo s) on fix $n; take $([ "$(echo $later | wc -w)" -eq 1 ] && echo it || echo them) out too?" || exit 0
+          out="$n $later"
+        else
+          pause "fix $n has been edited since it was applied, so it is yours now; gdd discards files"
+          exit 0
+        fi
+      fi
+      for m in $(printf '%s\n' $out | sort -rn); do
+        git apply -R "$(patch_of "$m")" || { pause "fix $m did not come out after all; the ones after it did"; exit 0; }
+        grep -vx "$m" "$d/applied" > "$d/applied.new"; mv "$d/applied.new" "$d/applied"
+      done
+      exit 0
+    fi
+    todo=$n
+  fi
+  if ! fits $todo; then
+    before=$(needs $todo)
+    if [ -n "$before" ]; then
+      git-confirm "$(them $todo) build$([ "$(echo $todo | wc -w)" -eq 1 ] && echo s) on $(them $before), not in your checkout; apply $([ "$(echo $before | wc -w)" -eq 1 ] && echo it || echo them) too?" || exit 0
+      todo=$(printf '%s\n' $before $todo | sort -n)
+    fi
+  fi
+  # Working tree only, so the change shows up unstaged like an edit of your
+  # own. Each patch was made against the branch's commit the run saw; one
+  # that no longer fits is left, and what applied before it stays.
+  for n in $todo; do
+    out=$(git apply "$(patch_of "$n")" 2>&1) || {
+      printf '%s\n' "$out" | tail -5
+      pause "fix $n does not apply to your checkout as it is now; the others applied before it are in place"
+      exit 0
+    }
+    printf '%s\n' "$n" >> "$d/applied"
+  done
+  exit 0
+  ;;
+# --branch <key> [name]: the accepted fixes as their own thing: a branch off the base
+# (otis-config base, origin/main), one commit a fix, titled as the fix is,
+# and the offer to push it and open an MR. Your checkout is not touched: the
+# commits are made in a worktree that goes when they are done, and enter on
+# the branch in gb brings it here. For a retrospective's changes, which belong
+# on no MR of yours, and for any fix you would rather ship apart.
+branch)
+  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  todo=$(sort -n "$d/accepted" 2>/dev/null | while read -r n; do grep -qx "$n" "$d/folded" "$d/branched" 2>/dev/null || echo "$n"; done)
+  [ -n "$todo" ] || { pause "nothing accepted to put on a branch; space accepts"; exit 0; }
+  # One already in your checkout (a) may be meant for your MR or for here;
+  # which is yours to say, since both would put it in two places.
+  inco=$(for n in $todo; do grep -qx "$n" "$d/applied" 2>/dev/null && echo "$n"; done)
+  if [ -n "$inco" ]; then
+    one=$([ "$(echo $inco | wc -w)" -eq 1 ] && echo 1)
+    if ! git-confirm "$(them $inco) $([ -n "$one" ] && echo is || echo are) in your checkout already (a); put $([ -n "$one" ] && echo it || echo them) on the branch too?"; then
+      todo=$(for n in $todo; do printf '%s\n' "$inco" | grep -qx "$n" || echo "$n"; done)
+      [ -n "$todo" ] || { pause "nothing else accepted to put on a branch"; exit 0; }
+    fi
+  fi
+  base=$(otis-config base)
+  [ "$base" != HEAD ] || { pause "no $(otis-config main) here to branch from"; exit 0; }
+  prefix=$(git config --get otis.branchPrefix) || { pause "set your branch prefix first: git config --global otis.branchPrefix <name>"; exit 0; }
+  case $kind in
+    retro) default="verify-env-$(printf '%s' "${key#v-}" | tr '%' '-')" ;;
+    *) default="fixes-$(printf '%s' "$label" | tr -c 'A-Za-z0-9-\n' '-' | sed 's/^-*//; s/-*$//')" ;;
+  esac
+  name=$2
+  if [ -z "$name" ]; then
+    printf 'branch name [%s/%s]: ' "$prefix" "$default"
+    read -r name
+    name=${name:-$default}
+  fi
+  b=$prefix/$name
+  git rev-parse -q --verify "refs/heads/$b" >/dev/null && { pause "$b exists already; another name"; exit 0; }
+  dir=$(git-worktree-path named "$name")
+  [ -e "$dir" ] && { pause "$dir exists already; another name"; exit 0; }
+  git-worktree-add "$name" -b "$b" "$base" >/dev/null 2>&1 || { pause "could not make a worktree for $b"; exit 0; }
+  # A retrospective's fixes are edits to the brief as the run saw it, which
+  # may not be on the base yet (a brief still uncommitted in your checkout):
+  # then it goes on the branch first, as it stood, and the fixes on top.
+  if [ "$kind" = retro ] && brief=$(cat "$d/context/brief-path" 2>/dev/null) && [ -n "$brief" ] &&
+    [ ! -e "$dir/$brief" ] && [ -r "$(git-worktree-path main)/$brief" ]; then
+    mkdir -p "$dir/$(dirname "$brief")" && cp "$(git-worktree-path main)/$brief" "$dir/$brief" &&
+      git -C "$dir" add "$brief" && git -C "$dir" commit -q -m "Add the verify-env brief: what a tester and a judge need to know to verify a change here"
+  fi
+  made=0
+  for n in $todo; do
+    title=$(jq -r --argjson n "$n" '.items[] | select(.n == $n) | .title' "$d/items.json")
+    if ! out=$(git -C "$dir" apply --index --3way "$(patch_of "$n")" 2>&1); then
+      printf '%s\n' "$out" | tail -5
+      git -C "$dir" reset -q --hard
+      pause "fix $n does not apply on $base; $made before it are committed on $b"
+      break
+    fi
+    git -C "$dir" commit -q -m "$title" || { pause "could not commit fix $n on $b"; break; }
+    printf '%s\n' "$n" >> "$d/branched"
+    made=$((made + 1))
+  done
+  [ "$made" -gt 0 ] || { git worktree remove --force "$dir" 2>/dev/null; git branch -qD "$b" 2>/dev/null; exit 0; }
+  printf '%s commit%s on %s, in %s\n' "$made" "$([ "$made" -eq 1 ] || echo s)" "$b" "$dir"
+  if git-confirm "push $b and get the link to open its MR?"; then
+    if git -C "$dir" push -q -u origin "$b"; then
+      printf 'open an MR: %s/%s/-/merge_requests/new?merge_request%%5Bsource_branch%%5D=%s\n' "$(otis-config url)" "$(otis-config project)" "$(printf '%s' "$b" | jq -rR '@uri')"
+    else
+      printf 'the push failed; %s is made, to push yourself\n' "$b"
+    fi
+  fi
+  git worktree remove "$dir" >/dev/null 2>&1
+  pause "enter on $b in gb switches to it"
+  exit 0
+  ;;
+fold)
+  range=$(cat "$d/range") base=${range%%..*}
+  # The run's base can be one git-mr-base built for display (a stacked MR
+  # whose parent was squash-merged), which is in no one's history: rebasing
+  # onto it would put it in yours. Where your branch really forks is its
+  # merge base with HEAD.
+  base=$(git merge-base "$base" HEAD)
+  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  [ "$kind" = retro ] && { pause "a retrospective's changes go in with a (into your checkout, uncommitted), then commit them on a branch of your own"; exit 0; }
+  b=$(git branch --show-current)
+  [ "$b" = "$(cat "$d/branch")" ] || { pause "fold from $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }
+  [ -z "$(git status --porcelain --untracked-files=no)" ] ||
+    { git status --short --untracked-files=no | head -10; pause "uncommitted changes here; commit them, or set them aside with gwip, then F again"; exit 0; }
+  [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ] &&
+    { pause "a rebase is in progress here; finish or abort it first"; exit 0; }
+  # Rebased onto or merged with main since the run: base..HEAD holds main's
+  # commits now, and the autosquash below would rewrite them into your MR.
+  [ "$(git rev-list --count "$base..HEAD")" = "$(git rev-list --count "$base..HEAD" --not "$(otis-config base)")" ] ||
+    { pause "$b was rebased onto or merged with $(otis-config main) since Claude's run; r runs it again"; exit 0; }
+  todo=$(sort -n "$d/accepted" 2>/dev/null | while read -r n; do grep -qx "$n" "$d/folded" "$d/applied" "$d/branched" 2>/dev/null || echo "$n"; done)
+  [ -n "$todo" ] || { pause "nothing accepted to fold; space accepts a proposal (one applied with a is yours to commit)"; exit 0; }
+
+  # Everything must apply to HEAD before anything is touched, in order, each
+  # fix on the ones before it; a fix that needs an earlier one you did not
+  # accept brings it along if you say so. Each step is a throwaway commit, so
+  # a fix's lines can be blamed as they are once the fixes before it are in.
+  tmp=$(mktemp) && trap 'rm -f "$tmp" "$tmp.plan" "$tmp.at" "$tmp.made"' EXIT
+  stack() {
+    GIT_INDEX_FILE=$tmp git read-tree HEAD
+    at=$(git rev-parse HEAD)
+    : > "$tmp.at"
+    for n in $todo; do
+      printf '%s\t%s\n' "$n" "$at" >> "$tmp.at"
+      out=$(GIT_INDEX_FILE=$tmp git apply --cached --3way "$(patch_of "$n")" 2>&1) || return 1
+      at=$(GIT_INDEX_FILE=$tmp git write-tree | xargs git commit-tree -p "$at" -m "fix $n")
+    done
+  }
+  if ! stack; then
+    before=$(needs $todo)
+    if [ -n "$before" ]; then
+      git-confirm "what you accepted builds on $(them $before), which you did not accept; fold $([ "$(echo $before | wc -w)" -eq 1 ] && echo it || echo them) in too?" || exit 0
+      todo=$(printf '%s\n' $before $todo | sort -n)
+      stack
+    else
+      false
+    fi || { printf '%s\n' "$out" | tail -5; pause "fix $n no longer applies to your branch, so nothing was folded; take it back (space) or r to run Claude again"; exit 0; }
+  fi
+
+  # A fix whose newest lines are an earlier fix's goes where that one goes: its
+  # commit's fixup, or with it, @<n>, when that one is a new commit.
+  printf "${GK_ATTENTION}folding into %s:${GK_R}\n" "$b"
+  while IFS="$(printf '\t')" read -r n at; do
+    t=$(target "$(patch_of "$n")" "$base" "$at")
+    if [ -n "$t" ] && [ -z "$(git rev-list "$base..HEAD" | grep -x "$t")" ]; then
+      m=$(git log -1 --format=%s "$t"); m=${m#fix }
+      t=$(awk -F'\t' -v m="$m" '$1 == m { print ($2 == "" ? "@" m : $2) }' "$tmp.plan")
+    fi
+    title=$(jq -r --argjson n "$n" '.items[] | select(.n == $n) | .title' "$d/items.json")
+    case $t in
+      "") into='→ a new commit on top' ;;
+      @*) into="→ with $(jq -r --argjson n "${t#@}" '.items[] | select(.n == $n) | .title' "$d/items.json")" ;;
+      *) into=$(git log -1 --format='→ fixup of %h %s' "$t") ;;
+    esac
+    printf '  %s  %s\n' "$title" "$into"
+    printf '%s\t%s\n' "$n" "$t" >> "$tmp.plan"
+  done < "$tmp.at"
+  git-confirm "fold these?" || exit 0
+
+  lint=$(git config --get otis.lintCommand)
+  if [ -n "$lint" ]; then
+    git-lock || exit 0
+    for n in $todo; do
+      git apply --index --3way "$(patch_of "$n")" >/dev/null 2>&1 ||
+        { git reset -q --hard HEAD; pause "fix $n did not apply for the lint run, so nothing was folded"; exit 0; }
+    done
+    git diff --cached --name-only HEAD > "$d/changed-files"
+    printf "${GK_ATTENTION}linting the fixes ...${GK_R}\n"
+    # Somewhere else when you have one (git-remote-run): this repo's lint is
+    # a cold Bazel analysis on a laptop and seconds where the cache is warm.
+    # Live output and the status: a pipeline would report tee's.
+    if [ -n "$(git config --get otis.remote)" ]; then
+      run='git-remote-run "$lint"'
+    else
+      run='sh -c "$lint"'
+    fi
+    { GIT_BASE_REF=$base OTIS_CHANGED_FILES=$d/changed-files eval "$run"; echo $? > "$d/lint.rc"; } 2>&1 |
+      tee "$d/lint.log"
+    if [ "$(cat "$d/lint.rc")" != 0 ]; then
+      git reset -q --hard HEAD
+      pause "lint failed, so nothing was folded; r runs Claude again, and it gets this output"
+      exit 0
+    fi
+    # What lint fixed by itself is whatever the patches did not stage.
+    git diff --binary > "$d/lint.patch"
+    [ -s "$d/lint.patch" ] || rm -f "$d/lint.patch"
+    git reset -q --hard HEAD
+    rm -f "$d/lint.log"
+  fi
+
+  before=$(git rev-list --reverse "$base..HEAD")
+  git-lock || exit 0
+  while IFS="$(printf '\t')" read -r n t; do
+    title=$(jq -r --argjson n "$n" '.items[] | select(.n == $n) | .title' "$d/items.json")
+    if ! git apply --index --3way "$(patch_of "$n")"; then
+      pause "fix $n did not apply after all; what applied before it is committed, the rest is not"
+      exit 0
+    fi
+    case $t in
+      "") git commit -q -m "$title" && printf '%s\t%s\n' "$n" "$(git rev-parse HEAD)" >> "$tmp.made" ;;
+      @*) git commit -q --fixup "$(awk -F'\t' -v m="${t#@}" '$1 == m { print $2 }' "$tmp.made")" ;;
+      *) git commit -q --fixup "$t" ;;
+    esac || { pause "the commit for fix $n failed (a hook?); fix $n is staged"; exit 0; }
+    printf '%s\n' "$n" >> "$d/folded"
+  done < "$tmp.plan"
+  if [ -s "$d/lint.patch" ]; then
+    git apply --index "$d/lint.patch" && git commit -q -m "chore: apply lint fixes" && rm -f "$d/lint.patch" ||
+      pause "could not commit what lint fixed; it is in $d/lint.patch"
+  fi
+  # From the history, not this run's count: a fold a hook stopped leaves
+  # its fixups behind for the next F to squash.
+  if git log --format=%s "$base..HEAD" | grep -q '^fixup! ' && ! GIT_SEQUENCE_EDITOR=true git rebase -q -i --autosquash --update-refs "$base"; then
+    pause "the fold stopped on a conflict: resolve it and git rebase --continue, or git rebase --abort to keep the fixes as commits on top"
+    exit 0
+  fi
+
+  git-confirm "push $b?" || exit 0
+  git push origin HEAD --force-with-lease --force-if-includes || { pause "the push failed"; exit 0; }
+
+  # Nothing to reply to on a branch: every proposal there is Claude's own.
+  [ "$kind" = mr ] || exit 0
+
+  # Each answered thread gets the commit its fix is in now: a fixup's target
+  # sits where it did before the rebase; a new commit is the fix's own.
+  after=$(git rev-list --reverse "$base..HEAD")
+  replies=$(while IFS="$(printf '\t')" read -r n t; do
+      thread=$(jq -r --argjson n "$n" '.items[] | select(.n == $n and .source == "thread") | .thread_id' "$d/items.json")
+      [ -n "$thread" ] || continue
+      case $t in
+        ("") of=$n ;;
+        (@*) of=${t#@} ;;
+        (*) of= ;;
+      esac
+      if [ -z "$of" ]; then
+        i=$(printf '%s\n' "$before" | grep -nx "$t" | cut -d: -f1)
+        sha=$(printf '%s\n' "$after" | sed -n "${i}p")
+      else
+        title=$(jq -r --argjson n "$of" '.items[] | select(.n == $n) | .title' "$d/items.json")
+        sha=$(git log --format='%H' --fixed-strings --grep="$title" -1 "$base..HEAD")
+      fi
+      [ -n "$sha" ] && printf '%s\t%s\n' "$thread" "$(git rev-parse --short "$sha")"
+    done < "$tmp.plan" | sort -u)
+  [ -n "$replies" ] || exit 0
+  n=$(printf '%s\n' "$replies" | wc -l | tr -d ' ')
+  git-confirm "reply \"Fixed in <commit>.\" on $n thread$([ "$n" -eq 1 ] || echo s) and resolve $([ "$n" -eq 1 ] && echo it || echo them)?" || exit 0
+  api="projects/:fullpath/merge_requests/$iid"
+  printf '%s\n' "$replies" | while IFS="$(printf '\t')" read -r thread sha; do
+    glab api -X POST "$api/discussions/$thread/notes" -f body="Fixed in $sha." >/dev/null &&
+      glab api -X PUT "$api/discussions/$thread?resolved=true" >/dev/null ||
+      printf 'could not reply on or resolve thread %s\n' "$thread"
+  done
+  git-mr-threads --refresh "$iid" refresh-preview >/dev/null 2>&1
+  exit 0
+  ;;
+esac

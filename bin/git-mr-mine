@@ -1,0 +1,92 @@
+#!/bin/sh
+# git-mr-mine [--claude] <iid> <target branch> <url> <source branch> [head sha] [base sha] [start sha]
+# Address the comments on one of your MRs: the MR's file picker, threads inline
+# (git-mr-files), in a checkout of your branch, so a fix and the reply to it
+# happen in the same place. With --claude (gmr's C), Claude proposes the fixes
+# instead (git-mr-fix), in that same checkout. That is wherever the branch is already checked out
+# (git allows one place per branch); otherwise one reused worktree,
+# .claude/worktrees/mine, switched to it. The main checkout is never switched,
+# and gmr never piles up a worktree per branch. Switching rewrites only the
+# files that differ, and never discards work: with uncommitted changes in mine,
+# it stops and says so. Commits you have not
+# pushed show in the diff; nvim still replies and resolves, and holds new
+# comments until HEAD matches the MR.
+claude=
+[ "$1" = --claude ] && { claude=1; shift; }
+iid=$1 target=${2:-$(otis-config main)} url=$3 b=$4 head=$5 base=$6 start=$7
+[ -n "$iid" ] && [ -n "$b" ] || exit 0
+pause() { printf '%s. press enter\n' "$1"; read -r _; }
+
+# Nothing to fetch when your branch is already at the MR's head (as gmr's list
+# reports it) and its base is here: the usual case, and then this opens at once.
+if [ -n "$head" ] && [ "$(git rev-parse -q --verify "refs/heads/$b")" = "$head" ] &&
+  git cat-file -e "$base^{commit}" 2>/dev/null && { [ -z "$start" ] || git cat-file -e "$start^{commit}" 2>/dev/null; }; then
+  git update-ref "refs/remotes/origin/$b" "$head"
+else
+  printf 'fetching !%s ...\n' "$iid"
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin "+refs/heads/$target:refs/remotes/origin/$target" \
+    "+refs/heads/$b:refs/remotes/origin/$b" || { pause "fetch failed"; exit 1; }
+  base=
+fi
+
+dir=$(git-worktree-path of "$b")
+clean() { [ -z "$(git -C "$1" status --porcelain --untracked-files=no)" ]; }
+# Local branch if there is one, else a tracking branch from origin's copy.
+from=$b
+git show-ref --verify --quiet "refs/heads/$b" || from="--track -c $b origin/$b"
+if [ -z "$dir" ]; then
+  dir=$(git-worktree-path named mine)
+  if [ ! -e "$dir" ]; then
+    printf 'creating the worktree for your MRs, first time only ...\n'
+    git-worktree-add mine --quiet --detach "origin/$b" && git -C "$dir" switch --quiet $from ||
+      { pause "could not create $dir"; exit 1; }
+  else
+    git worktree list --porcelain | grep -qxF "worktree $dir" ||
+      { pause "$dir exists but is not a git worktree, so it was left alone"; exit 1; }
+    if ! clean "$dir"; then
+      printf '%s has uncommitted changes on %s:\n' "$dir" "$(git -C "$dir" branch --show-current)"
+      git -C "$dir" status --short --untracked-files=no | head -20
+      pause "commit them, or set them aside with gwip there, then open !$iid again"
+      exit 1
+    fi
+    git -C "$dir" switch --quiet $from || { pause "could not switch $dir to $b"; exit 1; }
+  fi
+fi
+
+cd "$dir" || exit 1
+# Behind the MR, the threads' lines are off. Two ways that has one right
+# answer, so it is taken: nothing here the MR lacks (a fast-forward), or the
+# MR rebased on GitLab with every commit here already in it, patch for patch
+# (git cherry), so moving to it loses nothing. Otherwise commits of yours are
+# not on the MR, and rebasing them onto it is asked, since it can conflict.
+# --keep, like the fast-forward, refuses rather than touch uncommitted work.
+counts=$(git rev-list --left-right --count "HEAD...origin/$b")
+ahead=${counts%%	*} behind=${counts##*	}
+if [ "$behind" -gt 0 ]; then
+  old=$(git rev-parse --short HEAD)
+  if [ "$ahead" -eq 0 ]; then
+    git merge --quiet --ff-only "origin/$b" && printf '%s: brought up to !%s, %s commit(s) on\n' "$b" "$iid" "$behind" ||
+      pause "$b is $behind commit(s) behind !$iid and could not fast-forward (uncommitted changes in the way?), so thread lines may be off"
+  elif ! git cherry "origin/$b" HEAD | grep -q '^+'; then
+    git reset --quiet --keep "origin/$b" &&
+      printf '%s: !%s was rebased on GitLab with your %s commit(s) in it; moved to it (was %s: git reset --keep %s undoes)\n' "$b" "$iid" "$ahead" "$old" "$old" ||
+      pause "!$iid was rebased on GitLab, but uncommitted changes here are in the way of moving $b to it, so thread lines may be off"
+  else
+    n=$(git cherry "origin/$b" HEAD | grep -c '^+')
+    printf '%s has %s commit(s) not on !%s, which is %s ahead of it (rebased on GitLab, or pushed from elsewhere)\n' "$b" "$n" "$iid" "$behind"
+    if git-confirm "rebase yours onto !$iid? (was $old: git reset --keep $old undoes)"; then
+      git rebase --quiet "origin/$b" >/dev/null 2>&1 || {
+        git rebase --abort 2>/dev/null
+        pause "the rebase did not go (a conflict, or uncommitted changes), so $b is as it was; git rebase origin/$b there to do it yourself. Thread lines may be off"
+      }
+    else
+      pause "left as it is, so thread lines may be off"
+    fi
+  fi
+fi
+[ -n "$base" ] || base=$(git merge-base "origin/$target" HEAD) || { pause "no merge base with origin/$target"; exit 1; }
+# What merging would change now, as in git-mr-review (git-mr-base).
+[ -n "$start" ] && git cat-file -e "$start^{commit}" 2>/dev/null || start=$(git rev-parse -q --verify "origin/$target")
+base=$(git-mr-base "$base" "$(git rev-parse HEAD)" "$start")
+[ -n "$claude" ] && exec git-mr-fix "$iid" "$base..HEAD"
+exec git-mr-files "$iid" "$base..HEAD" "$url" mine

@@ -1,0 +1,309 @@
+#!/bin/sh
+# git-mr-list [toggle | --refresh]
+# Rows for gmr, the one picker for merge requests. Three sections:
+#   review   MRs requesting your review; once you have reviewed one (approved,
+#            commented as a review, or requested changes) it moves to the very
+#            bottom, out of the way, until GitLab asks you again
+#   yours    your open MRs, with their pipelines (what gci used to list)
+#   merged   yours merged in the last week, and whether each is live
+#            (git-ci-merged: merged, queued, deploying, live, rolled back),
+#            and Claude's production watch of it, if any (git-mr-watch)
+#
+# A row also says when Claude is working on it and what is waiting for you: a
+# review going, its drafts to submit, or a ⇢ when it found nothing to comment on
+# at the MR's current head (git-mr-claude), and on your own MRs a
+# fix run going or its fixes to fold in (git-mr-fix). A column of its own says
+# whether a verification in Cursor Cloud is going, and its verdict at the MR's
+# current head (git-verify).
+# gci is gmr opened with yours first ($GMR_FIRST=mine). toggle switches to
+# every open MR in the project and back, the 100 most recently updated, since
+# a big project has thousands; --refresh (u) refetches now.
+#
+# A row is what you see, then tab-separated iid, target branch, MR url, source
+# branch, kind (review, mine or merged), the MR's head and base commits as
+# GitLab reports them, a pipeline id and a url for it (for merged rows, the
+# deploy that shipped or will ship it).
+#
+# Stacks read as stacks, growing up: within a section an MR targeting another
+# listed MR's branch sits above it, indented, top of the stack first. The base
+# of a stack that targets a branch other than main with no open MR of its own
+# here says which. On an MR you review, approval means you approved it; on
+# yours, whether it has the approvals it needs. A pipeline failing only on
+# approval gates (otis-config gateJobs) is waiting, not broken. ▶ marks the MR for the
+# branch you are on; one checked out in another worktree names it in blue after
+# the title ("in mine"), as gb does.
+#
+# Each source is its own cache (git-cached-json), drawn at once and refreshed
+# in the background: MRs to review, every open MR, and yours with their
+# pipelines after 15s; merged ones after a minute, and never waited for. The
+# JSON is saved in the picker's $GIT_FZF_STATE for the previews
+# (git-mr-preview), and the commits of MRs to review are fetched ahead of time
+# (git-mr-prefetch), so opening one rarely waits on the network.
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+. "$share/mr-query.sh"
+# Claude's runs that a closed laptop killed go on from where they stopped
+# (share/claude-run.sh), in a subshell so its helpers stay out of this script.
+( . "$share/claude-run.sh" && resume_all )
+git remote get-url origin >/dev/null 2>&1 || {
+  printf "${GK_BAD}gmr needs an origin remote on GitLab, and this repo has none${GK_R}\t\t\t\t\t\t\t\t\t\terr-origin\n"
+  exit 0
+}
+scope=$(cat "$st/mr-scope" 2>/dev/null || echo sections)
+if [ "$1" = toggle ]; then
+  if [ "$scope" = sections ]; then scope=all; else scope=sections; fi
+  echo "$scope" > "$st/mr-scope"
+  git-fzf-scroll reset
+fi
+age=15 merged_age=60 now=
+[ "$1" = --refresh ] && age=0 merged_age=0 now=--now
+reload="execute-silent(git-fzf-bg --then refresh-preview git-mr-list)"
+repo=$(otis-config project)
+
+# fetch <cache name> <stale seconds> <saved as> <query>: the JSON into the
+# picker's state, or an error row and a nonzero exit.
+fetch() {
+  if json=$(git-cached-json $now "$1" "$2" "$reload" -- glab api graphql -f query="$4" -f repo="$repo" 2> "$st/$1.err"); then
+    cp "$json" "$st/$3"
+  else
+    printf "${GK_BAD}GitLab lookup failed: %s${GK_R}\t\t\t\t\t\t\t\t\t\terr-%s\n" "$(head -1 "$st/$1.err")" "$1"
+    echo '{}' > "$st/$3"
+    return 1
+  fi
+}
+
+# What the row's glyph columns mean, for the ? help view (git-fzf-help). A
+# column is allowed to be one glyph wide only because this is a keypress away.
+{
+  printf "${GK_CONTEXT}columns${GK_R}\n"
+  printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
+  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R} ${GK_GOOD}\342\207\242${GK_R}    Claude is working \302\267 Claude has left something for you \302\267 Claude found nothing to comment on\n"
+  printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
+  printf "  ${GK_ATTENTION}!1234${GK_R}    the merge request\n"
+  printf "\n${GK_CONTEXT}pipeline${GK_R}\n"
+  printf "  ${GK_GOOD}\342\234\223${GK_R} passed   ${GK_BAD}\342\234\227${GK_R} failed   ${GK_ATTENTION}\342\227\220${GK_R} running   ${GK_ATTENTION}\342\227\213${GK_R} pending\n"
+  printf "  ${GK_ELSEWHERE}\342\227\210${GK_R} failing only on approval gates, so waiting rather than broken\n"
+  printf "  ${GK_ELSEWHERE}\342\226\270${GK_R} manual   ${GK_CONTEXT}\342\212\230${GK_R} canceled   ${GK_CONTEXT}\302\267${GK_R} none\n"
+  printf "\n${GK_CONTEXT}review${GK_R}\n"
+  printf "  ${GK_GOOD}\342\234\223${GK_R} approved   ${GK_BAD}\342\234\227${GK_R} changes asked for   ${GK_CONTEXT}\302\267${GK_R} you reviewed it\n"
+  printf "  ${GK_CONTEXT}2${GK_R} approvals still needed   ${GK_ATTENTION}!${GK_R} nobody asked yet   ${GK_CONTEXT}~${GK_R} draft\n"
+  printf "  ${GK_YOURS}\356\234\265 3${GK_R} unresolved threads\n"
+  printf "\n${GK_CONTEXT}merged${GK_R}\n"
+  printf "  ${GK_GOOD}\342\226\262${GK_R} live   ${GK_ATTENTION}\342\227\220${GK_R} deploying   ${GK_ATTENTION}\342\227\213${GK_R} queued   ${GK_BAD}\342\226\274${GK_R} rolled back   ${GK_ELSEWHERE}\302\267${GK_R} not out yet\n"
+  printf "  production watch: ${GK_GOOD}\342\234\223${GK_R} not this MR   ${GK_YOURS}\342\232\240${GK_R} possibly   ${GK_BAD}\342\234\227${GK_R} likely   ${GK_CONTEXT}?${GK_R} unknown\n"
+} > "$st/legend"
+
+echo '{}' > "$st/ci.json"
+echo '{"mrs": []}' > "$st/ci-merged.json"
+if [ "$scope" = sections ]; then
+  printf "${GK_CONTEXT}to review, yours, merged this week${GK_R}\n" > "$st/footer"
+  fetch mrs-review $age mrs.json "$mr_review_query"
+  fetch ci-mine $age ci.json "$mr_mine_query"
+  merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
+    cp "$merged" "$st/ci-merged.json"
+  # The deploy strip on the merged heading, from gd's cache; fetched in the
+  # background when stale, and the reload draws it.
+  git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch >/dev/null 2>&1
+else
+  fetch mrs-all $age mrs.json "$mr_all_query"
+  total=$(jq '.data.project.mergeRequests.count // 0' "$st/mrs.json")
+  if [ "$total" -gt 100 ]; then
+    printf "${GK_CONTEXT}100 of %s open MRs, most recently updated first${GK_R}\n" "$total" > "$st/footer"
+  else
+    printf "${GK_CONTEXT}all open MRs${GK_R}\n" > "$st/footer"
+  fi
+fi
+
+# What Claude is doing and what is waiting on you, worked out once here and
+# saved for the previews (git-mr-preview, git-ci-preview), which run on every
+# cursor move and used to ask the same four scripts each time.
+gates=$(otis-config gateJobs) watch=$(git-mr-watch --marks) claude=$(git-mr-claude --marks) fixes=$(git-mr-fix --marks) verify=$(git-verify --marks)
+jq -nc --argjson gates "$gates" --argjson watch "$watch" --argjson claude "$claude" --argjson fixes "$fixes" --argjson verify "$verify" \
+  '{gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify}' > "$st/marks.json"
+
+current=$(git branch --show-current)
+elsewhere=$(git worktree list --porcelain | awk '
+  /^worktree / { n = split(substr($0, 10), parts, "/"); name = seen++ ? parts[n] : "main checkout" }
+  /^branch /   { print substr($0, 19) "\t" name }' | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -sc 'add // {}')
+
+jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.json" --slurpfile merged "$st/ci-merged.json" \
+  --arg scope "$scope" --arg first "${GMR_FIRST:-review}" --arg current "$current" --arg main "$(otis-config main)" --arg url "$(otis-config url)" \
+  --arg strip "$(git-deploy-list --strip 2>/dev/null)" \
+  --argjson elsewhere "$elsewhere" --argjson gates "$gates" --argjson watch "$watch" \
+  --argjson claude "$claude" --argjson fixes "$fixes" --argjson verify "$verify" '
+  include "otis";
+  def mark:
+    if . == $current then elsewhere + "▶ " + r
+    else "  " end;
+  def where:
+    $elsewhere[.] as $w |
+    if $w and . != $current then elsewhere + "in " + (if ($w | length) > 28 then $w[0:27] + "…" else $w end) + r + "  " else "" end;
+  # A pipeline whose only failures are approval gates is waiting, not broken
+  # (effective, pipe_glyph: share/otis.jq). ? in the picker lists every glyph.
+  def deploy_glyph:
+    if . == "live" then good + "▲"
+    elif . == "deploying" then attention + "◐"
+    elif . == "queued" then attention + "○"
+    elif . == "rolledback" then bad + "▼"
+    else elsewhere + "·" end;
+  # Unresolved threads, right-aligned in three columns behind their icon.
+  def threads:
+    ((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) | tostring as $n |
+    if $n == "0" then "   " else yours + "" + ($n | padl(2)) + r end;
+  # One column a level, capped: a seven-deep stack was spending fourteen columns
+  # saying what the order already says.
+  def indent:
+    if (.depth // 0) > 0 then
+      context + (if .depth > 1 then " " * ([.depth - 1, 4] | min) else "" end) + "┌ " + r
+    else "" end;
+  # A section in stack order, each MR with its depth: the bases (targeting no
+  # branch another MR here comes from) in the order GitLab gave, each preceded
+  # by what stacks on it, top first.
+  def stacked:
+    . as $all | ($all | map(.sourceBranch)) as $sources |
+    def up($d): . as $m |
+      (if $d < 30 then [$all[] | select(.targetBranch == $m.sourceBranch and .iid != $m.iid)] | reverse[] | up($d + 1) else empty end),
+      (.depth = $d);
+    $all[] | select(.targetBranch | IN($sources[]) | not) | up(0);
+  def base_note:
+    if (.depth // 0) == 0 and .targetBranch != $main then attention + "on " + .targetBranch + r + "  " else "" end;
+  # A section heading. Every field but the first is empty, so the keys that act
+  # on an MR see no iid and say so rather than acting on the wrong row.
+  def sep($text):
+    ([ faint + "── " + $text + " "
+         + (if (56 - ($text | length)) > 0 then "─" * (56 - ($text | length)) else "" end) + r,
+       "", "", "", "", "sep", "", "", "", "",
+       "sep-" + ($text | gsub("[^a-z]+"; "-")) ] | join("\t"));
+  # The merged heading carries the last deploys as glyphs, oldest left (gd).
+  def sep_strip($text; $strip):
+    sep($text) | if $strip == "" then . else sub("\t"; "  " + $strip + "\t") end;
+
+  ($review[0].data.currentUser.username // $mine[0].data.currentUser.username) as $me |
+  ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
+  ($merged[0].mrs // []) as $merged_mrs |
+
+  # Where your review of an MR stands, as GitLab keeps it per reviewer.
+  def my_review: [.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED";
+  def reviewed: my_review | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES");
+  def review_glyph:
+    if any(.approvedBy.nodes[]?; .username == $me) then good + "✓"
+    elif my_review == "REQUESTED_CHANGES" then bad + "✗"
+    elif my_review == "REVIEWED" then context + "·"
+    else " " end;
+  def mine_glyph:
+    if .approved then good + "✓"
+    elif .draft then context + "~"
+    elif .reviewers and (.reviewers.nodes | length) == 0 then attention + "!"
+    elif (.approvalsLeft // 0) > 0 then context + ((.approvalsLeft | tostring)[0:1])
+    else " " end;
+  # What Claude is doing here, or has left for you, and how much of it: two
+  # columns in the fixed zone, so it is never the part that gets chopped. The
+  # sentence version lives in the preview, where there is room for it.
+  def attn_glyph($kind):
+    ($fixes[.iid] // {}) as $f | ($claude[.iid] // {}) as $cl |
+    if $kind == "mine" and $f.fixing then attention + "◌ "
+    elif $kind == "mine" and ($f.fixes // 0) > 0 then yours + "✎" + ($f.fixes | tostring)
+    elif $cl.reviewing then attention + "◌ "
+    elif ($cl.drafts // 0) > 0 then yours + "✎" + ($cl.drafts | tostring)
+    elif $cl.clean != null and $cl.clean == .diffRefs.headSha then good + "⇢ "
+    else "  " end;
+
+  # Its verification in Cursor Cloud: going, or the verdict at the head of the MR
+  # (a push since makes it stale, so it goes), or that it broke.
+  def verify_glyph:
+    $verify[.iid] as $v |
+    if $v == null then " "
+    elif $v.verifying then attention + "◎"
+    elif $v.status == "failed" then bad + "○"
+    elif $v.status != "done" or $v.head != .diffRefs.headSha then " "
+    elif $v.verdict == "pass" then good + "●"
+    elif $v.verdict == "fail" then bad + "●"
+    elif $v.verdict == "inconclusive" then context + "●"
+    else " " end;
+
+  def open_row($kind):
+    [ (.sourceBranch | mark)
+        + attn_glyph($kind) + r
+        + verify_glyph + r + " "
+        + attention + ("!\(.iid)" | padr(6)) + r + " "
+        + (.headPipeline | effective($gates) | pipe_glyph) + r + " "
+        + (if $kind == "mine" then mine_glyph else review_glyph end) + r + " "
+        + threads + " "
+        + indent
+        # Set to merge when its pipeline succeeds (m in gmr): it goes out on its
+        # own, so the row says so ahead of the title, where it is never cut.
+        + (if $kind == "mine" and .autoMergeEnabled then good + "⇥ auto-merge " + r else "" end)
+        + text + (.title | gsub("\t"; " ")) + r + "  " + (.sourceBranch | where) + base_note
+        + (if $kind == "mine" and $scope != "all" then ""
+           else context + (if .author.username == $me then "you" else (.author.username // "") end) + r end)
+        ,
+      .iid, .targetBranch, .webUrl, .sourceBranch, $kind,
+      (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""),
+      (.headPipeline.id | gid),
+      (if .headPipeline.path then $url + .headPipeline.path else .webUrl end),
+      "mr-\(.iid)",
+      (.diffRefs.startSha // "")
+    ] | join("\t");
+
+  def merged_row:
+    [ (.sourceBranch | mark)
+        + ($watch[.iid] as $w | if $w.watching then attention + "◌" else " " end) + r + " "
+        + "  "
+        + attention + ("!\(.iid)" | padr(6)) + r + " "
+        + (.state | deploy_glyph) + r + " "
+        + ($watch[.iid] as $w |
+           if $w == null then " "
+           elif $w.verdict == "likely" then bad + "✗"
+           elif $w.verdict == "possible" then yours + "⚠"
+           elif $w.verdict == "unlikely" then good + "✓"
+           elif $w.verdict == "unknown" then context + "?"
+           else context + "·" end) + r + " "
+        # When it went live, started deploying, was rolled back, or merged.
+        + context + (((if .state == "live" then .deploy.at // .mergedAt
+             elif .state == "deploying" or .state == "rolledback" then .deploy.at else .mergedAt end) | ago) | padl(3)) + r + " "
+        + context + (.title | gsub("\t"; " ")) + r + "  " + (.sourceBranch | where)
+        + ($watch[.iid] as $w |
+           if $w == null then ""
+           else
+             # The glyph already carries the verdict; only a worrying one is
+             # worth spelling out twice.
+             (if $w.verdict == "likely" then bad + "  prod: likely this MR"
+              elif $w.verdict == "possible" then yours + "  prod: possibly this MR"
+              else "" end)
+             + (if $w.watching and ($w.verdict | IN("likely", "possible")) then context + " · watching" else "" end) + r
+           end),
+      .iid, .targetBranch, .webUrl, .sourceBranch, "merged", "", "",
+      (.deploy.pipeline // (.pipeline.id | gid)),
+      (.deploy.url // (if .pipeline.job.webPath then $url + .pipeline.job.webPath else .webUrl end)),
+      "mr-\(.iid)"
+    ] | join("\t");
+
+  # A heading only where there is something under it, so an empty section
+  # never leaves an orphan rule behind.
+  def open_section($label; $mrs; $kind):
+    if ($mrs | length) == 0 then empty
+    else sep($label), ($mrs | stacked | open_row($kind)) end;
+
+  if $scope == "all" then
+    $review[0].data.project.mergeRequests.nodes // [] | stacked
+      | open_row(if .author.username == $me then "mine" else "review" end)
+  else
+    ($mine_mrs | map(.iid)) as $mine_iids |
+    ($review[0].data.currentUser.reviewRequestedMergeRequests.nodes // [] | map(select(.iid | IN($mine_iids[]) | not))) as $asked |
+    ($asked | map(select(reviewed | not))) as $to_review |
+    ($asked | map(select(reviewed))) as $seen_already |
+    [ if ($merged_mrs | length) == 0 then empty
+      else sep_strip("merged this week"; $strip), ($merged_mrs[] | merged_row) end ] as $merged_rows |
+    if $first == "mine" then
+      open_section("yours"; $mine_mrs; "mine"), $merged_rows[],
+      open_section("to review"; $to_review; "review"),
+      open_section("reviewed, waiting on them"; $seen_already; "review")
+    else
+      open_section("to review"; $to_review; "review"),
+      open_section("yours"; $mine_mrs; "mine"), $merged_rows[],
+      open_section("reviewed, waiting on them"; $seen_already; "review")
+    end
+  end'
+[ "$scope" = sections ] && git-mr-prefetch "$st/mrs.json" </dev/null >/dev/null 2>&1 &
+exit 0

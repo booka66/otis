@@ -1,0 +1,102 @@
+#!/bin/sh
+# git-ci-merge --check <iid>   gmr's m, as fzf actions for a transform binding
+# git-ci-merge <iid>           confirm, then merge
+# git-ci-merge --auto <iid>    confirm, then merge when the pipeline succeeds
+# git-ci-merge --run <iid>     confirm, start its pipeline, then merge when it succeeds
+#
+# GitLab decides whether an MR is ready (approvals, pipeline, threads, conflicts,
+# draft) and reports it as detailed_merge_status. It computes that lazily, so a
+# list query mostly says "unchecked"; --check asks for a recheck and waits a few
+# seconds for it. Anything but mergeable becomes a footer note with the reason;
+# mergeable opens the confirm, which says where it lands and whether GitLab
+# squashes it and deletes the branch, as the MR is set to. The merge is pinned to
+# the commit the confirm showed, so a push in between makes it fail instead.
+# An MR whose only obstacle is its running pipeline gets the same confirm to
+# set auto-merge instead (auto_merge, which GitLab 17.11 renamed from
+# merge_when_pipeline_succeeds), pinned the same way.
+#
+# An MR with no pipeline at all gets the same, after starting one (--run). That
+# is where the next layer of a stack lands once the one below merges: GitLab
+# points it at main and drops its pipeline, since it only ever ran against the
+# branch below, and starts no new one. So a stack merges as m on its bottom MR,
+# then m on the next, and so on, each merging itself when its pipeline passes.
+mr() {
+  glab api "projects/:fullpath/merge_requests/$iid$1"
+}
+
+if [ "$1" = --check ]; then
+  iid=$2
+  [ -n "$iid" ] || exit 0
+  json=$(mr "?with_merge_status_recheck=true") || exec git-fzf-note "could not reach GitLab for !$iid"
+  tries=0
+  status=$(printf '%s' "$json" | jq -r .detailed_merge_status)
+  while { [ "$status" = unchecked ] || [ "$status" = checking ] || [ "$status" = approvals_syncing ]; } && [ $tries -lt 8 ]; do
+    sleep 0.5
+    tries=$((tries + 1))
+    json=$(mr "") || exec git-fzf-note "could not reach GitLab for !$iid"
+    status=$(printf '%s' "$json" | jq -r .detailed_merge_status)
+  done
+  case $status in
+    mergeable)                exec echo "execute(git-ci-merge $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+    not_approved)             why="it still needs approval" ;;
+    ci_must_pass)
+      [ "$(printf '%s' "$json" | jq -r '.head_pipeline == null')" = true ] &&
+        exec echo "execute(git-ci-merge --run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+      why="its pipeline has not passed" ;;
+    ci_still_running)
+      [ "$(printf '%s' "$json" | jq -r .merge_when_pipeline_succeeds)" = true ] &&
+        exec git-fzf-note "!$iid is already set to merge when its pipeline succeeds"
+      exec echo "execute(git-ci-merge --auto $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+    discussions_not_resolved) why="it has unresolved threads" ;;
+    draft_status)             why="it is a draft" ;;
+    conflict)                 why="it has conflicts; gup to rebase" ;;
+    need_rebase)              why="it needs a rebase; r rebases it" ;;
+    requested_changes)        why="a reviewer requested changes" ;;
+    not_open)                 why="it is not open" ;;
+    unchecked|checking)       why="GitLab is still checking it; try again in a moment" ;;
+    *)                        why="GitLab says $status" ;;
+  esac
+  exec git-fzf-note "!$iid can't merge yet: $why"
+fi
+
+auto= run=
+[ "$1" = --auto ] && { auto=1; shift; }
+[ "$1" = --run ] && { auto=1 run=1; shift; }
+iid=$1
+[ -n "$iid" ] || exit 0
+pause() { printf '%s. press enter\n' "$1"; read -r _; }
+json=$(mr "") || { pause "could not load !$iid"; exit 1; }
+sha=$(printf '%s' "$json" | jq -r .sha)
+printf '%s' "$json" | jq -r --arg main "$(otis-config main)" '
+  "!\(.iid)  \(.title)",
+  "  \(.source_branch) -> \(.target_branch)\(if .target_branch != $main then "   (not \($main))" else "" end)",
+  "  \(if .squash_on_merge then "squashed into one commit" else "merge commit, not squashed" end), " +
+  "\(if .force_remove_source_branch or .should_remove_source_branch then "branch deleted on GitLab" else "branch kept on GitLab" end)",
+  "  head \(.sha[0:8])"'
+if [ -n "$run" ]; then
+  printf '  it has no pipeline (a stacked MR loses its own when the one below merges)\n'
+  git-confirm "start its pipeline, and merge it when that succeeds?" || exit 0
+  out=$(glab api -X POST "projects/:fullpath/merge_requests/$iid/pipelines" 2>&1) || { printf '%s\n' "$out" | head -3; pause "starting the pipeline failed"; exit 1; }
+  printf 'pipeline %s started\n' "$(printf '%s' "$out" | jq -r .web_url 2>/dev/null)"
+  # GitLab takes a moment to see the new pipeline as the one to wait for;
+  # until then it has nothing to merge when.
+  tries=0
+  until [ "$(mr "" | jq -r .detailed_merge_status)" = ci_still_running ] || [ $tries -ge 20 ]; do
+    sleep 1
+    tries=$((tries + 1))
+  done
+elif [ -n "$auto" ]; then
+  printf '  its pipeline is still running\n'
+  git-confirm "merge it when the pipeline succeeds?" || exit 0
+fi
+if [ -n "$auto" ]; then
+  out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha&auto_merge=true" 2>&1) || { printf '%s\n' "$out" | head -3; pause "setting auto-merge failed; m again sets it"; exit 1; }
+  [ "$(printf '%s' "$out" | jq -r .merge_when_pipeline_succeeds 2>/dev/null)" = true ] && exit 0
+  pause "GitLab accepted it but did not set auto-merge (state $(printf '%s' "$out" | jq -r .state 2>/dev/null))"
+  exit 1
+fi
+git-confirm "merge it?" || exit 0
+out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha" 2>&1) || { printf '%s\n' "$out" | head -3; pause "merge failed"; exit 1; }
+state=$(printf '%s' "$out" | jq -r .state 2>/dev/null)
+[ "$state" = merged ] && exit 0
+pause "GitLab accepted it but says $state"

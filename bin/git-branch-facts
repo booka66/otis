@@ -1,0 +1,140 @@
+#!/bin/sh
+# git-branch-facts --wait                      what gb and gw know about local branches
+# git-branch-facts [--refresh] <reload action>
+#
+# One line per fact, tab-separated, for a list script's awk:
+#   CURRENT  branch                      the branch checked out here
+#   WT       path  branch                every worktree, main checkout first; branch empty when detached
+#   UP       sha  parents                each branch tip past the base, with its parents
+#   BRANCH   name  kind  label  iid  target  date  ahead  behind  sha
+# kind is the branch's state, and label its colored name, the same in every list:
+#   main                the default branch: pinned first in gb, never deleted by its d
+#   open                has an open MR
+#   merged              MR merged, and the branch has nothing the MR did not
+#   merged-diff         MR merged, but the branch has moved since
+#   closed              MR closed without merging, and the branch has nothing GitLab lacks
+#   closed-diff         MR closed, but the branch has commits GitLab never saw
+#   theirs              someone else's open MR, and the branch has nothing GitLab lacks
+#   pushed, local       no MR; with or without a copy on origin
+# date is the last commit's, in unix seconds; ahead and behind count against the base
+# (otis-config base: origin/main, or whatever the default branch is).
+#
+# git branch --merged cannot find merged branches here, since GitLab lands MRs
+# as new commits, so MR state comes from one GraphQL query for every local
+# branch name, cached in the git dir. --wait refreshes it first, for the worktree
+# sweep, which decides what is safe to delete. Otherwise the cache is used at once and, when
+# the last attempt is over a minute old (or on --refresh), refreshed in the
+# background, sending <reload action> to the open picker through its --listen
+# API if it changed. A failed lookup keeps the cache and says so, as
+# git-cached-json does: why is kept in $cache.err until one works, and the
+# picker's footer shows it (git-fzf-stale).
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+cache="$(git rev-parse --git-common-dir)/branch-mrs.tsv"
+base=$(otis-config base) main=$(otis-config main)
+
+refresh_cache() {
+  repo=$(otis-config project)
+  names=$(git branch --format='%(refname:short)' | grep -vx "$main" | jq -R . | jq -sc .)
+  query='query($repo: ID!, $branches: [String!]) { currentUser { username } project(fullPath: $repo) {
+    mergeRequests(sourceBranches: $branches, first: 100) { nodes { iid state sourceBranch targetBranch diffHeadSha updatedAt author { username } } } } }'
+  json=$(glab api graphql -f query="$query" -f repo="$repo" -F branches="$names" 2> "$cache.err")
+  if [ $? -ne 0 ] || [ "$(printf '%s' "$json" | jq -r '(.errors // []) | length' 2>/dev/null)" != 0 ]; then
+    printf '%s' "$json" | jq -r '.errors[]?.message // empty' 2>/dev/null >> "$cache.err"
+    [ -s "$cache.err" ] || echo "the MR lookup for local branches failed without saying why" > "$cache.err"
+    return 1
+  fi
+  rm -f "$cache.err"
+  # One MR per branch: an open one if any, else the most recently updated.
+  printf '%s' "$json" | jq -r '.data.currentUser.username as $me | [.data.project.mergeRequests.nodes // [] | .[]]
+    | group_by(.sourceBranch)[]
+    | (map(select(.state == "opened")) + (sort_by(.updatedAt) | reverse))[0]
+    | [.sourceBranch, .state, .iid, .diffHeadSha, (if .author.username == $me then "mine" else "theirs" end), .targetBranch] | @tsv' > "$cache.new" && mv "$cache.new" "$cache"
+}
+
+wait= refresh=
+[ "$1" = --wait ] && { wait=1; shift; }
+[ "$1" = --refresh ] && { refresh=1; shift; }
+reload=$1
+
+# Without an origin remote there is no GitLab to ask and no origin/main to
+# measure against: say so, compare with local main, and skip MR lookups.
+# An origin that is not on GitLab has no MRs to look up, which is not a failure.
+gitlab=
+case $(git remote get-url origin 2>/dev/null) in *gitlab*) gitlab=1 ;; esac
+if ! git remote get-url origin >/dev/null 2>&1; then
+  printf "${GK_CONTEXT}no origin remote, so no MR info; drift is against local main${GK_R}\n" > "$st/footer"
+elif [ -z "$gitlab" ]; then
+  printf "${GK_CONTEXT}origin is not on GitLab, so no MR info${GK_R}\n" > "$st/footer"
+elif [ -n "$wait" ]; then
+  refresh_cache
+elif [ -n "$refresh" ] || [ ! -e "$cache" ] || [ -z "$(find "$cache" "$cache.tried" -mmin -1 2>/dev/null)" ]; then
+  # Freshness is the file's age, never whether it has rows: a repo with no MRs
+  # has an empty cache, and treating that as missing would refresh and reload
+  # forever. The reload only happens when the refresh changed something.
+  # The picker reloads when the rows change, or when the lookup starts or stops failing.
+  if [ -n "$FZF_PORT" ]; then
+    before=$(cat "$cache" 2>/dev/null) failing=$([ -s "$cache.err" ] && echo 1)
+    touch "$cache.tried"
+    (
+      if refresh_cache; then [ "$(cat "$cache")" != "$before" ] || [ -n "$failing" ]; else [ -z "$failing" ]; fi &&
+        curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null
+    ) >/dev/null 2>&1 &
+  else
+    refresh_cache
+  fi
+fi
+[ -n "$gitlab" ] && git-fzf-stale "$cache"
+
+# A merged MR only counts as merged if the branch tip is the MR's last commit or
+# behind it; anything committed since is work the MR never had. A closed MR, or
+# someone else's open one, is safe to drop locally on the same terms, or when
+# the tip is already on origin's copy of the branch, since GitLab keeps
+# everything it has.
+merged_ok=$(
+  [ -s "$cache" ] && awk -F'\t' '$2 == "merged" || $2 == "closed" || ($2 == "opened" && $5 == "theirs") { print $1 "\t" $4 }' "$cache" |
+  while IFS="$(printf '\t')" read -r b mrsha; do
+    sha=$(git rev-parse -q --verify "refs/heads/$b") || continue
+    { [ "$sha" = "$mrsha" ] || git merge-base --is-ancestor "$sha" "$mrsha" 2>/dev/null ||
+      git merge-base --is-ancestor "$sha" "refs/remotes/origin/$b" 2>/dev/null; } && printf '%s\n' "$b"
+  done
+)
+
+{
+  printf 'CURRENT\t%s\n' "$(git branch --show-current)"
+  git worktree list --porcelain | awk '
+    /^worktree / { if (p != "") print "WT\t" p "\t" b; p = substr($0, 10); b = "" }
+    /^branch /   { b = substr($0, 19) }
+    END          { if (p != "") print "WT\t" p "\t" b }'
+  [ -s "$cache" ] && awk '{ print "MR\t" $0 }' "$cache"
+  printf '%s\n' "$merged_ok" | awk 'NF { print "OK\t" $0 }'
+  git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstrip=3)'
+  git log --simplify-by-decoration --decorate-refs=refs/heads/ --parents --format='UP%x09%H%x09%P' \
+    --branches --not "$base" 2>/dev/null
+  git for-each-ref refs/heads --sort=-committerdate \
+    --format="REF%09%(refname:short)%09%(committerdate:unix)%09%(ahead-behind:$base)%09%(objectname)"
+} | awk -F'\t' -v OFS='\t' -v main="$main" "$(cat "$share/rowfmt.awk")"'
+  BEGIN {
+    # Eight columns each, so every list that leads with one lines up: gb and
+    # gw. "detached" and "missing " in git-worktree-list are the same width.
+    label["main"] = GK_MAIN substr(main "        ", 1, 8) GK_R
+    label["open"] = GK_ATTENTION "open MR " GK_R; label["merged"] = GK_GOOD "merged  " GK_R; label["merged-diff"] = GK_BAD "merged+ " GK_R
+    label["closed"] = GK_GOOD "closed  " GK_R; label["closed-diff"] = GK_BAD "closed+ " GK_R; label["theirs"] = GK_GOOD "their MR" GK_R
+    label["pushed"] = GK_CONTEXT "no MR   " GK_R; label["local"] = GK_CONTEXT "unpushed" GK_R
+  }
+  $1 == "MR"     { state[$2] = $3; iid[$2] = $4; target[$2] = $7; next }
+  $1 == "OK"     { ok[$2] = 1; next }
+  $1 == "REMOTE" { remote[$2] = 1; next }
+  $1 == "REF" {
+    b = $2; split($4, ab, " ")
+    if (b == main) kind = "main"
+    else if (state[b] == "opened") kind = ok[b] ? "theirs" : "open"
+    else if (state[b] == "merged") kind = ok[b] ? "merged" : "merged-diff"
+    else if (state[b] == "closed") kind = ok[b] ? "closed" : "closed-diff"
+    else if (b in remote) kind = "pushed"
+    else kind = "local"
+    print "BRANCH", b, kind, label[kind], iid[b], target[b], $3, ab[1], ab[2], $5
+    next
+  }
+  { print }'

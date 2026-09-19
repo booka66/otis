@@ -1,0 +1,35 @@
+#!/bin/sh
+# otis-notify [--tty <tty>] [--sound <name>] <title> <body>: a desktop
+# notification, from the terminal where it can send one, so it names the
+# terminal and a click goes back to it: Ghostty and WezTerm (OSC 777), iTerm2
+# (OSC 9) and kitty (OSC 99). Anywhere else, or with the terminal gone, from
+# the system: macOS as otis over the title, with <sound> (Glass unless given),
+# or notify-send on Linux; with neither, a line in the terminal. <tty> is where
+# the terminal is, /dev/tty unless given, for a background job that has none.
+tty=/dev/tty sound=Glass
+while :; do
+  case $1 in
+    --tty) tty=$2; shift 2 ;;
+    --sound) sound=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+# Control characters would end the escape early or garble the line.
+title=$(printf '%s' "$1" | tr -d '\000-\037')
+body=$(printf '%s' "$2" | tr -d '\000-\037')
+
+osc=
+case $TERM_PROGRAM in
+  ghostty|WezTerm) osc=$(printf '\033]777;notify;%s;%s\007' "$title" "$body") ;;
+  iTerm.app) osc=$(printf '\033]9;%s: %s\007' "$title" "$body") ;;
+  *) [ -n "$KITTY_WINDOW_ID" ] && osc=$(printf '\033]99;;%s: %s\033\\' "$title" "$body") ;;
+esac
+[ -n "$osc" ] && { printf '%s' "$osc" > "$tty"; } 2>/dev/null && exit 0
+
+if [ "$(uname)" = Darwin ]; then
+  osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title "otis" subtitle (item 1 of argv) sound name (item 3 of argv)' -e 'end run' \
+    "$title" "$body" "$sound" >/dev/null 2>&1 && exit 0
+elif command -v notify-send >/dev/null 2>&1; then
+  notify-send "$title" "$body" 2>/dev/null && exit 0
+fi
+{ printf '%s: %s\n' "$title" "$body" > "$tty"; } 2>/dev/null

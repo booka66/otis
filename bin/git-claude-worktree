@@ -1,0 +1,61 @@
+#!/bin/sh
+# git-claude-worktree take <fix | review> <run dir> <commit>   a worktree for the run, at <commit>
+# git-claude-worktree release <path>                          give it back
+#
+# Each of Claude's runs gets a worktree of its own for as long as it runs,
+# from a pool under the main checkout: claude-fix, claude-fix-2, ... for fix
+# runs (git-mr-fix) and claude-review, claude-review-2, ... for reviews
+# (git-mr-claude). One is made the first time it is needed and kept after,
+# since moving a worktree to a commit rewrites only the files that differ,
+# where a fresh checkout of a big repo takes a minute. So runs go in parallel,
+# each in its own, and the pool never grows past what has run at once, up to
+# four of a kind: a fifth run is told to wait. A slot is held by a lock naming
+# its run; a lock whose run is over, or gone, was left by a crash and is taken
+# over.
+#
+# take prints the worktree's path, clean and detached at <commit>, or says
+# why not on stderr and exits 1. release frees the slot; the worktree stays.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/claude-run.sh"
+slots=$(git rev-parse --path-format=absolute --git-common-dir)/otis-claude-slots
+
+case $1 in
+  take)
+    kind=$2 run=$3 commit=$4
+    mkdir -p "$slots"
+    n=1
+    while [ "$n" -le 4 ]; do
+      name=claude-$kind
+      [ "$n" -gt 1 ] && name=$name-$n
+      lock=$slots/$name
+      n=$((n + 1))
+      if ! mkdir "$lock" 2>/dev/null; then
+        other=$(cat "$lock/run" 2>/dev/null)
+        [ -n "$other" ] && running "$other" && continue
+        # No run named yet: a take this very moment, unless the lock is old.
+        [ -z "$other" ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && continue
+        rm -rf "$lock"
+        mkdir "$lock" 2>/dev/null || continue
+      fi
+      printf '%s\n' "$run" > "$lock/run"
+      wt=$(git-worktree-path named "$name")
+      if [ ! -e "$wt" ]; then
+        out=$(git-worktree-add "$name" --quiet --detach "$commit" 2>&1) ||
+          { rm -rf "$lock"; printf 'could not create %s: %s\n' "$wt" "$(oneline "$out")" >&2; exit 1; }
+      else
+        git worktree list --porcelain | grep -qxF "worktree $wt" ||
+          { rm -rf "$lock"; printf '%s exists but is not a git worktree, so it was left alone\n' "$wt" >&2; exit 1; }
+        # Only Claude writes there; what an earlier run left goes.
+        out=$({ git -C "$wt" reset -q --hard && git -C "$wt" clean -fdq && git -C "$wt" switch --quiet --detach "$commit"; } 2>&1) ||
+          { rm -rf "$lock"; printf 'could not move %s to %.8s: %s\n' "$wt" "$commit" "$(oneline "$out")" >&2; exit 1; }
+      fi
+      printf '%s\n' "$wt"
+      exit 0
+    done
+    printf 'four %s runs are going already; wait for one to finish\n' "$kind" >&2
+    exit 1 ;;
+  release)
+    rm -rf "$slots/${2##*/}" ;;
+  *)
+    echo 'usage: git-claude-worktree take <fix | review> <run dir> <commit> | release <path>' >&2; exit 2 ;;
+esac

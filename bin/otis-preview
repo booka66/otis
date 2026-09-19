@@ -1,0 +1,88 @@
+#!/bin/sh
+# otis-preview <kind> <iid> <row id> <extra>: the dashboard's preview pane.
+#
+# Every row is already about something one of the other pickers knows how to
+# show, so this mostly hands over: a merge request previews as it does in gmr
+# (git-mr-preview, from the JSON otis-list left in the picker's state), one of
+# Claude's runs as it does in gag (git-agent-preview), a deploy as it does in
+# gd. Only the headings and the here row are this script's own.
+kind=$1 iid=$2 row=$3 extra=$4
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+
+case $kind in
+  review|mine|merged) exec git-mr-preview "$iid" "$kind" "" ;;
+  run)                exec git-agent-preview "$extra" ;;
+  trash)
+    printf "${GK_ATTENTION}the trash${GK_R}\n\n"
+    printf "${GK_CONTEXT}Worktrees otis took out of your way instead of deleting, so what git\n"
+    printf "would have dropped along with the directory — an .env, a local database,\n"
+    printf "a build — is still in there.\n\n"
+    printf "Its .git went with it, so each is a directory of files now and not a\n"
+    printf "worktree: W on the branch in gb makes a fresh one, and what you wanted\n"
+    printf "kept is here to copy across. Empty it when you are sure; enter opens it.${GK_R}\n\n"
+    git-worktree-trash --list | while IFS='	' read -r at dst src branch; do
+      was=$src; case $src in "$HOME"/*) was="~${src#"$HOME"}" ;; esac
+      printf "${GK_TEXT}%s${GK_R}${GK_CONTEXT}  %s${GK_R}\n" "${dst##*/}" \
+        "$(date -r "$at" '+%a %-d %b %H:%M' 2>/dev/null || date -d "@$at" '+%a %-d %b %H:%M' 2>/dev/null)"
+      printf "${GK_FAINT}  was %s${GK_R}\n" "$was"
+      [ -n "$branch" ] && printf "${GK_FAINT}  on %s${GK_R}\n" "$branch"
+    done
+    exit 0 ;;
+  deploy)             exec git-deploy-preview "$extra" ;;
+esac
+
+if [ "$kind" = sep ]; then
+  case $row in
+    sep-waiting)
+      printf "${GK_ATTENTION}waiting on you${GK_R}\n\n"
+      printf "${GK_CONTEXT}One row a merge request, never one a fact: an MR with a failed\n"
+      printf "pipeline and three threads on it is the pipeline, because that is\n"
+      printf "what you would do about it next.${GK_R}\n\n"
+      printf "${GK_CONTEXT}The order is what a delay costs. Production first, then what is\n"
+      printf "broken, then what a person is waiting on, then what Claude has left\n"
+      printf "you, then what you can finish.${GK_R}\n" ;;
+    sep-going)
+      printf "${GK_ATTENTION}going${GK_R}\n\n"
+      printf "${GK_CONTEXT}What is running right now, newest first: Claude's background runs,\n"
+      printf "your pipelines, and a production deploy on its way.\n\n"
+      printf "Nothing here needs you. It is here so you know what not to start.${GK_R}\n" ;;
+    sep-here)
+      printf "${GK_ATTENTION}here${GK_R}\n\n"
+      printf "${GK_CONTEXT}%s${GK_R}\n" "$(otis-config project)"
+      printf "${GK_CONTEXT}default branch %s${GK_R}\n" "$(otis-config main)"
+      n=$(git worktree list | wc -l | tr -d ' ')
+      printf "${GK_CONTEXT}%s worktree%s (gw)${GK_R}\n" "$n" "$([ "$n" = 1 ] || echo s)"
+      strip=$(git-deploy-list --strip 2>/dev/null)
+      [ -n "$strip" ] && printf "\n${GK_CONTEXT}production, oldest left${GK_R}\n%b\n" "$strip" ;;
+  esac
+  exit 0
+fi
+
+# here: the checkout under you. git's own answers, not a cache.
+b=$extra
+base=$(otis-config base)
+if [ -z "$b" ]; then
+  printf "${GK_ATTENTION}detached at %s${GK_R}\n" "$(git rev-parse --short HEAD 2>/dev/null)"
+else
+  printf "${GK_ATTENTION}%s${GK_R}\n" "$b"
+fi
+[ -n "$iid" ] && printf "${GK_CONTEXT}!%s · m opens it in the merge request list${GK_R}\n" "$iid"
+printf '\n'
+
+status=$(git -c color.status=always --no-optional-locks status --short 2>/dev/null)
+if [ -n "$status" ]; then
+  printf "${GK_FAINT}── uncommitted ── ${GK_CONTEXT}enter stages it (ga)${GK_R}\n"
+  printf '%s\n' "$status" | head -40
+  printf '\n'
+fi
+
+if [ -n "$b" ]; then
+  log=$(git -c color.ui=always log --oneline --no-decorate "$base..HEAD" 2>/dev/null | head -30)
+  if [ -n "$log" ]; then
+    printf "${GK_FAINT}── this branch, past %s ──${GK_R}\n" "$base"
+    printf '%s\n' "$log"
+  else
+    printf "${GK_CONTEXT}nothing here past %s yet${GK_R}\n" "$base"
+  fi
+fi

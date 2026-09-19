@@ -1,0 +1,19 @@
+#!/bin/sh
+# git-commit-check: read a commit message on stdin and print each house-style
+# problem on its own line; exit 1 if there were any. The one place these rules
+# live, for gcm and gam whether the message came from the command line or nvim.
+# The em dash is passed in as its UTF-8 bytes so this file never contains one.
+# Bytes, whatever the awk: a subject's length is its bytes less UTF-8's
+# continuation bytes, so a ’ counts as one character, as it reads.
+LC_ALL=C awk -v dash="$(printf '\342\200\224')" '
+  NR == 1 {
+    s = $0; n = length(s) - gsub(/[\200-\277]/, "", s)
+    if (n > 72) { print "subject is " n " characters; keep it to 72"; bad = 1 }
+    if ($0 ~ /^[a-z]+(\([^)]*\))?!?: /) { print "no type prefix like feat: or fix(area):, just say what it does"; bad = 1 }
+  }
+  NR == 2 && $0 != "" { print "leave a blank line between the subject and the body"; bad = 1 }
+  index($0, dash) { found = 1 }
+  END {
+    if (found) { print "em dash in the message; use a colon, a comma, or two sentences"; bad = 1 }
+    exit bad
+  }'

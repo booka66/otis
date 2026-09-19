@@ -1,0 +1,35 @@
+#!/bin/sh
+# git-commit-tidy: take care of a commit message's newlines, stdin to stdout.
+# Trailing spaces and leading or trailing blank lines go, a blank line is put
+# after the subject if it is missing, runs of blank lines become one, and plain
+# body paragraphs are re-wrapped to 72 columns (so pasted text reads like typed
+# text). Anything with structure keeps its line breaks: lists, headings,
+# quotes, tables, indented lines, fenced code and trailers ("Co-Authored-By:
+# x", "Changelog: fixed"), which tools read one per line. Long words such as
+# URLs are never split.
+perl -MText::Wrap -e '
+  $Text::Wrap::columns = 73;
+  $Text::Wrap::huge = "overflow";
+  my @lines = map { s/\s+$//r } split /\n/, do { local $/; <STDIN> };
+  shift @lines while @lines && $lines[0] eq "";
+  pop @lines while @lines && $lines[-1] eq "";
+  exit unless @lines;
+  splice @lines, 1, 0, "" if @lines > 1 && $lines[1] ne "";
+
+  my @out = (shift @lines);
+  my ($fence, @para) = (0);
+  my $flush = sub {
+    return unless @para;
+    my $structured = grep { /^(\s|[-*+>|#]|\d+[.)]\s|[A-Za-z][A-Za-z0-9-]*: )/ } @para;
+    push @out, $structured ? @para : split /\n/, wrap("", "", join " ", @para);
+    @para = ();
+  };
+  for my $line (@lines) {
+    if ($line =~ /^\s*```/) { $flush->(); $fence = !$fence; push @out, $line; next }
+    if ($fence) { push @out, $line; next }
+    if ($line eq "") { $flush->(); push @out, "" unless $out[-1] eq ""; next }
+    push @para, $line;
+  }
+  $flush->();
+  print "$_\n" for @out;
+'

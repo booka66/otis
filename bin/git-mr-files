@@ -1,0 +1,162 @@
+#!/bin/sh
+# git-mr-files <iid> <range> <url> <review | mine>
+# The picker over an MR's diff, run from the worktree nvim should open files
+# in: gmr's review worktree for an MR you review (git-mr-review), your
+# branch's own checkout for one of yours (git-mr-mine). It lists the change
+# by symbol (git-symbols), each with the open threads and drafts on its
+# lines, and f lists it by file instead, as gmr always did; n (since your last
+# review) is by file too. Either way the preview and nvim show the MR's
+# comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
+# and nvim starts in a diff against the range's base, with ]r and [r for the
+# next and previous file. Opening a file marks it viewed, v flips that and
+# moves on (git-mr-viewed); by symbol, both mark the symbol, v with all under
+# it, and a file is viewed once all its symbols are (git-symbols --viewed). o lists the threads on no line: the MR's overview,
+# whole files, outdated ones (git-mr-threads).
+#
+# Both lists have the row shape the symbol view defines, twelve fields with
+# the path second and the row's identity last, so every key here works on
+# either: a file row has its state third, which enter takes for no line.
+#
+# --list <iid> <range>: the rows, by symbol or by file (the by-file flag, or
+# n's since flag, in the picker's state). --toggle: f. --preview: the preview
+# for either kind of row.
+#
+# Reviewing, new comments are drafts until S submits them all at once
+# (git-mr-submit); on your own MR they post at once. nvim's <leader>mt switches
+# either way. C has Claude review the MR in the background and draft comments
+# for you to read, showing its progress (git-mr-claude); on your own MR, C
+# has Claude propose fixes for its threads instead, for you to accept, fold
+# into your commits and push (git-mr-fix). Reviewing also adds
+# approve (at the head the picker shows), n for what changed since your last
+# review (git-mr-since), gitlab.nvim where it is installed, and u catching up
+# with a push: when the MR's head has moved, the picker closes and the review
+# reopens there.
+#
+st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
+if [ "$1" = --toggle ]; then
+  if [ -e "$st/by-file" ]; then rm -f "$st/by-file"; else : > "$st/by-file"; fi
+  exit 0
+fi
+if [ "$1" = --list ]; then
+  iid=$2 range=$3
+  if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then
+    git-mr-file-preview --files "$iid" "$range" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; print }'
+    exit 0
+  fi
+  # By symbol: the open threads and drafts on each symbol'"'"'s lines, then the
+  # rows, then the MR'"'"'s footer note after the view'"'"'s own.
+  git-mr-threads --json "$iid" "$range" "reload(git-mr-files --list $iid $range)+refresh-preview" 2>/dev/null |
+    jq -r '.[] | select(.where.path and .where.state == "line")
+      | (if .draft then "draft" elif (.resolvable and (.resolved | not)) then "open" else empty end) as $k
+      | [.where.path, .where.side, .where.line, $k] | @tsv' > "$st/marks" 2>/dev/null
+  OTIS_SYMBOL_MARKS=$st/marks git-symbols --rows "$range"
+  note=$(git-mr-file-preview --note "$iid" "$range")
+  printf '%s\n' "$note" > "$st/mr-note"
+  footer=$(cat "$st/footer" 2>/dev/null)
+  [ -n "$note" ] && printf '%s\n' "${footer:+$footer · }$note" > "$st/footer"
+  exit 0
+fi
+# --viewed <add|toggle> <iid> <range> <path> <row id>: enter's mark and v,
+# on the file by file, on the symbol by symbol.
+if [ "$1" = --viewed ]; then
+  if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then exec git-mr-viewed "$2" "$3" "${4#*..}" "$5"; fi
+  exec git-symbols --viewed "$4" "$2" "$6"
+fi
+# --light <iid> <range>: the list again after a fold key (l, h, L, H, b),
+# which changes no thread and no note: the marks and the note of the last
+# list, and the rows alone. A third of the time of --list.
+if [ "$1" = --light ]; then
+  iid=$2 range=$3
+  OTIS_SYMBOL_MARKS=$st/marks git-symbols --rows "$range"
+  note=$(cat "$st/mr-note" 2>/dev/null)
+  footer=$(cat "$st/footer" 2>/dev/null)
+  [ -n "$note" ] && printf '%s\n' "${footer:+$footer · }$note" > "$st/footer"
+  exit 0
+fi
+if [ "$1" = --preview ]; then
+  iid=$2 range=$3 path=$4 side=$5 s=$6 e=$7 rid=$8
+  # A file row of the by-file list is the file's whole diff. In the symbol
+  # view git-symbols cuts it to what no symbol claims, and a file it read no
+  # symbols from comes back whole from there too.
+  if [ -z "$s" ] && { [ -e "$st/by-file" ] || [ -e "$st/since" ]; }; then exec git-mr-file-preview "$iid" "$range" "$path"; fi
+  git-symbols --preview "$range" "$path" "$side" "$s" "$e" "$rid" | git-mr-file-preview --annotate "$iid" "$range" "$path"
+  exit 0
+fi
+# --refs <iid>: the MR's head, base, target, source and start, one line.
+refs() {
+  mr=$(glab api "projects/:fullpath/merge_requests/$1" 2>&1) || { printf '%s\n' "$mr" | head -1 >&2; return 1; }
+  printf '%s' "$mr" | jq -r '"\(.diff_refs.head_sha) \(.diff_refs.base_sha) \(.target_branch) \(.source_branch) \(.diff_refs.start_sha)"'
+}
+[ "$1" = --refs ] && { refs "$2"; exit; }
+# --moved <iid> <range>: that u, as fzf actions. The refs are looked up again
+# after the picker closes rather than printed through it: branch names are
+# not safe inside an fzf action.
+if [ "$1" = --moved ]; then
+  refs=$(refs "$2" 2>&1) || exec git-fzf-note "could not ask GitLab whether !$2 moved: $refs"
+  if [ -n "$refs" ] && [ "${refs%% *}" != "${3#*..}" ]; then
+    echo "print(moved)+accept"
+  else
+    echo "execute-silent(git-mr-file-preview --refresh $2 $3)+reload(git-mr-files --list $2 $3)+refresh-preview"
+  fi
+  exit 0
+fi
+iid=$1 range=$2 url=$3 kind=$4
+export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind
+list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
+refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
+
+keys='enter=open in nvim,f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,v=viewed,o=threads on no line,s=the shape of it,S=submit drafts,t=tests/config/generated,c=commits view,w=web,u=refresh'
+claude="git-mr-claude $iid $range"
+if [ "$kind" = review ]; then
+  keys="$keys,C=Claude drafts comments"
+else
+  keys="$keys,C=Claude proposes fixes"
+  claude="git-mr-fix $iid $range"
+fi
+set --
+if [ "$kind" = review ]; then
+  keys="$keys,A=approve,n=since your last review"
+  set -- --bind "A:execute(git-mr-approve $iid ${range#*..} ${range%%..*})" \
+    --bind "n:transform(git-mr-since toggle $iid $range)" \
+    --bind "u:transform(git-mr-files --moved $iid $range)"
+  # r opens gitlab.nvim, for those who have it installed through lazy.nvim.
+  if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/gitlab.nvim" ]; then
+    keys="$keys,r=gitlab.nvim"
+    set -- "$@" --bind "r:transform(git-mr-comment --check $iid $range {2})"
+  fi
+else
+  set -- --bind "u:$refresh+refresh-preview"
+fi
+out=$(git-fzf "!$iid " "$keys" --header-from-state \
+  --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
+  --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
+  --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
+  --bind "enter:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-commit-open $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
+  --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($list)+down" \
+  --bind "f:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
+  --bind "l:execute-silent(git-symbols --open {12})+reload($light)" \
+  --bind "h:transform(git-symbols --close {12} $light)" \
+  --bind "L:execute-silent(git-symbols --open-all $range)+reload($light)" \
+  --bind "H:execute-silent(git-symbols --close-all)+reload($light)" \
+  --bind "b:execute-silent(git-symbols --flip)+reload($light)" \
+  --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
+  --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
+  --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
+  --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
+  --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
+  --bind "C:execute($claude)+$refresh+refresh-preview" \
+  --bind "c:execute(gl $range)" \
+  --bind "w:execute-silent(otis-open '$url')" \
+  "$@" \
+  --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12}" </dev/null)
+# u found a push: the same review, at the MR's new head and base. print()
+# comes out ahead of the row accept prints.
+case $(printf '%s\n' "$out" | head -1) in
+  moved)
+    refs=$(git-mr-files --refs "$iid") || exit 1
+    set -f
+    set -- $refs
+    exec git-mr-review "$iid" "$3" "$url" "$4" "$1" "$2" "$5"
+    ;;
+esac
+exit 0

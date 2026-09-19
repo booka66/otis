@@ -1,0 +1,71 @@
+#!/bin/sh
+# git-deploy-preview <deployment id>: one deploy, for gd's preview: what
+# happened and when, who set it off, the merge requests and commits it carried
+# (yours highlighted), and for a failed one the end of the job's log. A
+# rollback says which build it restored (the job's version input, as
+# git-ci-merged reads it). Logs and rollback lookups are kept in the cache
+# dir, since a finished job's log never changes.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+cache=$dir/deploys.json
+[ -s "$cache" ] || exit 0
+d=$(jq -c --arg id "$1" '.deploys[] | select((.id | tostring) == $id)' "$cache")
+[ -n "$d" ] || exit 0
+mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
+url=$(otis-config url) repo=$(otis-config project)
+
+printf '%s' "$d" | jq -r -L "$share" 'include "otis";
+  def took: "\(.duration / 60 | floor)m\(.duration % 60 | tostring | if length < 2 then "0" + . else . end)s";
+  (if .kind == "rollback" then bad + "↺ rollback" + r
+   elif .status == "success" then good + "✓ deployed" + r
+   elif .status == "failed" then (if .duration == 0 then bad + "✗ failed at once" + r + context + ", refused: production was already past this commit" + r else bad + "✗ failed" + r end)
+   elif .status == "running" then attention + "◐ deploying now" + r
+   elif .status == "canceled" then context + "⊘ canceled" + r
+   else attention + "○ waiting for the deploy lock" + r end)
+  + context + " · " + (.at | when) + (if .duration > 0 then " · took " + took else "" end) + " · by " + .user + r,
+  context + "pipeline " + .pipeline + " · " + .sha[0:8] + (if .prev != "" then " · since " + .prev[0:8] else "" end) + r,
+  context + .url + r'
+
+kind=$(printf '%s' "$d" | jq -r .kind); prev=$(printf '%s' "$d" | jq -r .prev); sha=$(printf '%s' "$d" | jq -r .sha)
+jobid=$(printf '%s' "$d" | jq -r .job); status=$(printf '%s' "$d" | jq -r .status)
+
+if [ "$kind" = rollback ]; then
+  f=$dir/rollback-$jobid.json
+  if [ ! -s "$f" ]; then
+    glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
+      project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' 2>/dev/null |
+      jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}' > "$f" 2>/dev/null || rm -f "$f"
+  fi
+  if [ -s "$f" ]; then
+    v=$(jq -r .version "$f")
+    printf "\n${GK_TEXT}restored the build of pipeline %s${GK_R}\n" "$v"
+  fi
+  exit 0
+fi
+
+if [ -n "$prev" ]; then
+  n=$(printf '%s' "$d" | jq -r .commits)
+  printf "\n${GK_TEXT}carried${GK_R} ${GK_CONTEXT}%s commits since the last deploy that went live${GK_R}\n" "$n"
+  # Main's own commits: a merge commit per MR, whose body GitLab writes as
+  # the MR's title, a blank line, then the "See merge request" trailer; or a
+  # commit pushed straight to main. One line each.
+  git log --first-parent --format='%h%x09%s%x09%b%x00' "$prev..$sha" 2>/dev/null | tr '\n\0' '\001\n' | head -60 |
+    awk -F'\t' -v mine="$(printf '%s' "$mine" | jq -r 'join(" ")')" -v Y="$GK_YOURS" -v T="$GK_TEXT" -v C="$GK_CONTEXT" -v R="$GK_R" '
+      BEGIN { n = split(mine, m, " "); for (i = 1; i <= n; i++) own[m[i]] = 1 }
+      { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
+        title = $3; sub(/\001.*/, "", title); if (title == "") title = $2
+        if (iid != "") printf "  %s!%-6s%s  %s%s%s\n", (iid in own ? Y : T), iid, R, T, title, R
+        else printf "  %s%s%s  %s%s%s\n", C, $1, R, C, $2, R }'
+else
+  printf "\n${GK_CONTEXT}what it carried is not known: no earlier deploy in the list went live${GK_R}\n"
+fi
+
+if [ "$status" = failed ] || [ "$status" = canceled ]; then
+  f=$dir/job-trace-$jobid.log
+  [ -s "$f" ] || glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r' > "$f"
+  if [ -s "$f" ]; then
+    printf "\n${GK_TEXT}the end of its log${GK_R}\n"
+    grep -v '^\s*$' "$f" | tail -25 | sed "s/^/  $(printf "${GK_CONTEXT}")/; s/\$/$(printf "${GK_R}")/"
+  fi
+fi

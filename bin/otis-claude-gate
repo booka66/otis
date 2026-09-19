@@ -1,0 +1,49 @@
+#!/bin/sh
+# otis-claude-gate: a PreToolUse hook for the Claude runs otis starts
+# (git-mr-fix, git-mr-claude). Claude gets Bash there for one purpose, running
+# the repo's checks through git-remote-run, and this is what holds it to that:
+# a Bash call is let through only when its whole command line is one
+# git-remote-run invocation, with nothing chained, piped, redirected or
+# substituted around it, and the command it hands over starts with one of
+# the commands you named with git config otis.claudeCommand (repeatable, e.g.
+# 'bazel test', 'bazel build'). Everything the MR says is in Claude's prompt,
+# so without that list a shell on your workspace would be the MR's to use;
+# with it, the most a hostile MR gets is one of your own checks run over its
+# files. Everything else is blocked, with the reason handed back to Claude.
+# A hook, not a permission rule, because the permission system may let a
+# "safe" command like ls through on its own judgment, and a rule that
+# denies Bash outright would deny git-remote-run with it.
+#
+# Reads the hook's JSON on stdin; exit 0 with an allow decision, or exit 2 to
+# block, which is how Claude Code reads a hook's answer. Runs where claude
+# runs, a worktree of the repo, so git config is the repo's.
+command=$(jq -r '.tool_input.command // ""')
+# Globs too: Claude's shell expands one to file names, which Claude can
+# write, and git-remote-run's sh reads what they spell as shell.
+case $command in
+  *[\;\&\|\<\>\`\$\*\?\[]*|*"
+"*)
+    printf 'blocked: only a single git-remote-run command is allowed here, with nothing chained, piped, substituted or globbed (name targets outright, or with :all or ...)\n' >&2
+    exit 2 ;;
+  git-remote-run|"git-remote-run "*) ;;
+  *)
+    printf 'blocked: the only shell command here is git-remote-run <command>, which runs <command> in the warm workspace; run your checks through it\n' >&2
+    exit 2 ;;
+esac
+rest=${command#git-remote-run}
+rest=${rest# }
+allowed=$(git config --get-all otis.claudeCommand 2>/dev/null | grep -v '^$')
+[ -n "$allowed" ] || { printf 'blocked: no command is allowed here (git config otis.claudeCommand names the checks Claude may run)\n' >&2; exit 2; }
+ok=
+set -f
+IFS='
+'
+for p in $allowed; do
+  case $rest in "$p"|"$p "*) ok=1 ;; esac
+done
+[ -n "$ok" ] || {
+  printf 'blocked: git-remote-run may only run a command starting with one of: %s\n' "$(printf '%s' "$allowed" | tr '\n' ',' | sed 's/,$//; s/,/, /g')" >&2
+  exit 2
+}
+printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"one of the checks otis.claudeCommand allows"}}\n'
+exit 0

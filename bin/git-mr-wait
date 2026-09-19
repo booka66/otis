@@ -1,0 +1,24 @@
+#!/bin/sh
+# git-mr-wait [quiet]: hold until gmr's review worktree has finished moving to
+# the MR (git-mr-review moves it in the background), for anything that needs its
+# files: nvim from the file picker, gitlab.nvim. $GMR_MOVING names the file
+# holding the move's pid; git-mr-files sets it for reviews only. Exits 1 if the
+# move failed, after showing why (quiet: silently, for git-mr-review itself).
+m=$GMR_MOVING
+[ -n "$m" ] || exit 0
+said=
+while [ -e "$m" ] && kill -0 "$(cat "$m" 2>/dev/null)" 2>/dev/null; do
+  if [ -z "$said" ] && [ "$1" != quiet ]; then
+    printf 'getting the review worktree onto this MR ...\n'
+    said=1
+  fi
+  sleep 0.1
+done
+[ -s "$m.err" ] || exit 0
+if [ "$1" != quiet ]; then
+  printf 'the review worktree could not move to this MR:\n'
+  cat "$m.err"
+  printf 'press enter\n'
+  read -r _
+fi
+exit 1

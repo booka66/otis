@@ -1,0 +1,246 @@
+#!/bin/sh
+# git-stack [name]            gstack: this branch's commits as a glab stack, synced
+# git-stack --update <name>   gmr's r on a glab stack: rebase it onto origin/main
+# git-stack --of <branch>     the name of the glab stack <branch> is a layer of
+# git-stack --sweep           forget glab stacks whose branches are all gone
+#
+# glab stack (experimental) makes one branch and one MR per commit, and keeps
+# each layer's branch, sha and MR in .git/stacked/<name>, shared by every
+# worktree. gstack runs the three steps that turn a branch into one:
+#   1. bring local main up to origin/main, since infer takes main..HEAD and a
+#      stale main hands it commits that are already on origin/main as layers
+#      of yours. Only the main ref moves: fetch main:main when no checkout has
+#      main, else a fast-forward in the one that does. Never a merge into
+#      whatever branch the main checkout happens to be on.
+#   2. glab stack infer --name <name> main..HEAD. The name defaults to the
+#      branch's last path part (cahoon/retry-webhooks is retry-webhooks). On a branch
+#      that is already a layer of a stack there is nothing to infer.
+#   3. push the layers (below), then glab stack sync, which opens MRs for new
+#      layers and drops merged ones; with nothing left to push, its own push
+#      is a no-op.
+#
+# --update rebases the whole stack onto origin/<base> first: the top layer,
+# with --update-refs, which carries every layer below along.
+#
+# otis pushes, not glab. glab pushes every layer in one git push, and a repo's
+# pre-push hook can refuse that: one that lints what is pushed and commits any
+# fixes takes one branch a push, checked out. So each layer is checked
+# out and pushed on its own, bottom first, with a lease. When the hook commits
+# lint fixes on a layer (HEAD moved under the push), the fix is folded into the
+# layer's one commit, the layers above are rebased onto it, and the push runs
+# again. git config otis.pushEnv is environment for these pushes (NAME=value,
+# space separated), for a hook that needs telling not to do something to a
+# stacked branch, such as rebasing it onto an older main, which would pull a
+# layer out of its stack. Yours alone: a repo's .otis cannot set it.
+#
+# sync checks out each layer in turn, in the checkout it runs in, and git
+# refuses to check out a branch another worktree has. So it runs in one
+# checkout, and otis clears the way (plan): gmr's own reused worktrees, mine and
+# review, are otis's to move, so one holding a layer is detached, which keeps
+# its files as they are. Your worktrees are not: sync runs in the one of yours
+# holding layers, and two of yours holding layers is a refusal naming them.
+# With no checkout holding any, it runs in mine, switched to the top layer.
+# Nothing moves before you say yes, and a checkout with uncommitted changes is
+# never used or moved (sync would carry them from layer to layer). Both ask
+# first: they push, and gstack opens MRs.
+pause() { printf '%s. press enter\n' "$1"; read -r _; exit "${2:-1}"; }
+common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
+stacked=$common/stacked
+main=$(otis-config main)
+
+# Stacks glab left behind. It keeps them in the shared git dir and never
+# cleans up, so a stack whose MRs merged, and whose branches went with them
+# (gb's d, or the worktree sweep), stays on disk with glab.currentstack still
+# naming it. The next infer then fails on a layer branch that is not a commit
+# any more, from any worktree, and says so in glab's words rather than in a way
+# that points here. A stack is gone when this machine has none of its layers:
+# the branches are the stack, and glab can infer it again from the commits.
+sweep_stacks() {
+  [ -d "$stacked" ] || return 0
+  for dir in "$stacked"/*/; do
+    [ -d "$dir" ] || continue
+    name=${dir%/}; name=${name##*/}
+    alive=
+    for b in $(cat "$dir"/*.json 2>/dev/null | jq -r '.branch // empty' 2>/dev/null); do
+      if git show-ref --verify --quiet "refs/heads/$b"; then alive=1; break; fi
+    done
+    [ -n "$alive" ] && continue
+    rm -rf "$dir"
+    echo "gstack: forgot the glab stack $name, whose branches are all gone from here"
+  done
+  cur=$(git config --get glab.currentstack 2>/dev/null) || return 0
+  [ -z "$cur" ] || [ -d "$stacked/$cur" ] || git config --unset glab.currentstack
+}
+
+# layers <name>: each layer's branch, bottom first.
+layers() {
+  for f in "$stacked/$1"/*.json; do [ -e "$f" ] && cat "$f"; done |
+    jq -rs 'INDEX(.sha) as $by | (map(select(.prev == ""))[0]) as $first
+      | [$first | recurse(if .next != "" then $by[.next] else empty end)] | .[].branch'
+}
+# checked_out: "<branch>\t<worktree>" for every branch checked out anywhere.
+checked_out() {
+  git worktree list --porcelain | awk '
+    /^worktree / { wt = substr($0, 10) }
+    /^branch refs\/heads\// { print substr($0, 19) "\t" wt }'
+}
+# plan <name>: how to clear the way for sync, as lines of "home <path>",
+# "detach <path>" and "switch <path> <branch>"; or why not, on stderr, and 1.
+plan() {
+  mine=$(git-worktree-path named mine) review=$(git-worktree-path named review)
+  holders=$(layers "$1" | while IFS= read -r b; do checked_out | awk -F'\t' -v b="$b" '$1 == b'; done)
+  own=$(printf '%s\n' "$holders" | awk -F'\t' -v m="$mine" -v r="$review" 'NF && ($2 == m || $2 == r) { print $2 }' | sort -u)
+  yours=$(printf '%s\n' "$holders" | awk -F'\t' -v m="$mine" -v r="$review" 'NF && $2 != m && $2 != r { print $2 }' | sort -u)
+  if [ "$(printf '%s' "$yours" | grep -c .)" -gt 1 ]; then
+    echo "its layers are checked out in more than one of your worktrees, and sync switches between them in one:" >&2
+    printf '%s\n' "$holders" | awk -F'\t' 'NF { print "  " $1 "  in " $2 }' >&2
+    return 1
+  fi
+  if [ -n "$yours" ]; then
+    home=$yours
+  elif [ -n "$own" ]; then
+    home=$(printf '%s\n' "$own" | head -1)
+  else
+    home=$mine
+    [ -e "$mine" ] || { echo "no checkout has a layer of $1, and there is no $mine to use; check its top layer out somewhere" >&2; return 1; }
+    echo "switch $mine $(layers "$1" | tail -1)"
+  fi
+  for w in $home $own; do
+    dirty "$w" && { echo "$w has uncommitted changes; commit them or gwip there first" >&2; return 1; }
+  done
+  echo "home $home"
+  printf '%s\n' "$own" | while IFS= read -r w; do [ -n "$w" ] && [ "$w" != "$home" ] && echo "detach $w"; done
+  return 0
+}
+# show_plan / do_plan <plan>: say what will move; move it.
+show_plan() {
+  printf '%s\n' "$1" | while read -r what w b; do
+    case $what in
+      home)   echo "  sync runs in $w" ;;
+      detach) echo "  $w lets go of its layer (detached, files unchanged)" ;;
+      switch) echo "  $w switches to $b" ;;
+    esac
+  done
+}
+do_plan() {
+  printf '%s\n' "$1" | while read -r what w b; do
+    case $what in
+      detach) git -C "$w" switch --quiet --detach || return 1 ;;
+      switch) git -C "$w" switch --quiet "$b" || return 1 ;;
+    esac
+  done
+}
+# sync <checkout>: glab stack sync there, for the MRs. Through a pipe, so its
+# spinner does not query the terminal from under fzf and leave the replies
+# on screen.
+sync() {
+  git config glab.currentstack "$name"
+  rc=$(mktemp)
+  { (cd "$1" && glab stack sync); echo $? > "$rc"; } 2>&1 | cat
+  code=$(cat "$rc"); rm -f "$rc"
+  return "$code"
+}
+# push_layers <name> <checkout>: push each layer, bottom first, one a push.
+push_layers() {
+  for b in $(layers "$1"); do
+    while :; do
+      git -C "$2" switch --quiet "$b" || return 1
+      [ "$(git -C "$2" rev-parse "$b")" = "$(git -C "$2" rev-parse -q --verify "refs/remotes/origin/$b")" ] && break
+      before=$(git -C "$2" rev-parse HEAD)
+      echo "pushing $b ..."
+      (cd "$2" && env $(git config --get otis.pushEnv) git push --quiet --force-with-lease origin "HEAD:refs/heads/$b") && break
+      after=$(git -C "$2" rev-parse HEAD)
+      [ "$after" != "$before" ] || return 1
+      echo "the hook committed fixes on $b; folding them into its commit and restacking above it"
+      git -C "$2" reset --quiet --soft "$before" &&
+        git -C "$2" commit --quiet --amend --no-edit --no-verify || return 1
+      top=$(layers "$1" | tail -1)
+      if [ "$b" != "$top" ]; then
+        git -C "$2" switch --quiet "$top" &&
+          git -C "$2" rebase --quiet --update-refs --onto "$b" "$before" "$top" || return 1
+      fi
+    done
+  done
+}
+dirty() { [ -n "$(git -C "$1" status --porcelain --untracked-files=no)" ]; }
+
+if [ "$1" = --sweep ]; then
+  sweep_stacks
+  exit 0
+fi
+
+if [ "$1" = --of ]; then
+  [ -d "$stacked" ] || exit 1
+  f=$(grep -l "\"branch\":\"$2\"" "$stacked"/*/*.json 2>/dev/null | head -1)
+  [ -n "$f" ] || exit 1
+  f=${f%/*}
+  echo "${f##*/}"
+  exit 0
+fi
+
+if [ "$1" = --update ]; then
+  name=$2
+  [ -d "$stacked/$name" ] || pause "no glab stack named $name"
+  p=$(plan "$name" 2> "$common/stack-plan.err") || { cat "$common/stack-plan.err"; rm -f "$common/stack-plan.err"; pause "nothing was changed"; }
+  rm -f "$common/stack-plan.err"
+  wt=$(printf '%s\n' "$p" | awk '$1 == "home" { print $2 }')
+  printf 'glab stack %s:\n' "$name"
+  layers "$name" | sed 's/^/  /'
+  show_plan "$p"
+  git fetch --quiet origin "$main" || pause "could not fetch origin/$main"
+  top=$(layers "$name" | tail -1)
+  printf '%s new commit(s) on origin/%s since the stack was based\n' "$(git rev-list --count "$top..origin/$main")" "$main"
+  git-confirm "rebase the whole stack onto origin/$main and force-push every layer?" || exit 0
+  do_plan "$p" || pause "could not clear the way; nothing was pushed"
+  base=$(cat "$stacked/$name/BASE_BRANCH" 2>/dev/null || echo "$main")
+  git -C "$wt" switch --quiet "$top" && git -C "$wt" rebase --quiet --update-refs "origin/$base" ||
+    pause "the rebase stopped in $wt; fix it there and git rebase --continue, or --abort, then r again"
+  push_layers "$name" "$wt" || pause "a push failed; the layers are rebased in $wt, and r again picks up from there"
+  sync "$wt" || pause "glab stack sync failed in $wt"
+  pause "done" 0
+fi
+
+name=$1
+b=$(git branch --show-current)
+[ -n "$b" ] || { echo "gstack: not on a branch (detached HEAD)" >&2; exit 1; }
+[ "$b" != "$main" ] || { echo "gstack: you are on $main; a stack is built from a branch" >&2; exit 1; }
+if dirty .; then
+  echo "gstack: uncommitted changes, which sync would carry from layer to layer. commit them, or gwip" >&2
+  exit 1
+fi
+
+sweep_stacks
+existing=$("$0" --of "$b")
+if [ -n "$existing" ]; then
+  name=$existing
+  p=$(plan "$name") || exit 1
+  echo "$b is a layer of glab stack $name:"
+  show_plan "$p"
+  git-confirm "sync it, pushing every layer?" || exit 0
+  do_plan "$p" || exit 1
+else
+  [ -n "$name" ] || name=${b##*/}
+  [ ! -d "$stacked/$name" ] || { echo "gstack: a glab stack named $name already exists; gstack <another name>" >&2; exit 1; }
+
+  git fetch --quiet origin "$main" || { echo "gstack: could not fetch origin/$main" >&2; exit 1; }
+  holder=$(checked_out | awk -F'\t' -v b="$main" '$1 == b { print $2 }')
+  if [ -n "$holder" ]; then
+    git -C "$holder" merge --quiet --ff-only "origin/$main" ||
+      { echo "gstack: $main in $holder does not fast-forward to origin/$main" >&2; exit 1; }
+  else
+    git fetch --quiet origin "$main:$main" ||
+      { echo "gstack: local $main does not fast-forward to origin/$main" >&2; exit 1; }
+  fi
+
+  n=$(git rev-list --count "$main..HEAD")
+  [ "$n" -gt 0 ] || { echo "gstack: $b has nothing past $main" >&2; exit 1; }
+  echo "glab stack $name from $b: $n commit(s), one branch and MR each"
+  git log --reverse --format='  %h %s' "$main..HEAD"
+  git-confirm "make the stack, push it and open its MRs?" || exit 0
+  glab stack infer --name "$name" "$main..HEAD" || exit 1
+fi
+
+# A new stack's layers are branches only this checkout has seen, so it is home.
+[ -n "$existing" ] && wt=$(printf '%s\n' "$p" | awk '$1 == "home" { print $2 }') || wt=$(git rev-parse --show-toplevel)
+push_layers "$name" "$wt" || { echo "gstack: a push failed; gstack again picks up from there" >&2; exit 1; }
+sync "$wt"

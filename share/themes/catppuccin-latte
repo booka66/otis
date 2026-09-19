@@ -1,0 +1,22 @@
+# Catppuccin Latte, for a light ground.
+attention=38;2;223;142;29
+good=38;2;64;160;43
+bad=38;2;210;15;57
+elsewhere=38;2;30;102;245
+yours=38;2;254;100;11
+text=38;2;76;79;105
+context=38;2;140;143;161
+faint=38;2;172;176;190
+main=38;2;23;146;153
+codebg=48;2;204;208;218
+errbg=48;2;251;224;227
+delta_syntax=Catppuccin Latte
+bat=OneHalfLight
+file=#1e66f5
+rule=#acb0be
+minus=#f5d5da
+plus=#d6ecd6
+minus_emph=#eba7b3
+plus_emph=#a9d8a9
+light=1
+glow=light

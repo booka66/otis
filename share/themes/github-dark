@@ -1,0 +1,21 @@
+# GitHub dark.
+attention=38;2;210;153;34
+good=38;2;63;185;80
+bad=38;2;248;81;73
+elsewhere=38;2;88;166;255
+yours=38;2;255;166;87
+text=38;2;230;237;243
+context=38;2;125;133;144
+faint=38;2;48;54;61
+main=38;2;57;197;207
+codebg=48;2;22;27;34
+errbg=48;2;55;29;32
+delta_syntax=OneHalfDark
+bat=OneHalfDark
+file=#58a6ff
+rule=#30363d
+minus=#3c1e21
+plus=#173322
+minus_emph=#6b2b2b
+plus_emph=#21542e
+glow=dark

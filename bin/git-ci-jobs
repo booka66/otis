@@ -1,0 +1,124 @@
+#!/bin/sh
+# git-ci-jobs <pipeline id> <iid>
+# git-ci-jobs --list <pipeline id> [--refresh]
+# Every job in a pipeline, one line each and failed first, with the end of the
+# selected job's log in the preview. It stands in for glab ci view, whose stage
+# graph does not fit a screen for this repo and makes you step onto a job and
+# wait before any log shows. enter opens the whole log, r retries one job, P
+# plays a manual one, X cancels one and ctrl-x the whole pipeline.
+# While jobs are still going, the list and the highlighted job's log refresh
+# on their own, and the cursor stays on the same job as rows reorder. The list
+# is a cache (git-cached-json, 15s), so a tick draws at once and the fetch
+# lands in the background; u, and every key that changes a job, refetch.
+# --tick <what> <pipeline id> <job status>: the timers' actions, only while
+# something is still moving, so a finished pipeline stays still.
+# --key <play | cancel | cancel-pipeline> <pipeline id> <job id> <status>: P, X
+# and ctrl-x as fzf actions; a job in the wrong state for the key gets a footer
+# note.
+# --run <play | cancel | cancel-pipeline> <pipeline id> <job id>: confirm, then do
+# it; only a failure waits, so its error can be read.
+#
+# Still going: every status a job moves on from by itself. GitLab's
+# waiting_for_resource is a job queued on a resource lock (a deploy), and
+# scheduled a delayed one.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+going='["created", "pending", "preparing", "waiting_for_resource", "scheduled", "running", "canceling"]'
+if [ "$1" = "--tick" ]; then
+  case $2 in
+    preview) jq -en --arg s "$4" --argjson going "$going" '$s | IN($going[])' >/dev/null && echo refresh-preview ;;
+    list)
+      jq -e --argjson going "$going" 'any(.[]; .status | IN($going[]))' \
+        "$GIT_FZF_STATE/jobs.json" >/dev/null 2>&1 && echo "execute-silent(git-fzf-bg git-ci-jobs --list $3)"
+      ;;
+  esac
+  exit 0
+fi
+
+# The job's name, from the list's JSON.
+name() { jq -r --argjson id "$1" '.[] | select(.id == $id) | .name' "$GIT_FZF_STATE/jobs.json"; }
+
+if [ "$1" = "--key" ]; then
+  what=$2 id=$3 job=$4 status=$5
+  [ -n "$job" ] || exit 0
+  name=$(name "$job")
+  case $what in
+    play) [ "$status" = manual ] || exec git-fzf-note "$name is $status, not a manual job to play" ;;
+    cancel) jq -en --arg s "$status" --argjson going "$going" '$s | IN($going[])' >/dev/null ||
+      exec git-fzf-note "$name is $status, nothing to cancel" ;;
+    cancel-pipeline) jq -e --argjson going "$going" 'any(.[]; .status | IN($going[]))' "$GIT_FZF_STATE/jobs.json" >/dev/null ||
+      exec git-fzf-note "nothing in pipeline $id is still going" ;;
+  esac
+  echo "execute(git-ci-jobs --run $what $id $job)+execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)"
+  exit 0
+fi
+
+if [ "$1" = "--run" ]; then
+  what=$2 id=$3 job=$4
+  name=$(name "$job")
+  case $what in
+    play)            git-confirm "play $name?" || exit 0; path=jobs/$job/play ;;
+    cancel)          git-confirm "cancel $name?" || exit 0; path=jobs/$job/cancel ;;
+    cancel-pipeline) git-confirm "cancel every job still going in pipeline $id?" || exit 0; path=pipelines/$id/cancel ;;
+  esac
+  out=$(glab api -X POST "projects/:fullpath/$path" 2>&1) && exit 0
+  printf '%s\n' "$out" | tail -3
+  printf '%s failed. press enter\n' "$what"
+  read -r _
+  exit 0
+fi
+
+if [ "$1" = "--list" ]; then
+  id=$2 st=$GIT_FZF_STATE
+  reload="execute-silent(git-fzf-bg git-ci-jobs --list $id)"
+  if [ "$3" = --refresh ]; then set -- --refresh "jobs-$id" "$reload"; else set -- "jobs-$id" 15 "$reload"; fi
+  if ! json=$(git-cached-json "$@" -- git-mr-pages "projects/:fullpath/pipelines/$id/jobs?per_page=100" 2> "$st/jobs.err"); then
+    printf "${GK_BAD}GitLab lookup failed: %s${GK_R}\t\t\t\n" "$(head -1 "$st/jobs.err")"
+    exit 0
+  fi
+  cp "$json" "$st/jobs.json"
+  jq -r -L "$share" --argjson gates "$(otis-config gateJobs)" '
+    include "otis";
+    def shown: if .status == "failed" and (.name | IN($gates[])) then "approval" else .status end;
+    def rank: {"failed": 0, "running": 1, "canceling": 1, "preparing": 2, "pending": 2, "waiting_for_resource": 3, "created": 4,
+      "scheduled": 5, "approval": 6, "manual": 7, "canceled": 8, "skipped": 9, "success": 10}[.] // 11;
+    def badge:
+      if . == "approval" then elsewhere + "approval"
+      elif . == "failed" then bad + "failed  "
+      elif . == "running" then attention + "running "
+      elif . == "canceling" then attention + "stopping"
+      elif . == "pending" or . == "created" or . == "preparing" then attention + "pending "
+      elif . == "waiting_for_resource" then attention + "queued  "
+      elif . == "scheduled" then attention + "delayed "
+      elif . == "success" then good + "passed  "
+      elif . == "manual" then elsewhere + "manual  "
+      else context + (.[0:8] + "        ")[0:8] end;
+    sort_by((shown | rank), .stage, .name)[] |
+    [ (shown | badge) + r + "  " + context + (.stage + "            ")[0:12] + r + " "
+        + text + .name + r
+        + (if .allow_failure and .status == "failed" then context + "  (allowed to fail)" + r else "" end)
+        + (if .duration then context + "  \(.duration | floor / 60 | floor)m\(.duration | floor % 60)s" + r else "" end),
+      (.id | tostring), .status, .web_url
+    ] | join("\t")' "$st/jobs.json"
+  jq -r -L "$share" --argjson gates "$(otis-config gateJobs)" --argjson going "$going" 'include "otis"; (map(select(.status == "failed" and (.name | IN($gates[]) | not))) | length) as $f | (map(select(.status == "failed" and (.name | IN($gates[])))) | length) as $a | (map(select(.status | IN($going[]))) | length) as $r |
+    context + "\($f) failed · \($r) still going\(if $a > 0 then " · waiting on approval" else "" end)" + r' "$st/jobs.json" > "$st/footer"
+  exit 0
+fi
+
+id=$1 iid=$2
+[ -n "$id" ] || exit 0
+git-fzf "!$iid jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job,ctrl-x=cancel pipeline,w=web,y=copy job link,u=refresh' --ansi \
+  --delimiter="$(printf '\t')" --with-nth=1 --track --id-nth=2 \
+  --bind "every(5):transform(git-ci-jobs --tick preview $id {3})" \
+  --bind "every(15):transform(git-ci-jobs --tick list $id)" \
+  --bind "start:reload(git-ci-jobs --list $id | tee \"\$GIT_FZF_STATE/bg.shown\")" \
+  --bind "u:execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)" \
+  --bind "enter:execute(git-ci-log --page {2} {3})" \
+  --bind "r:execute(git-confirm 'retry job {2}?' && glab api -X POST projects/:fullpath/jobs/{2}/retry >/dev/null)+execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)" \
+  --bind "P:transform(git-ci-jobs --key play $id {2} {3})" \
+  --bind "X:transform(git-ci-jobs --key cancel $id {2} {3})" \
+  --bind "ctrl-x:transform(git-ci-jobs --key cancel-pipeline $id {2} {3})" \
+  --bind "w:execute-silent(otis-open {4})" \
+  --bind "y:execute-silent(printf %s {4} | otis-copy)+transform(git-fzf-note copied {4})" \
+  --preview "git-ci-log --tail {2} {3}" </dev/null >/dev/null
+exit 0

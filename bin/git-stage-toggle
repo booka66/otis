@@ -1,0 +1,71 @@
+#!/bin/sh
+# git-stage-toggle <status> <path> [<rename source>]: stage a path, or unstage
+# it if nothing of it is left unstaged, then print the refreshed list. The
+# status is the two characters from git-file-list ("." for blank). What git
+# makes of a write is not always what the old status predicts (staging a
+# deleted new file drops the path entirely), so the list asks git again, about
+# this one path only.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+st=$1
+p=$2
+from=$3
+# Pressing a key on an error row: just redraw.
+[ -n "$p" ] || exec git-file-list --cached
+
+
+fail() {
+  # Error rows first, then the list, so you keep your place and your context.
+  printf "${GK_BAD}✗${GK_R}  ${GK_BAD}%s${GK_R}\t\t..\n" "$1"
+  printf "${GK_ATTENTION}→${GK_R}  ${GK_ATTENTION}%s${GK_R}\t\t..\n" "$2"
+  [ -n "$3" ] && printf "${GK_CONTEXT}·${GK_R}  ${GK_CONTEXT}%s${GK_R}\t\t..\n" "$3"
+  git-file-list --cached
+  exit 0
+}
+
+# Lock contention is common here: many agents and 18 fsmonitor daemons touch
+# this repo. A contended lock usually clears in well under a second.
+try_git() {
+  n=0
+  while :; do
+    err=$("$@" 2>&1) && return 0
+    case "$err" in
+      *index.lock*)
+        n=$((n + 1))
+        [ "$n" -ge 6 ] && break
+        sleep 0.1
+        ;;
+      *) break ;;
+    esac
+  done
+  case "$err" in
+    *index.lock*)
+      if running=$(git-lock --holder) && [ -n "$running" ]; then
+        fail "another git process is writing to this repo" \
+             "wait a moment, then press space again" \
+             "$running"
+      else
+        fail "a stale .git/index.lock is blocking writes" \
+             "press x to remove it, then space again" \
+             "no git process is holding it"
+      fi
+      ;;
+    *'ignored by one of your .gitignore'*)
+      fail "that path is gitignored" \
+           "press q, then: git add -f -- $p" \
+           "" ;;
+    *)
+      fail "git refused that change" \
+           "press q and run it by hand to see why" \
+           "$(printf '%s' "$err" | head -1)" ;;
+  esac
+}
+
+if [ "${st#?}" != "." ]; then
+  try_git git add -- "$p"
+else
+  # reset, not restore --staged, which fails in a repo with no commits yet. A
+  # rename unstages both of its paths.
+  try_git git reset -q -- "$p" ${from:+"$from"}
+fi
+exec git-file-list -- "$p" "$from"

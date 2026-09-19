@@ -1,0 +1,5 @@
+#!/bin/sh
+# git-fzf-note <text>: show one line in the picker's footer until the cursor
+# next moves. Prints fzf actions for a transform binding.
+printf '%s\n' "$*" > "$GIT_FZF_STATE/note"
+echo "rebind(focus)+transform-footer:git-fzf-footer"

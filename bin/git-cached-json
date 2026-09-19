@@ -1,0 +1,160 @@
+#!/bin/sh
+# git-cached-json <name> <stale seconds> <reload action> -- <fetch command...>
+# git-cached-json --refresh <name> <reload action> -- <fetch command...>
+# git-cached-json --no-wait <name> <stale seconds> <reload action> -- <fetch command...>
+# git-cached-json --sync <name> <stale seconds> -- <fetch command...>
+# git-cached-json --now <name> <stale seconds> <reload action> -- <fetch command...>
+#
+# Stale-while-revalidate for pickers that list GitLab data. Prints the path of
+# the cached JSON at once, so the picker draws without waiting on the network.
+# In the background it runs the fetch when the last attempt is older than
+# <stale seconds> (or always, with --refresh), and when the result differs it
+# swaps the cache in and sends <reload action> to the open picker over its
+# --listen API. That reload finds a fresh attempt, so it never fetches again in
+# a loop. With no cache yet, the first fetch runs in the foreground; if it
+# fails, the error is printed and the exit status is 1. --no-wait never holds a
+# picker up for it: with no cache it prints nothing and exits 1 at once, and
+# the fetch runs in the background like a refresh, reloading the picker when it
+# lands. --sync is for callers with no picker (git-alerts): when the last
+# attempt is stale it fetches in the foreground, so they share one cache with
+# the pickers instead of each asking GitLab, and it exits 1 while the last
+# fetch has failed, so they never act on old data. --now is a picker's u, run
+# behind the picker (git-fzf-bg) so it can wait: it fetches in the foreground
+# whatever the age, so the rows it prints are GitLab's now rather than the
+# cache's until a background fetch lands; a failed fetch prints the cache as
+# ever, and the footer says it is stale.
+#
+# A failed fetch never replaces the cache, and is never silent: why it failed
+# stays beside the cache ($cache.err) until a fetch works, and every call in
+# the meantime tells the picker (git-fzf-stale), whose footer says the list is
+# from the last fetch that worked. The cache's mtime is that time; attempts are
+# timed by $cache.tried, so a failing fetch is retried no more often than a
+# working one, and the picker reloads once when a fetch starts or stops failing.
+refresh= nowait= sync= now=
+[ "$1" = --refresh ] && { refresh=1; shift; }
+[ "$1" = --no-wait ] && { nowait=1; shift; }
+[ "$1" = --sync ] && { sync=1; shift; }
+[ "$1" = --now ] && { now=1; shift; }
+name=$1; shift
+if [ -n "$refresh" ]; then stale=0; else stale=$1; shift; fi
+[ -n "$sync" ] || { reload=$1; shift; }
+[ "$1" = -- ] && shift
+
+dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+mkdir -p "$dir"
+cache="$dir/$name.json"
+
+# Leftovers, swept once an hour: the temp files of a fetch that was killed
+# mid-run (the picker closed under it), once ten minutes old, and the per-MR
+# and per-pipeline caches of things not looked at for two weeks.
+if [ -z "$(find "$dir/.swept" -mmin -60 2>/dev/null)" ]; then
+  touch "$dir/.swept"
+  find "$dir" \( -name '*.json.??????' -o -name '*.json.??????.stderr' -o -name '*.err.??????' \) -mmin +10 -delete 2>/dev/null
+  find "$dir" \( -name 'mr-*' -o -name 'jobs-*' \) -mtime +14 -delete 2>/dev/null
+fi
+
+# run <fetch command...>: succeed only with output and no GraphQL errors,
+# leaving it in $new; otherwise leave why in $cache.err. Every run has temp
+# files of its own, since a picker's background refresh and git-alerts can run
+# the same fetch at once, and shared ones had each delete the other's output.
+run() {
+  new=$(mktemp "$cache.XXXXXX") || return 1
+  # Killed mid-fetch (the picker closed): leave nothing behind.
+  trap 'rm -f "$new" "$new.stderr"; exit 1' HUP TERM INT
+  if "$@" > "$new" 2> "$new.stderr" &&
+    [ "$(jq -r 'if type == "object" then (.errors // []) | length else 0 end' "$new" 2>/dev/null)" = 0 ]; then
+    rm -f "$new.stderr"
+    return 0
+  fi
+  err=$(mktemp "$cache.err.XXXXXX")
+  { jq -r '.errors[]?.message // empty' "$new" 2>/dev/null; cat "$new.stderr"; } > "$err"
+  [ -s "$err" ] || printf '%s failed without saying why\n' "$1" > "$err"
+  mv "$err" "$cache.err"
+  rm -f "$new" "$new.stderr"
+  return 1
+}
+tell() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null; }
+
+if [ -n "$sync" ]; then
+  last=$cache
+  [ "$cache.tried" -nt "$cache" ] && last=$cache.tried
+  if [ ! -e "$last" ] || [ $(( $(date +%s) - $(date -r "$last" +%s) )) -ge "$stale" ]; then
+    touch "$cache.tried"
+    if run "$@"; then
+      mv "$new" "$cache"
+      rm -f "$cache.err"
+    fi
+  fi
+  [ -s "$cache" ] && [ ! -s "$cache.err" ] || exit 1
+  echo "$cache"
+  exit 0
+fi
+
+if [ -n "$now" ]; then
+  touch "$cache.tried"
+  if run "$@"; then
+    mv "$new" "$cache"
+    rm -f "$cache.err"
+  fi
+  git-fzf-stale "$cache"
+  [ -s "$cache" ] || { head -1 "$cache.err" >&2; exit 1; }
+  echo "$cache"
+  exit 0
+fi
+
+if [ ! -s "$cache" ] && [ -n "$nowait" ] && [ -n "$FZF_PORT" ]; then
+  git-fzf-stale "$cache"
+  # A burst of calls starts one fetch.
+  [ -n "$(find "$cache.tried" -mmin -1 2>/dev/null)" ] && exit 1
+  touch "$cache.tried"
+  (
+    failing=$([ -s "$cache.err" ] && echo 1)
+    if run "$@"; then
+      mv "$new" "$cache"
+      rm -f "$cache.err"
+      tell
+    elif [ -z "$failing" ]; then
+      tell
+    fi
+  ) >/dev/null 2>&1 &
+  exit 1
+fi
+
+if [ ! -s "$cache" ]; then
+  if ! run "$@"; then
+    head -1 "$cache.err" >&2
+    git-fzf-stale "$cache"
+    exit 1
+  fi
+  mv "$new" "$cache"
+  rm -f "$cache.err"
+  echo "$cache"
+  git-fzf-stale "$cache"
+  exit 0
+fi
+
+echo "$cache"
+git-fzf-stale "$cache"
+last=$cache
+[ "$cache.tried" -nt "$cache" ] && last=$cache.tried
+# date -r reads a file's mtime on both macOS and Linux, where stat's flags differ.
+age=$(( $(date +%s) - $(date -r "$last" +%s) ))
+[ "$age" -ge "$stale" ] && [ -n "$FZF_PORT" ] || exit 0
+# Mark the attempt now so a burst of reloads starts one fetch, not several.
+touch "$cache.tried"
+(
+  failing=$([ -s "$cache.err" ] && echo 1)
+  if run "$@"; then
+    rm -f "$cache.err"
+    if ! cmp -s "$new" "$cache"; then
+      mv "$new" "$cache"
+      tell
+    else
+      rm -f "$new"
+      touch "$cache"
+      [ -n "$failing" ] && tell
+    fi
+  elif [ -z "$failing" ]; then
+    tell
+  fi
+) >/dev/null 2>&1 &

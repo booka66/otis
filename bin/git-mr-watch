@@ -1,0 +1,118 @@
+#!/bin/sh
+# git-mr-watch <iid>                 gmr's D on a merged MR: watch production for it
+# git-mr-watch --check <kind> <iid>  that D, as fzf actions: only merged rows have it
+# git-mr-watch-run <iid>             the watch itself, in the background
+# git-mr-watch --marks               {iid: {watching, verdict}} of every watch, for gmr's rows
+# git-mr-watch --preview <iid>       the watch's verdict and evidence, for gmr's preview
+#
+# Claude watches production after one of your MRs deploys, the way the repo's
+# watch-prod skill says: Datadog's errors, traces and deploy analysis after the
+# deploy against the hour before, and a verdict on whether this MR is causing
+# anything (likely, possible, unlikely, unknown), with evidence and what to do.
+#
+# What the skill works out for itself from GitHub, which this repo does not use,
+# comes from GitLab here and is handed to Claude: the MR and its diff, the
+# production deploy that shipped it (git-ci-merged) and when it went live, and
+# the other MRs in that deploy. A watch started before the MR is live waits for
+# it, and stops if production is rolled back without it.
+#
+# Claude checks at 10 minutes after the deploy, then every 10 minutes until the
+# window the skill picks from the change's risk (30 or 60 minutes) is over, or
+# sooner once it finds this MR likely causing trouble. The checks are one
+# conversation (claude --resume), so each compares with the last. It can only
+# read: --restricted with Read, Grep and Glob on its context files, and of your
+# Datadog MCP server (the one in ~/.claude.json, logged in as you) only the
+# tools that query; nothing that writes to Datadog, no shell, no GitLab.
+#
+# D starts a watch after a confirm and shows its progress (git-claude-view); q
+# goes back to gmr while it keeps going, x stops it, r watches again. gmr's row
+# shows the latest verdict, and whether it is still watching; the preview its
+# report. An alert (otis-notify) comes the first time a check finds the MR possibly or
+# likely causing trouble, and with the verdict when the watch is over.
+mode=
+case $1 in --check|--marks|--preview) mode=$1; shift ;; esac
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+share=$(cd "$(dirname "$0")/../share" && pwd)
+top=$common/gmr-watch
+
+. "$share/claude-run.sh"
+
+case $mode in
+  --check)
+    kind=$1 iid=$2
+    [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
+    [ "$kind" = merged ] || exec git-fzf-note "D watches production for your merged MRs, and !$iid is not merged"
+    command -v claude >/dev/null || exec git-fzf-note "D needs Claude Code (claude)"
+    echo "execute(git-mr-watch $iid)+execute-silent(git-fzf-bg git-mr-list)"
+    exit 0
+    ;;
+  --marks)
+    # Whether it is still going, and the latest check's verdict (none before
+    # the first check, or for a watch that stopped before one).
+    for dir in "$top"/*/; do
+      [ -d "$dir" ] || continue
+      dir=${dir%/} iid=${dir##*/}
+      case $iid in *[!0-9]*|"") continue ;; esac
+      watching=false
+      running "$dir" && watching=true
+      verdict=$(jq -r .verdict "$dir/verdict.json" 2>/dev/null)
+      printf '%s\t%s\t%s\n' "$iid" "$watching" "$verdict"
+    done | jq -Rn '[inputs | split("\t") | {(.[0]): {watching: (.[1] == "true"), verdict: .[2]}}] | add // {}'
+    exit 0
+    ;;
+  --preview)
+    iid=$1 d=$top/$1
+    [ -d "$d" ] || exit 0
+    . "$share/palette.sh"
+    printf "\n${GK_ATTENTION}production watch${GK_R}"
+    if running "$d"; then
+      printf "${GK_CONTEXT} · going · D shows progress${GK_R}\n"
+    else
+      printf "${GK_CONTEXT} · %s · D shows how it went${GK_R}\n" "$(cat "$d/status" 2>/dev/null || echo "stopped")"
+    fi
+    last=$(jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -1)
+    [ -n "$last" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$last"
+    [ -s "$d/verdict.json" ] || exit 0
+    jq -r -L "$share" '
+      include "otis";
+      def md: "\u0001" + gsub("\n"; "\u001f");
+      "",
+      (if .verdict == "likely" then bad + "likely caused by this MR"
+       elif .verdict == "possible" then yours + "possibly related to this MR"
+       elif .verdict == "unlikely" then good + "nothing in production points at this MR"
+       else context + "unknown: not enough evidence either way" end) + r
+        + context + " · \(.confidence) confidence" + r,
+      (.summary | md),
+      (if (.evidence | length) > 0 then "", elsewhere + "evidence" + r, (.evidence[] | "- " + . | md) else empty end),
+      (if .reasoning != "" then "", elsewhere + "reasoning" + r, (.reasoning | md) else empty end),
+      (if .action != "" then "", elsewhere + "action" + r, (.action | md) else empty end)
+    ' "$d/verdict.json" | LC_ALL=C awk -v width="${FZF_PREVIEW_COLUMNS:-100}" "$(cat "$share/markdown.awk")"'
+      /^\001/ { md(substr($0, 2), width - 2, ""); next }
+      { print }'
+    exit 0
+    ;;
+esac
+
+iid=$1
+d=$top/$iid
+
+# gmr's D: start a watch after a confirm, then show its progress.
+start() {
+  git-confirm "Claude watches production for !$iid (up to about an hour of Datadog checks)?" || return 1
+  rm -rf "$d"
+  mkdir -p "$d/context" || return 1
+  date +%s > "$d/started"
+  printf "Claude's production watch of !%s\n" "$iid" > "$d/title"
+  : > "$d/events.jsonl"
+  nohup git-mr-watch-run "$iid" </dev/null > "$d/log" 2>&1 &
+  echo $! > "$d/pid"
+}
+
+if [ ! -d "$d" ]; then
+  start || exit 0
+fi
+while :; do
+  git-claude-view "$d"
+  [ $? -eq 3 ] || exit 0
+  start
+done

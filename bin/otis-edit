@@ -1,0 +1,37 @@
+#!/bin/sh
+# otis-edit [-R] [+<line>] [--] <path>: open a file in your editor at <line>,
+# wherever a picker opens one to edit or read (enter in ga, gdm, gl and the
+# rest). The editor is otis-config editor: $OTIS_EDITOR, else git config
+# otis.editor, else nvim. -R is read only, where the editor has such a thing.
+# A review's comments inline (enter in gmr) need nvim whatever this says.
+#
+# otis-edit --name prints the editor's command name alone (nvim, cursor), for
+# a script that does something else when it is not nvim.
+ed=$(otis-config editor)
+name=${ed%% *}
+name=${name##*/}
+[ "$1" = --name ] && { printf '%s\n' "$name"; exit 0; }
+ro= line=1
+while :; do
+  case $1 in
+    -R) ro=1; shift ;;
+    +*) line=${1#+}; shift ;;
+    --) shift; break ;;
+    *) break ;;
+  esac
+done
+p=$1
+[ -n "$p" ] || exit 2
+# The editor as written may carry arguments of its own ("emacsclient -nw").
+set -f
+case $name in
+  nvim|vim|vi) exec $ed ${ro:+-R} "+$line" -- "$p" ;;
+esac
+case $p in -*) p=./$p ;; esac
+case $name in
+  # These open a window and return at once, so the picker is back straight away.
+  code|code-insiders|cursor|windsurf|codium) exec $ed --goto "$p:$line" ;;
+  zed|subl|hx) exec $ed "$p:$line" ;;
+  idea|webstorm|goland|pycharm|rubymine|phpstorm|clion|rider) exec $ed --line "$line" "$p" ;;
+  *) exec $ed "+$line" "$p" ;;
+esac

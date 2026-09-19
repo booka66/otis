@@ -1,0 +1,93 @@
+#!/bin/sh
+# git-ci-log --tail|--page <job id> <status>
+# A job's log, cleaned: GitLab's per-line timestamps and stream tags, section
+# markers and carriage-return redraws are stripped, and partial lines it split
+# are joined back.
+#
+# --tail prints the last screenful for the preview, which is where a failure
+# usually is. A finished job's log is cached for the picker's life; a running
+# one is fetched again each time, and the picker refreshes its preview on a
+# timer. Only a log fetched once the job was finished is cached: one fetched
+# while it ran lacks the end, and would stand in for the whole log after.
+#
+# --page opens the whole log in less, which draws on the alternate screen and
+# so leaves nothing behind in the terminal. A running job opens following the
+# end, like tail -f, while a background fetch appends whatever the job has
+# written since, until it finishes or less closes: ctrl-c stops following to
+# scroll back, F resumes, q closes.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+mode=$1 id=$2 status=$3
+[ -n "$id" ] || exit 0
+st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
+
+fetch() {
+  glab api "projects/:fullpath/jobs/$id/trace" 2> "$st/log.$id.err" |
+    perl -0pe 's/\n[^\n]*?Z [0-9a-f]{2}[OE]\+//g; s/^\d{4}-\d\d-\d\dT[\d:.]+Z [0-9a-f]{2}[OE] ?//mg;
+      s/section_(start|end):\d+:[^\r\n]*\r?//g; s/\e\[0K//g; s/\r//g'
+}
+
+# Still going: statuses a job moves on from by itself (as in git-ci-jobs).
+going() { case $1 in created|pending|preparing|waiting_for_resource|scheduled|running|canceling) return 0 ;; esac; return 1; }
+live=
+going "$status" && live=1
+
+if [ "$mode" = --page ]; then
+  page="$st/page.$id"
+  fetch > "$page"
+  if [ -z "$live" ]; then
+    exec less -R +G "$page"
+  fi
+  (
+    while sleep 3; do
+      fetch > "$page.next"
+      have=$(wc -c < "$page")
+      # Only ever append, never rewrite: less follows a growing file, not a
+      # replaced one. Bytes as they came, so a fetch ending mid-line lines up
+      # with the next.
+      tail -c +"$((have + 1))" "$page.next" >> "$page"
+      state=$(glab api "projects/:fullpath/jobs/$id" 2>/dev/null | jq -r '.status // empty')
+      going "$state" || break
+    done
+  ) &
+  follower=$!
+  # A handler, not an ignore: ctrl-c must reach less (to stop following) without
+  # ending this script, and an ignored signal would be inherited by less too.
+  trap 'true' INT
+  less -R +F "$page"
+  kill "$follower" 2>/dev/null
+  exit 0
+fi
+
+cache="$st/log.$id"
+if [ -n "$live" ]; then
+  cache="$st/log.$id.running"
+  fetch > "$cache"
+elif [ ! -s "$cache" ]; then
+  fetch > "$cache"
+fi
+
+if [ ! -s "$cache" ]; then
+  if [ -s "$st/log.$id.err" ]; then
+    printf "${GK_BAD}could not get the log from GitLab:${GK_R} %s\n" "$(head -1 "$st/log.$id.err")"
+  else
+    printf "${GK_CONTEXT}no log for this job yet (%s)${GK_R}\n" "$status"
+  fi
+  exit 0
+fi
+# The last screenful by rows, not lines: long lines wrap, and a plain tail of
+# N lines would overflow the preview and leave its top, not the end, in view.
+perl -e '
+  my ($rows, $cols) = @ARGV[0, 1];
+  my @lines = <STDIN>;
+  my ($used, $start) = (0, scalar @lines);
+  while ($start > 0) {
+    (my $plain = $lines[$start - 1]) =~ s/\e\[[0-9;]*[A-Za-z]//g;
+    chomp $plain;
+    my $need = length($plain) ? int((length($plain) + $cols - 1) / $cols) : 1;
+    last if $used + $need > $rows;
+    $used += $need;
+    $start--;
+  }
+  print @lines[$start .. $#lines];
+' "${FZF_PREVIEW_LINES:-40}" "$(( ${FZF_PREVIEW_COLUMNS:-100} - 1 ))" < "$cache"

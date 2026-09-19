@@ -1,0 +1,21 @@
+# Rosé Pine.
+attention=38;2;246;193;119
+good=38;2;156;207;216
+bad=38;2;235;111;146
+elsewhere=38;2;196;167;231
+yours=38;2;235;188;186
+text=38;2;224;222;244
+context=38;2;110;106;134
+faint=38;2;64;61;82
+main=38;2;49;116;143
+codebg=48;2;38;35;58
+errbg=48;2;63;39;56
+delta_syntax=OneHalfDark
+bat=OneHalfDark
+file=#c4a7e7
+rule=#403d52
+minus=#43293a
+plus=#333c48
+minus_emph=#6d3a50
+plus_emph=#4d616c
+glow=dark

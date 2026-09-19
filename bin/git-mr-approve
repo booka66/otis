@@ -1,0 +1,15 @@
+#!/bin/sh
+# git-mr-approve <iid> <head> <base>: approve an MR after a y/N, at <head>, the
+# commit you read: GitLab refuses the approval if the author has pushed since.
+# The review is recorded for git-mr-since. Success goes straight back to the
+# picker; only a failure waits, so its error can be read.
+iid=$1 head=$2 base=$3
+[ -n "$iid" ] || exit 0
+git-confirm "approve !$iid at $(printf '%.8s' "$head")?" || exit 0
+if out=$(glab mr approve "$iid" --sha "$head" 2>&1); then
+  git-mr-since record "$iid" "$head" "$base"
+  exit 0
+fi
+printf '%s\n' "$out" | tail -3
+printf 'approve failed. press enter\n'
+read -r _

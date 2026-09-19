@@ -1,0 +1,52 @@
+#!/bin/sh
+# git-preview-file <status> <path> [<rename source>]: preview one path from
+# ga's list: an untracked or added one as the file itself through bat, a
+# deleted one as the file it was (also bat, headed deleted), anything else as
+# its diff against HEAD through delta (git-delta), all in the theme's colors
+# (otis-theme). The status decides, not whether git tracks the path:
+# after git rm --cached, the staged deletion and the untracked file left
+# behind are two rows with one path.
+#
+# git-file-open reads a file view's line from the row the preview is scrolled
+# to, so each is two header lines and then one row per line of the file,
+# never wrapped.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+st=$1 p=$2 from=$3
+[ -n "$p" ] || exit 0
+w=${FZF_PREVIEW_COLUMNS:-100}
+
+delta_file() { git-delta --file-style=omit; }
+show() {
+  BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --line-range=:400 "$@" 2>/dev/null || head -200
+}
+
+case $st in
+  *D*)
+    # As the index has it (a deletion not yet staged), else as HEAD has it.
+    printf "${GK_BAD}deleted${GK_R}\n\n"
+    { git show ":$p" 2>/dev/null || git show "HEAD:$p"; } | show --wrap=never --file-name "$p"
+    ;;
+  '??')
+    if [ -d "$p" ]; then
+      printf "${GK_ATTENTION}untracked directory${GK_R}\n\n"
+      eza --icons --color=always -la --git-ignore -- "$p" 2>/dev/null || ls -la "$p"
+    else
+      printf "${GK_BAD}untracked file${GK_R}\n\n"
+      show --wrap=never -- "$p" < "$p"
+    fi
+    ;;
+  A*)
+    # As the worktree has it, edits since staging included.
+    printf "${GK_GOOD}added${GK_R}\n\n"
+    show --wrap=never -- "$p" < "$p"
+    ;;
+  *)
+    # A repo with no commits yet diffs against the empty tree. diff-index, not
+    # diff: git diff rewrites the index when it can take the lock, even under
+    # --no-optional-locks, and this runs on every move, so an agent's git add or
+    # commit running alongside would fail on that lock.
+    head=$(git rev-parse -q --verify HEAD || git hash-object -t tree /dev/null)
+    git diff-index -p -M "$head" -- "$p" ${from:+"$from"} | delta_file
+    ;;
+esac

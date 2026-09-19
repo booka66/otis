@@ -1,0 +1,47 @@
+#!/bin/sh
+# git-mr-submit <iid> <range> <review | mine> [comment | approve]
+# Publish all your draft comments on an MR at once, as GitLab's own submit
+# review does, so everyone on it gets one notification instead of one per
+# comment. With no answer it asks on the terminal (the file picker's S):
+# publish, then on an MR you review, whether to approve it too. nvim's
+# <leader>ms asks in nvim and passes the answer; then any error goes to stderr.
+#
+# Submitting as a reviewer marks your review done on GitLab (reviewed, or
+# approved), which sends the MR to the bottom of gmr's list; the approval is
+# pinned to the head you reviewed, so a push since then makes GitLab refuse
+# it. Either way the review is recorded for git-mr-since.
+iid=$1 range=$2 kind=$3 answer=$4
+api="projects/:fullpath/merge_requests/$iid"
+head=$(git rev-parse "${range#*..}") base=$(git rev-parse "${range%%..*}")
+fail() {
+  if [ -n "$asked" ]; then
+    printf '%s. press enter\n' "$1"
+    read -r _
+  else
+    printf '%s\n' "$1" >&2
+  fi
+  exit 1
+}
+
+asked=
+[ -z "$answer" ] && asked=1
+drafts=$(git-mr-pages "$api/draft_notes?per_page=100" 2>&1) || fail "could not list your drafts: $drafts"
+n=$(printf '%s' "$drafts" | jq length)
+if [ -n "$asked" ]; then
+  [ "$n" -gt 0 ] || fail "you have no drafts on !$iid to submit"
+  claude=$(printf '%s' "$drafts" | jq --argjson ids "$(git-mr-claude --drafts "$iid" | jq -sc .)" '[.[].id | select(IN($ids[]))] | length')
+  git-confirm "publish your $n draft$([ "$n" -eq 1 ] || echo s) on !$iid$([ "${claude:-0}" -gt 0 ] && echo " ($claude of them Claude's)")?" || exit 0
+  answer=comment
+  [ "$kind" = review ] && git-confirm "approve it too, at $(printf '%.8s' "$head")?" && answer=approve
+fi
+
+if [ "$n" -gt 0 ]; then
+  set --
+  [ "$kind" = review ] && [ "$answer" = comment ] && set -- -f reviewer_state=reviewed
+  out=$(glab api -X POST "$api/draft_notes/bulk_publish" "$@" 2>&1) || fail "could not publish: $out"
+fi
+if [ "$answer" = approve ]; then
+  out=$(glab mr approve "$iid" --sha "$head" 2>&1) || fail "published, but could not approve: $out"
+fi
+[ "$kind" = review ] && git-mr-since record "$iid" "$head" "$base"
+exit 0

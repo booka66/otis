@@ -1,0 +1,64 @@
+#!/bin/sh
+# git-mr-since record <iid> <head> <base>   remember the commits you reviewed an MR at
+# git-mr-since toggle <iid> <range>         the file picker's n, as fzf actions
+# git-mr-since files <iid> <range>          the files whose part of the MR changed since
+# git-mr-since diff <iid> <range> <path>    how one of them changed
+#
+# Changes since your last review, for gmr's file picker. Approving an MR or
+# submitting a review (git-mr-approve, git-mr-submit) records the head and base
+# you reviewed as refs/gmr-reviewed/<iid>/head and base: refs, so the commits
+# stay in the repo after a force-push drops them from GitLab. n in the file
+# picker then lists only the files whose diff in the MR is not the one you
+# reviewed, and previews how: the new commits (old head..head) when the MR only
+# moved forward, git range-diff of the old range against the new one when it
+# was rebased or rewritten. Viewed marks need nothing from here: a mark holds
+# the file's blob (git-mr-viewed), so a file touched since has already lost it.
+action=$1 iid=$2 range=$3 path=$4
+st=$GIT_FZF_STATE
+ref=refs/gmr-reviewed/$iid
+
+if [ "$action" = record ]; then
+  git update-ref "$ref/head" "$3" 2>/dev/null && git update-ref "$ref/base" "$4" 2>/dev/null
+  exit 0
+fi
+
+old_head=$(git rev-parse -q --verify "$ref/head") old_base=$(git rev-parse -q --verify "$ref/base")
+head=$(git rev-parse "${range#*..}")
+
+case $action in
+  toggle)
+    if [ -e "$st/since" ]; then
+      rm -f "$st/since"
+    elif [ -z "$old_head" ]; then
+      exec git-fzf-note "no review of !$iid recorded yet; approving it or submitting a review (S) records one"
+    elif [ "$old_head" = "$head" ]; then
+      exec git-fzf-note "nothing new since your last review, at $(git rev-parse --short "$old_head")"
+    elif git merge-base --is-ancestor "$old_head" "$head"; then
+      n=$(git rev-list --count "$old_head..$head")
+      printf 'since your review at %s, %s new commit%s\n' "$(git rev-parse --short "$old_head")" "$n" "$([ "$n" -eq 1 ] || echo s)" > "$st/since"
+    else
+      printf 'since your review at %s, rebased or rewritten\n' "$(git rev-parse --short "$old_head")" > "$st/since"
+    fi
+    echo "reload(git-mr-files --list $iid $range)+refresh-preview+first"
+    ;;
+  files)
+    # Each file's part of both diffs, compared with the line numbers taken out
+    # of the hunk headers, since new lines above a hunk shift it without
+    # changing it. No rename pairing, like the file list.
+    patches() { git diff --no-color --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ "$@"; }
+    { patches "$old_base" "$old_head"; echo '@@gmr-now'; patches "$range"; } | awk '
+      $0 == "@@gmr-now" { now = 1; next }
+      # "diff --git a/<path> b/<path>", the same path twice.
+      /^diff --git a\// { file = substr($0, 14, (length($0) - 16) / 2); next }
+      /^index / { next }
+      /^@@ / { sub(/^@@ [^@]* @@/, "@@") }
+      { if (now) after[file] = after[file] $0 "\n"; else before[file] = before[file] $0 "\n" }
+      END { for (f in after) if (after[f] != before[f]) print f }'
+    ;;
+  diff)
+    if git merge-base --is-ancestor "$old_head" "$head"; then
+      exec git-preview-commit "$old_head..$head" "$path"
+    fi
+    git range-diff --color=always "$old_base..$old_head" "$range" -- "$path"
+    ;;
+esac

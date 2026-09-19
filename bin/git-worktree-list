@@ -1,0 +1,150 @@
+#!/bin/sh
+# git-worktree-list [--refresh]   gw's rows, one per worktree
+# git-worktree-list --safe        fzf actions marking the worktrees safe to remove
+# git-worktree-list --safe-after  the same, once a search M cleared is gone
+# git-worktree-list --status      {path: {n, op, date}} for every worktree, the slow part
+#
+# A row is what you see, then tab-separated path, branch, kind, "safe" (or
+# nothing), the branch's MR iid, and how far ahead of and behind the base it is
+# (for the preview, so it never asks again). It answers what you pick a worktree for: where your work is, and
+# what can go. So each row leads with its branch's state, named as gb names it
+# (git-branch-facts), then anything that stops a removal or needs you first:
+# uncommitted changes, a rebase or merge left in progress, a directory that is
+# gone. Then its commits not on origin/main (how far behind is gup's business,
+# and in the preview), the last commit's age and its MR. Last, what it is for
+# (the main checkout, gmr's review and mine) and the branch, shown only when the
+# directory is not named after it; a narrow list cuts those first.
+#
+# The main checkout comes first, then the rest by last commit, newest first,
+# and last, under a "dedicated" heading, the ones gmr and Claude keep for reuse.
+# Safe to remove: merged, closed or someone else's MR with nothing local, and
+# nothing uncommitted; never the main checkout, gmr's own (they are reused so a
+# review does not check out the repo again) or the one you are in. gw runs this
+# from the main checkout, so a removal can never pull the ground out from under
+# it, and passes where you are in GW_HERE.
+#
+# git status is the slow part, up to a second per worktree in a big checkout,
+# so --status runs them all at once and the picker reads the result through
+# the cache (git-cached-json): it draws from the last run and refreshes behind
+# when that is over half a minute old, or on u. A worktree made since shows
+# without its counts until then.
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+
+if [ "$1" = --status ]; then
+  # --no-optional-locks: status otherwise takes each worktree's index lock to
+  # refresh it, and a git add or commit an agent runs there meanwhile fails.
+  git worktree list --porcelain | awk '/^worktree /{ print substr($0, 10) }' | {
+    while IFS= read -r p; do
+      (
+        op= n=0 date=
+        if [ -d "$p" ]; then
+          g=$(git -C "$p" rev-parse --absolute-git-dir)
+          if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op=rebasing
+          elif [ -e "$g/MERGE_HEAD" ]; then op=merging
+          elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op=cherry-picking
+          elif [ -e "$g/REVERT_HEAD" ]; then op=reverting
+          fi
+          n=$(git -C "$p" --no-optional-locks status --porcelain | wc -l | tr -d ' ')
+          date=$(git -C "$p" log -1 --format=%ct)
+        else
+          op=missing
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$p" "$n" "$op" "$date"
+      ) &
+    done
+    wait
+  } | jq -Rn '[inputs | split("\t") | {(.[0]): {n: (.[1] | tonumber), op: .[2], date: .[3]}}] | add // {}'
+  exit 0
+fi
+
+# M after a search, as in gb (git-branch-list): clear it, then mark.
+case $1 in
+  --safe) if [ -n "$FZF_QUERY" ]; then : > "$st/mark-safe"; echo 'rebind(result)+clear-query'; exit 0; fi ;;
+  --safe-after) [ -e "$st/mark-safe" ] || exit 0; rm -f "$st/mark-safe"; set -- --safe ;;
+esac
+if [ "$1" = --safe ]; then
+  actions=$(awk -F'\t' '$5 == "safe" { printf "pos(%d)+select+", NR }' "$st/worktrees")
+  [ -n "$actions" ] || exec git-fzf-note "nothing to clean up: no merged or closed worktree without uncommitted changes"
+  printf '%spos(%d)\n' "$actions" "${FZF_POS:-1}"
+  exit 0
+fi
+
+main=$(git-worktree-path main)
+: > "$st/footer"
+refresh=$1
+if [ -n "$refresh" ]; then set -- --refresh wt-status "execute-silent(git-fzf-bg git-worktree-list)"; else set -- wt-status 30 "execute-silent(git-fzf-bg git-worktree-list)"; fi
+status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || status=/dev/null
+{
+  git-branch-facts $refresh "execute-silent(git-fzf-bg git-worktree-list)"
+  jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' "$status" 2>/dev/null
+} | awk -F'\t' -v now="$(date +%s)" -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}" \
+  -v review="$(git-worktree-path named review)" -v mine="$(git-worktree-path named mine)" \
+  -v prefix="$(git config --get otis.branchPrefix)" -v footer="$st/footer.new" "$(cat "$share/rowfmt.awk")"'
+  $1 == "WT"     { n++; path[n] = $2; branch[n] = $3; next }
+  $1 == "BRANCH" { kind[$2] = $3; label[$2] = $4; iid[$2] = $5; ahead[$2] = $8; behind[$2] = $9; next }
+  $1 == "STATE"  { changes[$2] = $3; op[$2] = $4; date[$2] = $5; next }
+  function ago(t,    s) {
+    if (t == "") return ""
+    s = now - t
+    if (s < 3600) return int(s / 60) "m"
+    if (s < 86400) return int(s / 3600) "h"
+    if (s < 86400 * 14) return int(s / 86400) "d"
+    if (s < 86400 * 60) return int(s / 604800) "w"
+    return int(s / 2592000) "mo"
+  }
+  END {
+    # Names line up, up to a point: one long name should not push the state of every row off screen.
+    width = 0
+    for (i = 1; i <= n; i++) { m = split(path[i], parts, "/"); name[i] = parts[m]; if (length(name[i]) > width) width = length(name[i]) }
+    if (width > 28) width = 28
+    # The worktrees gmr and Claude keep for reuse are not work of yours, so
+    # they go last, under a heading.
+    for (i = 1; i <= n; i++) own[i] = (path[i] == review || path[i] == mine || name[i] ~ /^claude-(fix|review)/)
+
+    # Newest first after the main checkout, the dedicated ones after the rest;
+    # a handful of rows, so a plain insertion sort.
+    for (i = 2; i <= n; i++) order[i] = i
+    for (i = 3; i <= n; i++) for (j = i; j > 2 && (own[order[j]] < own[order[j - 1]] || \
+        own[order[j]] == own[order[j - 1]] && date[path[order[j]]] > date[path[order[j - 1]]]); j--) {
+      t = order[j]; order[j] = order[j - 1]; order[j - 1] = t
+    }
+    order[1] = 1
+
+    for (o = 1; o <= n; o++) {
+      i = order[o]; p = path[i]; b = branch[i]
+      # The heading is a row with no path, so enter and d on it do nothing.
+      if (own[i] && !headed) { headed = 1; printf "%s── dedicated %s%s\t\t\t\t\t\t\t\n", GK_FAINT, gk_rep("─", 44), GK_R }
+      k = (b == "") ? "detached" : kind[b]
+      lbl = (b == "") ? GK_CONTEXT "detached" GK_R : label[b]
+      if (op[p] == "missing") lbl = GK_BAD "missing " GK_R
+
+      mark = (p == here) ? GK_ELSEWHERE "▶ " GK_R : "  "
+      role = (p == main) ? "main checkout" : (p == review) ? "gmr: MRs you review" : (p == mine) ? "gmr: your MRs" \
+           : (name[i] ~ /^claude-fix/) ? "Claude\047s, for fix runs" : (name[i] ~ /^claude-review/) ? "Claude\047s, for reviews" : ""
+      show = (b != "" && b != name[i] && b != prefix "/" name[i]) ? b : ""
+
+      # What needs you first, then the facts, then what it is for; a narrow list cuts from the end.
+      extra = ""
+      if (op[p] != "" && op[p] != "missing") extra = extra "  " GK_BAD op[p] GK_R
+      if (changes[p] > 0) extra = extra "  " GK_BAD changes[p] " uncommitted" GK_R
+      if (ahead[b] > 0) extra = extra "  " GK_ATTENTION "↑" ahead[b] GK_R
+      if (date[p] != "") extra = extra "  " GK_CONTEXT ago(date[p]) GK_R
+      if (iid[b] != "") extra = extra "  " GK_CONTEXT "!" iid[b] GK_R
+      if (role != "") extra = extra "  " GK_ELSEWHERE role GK_R
+      if (show != "") extra = extra "  " GK_CONTEXT show GK_R
+
+      safe = (k ~ /^(merged|closed|theirs)$/ && changes[p] == 0 && op[p] == "" &&
+              p != main && p != review && p != mine && p != here) ? "safe" : ""
+      if (op[p] == "missing" && p != main) safe = "safe"
+      if (safe != "") nsafe++
+
+      shown = (length(name[i]) > width) ? substr(name[i], 1, width - 1) "…" : name[i]
+      printf "%s%s  %s%-" width "s%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", mark, lbl, GK_TEXT, shown, GK_R, extra, p, b, k, safe, iid[b], ahead[b], behind[b]
+    }
+    if (nsafe) printf "%s%d safe to remove · M marks them%s\n", GK_CONTEXT, nsafe, GK_R > footer
+  }' > "$st/worktrees"
+# The footer is the safe count, unless git-branch-facts had something to say.
+[ -s "$st/footer" ] || [ ! -e "$st/footer.new" ] || mv "$st/footer.new" "$st/footer"
+rm -f "$st/footer.new"
+cat "$st/worktrees"

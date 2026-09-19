@@ -1,0 +1,53 @@
+#!/bin/sh
+# git-agent-preview <dir>: a background run of Claude's, as gag previews it:
+# what it is and how it stands, then its report when it has one (a
+# verification's verdict, a production watch's), and the run's own account
+# of itself as it went, without the agents' every step, which enter shows
+# (git-claude-view).
+d=$1
+[ -d "$d" ] || exit 0
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+. "$share/claude-run.sh"
+w=${FZF_PREVIEW_COLUMNS:-100}
+
+state=$(cat "$d/status" 2>/dev/null)
+if [ -z "$state" ]; then
+  if running "$d"; then state=running; else state=died; fi
+fi
+case $state in
+  running) c=$GK_YOURS ;;
+  done) c=$GK_GOOD ;;
+  stopped) c=$GK_CONTEXT ;;
+  *) c=$GK_BAD ;;
+esac
+printf "${GK_ATTENTION}%s${GK_R}\n" "$(cat "$d/title" 2>/dev/null)"
+started=$(cat "$d/started" 2>/dev/null)
+ended=$(cat "$d/ended" 2>/dev/null)
+# A time in seconds: date -r on macOS, date -d @ on Linux.
+at() { date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2" 2>/dev/null; }
+printf "${c}%s${GK_R}${GK_CONTEXT} · started %s" "$state" "$(at "$started" '+%a %H:%M')"
+[ -n "$ended" ] && printf ', over %s' "$(at "$ended" '+%a %H:%M')"
+[ -s "$d/agent-url" ] && printf ' · tester: %s' "$(cat "$d/agent-url")"
+printf "${GK_R}\n"
+spent=$(costs "$d")
+[ -n "$spent" ] && printf "${GK_CONTEXT}cost%s${GK_R}\n" "$spent"
+echo
+
+# A verification's verdict and a production watch's, as their own pickers
+# show them; a review's and a fix run's last word says where their results
+# are (gmr).
+key=${d##*/}
+case ${d%/*} in
+  */otis-verify)
+    case $key in
+      b-*) git-verify --preview "" "$(printf '%s' "${key#b-}" | tr '%' '/')" ;;
+      *) git-verify --preview "$key" ;;
+    esac | sed '1{/^$/d;}'
+    echo ;;
+  */gmr-watch) git-mr-watch --preview "$key" | sed '1{/^$/d;}'; echo ;;
+esac
+
+printf "${GK_FAINT}── what it said, as it went ──${GK_R}\n"
+jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -40
+[ "$state" = running ] || printf "\n${GK_CONTEXT}enter shows every step${GK_R}\n"

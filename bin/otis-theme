@@ -1,0 +1,69 @@
+#!/bin/sh
+# otis-theme                pick a theme, each one previewed on otis's own rows
+#                           and a diff; enter keeps it (git config --global otis.theme)
+# otis-theme --env [name]   the theme as exports for sh to eval: what git-fzf,
+#                           otis-run and share/palette.sh load, so every script,
+#                           awk and jq program under them has it
+# otis-theme --list         the themes there are, with what each is
+# otis-theme --sample       otis's rows and a diff in the theme loaded now
+#
+# A theme is a file in share/themes: the nine colors the palette names by
+# their job (share/palette.sh says which is which), as SGR parameters, and
+# what delta, bat and glow need to match. The theme is otis.theme, else
+# terminal, which takes the terminal's own 16 colors and so matches whatever
+# theme the terminal has. $OTIS_THEME overrides otis.theme for one run.
+root=$(cd "$(dirname "$0")/.." && pwd)
+dir=$root/share/themes
+keys='attention good bad elsewhere yours text context faint main codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph light glow'
+
+case $1 in
+  --env)
+    name=${2:-${OTIS_THEME:-$(git config --get otis.theme 2>/dev/null)}}
+    name=${name:-terminal}
+    if [ ! -f "$dir/$name" ]; then
+      echo "otis-theme: no theme called $name; using terminal (otis-theme lists them)" >&2
+      name=terminal
+    fi
+    # Every key, empty where the theme has none, so one theme loaded over
+    # another leaves nothing of the first behind. One awk: every command
+    # from a shell pays for this before anything else.
+    awk -v keys="$keys" -v name="$name" '
+      { i = index($0, "="); if (i > 1) { k = substr($0, 1, i - 1); if (!(k in v)) v[k] = substr($0, i + 1) } }
+      END {
+        n = split(keys, K, " ")
+        for (j = 1; j <= n; j++) printf "export OTIS_T_%s=\047%s\047\n", toupper(K[j]), v[K[j]]
+        printf "export OTIS_T_NAME=\047%s\047\n", name
+      }' "$dir/$name"
+    exit 0 ;;
+  --list)
+    # The terminal's own first, since it fits any terminal.
+    for f in "$dir"/terminal "$dir"/terminal-light "$dir"/*; do
+      case $f in "$dir"/terminal|"$dir"/terminal-light) [ -n "$listed" ] && continue ;; *) listed=1 ;; esac
+      printf '%s\t%s\n' "${f##*/}" "$(sed -n '1s/^# *//p' "$f")"
+    done
+    exit 0 ;;
+  --sample)
+    share=$root/share
+    . "$share/palette.sh"
+    printf "${GK_MAIN}▶ main${GK_R}                 ${GK_CONTEXT}nothing to commit or push${GK_R}\n"
+    printf "  ${GK_TEXT}cahoon/billing-dupes${GK_R}   ${GK_ATTENTION}!482${GK_R} ${GK_GOOD}✓ approved${GK_R}   ${GK_CONTEXT}⇡2  3h${GK_R}\n"
+    printf "  ${GK_TEXT}cahoon/retry-webhooks${GK_R}  ${GK_ATTENTION}!497${GK_R} ${GK_BAD}✗ pipeline failed${GK_R}\n"
+    printf "  ${GK_TEXT}Refund flow copy${GK_R}       ${GK_YOURS}2 threads waiting on you${GK_R}\n"
+    printf "  ${GK_ELSEWHERE}in .claude/worktrees/away${GK_R}  ${GK_FAINT}───── 3 more ─────${GK_R}\n\n"
+    printf '%s\n' 'diff --git a/src/billing.ts b/src/billing.ts' '--- a/src/billing.ts' '+++ b/src/billing.ts' \
+      '@@ -10,6 +10,6 @@ export function charge(order: Order) {' \
+      '   const total = order.items.reduce((s, i) => s + i.price, 0);' \
+      '-  if (total > 0) return pay(order.id, total);' \
+      '+  if (total > 0 && !order.paid) return pay(order.id, total);' \
+      '   return null;' ' }' | git-delta
+    exit 0 ;;
+esac
+
+now=$(git config --get otis.theme 2>/dev/null)
+sel=$(otis-theme --list | awk -F'\t' -v now="${now:-terminal}" '{ printf "%-21s %s%s\t%s\n", $1, $2, ($1 == now ? "  (yours now)" : ""), $1 }' |
+  git-fzf 'theme ' 'enter=use it' --ansi --delimiter='\t' --with-nth=1 \
+    --preview 'eval "$(otis-theme --env {2} 2>/dev/null)"; otis-theme --sample') || exit 1
+name=$(printf '%s' "$sel" | cut -f2)
+[ -n "$name" ] || exit 1
+git config --global otis.theme "$name"
+echo "theme: $name (pickers opened from now on)"

@@ -1,0 +1,21 @@
+# One Dark, from Atom.
+attention=38;2;229;192;123
+good=38;2;152;195;121
+bad=38;2;224;108;117
+elsewhere=38;2;97;175;239
+yours=38;2;209;154;102
+text=38;2;171;178;191
+context=38;2;92;99;112
+faint=38;2;62;68;81
+main=38;2;86;182;194
+codebg=48;2;44;49;58
+errbg=48;2;73;56;64
+delta_syntax=TwoDark
+bat=TwoDark
+file=#61afef
+rule=#3e4451
+minus=#4d3941
+plus=#3e4a42
+minus_emph=#72464e
+plus_emph=#556850
+glow=dark

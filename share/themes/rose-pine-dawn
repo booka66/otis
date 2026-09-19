@@ -1,0 +1,22 @@
+# Rosé Pine Dawn, for a light ground.
+attention=38;2;234;157;52
+good=38;2;86;148;159
+bad=38;2;180;99;122
+elsewhere=38;2;144;122;169
+yours=38;2;215;130;126
+text=38;2;87;82;121
+context=38;2;152;147;165
+faint=38;2;223;218;217
+main=38;2;40;105;131
+codebg=48;2;242;233;225
+errbg=48;2;240;222;220
+delta_syntax=OneHalfLight
+bat=OneHalfLight
+file=#907aa9
+rule=#dfdad9
+minus=#f0dedc
+plus=#e1e6e1
+minus_emph=#e4c6c8
+plus_emph=#c6d5d4
+light=1
+glow=light

@@ -1,0 +1,30 @@
+#!/bin/sh
+# git-commit-fixup --check [<sha>]   why the staged changes cannot be folded in
+#                                    (into <sha>), on stderr, exit 1; else exit 0
+# git-commit-fixup <sha>             fold what is staged into <sha>
+#
+# gfx and gl's f. Only this branch's commits take a fixup, since rewriting one
+# already on main would rewrite main here. Unstaged changes are refused up
+# front: the rebase would stop on them and leave a stray fixup! commit behind.
+base=$(otis-config base)
+
+if [ "$1" = --check ]; then
+  sha=$2
+  if git diff --cached --quiet; then
+    echo "nothing staged to fold in; stage it with ga first" >&2
+  elif ! git diff --quiet; then
+    echo "there are unstaged changes too. stage them, or set them aside with gwip first" >&2
+  elif [ -z "$(git rev-list -1 "$base..HEAD" 2>/dev/null)" ]; then
+    echo "this branch has no commits of its own on top of $base to fix up" >&2
+  elif [ -n "$sha" ] && { ! git merge-base --is-ancestor "$sha" HEAD || git merge-base --is-ancestor "$sha" "$base"; }; then
+    echo "$sha is not one of this branch's commits on top of $base" >&2
+  else
+    exit 0
+  fi
+  exit 1
+fi
+
+sha=$1
+git-lock || exit 1
+git commit --fixup "$sha" &&
+  GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash --update-refs "$sha~1"

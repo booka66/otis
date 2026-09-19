@@ -1,0 +1,21 @@
+# Dracula.
+attention=38;2;241;250;140
+good=38;2;80;250;123
+bad=38;2;255;85;85
+elsewhere=38;2;189;147;249
+yours=38;2;255;184;108
+text=38;2;248;248;242
+context=38;2;98;114;164
+faint=38;2;68;71;90
+main=38;2;139;233;253
+codebg=48;2;68;71;90
+errbg=48;2;79;50;60
+delta_syntax=Dracula
+bat=Dracula
+file=#bd93f9
+rule=#44475a
+minus=#53333c
+plus=#305444
+minus_emph=#7e3b42
+plus_emph=#387d52
+glow=dark

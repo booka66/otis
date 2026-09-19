@@ -1,0 +1,83 @@
+#!/bin/sh
+# Rows for gl and grb: what you see, then tab-separated the commit's sha.
+#
+# The fixed zone is the sha and how long ago the commit landed, and is never
+# cut. Then the subject, which is what you are reading the log for. Then the
+# refs and the author, which a narrow pane can drop: refs used to sit *before*
+# the subject, so a single commit carrying "(HEAD -> main, origin/main, tag:
+# v2.1)" pushed every subject on the screen forty columns to the right.
+#
+# The age is relative rather than a date, as gb and gw show it: four columns
+# instead of ten, and "3h" answers the question a log is usually asked.
+#
+# Your commits are the ones this branch has and the base does not, and they get
+# the bright treatment while everything already landed is dimmed. Of those, the
+# ones the upstream has not got yet are still in your hands, and their sha says
+# so in its own color. Keying that off the upstream alone, as this did, meant
+# every commit went dim the moment the branch was pushed, which is exactly when
+# you start reading it.
+#
+# No +/- counts here, deliberately: they would need `git log --numstat`, which
+# diffs every commit it lists. Bare gl lists the newest 500: a big repo's whole
+# history takes seconds to decorate and format, and every fold or reword
+# reloads the list, so the picker says where it stopped and how to ask for
+# more (gl -n 2000, or a range). Any argument at all lifts the cap. The
+# preview already shows the stat for the commit under the cursor.
+#
+# main, in an argument or either end of a range (main..HEAD), means origin/main.
+# git fetch never moves a local branch, and otis rebases onto origin/main
+# without ever touching local main, so local main is whatever it was the last
+# time you pulled in that checkout: gl main stopped a day back, short of
+# everything that has landed since. An explicit refs/heads/main still names
+# the local branch.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+main=$(otis-config main) remote=$(otis-config base)
+if [ "$remote" != "$main" ] && [ "$remote" != HEAD ]; then
+  for arg in "$@"; do
+    shift
+    case $arg in
+      "$main")          arg=$remote ;;
+      "$main"...*)      arg=$remote...${arg#"$main"...} ;;
+      "$main"..*)       arg=$remote..${arg#"$main"..} ;;
+    esac
+    case $arg in
+      *..."$main")      arg=${arg%...*}...$remote ;;
+      *.."$main")       arg=${arg%..*}..$remote ;;
+    esac
+    set -- "$@" "$arg"
+  done
+fi
+mine=$(git log --format=%h "$remote"..HEAD 2>/dev/null | tr '\n' ' ')
+up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+held=$(git log --format=%h "${up:-$remote}"..HEAD 2>/dev/null | tr '\n' ' ')
+cap=
+[ $# -eq 0 ] && cap=500
+
+git log ${cap:+-n $((cap + 1))} --format='%h%x1f%ct%x1f%d%x1f%s%x1f%an' "$@" |
+awk -F'\037' -v mine=" $mine " -v held=" $held " -v now="$(date +%s)" -v cap="$cap" -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" \
+    "$(cat "$share/rowfmt.awk")"'
+  function ago(t,   s) {
+    s = now - t
+    if (s < 3600) return int(s / 60) "m"
+    if (s < 86400) return int(s / 3600) "h"
+    if (s < 86400 * 14) return int(s / 86400) "d"
+    if (s < 86400 * 60) return int(s / 604800) "w"
+    return int(s / 2592000) "mo"
+  }
+  cap != "" && NR > cap { more = 1; next }
+  {
+    sha = $1; refs = $3; subj = $4; who = $5
+    yours = index(mine, " " sha " ")
+    unpushed = index(held, " " sha " ")
+    sub(/^ *\(/, "", refs); sub(/\)$/, "", refs)
+    print (unpushed ? GK_YOURS : yours ? GK_ATTENTION : GK_FAINT) sha GK_R " " \
+      GK_CONTEXT gk_padl(ago($2), 4) GK_R "  " \
+      (yours ? GK_TEXT : GK_CONTEXT) subj GK_R \
+      (refs != "" ? "  " GK_MAIN refs GK_R : "") \
+      "  " GK_CONTEXT who GK_R "\t" sha
+  }
+  END {
+    if (out == "") exit
+    if (more) print GK_CONTEXT "the newest " cap " commits \302\267 gl -n 2000, or gl <range>, for more" GK_R > out
+    else printf "" > out
+  }'

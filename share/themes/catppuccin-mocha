@@ -1,0 +1,21 @@
+# Catppuccin Mocha.
+attention=38;2;249;226;175
+good=38;2;166;227;161
+bad=38;2;243;139;168
+elsewhere=38;2;137;180;250
+yours=38;2;250;179;135
+text=38;2;205;214;244
+context=38;2;127;132;156
+faint=38;2;88;91;112
+main=38;2;148;226;213
+codebg=48;2;49;50;68
+errbg=48;2;66;38;52
+delta_syntax=Catppuccin Mocha
+bat=OneHalfDark
+file=#89b4fa
+rule=#585b70
+minus=#3c2a36
+plus=#2b3a36
+minus_emph=#5e3446
+plus_emph=#3a5a4a
+glow=dark

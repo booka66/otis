@@ -1,0 +1,390 @@
+#!/bin/sh
+# git-callers <rev> <table>            the cache file when the callers are found; else "running", having
+#                                      started the finding in the background unless it already runs;
+#                                      nothing when it is off or tsgo and node are not here
+# git-callers --file <rev> [table]     the cache file for this change, if it is done
+# git-callers --state <rev> [table]    running, done, or none (the table only for the worktree)
+# git-callers --spec <path>            the import specifier a file is imported by, for the eye and the tests
+# git-callers --run <rev> <table>      the work itself
+# git-callers --recheck <rev> <table>  the broken callers as this checkout has them: a file, its first
+#                                      line the disk it checked, then each broken caller's path and how
+#                                      many of the change's errors it still has; else "running", or
+#                                      nothing when the disk is the change's head
+#
+# The callers are found against a commit, which a fix made in the checkout
+# (F, or nvim) does not change. So in a checkout that has the change (at its
+# head or past it), once the broken callers' files or the change's own
+# differ on disk from the change's head, --recheck runs the
+# same two passes over them as the disk has them (--recheck-run, in the
+# background, reloading the picker when it lands): an error it no longer
+# finds is fixed here, uncommitted, and git-symbols shows it so.
+#
+# What the symbol tree cannot see: the callers of a changed symbol that the
+# change did not touch, which is what it can break. tsgo says where a symbol
+# is used, precisely, through types and re-exports, in every project it has
+# loaded, and it loads a project when a file of it is opened. A project is
+# one package's tsconfig, and callers live upstream, so for each changed file
+# one git grep for its import specifier (its package's name and its path
+# under src, as the packages' exports map it) says which packages import it,
+# and every file that imports it is opened too, or past fifteen packages one
+# file from each (share/lsp-references.mjs runs the session). Each reference is placed in the declaration around it by
+# ast-grep, on seam's rules, so the row is a signature. References inside changed symbols are
+# left out, since the tree has those; so are import lines, which no
+# declaration holds.
+#
+# Lazy and cached like the gloss (git-symbols-gloss): a commit, branch or MR
+# by its shas for good, the worktree by its symbols. git config otis.callers
+# off turns it off; without tsgo or node nothing runs. tsgo resolves the
+# workspace's packages through node_modules, which a worktree gets mirrored
+# from the main checkout's first (otis-node-modules), so it works here and
+# in nvim alike. It reads an open file over the disk, so every file the
+# change touches is opened as the change leaves it, and the callers are type
+# checked twice, with the changed files first as the base has them, then as
+# the change leaves them: an error the second check has and the first did
+# not is one the change brings, and the caller is what the change breaks.
+# An error the caller had already is not counted against it. The cache is one row
+# a caller, tab separated: the symbol's id, the caller's path, the line of
+# its first call, the caller's id, its head, its start and end lines, how
+# many calls it makes, how many type errors it has, the first of them as
+# line and message, its package (the directory of its package.json, or
+# that package's name at the root), and every error as line and message,
+# \036 between them.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+mode=
+case $1 in --file|--state|--spec|--run|--recheck|--recheck-run) mode=$1; shift ;; esac
+
+# --spec: the package's name from the nearest package.json above the file,
+# then the path under src without its extension; index is the package
+# itself. Nothing when no package.json is above it.
+if [ "$mode" = --spec ]; then
+  p=$1; d=$(dirname "$p")
+  while :; do
+    if [ -f "$d/package.json" ]; then
+      name=$(jq -r '.name // ""' "$d/package.json" 2>/dev/null)
+      [ -n "$name" ] || exit 0
+      sub=${p#"$d"/}; sub=${sub#src/}; sub=${sub%.tsx}; sub=${sub%.ts}
+      case $sub in index) printf '%s\n' "$name" ;; *) printf '%s/%s\n' "$name" "$sub" ;; esac
+      exit 0
+    fi
+    case $d in .|/) exit 0 ;; esac
+    d=$(dirname "$d")
+  done
+fi
+
+rev=$1 table=$2
+# A commit's or a range's cache is keyed by its shas alone, so --file and
+# --state need no table for one (git-mr-claude asks before it has built one).
+[ -n "$rev" ] || exit 0
+[ -s "$table" ] || { [ "$rev" != worktree ] && { [ "$mode" = --file ] || [ "$mode" = --state ]; }; } || exit 0
+dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/callers"
+# A cache is for good, its shas never changing, so one an older finder wrote
+# (fewer columns, or found from a checkout without modules) goes when the
+# finder changes: the directory carries the version it was written by.
+version=7
+if [ "$(cat "$dir/version" 2>/dev/null)" != "$version" ]; then
+  rm -rf "$dir"; mkdir -p "$dir" && printf '%s\n' "$version" > "$dir/version"
+fi
+# The key comes from git-symbols when it is the caller, which has it. The
+# worktree's is its symbols and their signatures, not their lines: an edit
+# that moves a function down a line is not a new question.
+if [ -n "$OTIS_CALLERS_KEY" ]; then key=$OTIS_CALLERS_KEY; else
+  case $rev in worktree) key=$(cut -f1-7,13 "$table" | git hash-object --stdin) ;; *) key=$OTIS_SYMBOLS_KEY ;; esac
+fi
+if [ -n "$key" ]; then :; else
+  case $rev in
+    *...*) key=$(git merge-base "${rev%%...*}" "${rev##*...}")-$(git rev-parse "${rev##*...}") ;;
+    *..*)  key=$(git rev-parse "${rev%%..*}")-$(git rev-parse "${rev##*..}") ;;
+    *)     key=$(git rev-parse "$rev") ;;
+  esac
+fi
+file=$dir/$key.tsv
+running=$dir/$key.running
+alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
+# One tsgo session at a time in a repo, whatever the change: a big
+# monorepo's projects are gigabytes each session, and two pickers open (gl
+# and ga) would otherwise run two. The turn is a directory holding its
+# holder's pid, taken back from a holder that died; a run waits for it.
+# The caller's EXIT trap gives it back.
+tsgo_turn() {
+  until mkdir "$dir/tsgo.turn" 2>/dev/null; do
+    o=$(cat "$dir/tsgo.turn/pid" 2>/dev/null)
+    [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null && rm -rf "$dir/tsgo.turn"
+    sleep 1
+  done
+  echo $$ > "$dir/tsgo.turn/pid"
+}
+
+case $mode in
+  --file) [ -s "$file" ] && printf '%s\n' "$file"; exit 0 ;;
+  --state)
+    if alive; then echo running; elif [ -e "$file" ]; then echo done; else echo none; fi
+    exit 0 ;;
+esac
+
+if [ "$mode" = --recheck ] || [ "$mode" = --recheck-run ]; then
+  [ -s "$file" ] && [ "$rev" != worktree ] || exit 0
+  cd "$(git rev-parse --show-toplevel)" || exit 0
+  case $rev in
+    *...*) head=$(git rev-parse "${rev##*...}"); cbase=$(git merge-base "${rev%%...*}" "$head") ;;
+    *..*)  head=$(git rev-parse "${rev##*..}"); cbase=$(git rev-parse "${rev%%..*}") ;;
+    *)     head=$(git rev-parse "$rev"); cbase=$(git rev-parse -q --verify "$rev^" 2>/dev/null) ;;
+  esac
+  # Only a checkout that has the change can say whether a fix in it
+  # works: at its head, or past it (a fix committed and not pushed).
+  git merge-base --is-ancestor "$head" HEAD 2>/dev/null || { rm -f "$dir/$key.disk"; exit 0; }
+  broken=$(awk -F'\t' '$9 > 0 { print $2 }' "$file" | sort -u)
+  [ -n "$broken" ] || exit 0
+  touched=$(git diff --name-only "$cbase" "$head" -- '*.ts' '*.tsx' 2>/dev/null)
+  disk=$dir/$key.disk
+  # What the disk has of them, as one hash; nothing to do while it is the head.
+  moved=
+  stamp=$(printf '%s\n' $broken $touched | sort -u | while read -r p; do
+    h=$(git hash-object "$p" 2>/dev/null || echo gone)
+    [ "$h" = "$(git rev-parse -q --verify "$head:$p" 2>/dev/null || echo gone)" ] || echo moved >&2
+    printf '%s %s\n' "$p" "$h"
+  done 2> "$dir/$key.moved" | git hash-object --stdin)
+  [ -s "$dir/$key.moved" ] && moved=1
+  rm -f "$dir/$key.moved"
+  [ -n "$moved" ] || { rm -f "$disk"; exit 0; }
+  rrun=$dir/$key.recheck
+  if [ "$mode" = --recheck ]; then
+    [ "$(head -1 "$disk" 2>/dev/null)" = "$stamp" ] && { printf '%s\n' "$disk"; exit 0; }
+    [ -s "$rrun" ] && kill -0 "$(cat "$rrun")" 2>/dev/null && { echo running; exit 0; }
+    command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
+    nohup git-callers --recheck-run "$rev" "$table" </dev/null >/dev/null 2>>"$dir/$key.err" &
+    echo $! > "$rrun"
+    echo running
+    exit 0
+  fi
+  tmp=$(mktemp -d) || exit 1
+  trap 'rm -rf "$tmp" "$rrun"' EXIT
+  tsgo_turn
+  trap 'rm -rf "$tmp" "$rrun" "$dir/tsgo.turn"' EXIT
+  otis-node-modules "$(pwd)"
+  # The change's files as the disk has them, each also at the base for the
+  # first pass, and the broken callers' files, checked in both.
+  i=0
+  for p in $touched; do
+    i=$((i + 1))
+    [ -n "$cbase" ] && git show "$cbase:$p" > "$tmp/base.$i" 2>/dev/null && printf '%s\t%s\n' "$p" "$tmp/base.$i"
+  done > "$tmp/base"
+  printf '%s\n' $touched > "$tmp/open"
+  printf '%s\n' $broken > "$tmp/importers"
+  jq -Rn --arg root "$(pwd)" --rawfile o "$tmp/open" --rawfile b "$tmp/base" --rawfile i "$tmp/importers" '
+    { root: $root, check: true, queries: [],
+      importers: [$i | split("\n")[] | select(. != "")],
+      open: [$o | split("\n")[] | select(. != "") | { path: . }],
+      base: [$b | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }] }' > "$tmp/job"
+  node "$share/lsp-references.mjs" < "$tmp/job" > "$tmp/out" || exit 0
+  { printf '%s\n' "$stamp"
+    for p in $broken; do printf '%s\t%s\n' "$p" "$(awk -F'\t' -v p="$p" '$1 == "D" && $2 == p' "$tmp/out" | wc -l | tr -d ' ')"; done
+  } > "$disk.new" && mv "$disk.new" "$disk"
+  if [ -n "$GMR_IID" ]; then git-fzf-bg --landing git-mr-files --list "$GMR_IID" "$rev"
+  else git-fzf-bg --landing git-symbols --rows "$rev"; fi
+  exit 0
+fi
+
+if [ "$mode" != --run ]; then
+  [ -s "$file" ] && { printf '%s\n' "$file"; exit 0; }
+  [ -e "$file" ] && exit 0
+  alive && { echo running; exit 0; }
+  [ "$(git config --get otis.callers)" != off ] && command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
+  mkdir -p "$dir" || exit 0
+  # One run at a time for the worktree: it changes under you, and a run for
+  # what it was a moment ago is ten seconds of tsgo for nothing, so a newer
+  # question ends the older run, tsgo and all.
+  if [ "$rev" = worktree ] && [ -s "$dir/worktree.running" ]; then
+    old=$(cat "$dir/worktree.running")
+    if kill -0 "$old" 2>/dev/null; then
+      for p in $(pgrep -P "$old") ; do pkill -P "$p" 2>/dev/null; kill "$p" 2>/dev/null; done
+      kill "$old" 2>/dev/null
+    fi
+  fi
+  cp "$table" "$dir/$key.table"
+  nohup git-callers --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  echo $! > "$running"
+  [ "$rev" = worktree ] && echo $! > "$dir/worktree.running"
+  echo running
+  exit 0
+fi
+
+# --run. One at a time per change: the lock is a directory.
+mkdir -p "$dir" || exit 1
+lock=$dir/$key.lock
+# The holder's pid is in the lock, not $running: the asker writes this run's
+# own pid there, so a lock a killed run left would look held for good.
+if ! mkdir "$lock" 2>/dev/null; then
+  kill -0 "$(cat "$lock/pid" 2>/dev/null)" 2>/dev/null && exit 0
+  rm -rf "$lock"; mkdir "$lock" || exit 0
+fi
+echo $$ > "$lock/pid"
+echo $$ > "$running"
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$running" "$lock" "$tmp" "$dir/$key.table"' EXIT
+tsgo_turn
+trap 'rm -rf "$running" "$lock" "$tmp" "$dir/$key.table" "$dir/tsgo.turn"' EXIT
+root=$(git rev-parse --show-toplevel)
+cd "$root" || exit 1
+otis-node-modules "$root"
+at=$(git rev-parse HEAD 2>/dev/null)
+# The change's two ends: its base is what the check's first pass reads the
+# changed files at, and what an error must be absent from to count.
+case $rev in
+  worktree) head=; cbase=HEAD ;;
+  *...*) head=$(git rev-parse "${rev##*...}"); cbase=$(git merge-base "${rev%%...*}" "$head") ;;
+  *..*)  head=$(git rev-parse "${rev##*..}"); cbase=$(git rev-parse "${rev%%..*}") ;;
+  *)     head=$(git rev-parse "$rev"); cbase=$(git rev-parse -q --verify "$rev^" 2>/dev/null) ;;
+esac
+
+# The queries: the change's exported top-level symbols on its new side, with
+# the line the keyword is on and the bare name.
+awk -F'\t' 'BEGIN { OFS = "\t" } $2 != "file" && $4 == "" && $5 == 1 && $7 == "new" { nm = $3; sub(/^type /, "", nm); print $1 "#" $3, $1, $10, nm }' "$table" > "$tmp/queries"
+[ -s "$tmp/queries" ] || { : > "$file"; exit 0; }
+cut -f2 "$tmp/queries" | sort -u > "$tmp/changed"
+
+# The files to open: every TypeScript file the change touches, as the
+# change leaves it, so what tsgo sees is the change laid over this checkout,
+# then every file that imports a changed file: opening one loads its
+# package for the references, and each is checked, since a change can
+# break an importer through a type it never names.
+: > "$tmp/open"
+if [ -n "$head" ]; then
+  { git diff --name-only "$cbase" "$head" -- '*.ts' '*.tsx' 2>/dev/null; cat "$tmp/changed"; } | sort -u
+else cat "$tmp/changed"; fi > "$tmp/touched"
+# And each touched file as the base has it, for the check's first pass.
+: > "$tmp/base"
+i=0
+while read -r p; do
+  i=$((i + 1))
+  if [ -n "$head" ]; then git show "$head:$p" > "$tmp/text.$i" 2>/dev/null || continue
+  else cp "$p" "$tmp/text.$i" 2>/dev/null || continue; fi
+  if [ -n "$cbase" ] && git show "$cbase:$p" > "$tmp/base.$i" 2>/dev/null; then printf '%s\t%s\n' "$p" "$tmp/base.$i" >> "$tmp/base"; fi
+  printf '%s\t%s\n' "$p" "$tmp/text.$i"
+  grep -qxF "$p" "$tmp/changed" || continue
+  spec=$(git-callers --spec "$p")
+  [ -n "$spec" ] && printf '%s"\n%s'"'"'\n' "$spec" "$spec"
+done < "$tmp/touched" > "$tmp/open.changed" 2>/dev/null
+grep -v '["'"'"']$' "$tmp/open.changed" > "$tmp/open"
+grep '["'"'"']$' "$tmp/open.changed" > "$tmp/patterns"
+# The importers: by the package specifier from anywhere, and, within the
+# changed file's own package, by a relative path, which names the file
+# after a slash ("./lib", "../db/lib").
+: > "$tmp/importers"
+[ -s "$tmp/patterns" ] && git grep -l -F -f "$tmp/patterns" -- '*.ts' '*.tsx' 2>/dev/null >> "$tmp/importers"
+while read -r p; do
+  n=${p##*/}; n=${n%.tsx}; n=${n%.ts}
+  d=$(dirname "$p"); while [ ! -f "$d/package.json" ]; do case $d in .|/) break ;; esac; d=$(dirname "$d"); done
+  git grep -l -F -e "/$n\"" -e "/$n'" -- "$d" 2>/dev/null | grep '\.tsx\{0,1\}$'
+done < "$tmp/changed" >> "$tmp/importers"
+sort -u "$tmp/importers" | grep -vxF -f "$tmp/touched" > "$tmp/importers.new"; mv "$tmp/importers.new" "$tmp/importers"
+# Each importer's package. Past a few packages the check is off: a change
+# to a file the whole monorepo imports (an enum everything reads) would
+# type-check every package twice in one tsgo, tens of gigabytes for an hour.
+# One file from each package is still opened, which loads it for the
+# references, and the cache says it went unchecked ($key.unchecked, the
+# package count), so a caller with no errors there is not read as fine.
+while read -r p; do
+  d=$(dirname "$p"); while [ ! -f "$d/package.json" ]; do case $d in .|/) break ;; esac; d=$(dirname "$d"); done
+  printf '%s\t%s\n' "$d" "$p"
+done < "$tmp/importers" > "$tmp/importers.pkg"
+npkg=$(cut -f1 "$tmp/importers.pkg" | sort -u | wc -l | tr -d ' ')
+check=1
+rm -f "$dir/$key.unchecked"
+if [ "$npkg" -gt 15 ]; then
+  check=0
+  awk -F'\t' '!seen[$1]++ { print $2 }' "$tmp/importers.pkg" > "$tmp/importers"
+  printf '%s\n' "$npkg" > "$dir/$key.unchecked"
+fi
+sed 's/$/\t/' "$tmp/importers" >> "$tmp/open"
+
+# The session, with the check.
+jq -Rn --arg root "$root" --arg check "$check" --rawfile q "$tmp/queries" --rawfile o "$tmp/open" --rawfile b "$tmp/base" --rawfile i "$tmp/importers" '
+  { root: $root, check: ($check == "1"),
+    importers: [$i | split("\n")[] | select(. != "")],
+    open: [$o | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: (.[1] // "" | select(. != "")) }],
+    base: [$b | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }],
+    queries: [$q | split("\n")[] | select(. != "") | split("\t") | { id: .[0], path: .[1], line: (.[2] | tonumber), name: .[3] }] }' > "$tmp/job"
+node "$share/lsp-references.mjs" < "$tmp/job" > "$tmp/out" 2>>"$dir/$key.err" || { : > "$file"; exit 0; }
+grep '^R' "$tmp/out" | cut -f2- > "$tmp/refs"
+grep '^D' "$tmp/out" | cut -f2- > "$tmp/diags"
+[ -s "$tmp/refs" ] || { : > "$file"; exit 0; }
+
+# The declaration around each reference and each error. A touched file is
+# read as the change has it; any other as it is on disk, which is what tsgo
+# saw. And each file's package.
+pkgof() {
+  d=$(dirname "$1")
+  while :; do
+    if [ -f "$d/package.json" ]; then
+      if [ "$d" = . ]; then jq -r '.name // "."' "$d/package.json" 2>/dev/null || echo .; else printf '%s\n' "$d"; fi
+      return
+    fi
+    case $d in .|/) echo .; return ;; esac
+    d=$(dirname "$d")
+  done
+}
+{ cut -f2 "$tmp/refs"; cut -f1 "$tmp/diags"; } | sort -u > "$tmp/files"
+while read -r p; do printf '%s\t%s\n' "$p" "$(pkgof "$p")"; done < "$tmp/files" > "$tmp/pkgs"
+# The same declarations the table is built from, so a reference lands in the
+# same definition seam would have named (seam --rules, seam's share/decls.jq).
+rules=$(seam --rules) seamshare=$(seam --share)
+mkdir "$tmp/tree"
+while read -r p; do
+  if [ -n "$head" ] && grep -qxF "$p" "$tmp/touched"; then mkdir -p "$tmp/tree/$(dirname "$p")"; git show "$head:$p" > "$tmp/tree/$p" 2>/dev/null
+  elif [ -f "$p" ]; then mkdir -p "$tmp/tree/$(dirname "$p")"; cp "$p" "$tmp/tree/$p"; fi
+done < "$tmp/files"
+(cd "$tmp/tree" && ast-grep scan --json=compact --inline-rules "$rules" . 2>/dev/null) | jq -r --arg side new -f "$seamshare/decls.jq" > "$tmp/decls"
+
+# Each reference to the innermost declaration holding it, a member named
+# with its class; none for an import line. Then one row a caller, the
+# symbol's own body and the tree's symbols left out, with the errors that
+# fall inside it; and an error in no caller, in something the change breaks
+# without its calling anything changed, a row of its own under the symbol
+# "-": the declaration holding it, or the file. By symbol, package, path
+# and line.
+awk -F'\t' '
+  BEGIN { OFS = "\t" }
+  FILENAME == ARGV[1] { n++; P[n] = $2; R[n] = $3; A[n] = $4 + 0; Z[n] = $5 + 0; NM[n] = $6; H[n] = $7; next }
+  FILENAME == ARGV[2] { changed[$1 "#" ($4 != "" ? $4 "." : "") $3] = 1; next }
+  FILENAME == ARGV[3] { pkg[$1] = $2; next }
+  FILENAME == ARGV[4] { nd++; DP[nd] = $1; DL[nd] = $2 + 0; DM[nd] = $3; next }
+  {
+    best = 0
+    for (i = 1; i <= n; i++) if (P[i] == $2 && R[i] != "export" && R[i] != "comment" && A[i] <= $3 && $3 <= Z[i] && (!best || Z[i] - A[i] < Z[best] - A[best])) best = i
+    if (!best) next
+    id = $2 "#" NM[best]
+    if (R[best] == "method" || R[best] == "field") {
+      cls = ""
+      for (i = 1; i <= n; i++) if (P[i] == $2 && R[i] == "class" && A[i] <= A[best] && Z[best] <= Z[i]) { cls = NM[i]; break }
+      id = $2 "#" cls "." NM[best]
+    }
+    if (id == $1 || (id in changed)) next
+    k = $1 SUBSEP id
+    if (!(k in seen)) { seen[k] = 1; m++; K[m] = k; SYM[m] = $1; CP[m] = $2; CL[m] = $3; CID[m] = id; CH[m] = H[best]; CS[m] = A[best]; CE[m] = Z[best] }
+    cnt[k]++
+  }
+  END {
+    for (x = 1; x <= m; x++) {
+      ne = 0; first = ""; all = ""
+      for (y = 1; y <= nd; y++) if (DP[y] == CP[x] && CS[x] <= DL[y] && DL[y] <= CE[x]) { if (!ne++) first = DL[y] ": " DM[y]; all = all (all == "" ? "" : "\036") DL[y] ": " DM[y]; held[y] = 1 }
+      print SYM[x], CP[x], CL[x], CID[x], CH[x], CS[x], CE[x], cnt[K[x]], ne, first, ((CP[x] in pkg) ? pkg[CP[x]] : "."), all
+    }
+    for (y = 1; y <= nd; y++) {
+      if (y in held) continue
+      best = 0
+      for (i = 1; i <= n; i++) if (P[i] == DP[y] && R[i] != "export" && R[i] != "comment" && A[i] <= DL[y] && DL[y] <= Z[i] && (!best || Z[i] - A[i] < Z[best] - A[best])) best = i
+      # No declaration holds it (a describe block is a call): the file, whole.
+      if (best) { id = DP[y] "#" NM[best]; h = H[best]; a = A[best]; z = Z[best] } else { id = DP[y]; h = DP[y]; a = 1; z = 999999 }
+      k = "-" SUBSEP id
+      if (!(k in bseen)) { bseen[k] = 1; b++; BID[b] = id; BP[b] = DP[y]; BL[b] = DL[y]; BH[b] = h; BS[b] = a; BZ[b] = z; BF[b] = DL[y] ": " DM[y] }
+      BA[k] = BA[k] ((k in BA) && BA[k] != "" ? "\036" : "") DL[y] ": " DM[y]
+      bcnt[k]++
+    }
+    for (x = 1; x <= b; x++) print "-", BP[x], BL[x], BID[x], BH[x], BS[x], BZ[x], 0, bcnt["-" SUBSEP BID[x]], BF[x], ((BP[x] in pkg) ? pkg[BP[x]] : "."), BA["-" SUBSEP BID[x]]
+  }' "$tmp/decls" "$table" "$tmp/pkgs" "$tmp/diags" "$tmp/refs" | sort -t "$(printf '\t')" -k1,1 -k11,11 -k2,2 -k6,6n > "$file.new"
+mv "$file.new" "$file"
+# The open picker reloads: a review's list is git-mr-files', with the
+# threads on each symbol; any other's is the symbol view's own.
+if [ -n "$GMR_IID" ]; then git-fzf-bg --landing git-mr-files --list "$GMR_IID" "$rev"
+else git-fzf-bg --landing git-symbols --rows "$rev"; fi
+exit 0

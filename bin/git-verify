@@ -1,0 +1,354 @@
+#!/bin/sh
+# git-verify <iid>                  gmr's V: verify an MR in a Cursor Cloud agent's VM
+# git-verify --branch <b> [iid]     gb's V: the same for a branch (its MR's run, if it has one)
+# git-verify --check <kind> <iid>   gmr's V, as fzf actions: only open MRs have it
+# git-verify --marks                {key: {verifying, status, verdict, head}} of every run, for gmr's and gb's rows
+# git-verify --artifacts <dir>      what a run brought back, in a picker (a in its progress view)
+# git-verify --artifact <file>      one of them, for that picker's preview
+# git-verify --attach <dir>        the report uploaded to the MR (a branch run: the branch's open MR) and linked at the end of its description (p in its progress view)
+# git-verify --keylines < <log>     the lines of test or build output that say how it went
+# git-verify --preview <iid> [b]    the verdict and where the evidence is, for the previews (b: gb's branch, when it has no MR)
+# git-verify-run <key>              the verification itself, in the background
+#
+# Two agents, one of which never grades its own work. Claude, here and
+# read-only, is the judge: it reads the change and writes what would prove it
+# works, then reads the tester's report and evidence and either sends it back
+# ("you never tried the empty state") or gives a verdict. A Cursor Cloud agent
+# is the tester: a VM with the repo's environment (its .cursor/), where it
+# can start the sandbox, click through the app and record it, and run tests.
+# otis carries what each says to the other, up to three rounds.
+#
+# The tester works from what is on origin, so the branch must be pushed. From
+# gb, V on a branch origin does not have as it is here asks once to push it
+# and verify, in place of the usual confirm, and pushes it (with a lease,
+# when origin's has been rewritten under it); a branch with an MR waits for
+# GitLab to see the push, since the run reads the MR's head from there. It is
+# told not to commit or push, and Cursor opens no MR for it, but a prompt is
+# all that holds it to that. It needs CURSOR_API_KEY (Cursor's dashboard,
+# Integrations, API keys) in the environment gb and gmr run in.
+#
+# A run keeps its state in <git dir>/otis-verify/<key>, key being the MR's iid
+# or b-<branch> (slashes as %) for a branch with none: the verdict in
+# verdict.json, the report in report.md (and report.html, for a browser:
+# git-verify-html), and the tester's screenshots and
+# videos under artifacts/. V starts one after a confirm and shows its progress
+# (git-claude-view); q goes back while it keeps going, x stops it (and the
+# tester's run), r verifies again. An alert (otis-notify) comes with the verdict.
+#
+# A closed laptop does not lose one. Sleep pauses it and a Claude turn that
+# broke off on waking is tried again; a run killed outright picks up from its
+# last finished step the next time gmr or gb draws, or V opens it, against the
+# same Cursor agent (git-verify-run says what it keeps).
+mode=
+case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--keylines|--attach) mode=$1; shift ;; esac
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+share=$(cd "$(dirname "$0")/../share" && pwd)
+top=$common/otis-verify
+pause() { printf '%s. press enter\n' "$1"; read -r _; exit 0; }
+
+. "$share/claude-run.sh"
+
+case $mode in
+  --check)
+    kind=$1 iid=$2
+    [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
+    [ "$kind" = merged ] && exec git-fzf-note "V verifies open MRs, and !$iid has merged"
+    echo "execute(git-verify $iid)"
+    exit 0
+    ;;
+  --marks)
+    # Whether one is going, how the last one ended, its verdict once it is
+    # over, and the commit it verified, so a row shows a verdict only while
+    # the MR is still there.
+    for dir in "$top"/*/; do
+      [ -d "$dir" ] || continue
+      dir=${dir%/}
+      verifying=false verdict=
+      running "$dir" && verifying=true
+      status=$(cat "$dir/status" 2>/dev/null)
+      [ "$status" = done ] && verdict=$(jq -r '.verdict // empty' "$dir/verdict.json" 2>/dev/null)
+      printf '%s\t%s\t%s\t%s\t%s\n' "${dir##*/}" "$verifying" "$status" "$verdict" "$(cat "$dir/head" 2>/dev/null)"
+    done | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4]}}] | add // {}'
+    exit 0
+    ;;
+  --preview)
+    d=$top/$1
+    [ -z "$1" ] && d="$top/b-$(printf '%s' "$2" | tr '/' '%')"
+    [ -d "$d" ] || exit 0
+    . "$share/palette.sh"
+    n=$(find "$d/artifacts" -type f 2>/dev/null | wc -l | tr -d ' ')
+    printf "\n${GK_ATTENTION}verification${GK_R}"
+    if running "$d"; then
+      printf "${GK_CONTEXT} · going · V shows progress${GK_R}\n"
+    else
+      printf "${GK_CONTEXT} · %s · V shows how it went%s%s${GK_R}\n" "$(cat "$d/status" 2>/dev/null || echo "stopped")" \
+        "$([ "$n" -gt 0 ] && echo ", a there lists its $n artifacts")" "$([ -s "$d/verdict.json" ] && echo ", h the report")"
+    fi
+    # The verdict once there is one, else the last thing the run said.
+    # Cursor's side, once, for a run that ended before it kept usage.json.
+    if [ ! -s "$d/usage.json" ] && [ -s "$d/agent" ] && [ -s "$d/status" ] && [ -n "$CURSOR_API_KEY" ]; then
+      printf 'user = "%s:"\n' "$CURSOR_API_KEY" | curl -sS -m 5 -K - "https://api.cursor.com/v1/agents/$(cat "$d/agent")/usage" 2>/dev/null |
+        jq -e 'select(.cost)' > "$d/usage.json.new" 2>/dev/null && mv "$d/usage.json.new" "$d/usage.json" || rm -f "$d/usage.json.new"
+    fi
+    spent=$(costs "$d")
+    [ -n "$spent" ] && printf "${GK_CONTEXT}cost%s${GK_R}\n" "$spent"
+    if [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ -s "$d/verdict.json" ]; then
+      # Each claim's artifacts are links (OSC 8; fzf passes them through, and
+      # Ghostty opens a file: one on click), and a shows them all.
+      { jq -r -L "$share" --slurpfile plan "$d/plan.json" --arg dir "$d/artifacts" --arg frames "$d/context/frames" '
+        include "otis";
+        def md: "\u0001" + gsub("\n"; "\u001f");
+        def link: (if startswith("frames/") then $frames + "/" + .[7:] else $dir + "/" + . end) as $f
+          | "\u001b]8;;file://" + $f + "\u001b\\" + . + "\u001b]8;;\u001b\\";
+        ($plan[0].criteria | map({(.id): .claim}) | add // {}) as $claims
+        | (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else context + "inconclusive" end) + r,
+          (.summary | md),
+          (.criteria[] | "", (if .result == "verified" then good + "✓ verified" elif .result == "failed" then bad + "✗ failed" else context + "? unverified" end)
+            + r + "  " + attention + .id + r,
+            (($claims[.id] // "") | md),
+            ("_" + .evidence + "_" | md),
+            (if ((.artifacts // []) | length) > 0 then "  " + elsewhere + ((.artifacts // []) | map(link) | join(" · ")) + r else empty end)),
+          (if (.concerns | length) > 0 then "", yours + "concerns" + r, (.concerns[] | "- " + . | md) else empty end)
+      ' "$d/verdict.json"
+      # The retrospective: what slowed either agent, and what to change where.
+      [ -s "$d/retro.json" ] && jq -r -L "$share" 'include "otis";
+        def md: "\u0001" + gsub("\n"; "\u001f");
+        "", attention + "looking back" + r, (.summary | md),
+        (if (.blockers | length) > 0 then "", context + "what got in the way" + r,
+          (.blockers[] | "- " + .who + ": " + .what + " (" + .cost + ")" | md) else empty end),
+        (if (.recommendations | length) > 0 then "", context + "what to change" + r,
+          (.recommendations[] | "- **" + .where + "** (" + .effort + "): " + .change | md) else empty end)
+      ' "$d/retro.json"
+      } | LC_ALL=C awk -v width="${FZF_PREVIEW_COLUMNS:-100}" "$(cat "$share/markdown.awk")"'
+        /^\001/ { md(substr($0, 2), width - 2, ""); next }
+        { print }'
+    else
+      last=$(jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -1)
+      [ -n "$last" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$last"
+    fi
+    exit 0
+    ;;
+  --artifacts)
+    # One row a file: what it is, its name and its size; the tester's own
+    # report for each round first, since it says what the rest are.
+    d=$1
+    . "$share/palette.sh"
+    list() {
+      for f in "$d"/context/report-*.md; do
+        [ -f "$f" ] || continue
+        round=${f##*report-}; round=${round%.md}
+        printf "${GK_ELSEWHERE}report${GK_R}    the tester's report, round %s\t%s\n" "$round" "$f"
+      done
+      # What the judge made of each claim, for files named after one (c1-...).
+      results=$(jq -r '.criteria[]? | "\(.id)\t\(.result)"' "$d/verdict.json" 2>/dev/null)
+      find "$d/artifacts" -type f 2>/dev/null | sort | while IFS= read -r f; do
+        case $f in
+          *.png|*.jpg|*.jpeg|*.gif|*.webp) kind="${GK_GOOD}image${GK_R}" ;;
+          *.mp4|*.webm|*.mov|*.mkv) kind="${GK_ATTENTION}video${GK_R}" ;;
+          *) kind="${GK_CONTEXT}text ${GK_R}" ;;
+        esac
+        name=${f#"$d/artifacts/"}
+        claim=$(printf '%s' "${name##*/}" | sed -n 's/^\(c[0-9][0-9]*\)[-_.].*/\1/p')
+        case $(printf '%s\n' "$results" | awk -F'\t' -v c="$claim" 'c != "" && $1 == c { print $2 }') in
+          verified) mark="${GK_GOOD}\342\234\223${GK_R}" ;;
+          failed)   mark="${GK_BAD}\342\234\227${GK_R}" ;;
+          unverified) mark="${GK_CONTEXT}?${GK_R}" ;;
+          *)        mark=" " ;;
+        esac
+        size=$(wc -c < "$f" | awk '{ s = $1; u = "B"; if (s >= 1048576) { s /= 1048576; u = "M" } else if (s >= 1024) { s /= 1024; u = "K" }
+          printf (u == "B" ? "%d%s" : "%.1f%s"), s, u }')
+        # The palette's colors are printf escapes, so they go in the format.
+        printf "$kind  $mark %s  ${GK_CONTEXT}%s${GK_R}\t%s\n" "$name" "$size" "$f"
+      done
+    }
+    rows=$(list)
+    [ -n "$rows" ] || { printf 'the tester brought nothing back. press enter\n'; read -r _; exit 0; }
+    printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (videos and images in their app; text in your editor),o=the folder in Finder,y=copy path' \
+      --ansi --delimiter='\t' --with-nth=1 \
+      --bind 'enter:execute(case {2} in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) otis-open {2} ;; *) otis-edit -R -- {2} ;; esac)' \
+      --bind "o:execute-silent(otis-open '$d/artifacts')" \
+      --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
+      --preview 'git-verify --artifact {2}' >/dev/null
+    exit 0
+    ;;
+  --attach)
+    # Only when you press p, after a confirm: the one thing a verification
+    # puts on GitLab. The file goes up as an upload of the project's (GitLab
+    # offers HTML as a download, which opens in the browser as it does here),
+    # and the description gains [verification](its link) at the end, in
+    # place of the one a last attach left there.
+    # A branch's run (b-<branch>, from gb's V) links from the MR the branch
+    # has since opened, if it has one.
+    d=${1%/} iid=${1##*/}
+    case $iid in
+      b-*)
+        b=$(printf '%s' "${iid#b-}" | tr '%' '/')
+        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        [ -n "$iid" ] || pause "$b has no open MR to link it from; gb's n opens one" ;;
+      *[!0-9]*|'') pause "only a verification of an MR has a description to link it from" ;;
+    esac
+    [ -s "$d/verdict.json" ] || pause "no verdict yet, so no report"
+    [ -s "$d/report.html" ] || git-verify-html "$d" || pause "could not write the report"
+    mr=$(glab api "projects/:fullpath/merge_requests/$iid") || pause "could not read !$iid from GitLab"
+    ask="Upload the report to !$iid and link it at the end of its description?"
+    [ "$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)" = "$(cat "$d/head")" ] ||
+      ask="!$iid has moved on since this verified $(head -c 10 "$d/head"). Link it anyway?"
+    git-confirm "$ask" || exit 0
+    tmp=$(mktemp -d) && cp "$d/report.html" "$tmp/verification-$iid.html" || exit 1
+    up=$(glab api "projects/:fullpath/uploads" --form "file=@$tmp/verification-$iid.html" 2>&1)
+    rm -rf "$tmp"
+    url=$(printf '%s' "$up" | jq -r '.url // empty' 2>/dev/null)
+    [ -n "$url" ] || pause "the upload failed: $(printf '%s' "$up" | head -c 200)"
+    printf '%s' "$mr" | jq --arg url "$url" '{description: ((.description // "")
+      | sub("\\s*\\[verification\\]\\(/uploads/[^)]*\\)\\s*$"; "")
+      | if . == "" then "" else . + "\n\n" end + "[verification](\($url))")}' > "$d/attach.json"
+    glab api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+      pause "the report is uploaded but the description was not changed: $(head -c 200 "$d/attach.err")"
+    rm -f "$d/attach.json" "$d/attach.err"
+    pause "linked from !$iid's description"
+    ;;
+  --keylines)
+    # Test and build output is mostly startup noise, and what it proves is
+    # in a handful of lines: those, the last 25 of them.
+    grep -E '(PASS|FAIL|passed|failed|✓|✗|[Ee]rror:|ERROR|Tests?:|Test Suites:|[Ee]xit( code)?[ :=]+[0-9]|Build completed|Executed [0-9])' |
+      grep -vE '^\[[WI]\] |NamespaceNotFound|deprecated' | tail -n 25
+    exit 0
+    ;;
+  --artifact)
+    f=$1
+    d=${f%/artifacts/*}; d=${d%/context/*}
+    cols=${FZF_PREVIEW_COLUMNS:-100} lines=${FZF_PREVIEW_LINES:-40}
+    . "$share/palette.sh"
+    # image <file> <lines>: drawn in the preview, as the terminal can.
+    image() {
+      if { [ "$TERM_PROGRAM" = ghostty ] || [ -n "$KITTY_WINDOW_ID" ]; } && command -v kitten >/dev/null; then
+        kitten icat --clear --transfer-mode=memory --unicode-placeholder --stdin=no --place="${cols}x$2@0x0" "$1" |
+          sed '$d' | sed "\$s/\$/$(printf '\033[m')/"
+      elif command -v chafa >/dev/null; then
+        chafa -s "${cols}x$2" "$1"
+      else
+        printf "${GK_CONTEXT}nothing here draws images (chafa); enter opens it${GK_R}\n"
+      fi
+    }
+    case $f in
+      *.png|*.jpg|*.jpeg|*.gif|*.webp)
+        printf "${GK_CONTEXT}%s · enter opens it${GK_R}\n" "${f##*/}"
+        image "$f" $((lines - 2)) ;;
+      *.mp4|*.webm|*.mov|*.mkv)
+        info=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of json "$f" 2>/dev/null |
+          jq -r '(.format.duration // "0" | tonumber | floor) as $s
+            | "\($s / 60 | floor):\($s % 60 | tostring | if length < 2 then "0" + . else . end) · \(.streams[0].width)x\(.streams[0].height)"' 2>/dev/null)
+        printf "${GK_ATTENTION}%s${GK_R}${GK_CONTEXT} · %s · enter plays it${GK_R}\n" "${f##*/}" "${info:-video}"
+        # A frame from the middle: one the judge looked at, else one taken now.
+        name=${f##*/}; name=${name%.*}
+        frame=$(ls "$d/context/frames/$name"-*.jpg 2>/dev/null | awk '{ a[NR] = $0 } END { if (NR) print a[int((NR + 1) / 2)] }')
+        if [ -z "$frame" ] && command -v ffmpeg >/dev/null; then
+          mkdir -p "$d/context/frames"
+          frame=$d/context/frames/$name-preview.jpg
+          ffmpeg -loglevel error -y -ss 1 -i "$f" -frames:v 1 -vf scale=960:-1 "$frame" 2>/dev/null || frame=
+        fi
+        [ -n "$frame" ] && image "$frame" $((lines - 2)) ;;
+      *.log|*.txt|*.out)
+        # Test and build output is mostly startup noise, and what it proves is
+        # in a handful of lines and at the end: those first, then the tail.
+        printf "${GK_ATTENTION}%s${GK_R}${GK_CONTEXT} · %s lines · enter opens it all${GK_R}\n\n" "${f##*/}" "$(wc -l < "$f" | tr -d ' ')"
+        key=$(git-verify --keylines < "$f")
+        if [ -n "$key" ]; then
+          printf "${GK_ELSEWHERE}what it says${GK_R}\n"
+          printf '%s\n' "$key" | awk -v g="$(printf "$GK_GOOD")" -v b="$(printf "$GK_BAD")" -v z="$(printf "$GK_R")" '
+            /FAIL|failed|✗|[Ee]rror|ERROR/ && !/ 0 failed|failed: 0|ERROR=0/ { print b $0 z; next }
+            /PASS|passed|✓/ { print g $0 z; next }
+            { print }'
+          printf '\n'
+        fi
+        printf "${GK_ELSEWHERE}how it ends${GK_R}\n"
+        tail -n $((lines - 6)) "$f" ;;
+      *.md)
+        # Through the environment: macOS awk refuses a newline in a -v value.
+        GK_TEXT_MD=$(cat "$f") LC_ALL=C awk -v width="$cols" "$(cat "$share/markdown.awk")"'
+          BEGIN { text = ENVIRON["GK_TEXT_MD"]; gsub("\n", "\037", text); md(text, width - 2, "") }' ;;
+      *)
+        if command -v bat >/dev/null; then
+          bat --color=always --theme="${OTIS_T_BAT:-ansi}" --style=plain --paging=never --terminal-width "$cols" "$f"
+        else
+          cat "$f"
+        fi ;;
+    esac
+    exit 0
+    ;;
+  --branch)
+    b=$1 iid=$2
+    [ -n "$b" ] || exit 0
+    if [ -n "$iid" ]; then set -- "$iid"; else set -- "b-$(printf '%s' "$b" | tr '/' '%')"; fi
+    ;;
+esac
+
+key=$1
+[ -n "$key" ] || exit 0
+d=$top/$key
+command -v claude >/dev/null || pause "V needs Claude Code (claude) for the judge"
+[ -n "$CURSOR_API_KEY" ] || pause "V needs CURSOR_API_KEY (Cursor dashboard, Integrations, API keys) exported in your shell"
+
+case $key in
+  b-*) what=${key#b-}; what=$(printf '%s' "$what" | tr '%' '/') ;;
+  *) what="!$key" ;;
+esac
+
+# gb's branch as origin has it against as it is here: nothing when they are
+# the same (or origin cannot be asked; the run says so), else the question
+# that replaces the confirm, and push, how to push it.
+unpushed() {
+  here=$(git rev-parse -q --verify "refs/heads/$b") || return 1
+  there=$(git ls-remote origin "refs/heads/$b" 2>/dev/null) || return 1
+  there=${there%%	*}
+  [ "$here" != "$there" ] || return 1
+  push="git push -u origin refs/heads/$b:refs/heads/$b"
+  if [ -z "$there" ]; then ask="origin has no $b. Push it"
+  elif git merge-base --is-ancestor "$there" "$here" 2>/dev/null; then ask="$b is ahead of origin. Push it"
+  else ask="$b and origin's ($(printf '%.8s' "$there")) have diverged. Force-push it, with a lease,"; push="$push --force-with-lease=refs/heads/$b:$there"; fi
+  ask="$ask then a Cursor Cloud agent tests it while Claude judges (about 15-30 minutes, billed by Cursor)?"
+}
+
+start() {
+  if [ -n "$b" ] && unpushed; then
+    git-confirm "$ask" || return 1
+    $push || pause "the push failed, so nothing was started"
+    # The run reads an MR's head from GitLab, which takes a moment to see
+    # a push.
+    if [ -n "$iid" ]; then
+      printf 'waiting for GitLab to see the push\n'
+      n=0
+      until [ "$(glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq -r .diff_refs.head_sha)" = "$here" ]; do
+        n=$((n + 1)); [ "$n" -le 30 ] || pause "GitLab has not seen the push after a minute; V again once it has"
+        sleep 2
+      done
+    fi
+  else
+    git-confirm "A Cursor Cloud agent tests $what while Claude judges (about 15-30 minutes, billed by Cursor)?" || return 1
+  fi
+  # The last run's tester, whose VM may still be up with everything set up:
+  # git-verify-run sends it the new commit instead of booting another.
+  prev=$(cat "$d/agent" 2>/dev/null)
+  rm -rf "$d"
+  mkdir -p "$d/context" || return 1
+  [ -n "$prev" ] && printf '%s\n' "$prev" > "$d/agent-prev"
+  date +%s > "$d/started"
+  printf 'Verifying %s\n' "$what" > "$d/title"
+  : > "$d/events.jsonl"
+  # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
+  printf '%s\n' git-verify-run "$key" > "$d/cmd"
+  pwd > "$d/cwd"
+  nohup git-verify-run "$key" </dev/null > "$d/log" 2>&1 &
+  echo $! > "$d/pid"
+}
+
+if [ ! -d "$d" ]; then
+  start || exit 0
+elif orphaned "$d"; then
+  resume "$d"
+fi
+while :; do
+  git-claude-view "$d"
+  [ $? -eq 3 ] || exit 0
+  start || exit 0
+done

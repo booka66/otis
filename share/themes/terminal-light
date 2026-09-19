@@ -1,0 +1,18 @@
+# Your terminal's own colors, for a light ground.
+attention=33
+good=32
+bad=31
+elsewhere=36
+yours=35
+text=39
+context=90
+faint=2
+main=34
+codebg=48;5;254
+errbg=48;5;224
+delta_syntax=ansi
+bat=ansi
+file=6
+rule=8
+light=1
+glow=light

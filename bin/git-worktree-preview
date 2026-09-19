@@ -1,0 +1,67 @@
+#!/bin/sh
+# git-worktree-preview <path> <branch> <kind> [iid] [ahead] [behind]: gw's preview. First the verdict,
+# the thing you came to find out: whether it can go, and if not, what is in the
+# way. Then what is uncommitted, and the branch as gb shows it
+# (git-branch-preview): its MR and its commits not on the base.
+p=$1 b=$2 kind=$3 iid=$4 ahead=$5 behind=$6
+[ -n "$p" ] || exit 0
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+
+printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "${p##*/}" "$(printf '%s' "$p" | sed "s#^$HOME#~#")"
+if [ ! -d "$p" ]; then
+  printf "${GK_BAD}the directory is gone${GK_R}; d clears git's record of it\n"
+  exit 0
+fi
+
+g=$(git -C "$p" rev-parse --absolute-git-dir)
+op=
+if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op="a rebase"
+elif [ -e "$g/MERGE_HEAD" ]; then op="a merge"
+elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op="a cherry-pick"
+elif [ -e "$g/REVERT_HEAD" ]; then op="a revert"
+fi
+# --no-optional-locks, as in git-worktree-list: never hold up a write there.
+dirty=$(git -C "$p" --no-optional-locks status --porcelain)
+n=0
+[ -n "$dirty" ] && n=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
+
+case $p in
+  "$(git-worktree-path main)")          role="the main checkout; every other worktree lives under it" ;;
+  "$(git-worktree-path named review)")  role="gmr moves this checkout to each MR you review; removing it means the next review checks out the repo again" ;;
+  "$(git-worktree-path named mine)")    role="gmr switches this checkout to your MRs that are not checked out anywhere else" ;;
+  *) case ${p##*/} in
+       claude-fix*)    role="one of Claude's, for fix runs (C in gmr or gb); a run moves it to the branch it works on" ;;
+       claude-review*) role="one of Claude's, for reviews (C in gmr); a review moves it to the MR it reads" ;;
+       *) role= ;;
+     esac ;;
+esac
+[ -n "$role" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$role"
+
+if [ -n "$op" ]; then
+  printf "${GK_BAD}%s is in progress here${GK_R}; finish or abort it there first\n" "$op"
+elif [ "$n" -gt 0 ]; then
+  printf "${GK_BAD}%s uncommitted${GK_R}, so d leaves it; commit, or gwip there\n" "$n"
+elif [ -n "$role" ]; then
+  :
+else
+  case $kind in
+    merged)   printf "${GK_GOOD}safe to remove${GK_R}: the MR merged and nothing here is uncommitted; d takes the branch too\n" ;;
+    closed)   printf "${GK_GOOD}safe to remove${GK_R}: the MR closed and nothing here is uncommitted; d takes the branch too\n" ;;
+    theirs)   printf "${GK_GOOD}safe to remove${GK_R}: someone else's MR, and GitLab has everything here; d takes the branch too\n" ;;
+    detached) printf "${GK_CONTEXT}clean, not on a branch${GK_R}\n" ;;
+    *)        printf "${GK_CONTEXT}clean; its commits stay on the branch if you remove it${GK_R}\n" ;;
+  esac
+fi
+
+if [ "$n" -gt 0 ]; then
+  printf '\n'
+  printf '%s\n' "$dirty" | head -12 | sed 's/^/  /'
+  [ "$n" -gt 12 ] && printf "  ${GK_CONTEXT}... %s more${GK_R}\n" "$((n - 12))"
+fi
+printf '\n'
+if [ -n "$b" ]; then
+  exec git-branch-preview "$b" "$kind" "" "" "$iid" "$ahead" "$behind"
+fi
+printf "${GK_CONTEXT}detached at${GK_R}\n"
+git -C "$p" log --color=always --format='%C(yellow)%h%C(reset) %s %C(dim)%cr%C(reset)' -8

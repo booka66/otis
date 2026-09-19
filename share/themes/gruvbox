@@ -1,0 +1,21 @@
+# Gruvbox dark: otis's first look.
+attention=38;2;250;189;47
+good=38;2;184;187;38
+bad=38;2;251;73;52
+elsewhere=38;2;131;165;152
+yours=38;2;254;128;25
+text=38;2;235;219;178
+context=38;2;146;131;116
+faint=38;2;102;92;84
+main=38;2;142;192;124
+codebg=48;2;60;56;54
+errbg=48;2;60;31;30
+delta_syntax=gruvbox-dark
+bat=gruvbox-dark
+file=#83a598
+rule=#665c54
+minus=#3c2022
+plus=#26332a
+minus_emph=#6b2f31
+plus_emph=#3f5a45
+glow=dark

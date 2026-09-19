@@ -1,0 +1,46 @@
+#!/bin/sh
+# git-preview-at <row>: read a delta-rendered diff on stdin and print the file
+# line showing at <row>, so enter can open an editor where you have scrolled
+# the preview to rather than at the file's first change.
+# git-preview-at --changed <row> <rows>: the same, but a changed line in view
+# wins: the first added line on the screen of <rows> rows from <row>, so enter
+# lands on the hunk you were looking at; with none in view, the line at <row>.
+#
+# delta numbers every row in its gutter: "old ⋮ new │ ..." in one column, or
+# side by side as "│ old │ ... │ new │ ...". These are the same columns
+# git-mr-file-preview reads to place comment threads under their lines.
+#
+# A row carrying no number of its own -- a hunk header, a comment thread
+# printed under a line, a wrapped continuation -- takes the last number above
+# it, so the answer is always a line you can actually see. A removed line has
+# only an old-side number and nothing in the file to open, so the nearest new
+# line above it wins; failing that (a diff that only removes) the old number is
+# better than nothing.
+changed=0
+[ "$1" = --changed ] && { changed=${3:-0}; set -- "$2"; }
+row=${1:-1}
+[ "$row" -gt 1 ] 2>/dev/null || exit 1
+awk -v want="$row" -v changed="$changed" '
+  NR > want + changed { exit }
+  {
+    s = $0
+    gsub(/\033\[[0-9;]*[A-Za-z]/, "", s)
+    if (index(s, "\342\224\202") == 0) next          # │
+    n = split(s, cols, "\342\224\202")
+    if (index(s, "\342\213\256") > 0) {              # ⋮, the one-column layout
+      split(cols[1], p, "\342\213\256"); old = p[1]; new = p[2]
+    } else if (n >= 5 && cols[1] == "") {            # side by side
+      old = cols[2]; new = cols[4]
+    } else next
+    gsub(/ /, "", old); gsub(/ /, "", new)
+    # An added line on the screen from want: no old number, a new one.
+    if (NR >= want && changed && hunk == "" && old == "" && new ~ /^[0-9]+$/) hunk = new
+    if (NR > want) next
+    if (new ~ /^[0-9]+$/) last = new
+    else if (old ~ /^[0-9]+$/) lastold = old
+  }
+  END {
+    if (hunk != "") print hunk
+    else if (last != "") print last
+    else if (lastold != "") print lastold
+  }'

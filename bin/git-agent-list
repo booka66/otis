@@ -1,0 +1,134 @@
+#!/bin/sh
+# git-agent-list                 one row per background run of Claude's in this repo, for gag
+# git-agent-list --open <dir> [<back>]  the fzf actions that open a run, and what to do on the way back
+# git-agent-list --forget <dir>  a finished run's directory removed, after a confirm (gag's d)
+# git-agent-list --data          every run as raw fields, for otis-list
+#
+# Every run keeps its state in a directory (share/claude-run.sh, git-claude-view):
+# reviews under gmr-claude, fix runs under gmr-fix, production watches under
+# gmr-watch and verifications under otis-verify, each named by what it is
+# about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
+# as a glyph, what kind of run, what it is about, when and how long, and its
+# last word to you; running ones first, then newest first. Then tab-separated
+# the run's directory, its kind, what it is about, and the row's identity for
+# --track. Runs the laptop killed are started again first (resume_all), as
+# gmr and gb do when they draw.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/claude-run.sh"
+common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
+
+# git-agent-list --open <dir> [<back>]: gag's enter, as fzf actions. Each run
+# opens through the command that starts its kind, as V, C and D do: a fix run
+# as its proposals (git-mr-fix, which shows the run itself while it is going),
+# the rest as their steps (git-claude-view), and r there starts it again, which
+# git-claude-view leaves to its caller (exit 3). Straight into git-claude-view,
+# r would do nothing. One with nothing to start it from opens as its steps.
+#
+# <back> is what the picker does once you leave what was opened, and defaults
+# to gag's own reload. A picker that is not gag passes its own, or it would
+# come back to somebody else's rows: otis does.
+if [ "$1" = --open ]; then
+  dir=$2 back=${3:-reload(git-agent-list)}
+  key=${dir##*/}
+  case ${dir%/*} in
+    */gmr-fix) echo "execute(git-mr-fix '$key' '$(cat "$dir/range" 2>/dev/null)')+$back" ;;
+    */otis-verify)
+      case $key in
+        b-*) echo "execute(git-verify --branch '$(printf '%s' "${key#b-}" | tr '%' '/')')+$back" ;;
+        *) echo "execute(git-verify '$key')+$back" ;;
+      esac ;;
+    */gmr-watch) echo "execute(git-mr-watch '$key')+$back" ;;
+    */gmr-claude)
+      # The range it reviewed, from what resume would run: git-mr-claude --run <iid> <range>.
+      range=$(sed -n 4p "$dir/cmd" 2>/dev/null)
+      if [ -n "$range" ]; then echo "execute(git-mr-claude '$key' '$range')+$back"
+      else echo "execute(git-claude-view '$dir')+$back"; fi ;;
+    *) echo "execute(git-claude-view '$dir')+$back" ;;
+  esac
+  exit 0
+fi
+if [ "$1" = --forget ]; then
+  dir=$2
+  [ -d "$dir" ] || exit 0
+  running "$dir" && { printf 'it is still running; x in its progress stops it. press enter\n'; read -r _; exit 0; }
+  git-confirm "forget $(cat "$dir/title" 2>/dev/null || basename "$dir")? its progress and what it brought back go" || exit 0
+  rm -rf "$dir"
+  exit 0
+fi
+
+# scan: every run, one tab-separated line each, unsorted and unformatted:
+# state, started, ended, kind, directory, its last word. --data is this on its
+# own, for otis-list, which shows the running ones on the dashboard and has
+# no business knowing where a run keeps itself.
+scan() {
+  for kind in gmr-claude gmr-fix gmr-watch otis-verify; do
+    for dir in "$common/$kind"/*/; do
+      [ -d "$dir" ] || continue
+      dir=${dir%/}
+      [ -s "$dir/started" ] || continue
+      state=$(cat "$dir/status" 2>/dev/null)
+      if [ -z "$state" ]; then
+        if running "$dir"; then state=running; else state=died; fi
+      fi
+      # Its last word: the run's own lines, not the agents', and never its
+      # (long) final result.
+      last=$(tail -n 300 "$dir/events.jsonl" 2>/dev/null | jq -r 'select(.type == "otis") | .text' 2>/dev/null | tail -1)
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$(cat "$dir/started")" "$(cat "$dir/ended" 2>/dev/null)" "$kind" "$dir" "$last"
+    done
+  done
+}
+# A read, so it never starts anything: gag resumes killed runs below, and
+# otis-list does its own before it asks.
+[ "$1" = --data ] && { scan; exit 0; }
+
+resume_all
+now=$(date +%s)
+scan |
+awk -F'\t' '{ print (($1 == "running") ? 0 : 1) "\t" $0 }' | sort -t'	' -k1,1n -k3,3nr | cut -f2- |
+awk -F'\t' -v now="$now" "$(cat "$share/rowfmt.awk")"'
+  function ago(t,   s) {
+    s = now - t
+    if (s < 60) return "just now"
+    if (s < 3600) return int(s / 60) "m ago"
+    if (s < 86400) return int(s / 3600) "h ago"
+    return int(s / 86400) "d ago"
+  }
+  function took(a, b,   s) {
+    s = b - a
+    if (s < 60) return s "s"
+    if (s < 3600) return int(s / 60) "m"
+    return int(s / 3600) "h " int((s % 3600) / 60) "m"
+  }
+  BEGIN {
+    label["gmr-claude"] = "review"; label["gmr-fix"] = "fixes"; label["gmr-watch"] = "watch"; label["otis-verify"] = "verify"
+    cols = ENVIRON["FZF_COLUMNS"] + 0
+    if (cols <= 0) cols = 100
+  }
+  {
+    state = $1; started = $2; ended = $3; kind = $4; dir = $5; last = $6
+    key = dir; sub(/.*\//, "", key)
+    what = key
+    retro = 0
+    if (what ~ /^v-/) { retro = 1; what = substr(what, 3) }
+    if (what ~ /^b-/) { what = substr(what, 3); gsub(/%/, "/", what) } else what = "!" what
+    if (retro) what = "retro " what
+    if (state == "running")      g = GK_YOURS "◌"
+    else if (state == "done")    g = GK_GOOD "✓"
+    else if (state == "stopped") g = GK_CONTEXT "■"
+    else                         g = GK_BAD "✗"
+    # A run that died has no end to date; it is placed by its start.
+    if (state == "running") when = "for " took(started, now)
+    else if (ended == "") when = ago(started)
+    else when = ago(ended) " · " took(started, ended)
+    if (state != "running" && state != "done") last = state (last == "" ? "" : ": " last)
+    left = 2 + 7 + 2 + 22 + 2 + 16 + 2
+    budget = gk_list_width(cols) - left
+    if (budget < 20) budget = 20
+    if (length(last) > budget) last = substr(last, 1, budget - 1) "…"
+    printf "%s%s %s%-7s%s  %s%s  %s%-16s%s  %s%s%s\t%s\t%s\t%s\t%s\n",
+      g, GK_R, GK_CONTEXT, label[kind], GK_R,
+      gk_path(what, 22, (state == "running") ? GK_TEXT : GK_CONTEXT), gk_rep(" ", 22 - (length(what) > 22 ? 22 : length(what))),
+      GK_FAINT, when, GK_R,
+      (state == "running") ? GK_TEXT : GK_CONTEXT, last, GK_R,
+      dir, label[kind], what, dir
+  }'

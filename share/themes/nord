@@ -1,0 +1,21 @@
+# Nord.
+attention=38;2;235;203;139
+good=38;2;163;190;140
+bad=38;2;191;97;106
+elsewhere=38;2;129;161;193
+yours=38;2;208;135;112
+text=38;2;216;222;233
+context=38;2;97;110;136
+faint=38;2;67;76;94
+main=38;2;136;192;208
+codebg=48;2;59;66;82
+errbg=48;2;72;60;72
+delta_syntax=Nord
+bat=Nord
+file=#81a1c1
+rule=#434c5e
+minus=#4b3d48
+plus=#45504f
+minus_emph=#684651
+plus_emph=#5d6b5e
+glow=dark

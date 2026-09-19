@@ -1,0 +1,66 @@
+#!/bin/sh
+# git-lock [--no-wait]   clear the way for a write to this worktree's index
+# git-lock --holder      print the git command holding the lock, if any
+#
+# exit 0 when no index.lock is in the way. A lock held by a running git command
+# in this worktree is waited on for up to 5 seconds (--no-wait skips that); a
+# lock nothing holds is stale, left by a crash, and is removed once it is at
+# least 5 seconds old. exit 1 when a git command is still writing after the
+# wait, or the lock is too new to call stale.
+#
+# Only git commands whose working directory is inside this worktree count as
+# holders; git -C <dir> run from elsewhere counts too, since git changes into
+# the worktree before it writes. Each worktree has its own index and lock, and
+# matching every git on the machine would call a stale lock busy whenever any
+# other repo was busy. A git whose working directory cannot be read counts, to
+# be safe. status and diff count too: they refresh the index, and in a big
+# checkout with a cold cache that can hold the lock longer than the age below.
+# The age covers whatever is not matched here, which holds the lock for
+# moments, while a crash leaves it there for good.
+gitdir=$(git rev-parse --git-dir) || exit 1
+top=$(git rev-parse --show-toplevel) || exit 1
+lock="$gitdir/index.lock"
+
+holder() {
+  # Options like -c k=v, -C <dir> and --no-pager can come before the command.
+  for pid in $(pgrep -f '(^|/)git( +-[^ ]+( +[^- ][^ ]*)?)* +(add|commit|rebase|merge|restore|reset|checkout|switch|stash|pull|cherry-pick|revert|apply|am|rm|mv|update-index|read-tree|status|diff|worktree|submodule|sparse-checkout)( |$)'); do
+    # Linux has /proc, which a system without lsof still has; macOS has lsof.
+    if [ -e "/proc/$pid/cwd" ]; then
+      cwd=$(readlink "/proc/$pid/cwd")
+    else
+      cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+    fi
+    case $cwd in
+      ""|"$top"|"$top"/*) ps -o command= -p "$pid" 2>/dev/null && return 0 ;;
+    esac
+  done
+  return 1
+}
+
+case $1 in
+  --holder) holder; exit 0 ;;
+  --no-wait) tries=0 ;;
+  *) tries=50 ;;
+esac
+
+[ -e "$lock" ] || exit 0
+while [ "$tries" -gt 0 ] && [ -e "$lock" ]; do
+  sleep 0.1
+  tries=$((tries - 1))
+done
+[ -e "$lock" ] || exit 0
+
+if running=$(holder); then
+  printf 'another git command is still writing here: %s\n' "$running" >&2
+  exit 1
+fi
+# date -r reads a file's mtime on both macOS and Linux. No mtime means the lock
+# went away meanwhile, which clears the way too.
+since=$(date -r "$lock" +%s 2>/dev/null) || exit 0
+age=$(( $(date +%s) - since ))
+if [ "$age" -lt 5 ]; then
+  printf 'index.lock is only %ss old and git may still be writing; try again in a few seconds\n' "$age" >&2
+  exit 1
+fi
+rm -f "$lock"
+printf 'removed a stale index.lock (no git command was using it)\n' >&2

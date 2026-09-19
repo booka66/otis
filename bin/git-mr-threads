@@ -1,0 +1,211 @@
+#!/bin/sh
+# git-mr-threads <iid> <range>                    picker of the threads no line shows
+# git-mr-threads --list <iid> <range>             its rows
+# git-mr-threads --show <id>                      one thread in full, its preview
+# git-mr-threads --overview <iid>                 unresolved threads on the MR, for gmr
+# git-mr-threads --open <id>                      reply in nvim, edit or delete there
+# git-mr-threads --resolve <iid> <range> <id> <resolvable> <resolved>
+# git-mr-threads --json <iid> <range> <reload>    every thread, placed, from the cache
+# git-mr-threads --refresh <iid> <reload>         refetch the cache now
+# git-mr-threads --fetch <iid> <range>            every thread, placed, fetched now
+#
+# An MR's comment threads with your unpublished drafts, as one list for the
+# file picker's preview (git-mr-file-preview), nvim (share/mr-comments.lua) and
+# this picker. Each thread gets .where, where it sits in the diff of <range>:
+#   line      on a line: side (new, or old for a removed line), path, line, and
+#             from, the first line of a multi-line comment
+#   outdated  on a line of a file that has changed since. GitLab leaves such a
+#             thread at the diff it was made on, and its line number there says
+#             nothing about the file now
+#   file      on a whole file
+#   overview  on the MR itself
+# A thread stays on its line while its side of the file is exactly the file it
+# was made on (the same blob), which also holds in your own checkout with
+# commits GitLab has not seen yet. Drafts of new threads are threads with
+# draft: true; a draft reply is a note with draft: true at the end of its thread.
+# A draft Claude wrote (git-mr-claude) has claude: true, on the thread and the
+# note, Claude for its author, and why, Claude's reasons for you, which stay on
+# this machine and are never part of the draft.
+#
+# The picker lists every thread but those on a line: the MR's overview, whole
+# files, and outdated ones. They come from per-MR caches (git-cached-json)
+# shared with the file picker, refetched when over 15 seconds old.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+# Each file's mtime to the nanosecond, one a line: stat says it differently
+# on Linux (-c %.9Y) and macOS (-f %Fm). Whole seconds would key a cache on
+# a file that changed within the second it was read (F, then its preview).
+if stat -c %Y / >/dev/null 2>&1; then mtimes() { stat -c %.9Y "$@"; }; else mtimes() { stat -f %Fm "$@"; }; fi
+st=$GIT_FZF_STATE
+mode=$1
+[ "${mode#--}" != "$mode" ] && shift
+iid=$1 range=$2
+api="projects/:fullpath/merge_requests/$iid"
+
+# Lines marked with \001 are comment text: wrapped to the preview and indented.
+wrap() {
+  awk -v width="$(( ${FZF_PREVIEW_COLUMNS:-100} - 4 ))" '
+    { gsub(/[\002-\010\013-\036\177]/, "") }
+    !/^\001/ { print; next }
+    {
+      n = split(substr($0, 2), words, " "); out = ""
+      for (i = 1; i <= n; i++) {
+        if (out != "" && length(out) + 1 + length(words[i]) > width) { print "  " out; out = words[i] }
+        else out = out (out == "" ? "" : " ") words[i]
+      }
+      print "  " out
+    }'
+}
+
+# place <discussions.json> <drafts.json>: the placed list.
+place() {
+  head=$(git rev-parse -q --verify "${range#*..}^{commit}")
+  base=$(git rev-parse -q --verify "${range%%..*}^{commit}")
+  # The blob each thread's file had where it was made, and has in <range>, in one git call.
+  specs=$(jq -r --arg h "$head" --arg b "$base" '.[]? | (.notes[0].position // .position) // empty
+    | if .new_line then "\(.head_sha):\(.new_path)", "\($h):\(.new_path)"
+      elif .old_line then "\(.base_sha):\(.old_path)", "\($b):\(.old_path)" else empty end' "$1" "$2" | sort -u)
+  objects=$(printf '%s\n' "$specs" | git cat-file --batch-check='%(objectname)')
+  # A missing object prints as "<spec> missing".
+  blobs=$(jq -n --arg s "$specs" --arg o "$objects" \
+    '[$s, $o | split("\n")] | transpose | map(select(.[1] | test(" ") | not) | {(.[0]): .[1]}) | add // {}')
+  claude=$(git-mr-claude --drafts "$iid" | jq -sc .)
+  jq --slurpfile drafts "$2" --argjson blobs "$blobs" --argjson claude "$claude" --argjson why "$(git-mr-claude --why "$iid")" \
+    --arg h "$head" --arg b "$base" '
+    def same($made; $now): $blobs[$made] as $x | $x != null and $x == $blobs[$now];
+    def draft_note: {id, draft: true, claude: (.id | IN($claude[])), why: $why[.id | tostring], body: .note, created_at: "", position}
+      | .author = {username: (if .claude then "Claude" else "you" end)};
+    ($drafts[0] // []) as $dr |
+    [ (.[] | select(.notes[0].system | not) | .id as $id
+        | .notes += [$dr[] | select(.discussion_id == $id) | draft_note]),
+      ($dr[] | select((.discussion_id // "") == "")
+        | {id: "draft-\(.id)", draft: true, claude: (.id | IN($claude[])), resolvable: false, resolved: false, notes: [draft_note]}) ]
+    | map(.notes[0].position as $p | .where =
+        if $p == null or ($p.new_path // $p.old_path) == null then {state: "overview"}
+        elif $p.new_line then
+          {state: (if same("\($p.head_sha):\($p.new_path)"; "\($h):\($p.new_path)") then "line" else "outdated" end),
+           side: "new", path: $p.new_path, line: $p.new_line, from: ($p.line_range.start.new_line // $p.new_line)}
+        elif $p.old_line then
+          {state: (if same("\($p.base_sha):\($p.old_path)"; "\($b):\($p.old_path)") then "line" else "outdated" end),
+           side: "old", path: $p.old_path, line: $p.old_line, from: ($p.line_range.start.old_line // $p.old_line)}
+        else {state: "file", path: ($p.new_path // $p.old_path)} end)' "$1"
+}
+
+case $mode in
+  --json)
+    reload=$3
+    threads=$(git-cached-json --no-wait "mr-$iid-threads" 15 "$reload" -- \
+      git-mr-pages "$api/discussions?per_page=100" 2>/dev/null) || exit 1
+    # Drafts not cached yet are only missing for a moment.
+    drafts=$(git-cached-json --no-wait "mr-$iid-drafts" 15 "$reload" -- \
+      git-mr-pages "$api/draft_notes?per_page=100" 2>/dev/null) || drafts=/dev/null
+    # Placing is a dozen processes, and the preview asks on every move, so a
+    # picker keeps the placed list for as long as what it was placed from
+    # (the two caches, Claude's drafts and reasons, the range) stays the same.
+    if [ -n "$GIT_FZF_STATE" ] && [ -d "$GIT_FZF_STATE" ]; then
+      claude="$(git rev-parse --path-format=absolute --git-common-dir)/gmr-claude"
+      placed=$GIT_FZF_STATE/placed.$(printf '%s' "$iid|$range|$(mtimes "$threads" "$drafts" "$claude/$iid.drafts" "$claude/$iid.why.jsonl" 2>/dev/null | tr '\n' ',')" | cksum | cut -d' ' -f1)
+      if [ ! -s "$placed" ]; then place "$threads" "$drafts" > "$placed.new" && mv -f "$placed.new" "$placed"; fi
+      cat "$placed"
+    else
+      place "$threads" "$drafts"
+    fi
+    ;;
+  --refresh)
+    reload=$2
+    git-cached-json --refresh "mr-$iid-threads" "$reload" -- git-mr-pages "$api/discussions?per_page=100" >/dev/null 2>&1
+    git-cached-json --refresh "mr-$iid-drafts" "$reload" -- git-mr-pages "$api/draft_notes?per_page=100" >/dev/null 2>&1
+    ;;
+  --fetch)
+    tmp=$(mktemp -d) || exit 1
+    trap 'rm -rf "$tmp"' EXIT
+    git-mr-pages "$api/discussions?per_page=100" > "$tmp/threads" &&
+      git-mr-pages "$api/draft_notes?per_page=100" > "$tmp/drafts" &&
+      place "$tmp/threads" "$tmp/drafts"
+    ;;
+  --list)
+    if ! git-mr-threads --json "$iid" "$range" "reload(git-mr-threads --list $iid $range)" > "$st/threads.json"; then
+      printf "${GK_CONTEXT}loading the threads ...${GK_R}\n" > "$st/footer"
+      exit 0
+    fi
+    if [ -s "$st/footer.error" ]; then
+      mv "$st/footer.error" "$st/footer"
+    else
+      jq -r -L "$share" 'include "otis"; map(select(.where.state != "line")) | context + "\(length) not on a line of the diff, "
+        + "\(map(select(.resolvable and (.resolved | not))) | length) unresolved" + r' "$st/threads.json" > "$st/footer"
+    fi
+    # Unresolved first, then drafts, comments that cannot be resolved, and resolved.
+    jq -r -L "$share" '
+      include "otis";
+      map(select(.where.state != "line"))
+      | sort_by(if .draft then 1 elif .resolvable | not then 2 elif .resolved then 3 else 0 end)[]
+      | .notes[0] as $n |
+      [ (if .draft then yours + "✎ draft   "
+         elif .resolvable | not then "          "
+         elif .resolved then context + "✓ resolved"
+         else elsewhere + " open    " end) + r + "  "
+          + (if .where.state == "overview" then context + "overview"
+             elif .where.state == "file" then elsewhere + .where.path
+             else attention + "outdated " + elsewhere + "\(.where.path):\(.where.line)" end) + r + "  "
+          + attention + $n.author.username + r + "  "
+          + text + ($n.body | gsub("[\t\n]+"; " ") | .[0:120]) + r
+          + (if (.notes | length) > 1 then context + "  +\(.notes | length - 1)" + r else "" end),
+        .id, (.resolvable | tostring), (.resolved | tostring), ($n.id | tostring)
+      ] | join("\t")' "$st/threads.json"
+    ;;
+  --show)
+    jq -r -L "$share" --arg id "$1" '
+      include "otis";
+      .[] | select(.id == $id) |
+      context + (if .where.state == "overview" then "on the MR"
+        elif .where.state == "file" then "on the file " + .where.path
+        else "outdated: was \(if .where.side == "old" then "removed line" else "line" end) \(.where.line) of \(.where.path)" end)
+        + (if .draft then " · draft, published when you submit"
+           elif .resolved then " · resolved" elif .resolvable then " · unresolved" else "" end) + r,
+      (.notes[] | "", attention + .author.username + r
+        + context + (if .draft then " · draft" else " · " + .created_at[0:10] end) + r,
+        (.body | split("\n")[] | "\u0001" + .))' "$st/threads.json" | wrap
+    ;;
+  --overview)
+    # gmr's preview of an MR: its unresolved threads on the MR itself, which
+    # no file shows. A first look fetches them and redraws the preview.
+    json=$(git-cached-json --no-wait "mr-$iid-threads" 15 refresh-preview -- \
+      git-mr-pages "$api/discussions?per_page=100" 2>/dev/null) || exit 0
+    jq -r -L "$share" '
+      include "otis";
+      map(select(.resolvable and (.resolved | not) and .notes[0].position == null))
+      | select(length > 0)
+      | "", yours + " \(length) unresolved on the MR itself" + r,
+        (.[] | "", attention + .notes[0].author.username + r + context + " · " + .notes[0].created_at[0:10]
+            + (if (.notes | length) > 1 then " · \(.notes | length - 1) repl\(if (.notes | length) == 2 then "y" else "ies" end)" else "" end) + r,
+          (.notes[0].body | split("\n")[] | "\u0001" + .))' "$json" | wrap
+    ;;
+  --open)
+    # nvim for its compose window: replying there is a draft or not the same as
+    # on a line, and your own comments can be edited and deleted.
+    env -u NVIM_DIFF_BASE GMR_THREAD="$1" nvim -c "luafile $share/mr-comments.lua"
+    ;;
+  --resolve)
+    id=$3 resolvable=$4 resolved=$5
+    [ "$resolvable" = true ] || exec git-fzf-note "only a thread can be resolved, and this is a single comment or a draft"
+    if [ "$resolved" = true ]; then to=false; else to=true; fi
+    if response=$(glab api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
+      git-mr-threads --refresh "$iid" "reload(git-mr-threads --list $iid $range)"
+    else
+      git-fzf-error "resolve the thread" "$response"
+    fi
+    echo "reload(git-mr-threads --list $iid $range)"
+    ;;
+  *)
+    list="git-mr-threads --list $iid $range"
+    git-fzf "!$iid threads " 'enter=reply / edit in nvim,r=resolve or unresolve,w=web,u=refresh' \
+      --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
+      --bind "start:reload($list)" \
+      --bind "enter:execute(git-mr-threads --open {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --bind "r:transform(git-mr-threads --resolve $iid $range {2} {3} {4})" \
+      --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\"#note_{5})" \
+      --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --preview "git-mr-threads --show {2}" </dev/null >/dev/null
+    exit 0
+    ;;
+esac

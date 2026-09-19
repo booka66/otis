@@ -1,0 +1,22 @@
+#!/bin/sh
+# git-ci-do <jobs | retry | new | pipeline> <pipeline id> <iid> <pipeline url>
+# gmr's pipeline keys as fzf actions for a transform binding; an MR without a
+# pipeline gets a footer note instead of a screen to dismiss.
+#
+# A merged row's pipeline is a main pipeline (the deploy's, or the MR's own),
+# so retry refuses it: it would rerun the whole e2e on an old main commit whose
+# deploy then refuses to run behind production. new starts a fresh pipeline for
+# an open MR (git-ci-run), and needs no pipeline to exist.
+action=$1 id=$2 iid=$3 url=$4
+if { [ "$action" = retry ] || [ "$action" = new ]; } &&
+  jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; then
+  exec git-fzf-note "!$iid is merged; R and N are for open MRs' pipelines, not main's"
+fi
+[ -n "$iid" ] || exec git-fzf-note "no MR on that row"
+[ "$action" = new ] && exec echo "execute(git-ci-run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+[ -n "$id" ] || exec git-fzf-note "!$iid has no pipeline yet"
+case $action in
+  jobs)     echo "execute(git-ci-jobs $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+  retry)    echo "execute(git-ci-retry $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+  pipeline) echo "execute-silent(otis-open $url)" ;;
+esac

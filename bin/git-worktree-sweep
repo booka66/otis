@@ -1,0 +1,38 @@
+#!/bin/sh
+# git-worktree-sweep: remove the worktrees gw would mark safe, on its own, and
+# say what went. _git_sweep in git.zsh runs it once an hour per repo, in the
+# background, and shows each line as an alert.
+#
+# Safe is gw's rule (git-worktree-list): the branch's MR merged or closed, or
+# someone else's with nothing local (git-branch-facts, refreshed first), and
+# never the main checkout or otis's own (gmr's review and mine; Claude's pool
+# is detached, so it never has a branch to judge by). Two more things keep a
+# worktree: a shell sitting in it, which _git_autofetch's stamp shows, touched
+# from every prompt there and at most five minutes old, so one under half an
+# hour means someone is there; and anything uncommitted or untracked, which
+# git worktree remove refuses on by itself. The worktree goes to the Trash
+# (git-worktree-trash), so its ignored files are not lost; the branch goes
+# on gb's M terms, as gw's d does, and the line says how to bring it back. A
+# worktree whose directory is gone is left for gw: git worktree prune would
+# also unregister any worktree on a volume that is merely unmounted.
+main=$(git-worktree-path main) || exit 1
+cd "$main" || exit 1
+st=$(mktemp -d) && trap 'rm -rf "$st"' EXIT
+review=$(git-worktree-path named review) mine=$(git-worktree-path named mine)
+GIT_FZF_STATE=$st git-branch-facts --wait 2>/dev/null | awk -F'\t' -v OFS='\t' '
+  $1 == "WT"     { n++; path[n] = $2; branch[n] = $3 }
+  $1 == "BRANCH" { kind[$2] = $3 }
+  END { for (i = 1; i <= n; i++) if (branch[i] != "") print path[i], branch[i], kind[branch[i]] }' |
+while IFS="$(printf '\t')" read -r p b kind; do
+  [ "$p" = "$main" ] || [ "$p" = "$review" ] || [ "$p" = "$mine" ] && continue
+  case $kind in merged|closed|theirs) ;; *) continue ;; esac
+  gd=$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null) || continue
+  [ -n "$(find "$gd/autofetch-stamp" -mmin -30 2>/dev/null)" ] && continue
+  git-worktree-trash "$p" >/dev/null 2>&1 || continue
+  sha=$(git rev-parse --short "$b")
+  if git branch -q -D "$b" 2>/dev/null; then
+    printf '%s and its branch %s (%s) · restore: git branch %s %s\n' "${p##*/}" "$b" "$kind" "$b" "$sha"
+  else
+    printf '%s (%s)\n' "${p##*/}" "$kind"
+  fi
+done

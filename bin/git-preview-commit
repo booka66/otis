@@ -1,0 +1,79 @@
+#!/bin/sh
+# Preview one commit through delta (git-delta): message, stat and patch. Paths
+# after the sha narrow it to just those files' diff, with no message or stat,
+# for the file picker in git-commit-open. The sha may also be a range
+# (base..head, or main...branch): with paths that file's diff, without them the
+# whole range's patch. One path the sha added or deleted shows as the file
+# itself, as the sha has it or as it was before (bat, headed added or deleted,
+# two header lines then one row a line, unwrapped, which git-commit-open
+# counts on to open it where the preview is scrolled), unless --diff (git-mr-file-preview, which prints comment threads under
+# delta's line numbers). --tests-toggle (gl, gb) leaves test files
+# out of the stat and patch while git-test-files has them hidden, with a note saying
+# how many.
+#
+# A merge commit shows what it brought in, its diff against its first parent:
+# git show's default for a merge is only the lines both sides touched, which is
+# usually nothing, and on origin/main nearly every commit is a GitLab merge.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+filter=0 diff=0
+while :; do
+  case $1 in
+    --tests-toggle) filter=1; shift ;;
+    --diff) diff=1; shift ;;
+    *) break ;;
+  esac
+done
+sha=$1
+[ -n "$sha" ] || exit 0
+shift
+# before: where a deleted file still is, a commit's first parent or a range's
+# base (its merge base with three dots); git-commit-open's, the same.
+before() {
+  case $sha in
+    *...*) git merge-base "${sha%%...*}" "${sha##*...}" ;;
+    *..*)  printf '%s\n' "${sha%%..*}" ;;
+    *)     printf '%s^\n' "$sha" ;;
+  esac
+}
+after() { printf '%s\n' "${sha##*..}"; }
+# status <path>: A, D, M... as the sha changed it.
+status() {
+  case $sha in
+    *..*) git diff --name-status --no-renames "$sha" -- "$1" ;;
+    *)    git show --format= --name-status --no-renames --diff-merges=first-parent "$sha" -- "$1" ;;
+  esac | cut -c1
+}
+plain() {
+  . "$share/palette.sh"
+  printf "$1%s${GK_R}\n\n" "$2"
+  git show "$3" 2>/dev/null |
+    BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --line-range=:400 --wrap=never --file-name "$4" 2>/dev/null
+}
+if [ $# -eq 1 ] && [ $diff -eq 0 ]; then
+  case $(status "$1") in
+    D) plain "$GK_BAD" deleted "$(before):$1" "$1"; exit 0 ;;
+    A) plain "$GK_GOOD" added "$(after):$1" "$1"; exit 0 ;;
+  esac
+fi
+if [ $# -gt 0 ]; then
+  case $sha in
+    *..*) git diff "$sha" -- "$@" ;;
+    *)    git show --format= --patch --diff-merges=first-parent "$sha" -- "$@" ;;
+  esac
+else
+  case $sha in
+    *..*) changes() { git diff --patch "$@"; } ; names() { git diff --name-only "$sha"; } ;;
+    *)    changes() { git show --stat --patch --diff-merges=first-parent "$@"; } ; names() { git show --format= --name-only --diff-merges=first-parent "$sha"; } ;;
+  esac
+  if [ $filter -eq 1 ] && git-test-files hidden; then
+    n=$(names | git-test-files count)
+    [ "$n" -eq 1 ] && printf '1 test file hidden · t shows it\n\n'
+    [ "$n" -gt 1 ] && printf '%s test files hidden · t shows them\n\n' "$n"
+    # The excludes are globs; keep the shell from expanding them.
+    set -f
+    changes "$sha" -- :/ $(git-test-files excludes)
+  else
+    changes "$sha"
+  fi
+fi 2>/dev/null |
+  git-delta

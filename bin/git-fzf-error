@@ -1,0 +1,19 @@
+#!/bin/sh
+# git-fzf-error <what failed> <raw output>
+# Make a failed GitLab call readable. The footer gets one short line saying what
+# failed and that ? shows why; the ? help view shows GitLab's own message in
+# full, pulled out of the JSON it answers with. The list command moves
+# footer.error into place on the next reload.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+what=$1 raw=$2
+json=$(printf '%s' "$raw" | grep -o '{.*}' | head -1)
+msg=$(printf '%s' "$json" | jq -r '
+  (.message // .error // .error_description // empty)
+  | if type == "string" then .
+    elif type == "array" then join("; ")
+    else to_entries | map("\(.key): \(.value | if type == "array" then join(", ") else tostring end)") | join("; ")
+    end' 2>/dev/null)
+[ -n "$msg" ] || msg=$(printf '%s' "$raw" | head -5)
+printf "${GK_BAD}could not %s · ? shows why${GK_R}\n" "$what" > "$GIT_FZF_STATE/footer.error"
+printf '%s\n' "$msg" > "$GIT_FZF_STATE/last-error"

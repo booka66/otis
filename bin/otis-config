@@ -1,0 +1,283 @@
+#!/bin/sh
+# otis-config <key>: one setting, from git config otis.<key> where there is
+# one, else from the repo's own .otis, else worked out from the repo. Every
+# script asks here, so the GitLab host, the project, the default branch and
+# the deploy jobs are decided in one place, and another project changes them
+# with git config alone.
+#
+#   host         the GitLab host: otis.host, else the origin remote's host, else gitlab.com
+#   url          https://<host>
+#   project      the project's path on GitLab (group/repo): otis.project, else the origin remote's path
+#   main         the default branch's name: otis.mainBranch, else what origin/HEAD names, else main
+#   base         what a branch is measured against: origin/<main> if it exists, else <main>, else HEAD
+#   gateJobs     JSON list of CI jobs that are approval gates rather than checks of the code,
+#                so a pipeline failing only on them is waiting, not broken: every otis.gateJob
+#   deployEnv    the GitLab environment production deploys go to: otis.deployEnv
+#   deployJob    the job that deploys it: otis.deployJob
+#   rollbackJob  the job that rolls it back: otis.rollbackJob
+#   datadogEnv   the env tag production carries in Datadog: otis.datadogEnv
+#   readyLabel   the label an MR gets when gmr's d marks it ready, and loses when d makes it a draft
+#                again: otis.readyLabel, else ready-for-ci; git config otis.readyLabel "" for none
+#   cursorEnv    the Cursor Cloud environment V's tester runs in, by its dashboard name: otis.cursorEnv, else the repo's own
+#   verifyRetro  exit 0 when a verification ends with a retrospective by a fresh Claude on what slowed
+#                either agent and what to change (git config otis.verifyRetro false turns it off); on by default
+#   checkInModel  the model the judge's looks in run on (a claude --model value, e.g. sonnet), for cost: otis.checkInModel, else the judge's own
+#   verifyCheckIn  minutes between the judge's looks at what V's tester is doing, 0 for never: otis.verifyCheckIn, else 5
+#   cursorModel  the model V's Cursor Cloud tester runs, an id from Cursor's GET /v1/models with its parameters after a colon
+#                (gpt-5.6-luna:reasoning=high): otis.cursorModel, else Cursor's default
+#   phone        the Bandwidth number that stands in for the customer in V, which the tester drives: otis.phone
+#   phoneAccount the Bandwidth account that number belongs to, its id: otis.phoneAccount
+#   phoneApp     the Bandwidth messaging application that number is on, its id: otis.phoneApp
+#   phoneInbox   the Hookdeck source that application's callbacks land in (src_...): otis.phoneInbox
+#   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
+#                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
+#   worktrees    where otis puts its worktrees, under the main checkout: otis.worktrees
+#   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim
+#   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the
+#                principle behind it, for you alone (git config --global otis.lessons true); off by default
+#   gitlab       exit 0 when origin is on GitLab: its host is <host>, or has gitlab in its name (ends the run, so ask it alone)
+#
+# No key opens every one in a picker, with its value and where that came
+# from: the git config scope that set it (local, global), $OTIS_EDITOR, or
+# default for one worked out or left unset; there it is set and unset.
+#
+# Several keys at once print one value a line, in the order asked, which is one
+# process where a list script used to spend five: otis-config project url base.
+# Only keys that answer with a value; gitlab, lessons and verifyRetro answer
+# with an exit status, so they are asked on their own.
+#
+# A team keeps what is true of its repo for everyone (its CI's gate and deploy
+# jobs, its Datadog env, its Cursor environment, its phone) in .otis at the
+# repo's top, in git config's format, committed:
+#
+#   [otis]
+#     gateJob = approval-check
+#     deployJob = deploy-production
+#
+# Your own git config wins over it. Only the settings named in shared() are
+# read from it: a repo you clone must not be able to choose the commands
+# Claude may run (claudeCommand), your editor, or where worktrees go.
+shared() {
+  case $1 in
+    host | project | mainBranch | gateJob | deployEnv | deployJob | rollbackJob | datadogEnv | readyLabel | \
+      cursorEnv | cursorModel | verifyCheckIn | checkInModel | verifyRetro | phone | phoneAccount | phoneApp | phoneInbox) ;;
+    *) return 1 ;;
+  esac
+  if [ -z "$repofile" ]; then
+    repofile=$(git rev-parse --show-toplevel 2>/dev/null)/.otis
+  fi
+  [ -f "$repofile" ]
+}
+# git config <how> otis.<name>: yours, else the repo's .otis where shared()
+# lets it say.
+layered() {
+  how=$1 n=$2
+  git config $how "otis.$n" 2>/dev/null || { shared "$n" && git config --file "$repofile" $how "otis.$n" 2>/dev/null; }
+}
+cfg() { layered --get "$1"; }
+
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro phone phoneAccount phoneApp phoneInbox claudeCommands worktrees editor lessons gitlab'
+
+# The origin remote's host and path, from either URL form:
+# https://host/group/repo.git or git@host:group/repo.git. Worked out once:
+# project and url both want it, and asking git twice for the same remote is
+# most of what a multi-key call used to cost.
+origin_parts() {
+  if [ -z "$origin_done" ]; then
+    origin_done=1 origin_rc=1 host= path=
+    if url=$(git remote get-url origin 2>/dev/null); then
+      rest=
+      case $url in
+        *://*) rest=${url#*://}; rest=${rest#*@} ;;
+        *@*:*) rest=${url#*@}; rest=$(printf '%s' "$rest" | sed 's#:#/#') ;;
+        [!/]*:*) rest=$(printf '%s' "$url" | sed 's#:#/#') ;;
+      esac
+      if [ -n "$rest" ]; then
+        host=${rest%%/*}; host=${host%%:*}
+        path=${rest#*/}; path=${path%.git}
+        origin_rc=0
+      fi
+    fi
+  fi
+  return $origin_rc
+}
+host() { cfg host || { origin_parts && printf '%s\n' "$host"; } || echo gitlab.com; }
+# Also worked out once: base asks for it, and so may the same call.
+main() {
+  if [ -z "$main_done" ]; then
+    main_done=1 main_memo=main
+    if m=$(cfg mainBranch); then main_memo=$m
+    elif d=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then main_memo=${d#origin/}
+    fi
+  fi
+  printf '%s\n' "$main_memo"
+}
+
+one() {
+  case $1 in
+    host) host ;;
+    url) printf 'https://%s\n' "$(host)" ;;
+    project) cfg project || { origin_parts && printf '%s\n' "$path"; } ;;
+    main) main ;;
+    base)
+      m=$(main)
+      for ref in "origin/$m" "$m"; do
+        git rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1 && { printf '%s\n' "$ref"; return 0; }
+      done
+      echo HEAD ;;
+    gateJobs)
+      layered --get-all gateJob | jq -R 'select(. != "")' | jq -sc . ;;
+    deployEnv) cfg deployEnv || echo production ;;
+    deployJob) cfg deployJob || echo deploy ;;
+    rollbackJob) cfg rollbackJob || echo rollback ;;
+    datadogEnv) cfg datadogEnv || echo production ;;
+    readyLabel) cfg readyLabel || echo ready-for-ci ;;
+    cursorEnv) cfg cursorEnv ;;
+    cursorModel) cfg cursorModel ;;
+    verifyCheckIn) cfg verifyCheckIn || echo 5 ;;
+    checkInModel) cfg checkInModel ;;
+    verifyRetro) [ "$(layered '--type=bool --get' verifyRetro || echo true)" = true ] ;;
+    phone) cfg phone ;;
+    phoneAccount) cfg phoneAccount ;;
+    phoneApp) cfg phoneApp ;;
+    phoneInbox) cfg phoneInbox ;;
+    claudeCommands) git config --get-all otis.claudeCommand 2>/dev/null | grep -v '^$' ;;
+    worktrees) cfg worktrees || echo .claude/worktrees ;;
+    editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;
+    lessons) [ "$(git config --type=bool --get otis.lessons 2>/dev/null)" = true ] ;;
+    gitlab)
+      origin_parts || exit 1
+      [ "$host" = "$(cfg host)" ] && exit 0
+      case $host in *gitlab*) exit 0 ;; *) exit 1 ;; esac ;;
+    *) echo "usage: otis-config [$(printf '%s' "$keys" | sed 's/ / | /g')]" >&2; exit 2 ;;
+  esac
+}
+
+# The git config name behind a key: url and base follow host and mainBranch,
+# and gitlab, worked out from origin alone, has none.
+gitname() {
+  case $1 in
+    url) echo host ;; main | base) echo mainBranch ;; gateJobs) echo gateJob ;;
+    claudeCommands) echo claudeCommand ;; gitlab) ;; *) echo "$1" ;;
+  esac
+}
+
+# The git config scope a key's value came from, or default.
+source_of() {
+  [ "$1" = editor ] && [ -n "$OTIS_EDITOR" ] && { echo OTIS_EDITOR; return; }
+  n=$(gitname "$1") s=
+  [ -n "$n" ] && s=$(git config --show-scope --get-all "otis.$n" 2>/dev/null | tail -1 | cut -f1)
+  [ -z "$s" ] && [ -n "$n" ] && shared "$n" && git config --file "$repofile" --get-all "otis.$n" >/dev/null 2>&1 && s=.otis
+  echo "${s:-default}"
+}
+
+case $1 in
+  # Every key, its source and its value, a row a key with the key after a tab.
+  --rows)
+    . "$(dirname "$0")/../share/palette.sh"
+    for key in $keys; do
+      case $key in
+        verifyRetro | lessons | gitlab) (one "$key") && v=yes || v=no ;;
+        *) v=$(one "$key" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }') ;;
+      esac
+      s=$(source_of "$key")
+      if [ "$s" = default ]; then
+        printf "${GK_TEXT}%-15s${GK_R} ${GK_FAINT}%-12s${GK_R} ${GK_CONTEXT}%s${GK_R}\t%s\n" "$key" "$s" "${v:-(unset)}" "$key"
+      else
+        printf "${GK_TEXT}%-15s${GK_R} ${GK_ELSEWHERE}%-12s${GK_R} ${GK_ATTENTION}%s${GK_R}\t%s\n" "$key" "$s" "$v" "$key"
+      fi
+    done
+    exit 0 ;;
+  --about)
+    awk -v k="$2" '
+      /^#   [A-Za-z]/ { on = ($2 == k); if (on) { sub(/^#   [A-Za-z]+ +/, ""); print }; next }
+      /^#     / && on { sub(/^# +/, ""); print; next }
+      /^[^#]/ { exit }
+      { on = 0 }' "$0"
+    n=$(gitname "$2")
+    echo
+    if [ -z "$n" ]; then
+      echo "Worked out from origin; nothing to set."
+    else
+      o=$(git config --show-origin --get-all "otis.$n" 2>/dev/null)
+      shared "$n" && o="$o
+$(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
+      if [ -n "$(printf '%s' "$o" | tr -d '\n')" ]; then
+        printf '%s\n' "$o" | awk -F'\t' -v n="otis.$n" 'NF { print $1 "   " n " = " $2 }'
+      else
+        echo "otis.$n is not set, so this is the default."
+      fi
+    fi
+    exit 0 ;;
+  # The fzf actions for enter and E: a note where there is nothing to set, else
+  # the edit in the terminal, then the rows again. Set for every repo under a
+  # value of this repo's own, the note says the repo's own still wins.
+  --set)
+    n=$(gitname "$3")
+    [ -n "$n" ] || exec git-fzf-note "$3 is worked out from origin; set host instead"
+    printf 'execute(otis-config --prompt %s %s)+reload(otis-config --rows)' "$2" "$3"
+    if [ "$2" = global ] && git config --local --get "otis.$n" >/dev/null 2>&1; then
+      printf '+%s' "$(git-fzf-note "set for every repo, but this repo's own otis.$n still wins here")"
+    fi
+    echo
+    exit 0 ;;
+  # Back to the default: unset in this repo and for every repo, since a
+  # global value left behind would be what applies, not the default.
+  --unset)
+    n=$(gitname "$2") gone=
+    [ -n "$n" ] || exec git-fzf-note "$2 is worked out from origin; nothing to unset"
+    for s in local global; do
+      git config "--$s" --unset-all "otis.$n" 2>/dev/null && gone="$gone $s"
+    done
+    now="back to the default"
+    [ "$(source_of "$2")" = .otis ] && now="now the repo's .otis value, which is changed in that file"
+    [ -n "$gone" ] || exec git-fzf-note "$2 is $now"
+    printf 'reload(otis-config --rows)+%s\n' "$(git-fzf-note "otis.$n $now (unset:$gone)")"
+    exit 0 ;;
+  # One value in place, starting from what applies now, with zsh's line
+  # editor: esc or ctrl-c keeps it, an empty one unsets it. Several in your
+  # editor instead, one a line.
+  --prompt)
+    scope=$2 n=$(gitname "$3")
+    case $n in
+      gateJob | claudeCommand)
+        f=$(mktemp) || exit 1
+        { echo "# otis.$n ($scope), one a line; lines starting with # are dropped, and none at all unsets it"
+          git config "--$scope" --get-all "otis.$n" 2>/dev/null; } > "$f"
+        otis-edit "$f"
+        git config "--$scope" --unset-all "otis.$n" 2>/dev/null
+        grep -v -e '^#' -e '^$' "$f" | while IFS= read -r v; do git config "--$scope" --add "otis.$n" "$v"; done
+        rm -f "$f" ;;
+      *)
+        cur=$(layered --get "$n")
+        v=$(zsh -fc 'bindkey -e; v=$1; vared -p "otis.$2 ($3, empty unsets)> " v </dev/tty >/dev/tty && print -r -- "$v"' _ "$cur" "$n" "$scope") || exit 0
+        if [ -n "$v" ]; then git config "--$scope" "otis.$n" "$v"
+        else git config "--$scope" --unset-all "otis.$n" 2>/dev/null
+        fi ;;
+    esac
+    exit 0 ;;
+esac
+
+# No key: every setting in a picker (git-fzf), with where its value came from.
+# The preview is what the key does, from the list at the top of this file, and
+# every git config file that sets it. enter sets it in this repo, E for every
+# repo (--global), x puts it back to the default. A setting with several values
+# (gateJobs, claudeCommands) opens in your editor, one value a line.
+if [ $# -eq 0 ]; then
+  exec git-fzf 'otis config ' 'enter=set in this repo,E=set for every repo,x=back to the default (unsets here and globally)' --ansi \
+    --delimiter='\t' --with-nth=1 --track --id-nth=2 \
+    --bind 'start:reload(otis-config --rows)' \
+    --bind 'enter:transform(otis-config --set local {2})' \
+    --bind 'E:transform(otis-config --set global {2})' \
+    --bind 'x:transform(otis-config --unset {2})' \
+    --preview 'otis-config --about {2}' </dev/null >/dev/null
+fi
+# One key answers as it always has, exit status included, since gitlab,
+# lessons and verifyRetro are asked that way. Several print one value a line,
+# a blank one for a setting with no value, so the answers line up with the
+# keys however many of them are unset.
+if [ $# -le 1 ]; then
+  one "$1"
+  exit $?
+fi
+for key; do one "$key" || echo; done

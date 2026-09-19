@@ -1,0 +1,21 @@
+# Kanagawa, after the wave.
+attention=38;2;230;195;132
+good=38;2;152;187;108
+bad=38;2;228;104;118
+elsewhere=38;2;126;156;216
+yours=38;2;255;160;102
+text=38;2;220;215;186
+context=38;2;114;113;105
+faint=38;2;54;54;70
+main=38;2;122;168;159
+codebg=48;2;42;42;55
+errbg=48;2;66;44;54
+delta_syntax=OneHalfDark
+bat=OneHalfDark
+file=#7e9cd8
+rule=#363646
+minus=#462e38
+plus=#373e36
+minus_emph=#6e3c47
+plus_emph=#4f5d43
+glow=dark

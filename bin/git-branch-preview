@@ -1,0 +1,49 @@
+#!/bin/sh
+# git-branch-preview <branch> <kind> [place] [worktree] [iid] [ahead] [behind] [claude]
+# A branch at a glance, for gb and gw: its MR, where it is checked out,
+# and its commits that the base does not have (for a merged MR those still
+# show, because GitLab lands MRs as new commits). Everything but the commits
+# comes in from the row (git-branch-list, git-worktree-list), which already
+# worked it out, so a cursor move costs the log and the diff, nothing else.
+# claude is what git-mr-fix has here: "fixing", a count of fixes waiting, or
+# nothing.
+b=$1 kind=$2 place=$3 wt=$4 iid=$5 ahead=$6 behind=$7 claude=$8
+[ -n "$b" ] || exit 0
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+base=$(otis-config base)
+
+case $kind in
+  open)                mr="!$iid open" ;;
+  theirs)              mr="!$iid their open MR" ;;
+  merged|merged-diff)  mr="!$iid merged" ;;
+  closed|closed-diff)  mr="!$iid closed" ;;
+  *)                   mr="no MR" ;;
+esac
+printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "$b" "$mr"
+case $place in
+  here)     printf "${GK_CONTEXT}checked out here${GK_R}\n" ;;
+  worktree) printf "${GK_CONTEXT}checked out in %s${GK_R}\n" "$wt" ;;
+esac
+case $kind in
+  main)        printf "${GK_CONTEXT}%s commits behind %s${GK_R}\n" "${behind:-0}" "$base" ;;
+  merged-diff) printf "${GK_BAD}the MR merged, but this branch has commits since then${GK_R}\n" ;;
+  closed-diff) printf "${GK_BAD}the MR closed, but this branch has commits GitLab never got${GK_R}\n" ;;
+esac
+printf "${GK_CONTEXT}last commit %s${GK_R}\n" "$(git log -1 --format='%cr' "$b")"
+case $claude in
+  fixing) printf "${GK_ATTENTION}Claude is working on fixes here${GK_R}; C shows how far it has got\n" ;;
+  ?*)     printf "${GK_YOURS}%s fix%s waiting${GK_R}; C shows them: space accepts, a applies to your checkout\n" "$claude" "$([ "$claude" -eq 1 ] || echo es)" ;;
+esac
+git-verify --preview "$iid" "$b"
+printf '\n'
+n=${ahead:-$(git rev-list --count "$base..$b")}
+if [ "$n" -eq 0 ]; then
+  printf "${GK_CONTEXT}nothing here that %s does not have${GK_R}\n" "$base"
+else
+  printf "${GK_CONTEXT}%s commits not on %s:${GK_R}\n" "$n" "$base"
+  git log --color=always --format='%C(yellow)%h%C(reset) %s %C(dim)%cr%C(reset)' -40 "$base..$b"
+  # Three dots: the branch's own changes since it left the base, not the base's since.
+  printf '\n'
+  git-preview-commit --tests-toggle "$base...$b"
+fi

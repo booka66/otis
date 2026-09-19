@@ -1,0 +1,1177 @@
+#!/usr/bin/env -S zsh -f
+# otis-tour                a menu of guided tours of what otis does, the
+#                          most useful first; enter takes one, and q in a
+#                          tour comes back to the menu
+# otis-tour <tour|part>    that tour, or a tour from that part on
+# otis-tour --list         the tours and their parts
+# otis-tour --about <tour> what a tour covers (the menu's preview)
+#
+# The hands-on tours (reading by symbol, bad changes, committing, branches)
+# run on changes made up for them, in a throwaway repo under $TMPDIR
+# (otis-tour) with an origin of its own, so nothing touches your repos or
+# GitLab. The rest are
+# about what needs GitLab, Claude or Cursor Cloud, and offer to open the real
+# thing in the repo you ran the tour from. The one thing that leaves your
+# machine is what otis always sends: with Claude Code installed, the symbol
+# view has Haiku gloss the made-up change and Sonnet propose a fix for the
+# caller it breaks.
+root=${0:A:h:h}
+path=($root/bin $path)
+# The theme, for the tour's own words and every picker it opens; loaded again
+# at the menu, so one picked in the settings tour takes from there on.
+theme() {
+  eval "$(otis-theme --env)"
+  a=$'\e['$OTIS_T_ATTENTION'm' k=$'\e['$OTIS_T_ELSEWHERE'm' m=$'\e['$OTIS_T_CONTEXT'm'
+  g=$'\e['$OTIS_T_GOOD'm' b=$'\e['$OTIS_T_BAD'm' y=$'\e['$OTIS_T_YOURS'm' r=$'\e[0m'
+}
+theme
+tour=${${TMPDIR:-/tmp}%/}/otis-tour repo=${${TMPDIR:-/tmp}%/}/otis-tour/repo
+seen=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/tour-seen
+here=$PWD
+cols=$(tput cols 2>/dev/null || print 80)
+(( w = cols > 82 ? 78 : cols - 4 ))
+
+# The tours, in the order worth taking them: name, title, what kind, its
+# parts, and a few sentences for the menu's preview.
+tours=(symbols shapes mr claude verify ship dashboard commits branches settings cheatsheet)
+typeset -A ttitle tkind tparts tabout ptitle
+ttitle=(
+  symbols    "Reviewing by symbol"
+  shapes     "Bad changes, and how symbols show them"
+  mr         "Reviewing a merge request in gmr"
+  claude     "Claude reviews and fixes (C)"
+  verify     "Verifying in Cursor Cloud (V)"
+  ship       "Merging, deploys and watching production (D)"
+  dashboard  "The dashboard: otis and gag"
+  commits    "Committing and fixing history"
+  branches   "Branches, stacks and worktrees"
+  settings   "Settings worth turning on"
+  cheatsheet "Cheat sheet"
+)
+tkind=(
+  symbols    "hands-on · 15 min"
+  shapes     "hands-on · 15 min"
+  mr         "your repo · 5 min"
+  claude     "your repo · 5 min"
+  verify     "your repo · 5 min"
+  ship       "your repo · 5 min"
+  dashboard  "your repo · 3 min"
+  commits    "hands-on · 10 min"
+  branches   "hands-on · 5 min"
+  settings   "your setup · 3 min"
+  cheatsheet "one page"
+)
+tparts=(
+  symbols    "why gitlab side files reading radius more seam staging log recap"
+  shapes     "score sweep tangle chain carry knot heavy gallery"
+  mr         "mr"
+  claude     "claude_review claude_fix"
+  verify     "verify_how verify_run verify_setup"
+  ship       "ship_merge ship_prod"
+  dashboard  "dashboard"
+  commits    "commits"
+  branches   "branches_gb branches_more"
+  settings   "settings"
+  cheatsheet "cheatsheet"
+)
+tabout=(
+  symbols    "Why otis reads a change by symbol rather than by file, shown rather than told: one made-up change as GitLab shows it, as files, and by symbol. Then every key the symbol view has, the callers elsewhere that a change breaks without touching, Claude's fix for them, seam's graph page, and staging one function at a time. Start here."
+  shapes     "Six made-up changes that each go wrong a different way: a sweep, a branch of unrelated stories, a parameter threaded nine layers deep, a type change that breaks code it never touched, a cycle, and a 300-line function. Each as files first, so you can guess what is wrong, then as seam's score and the symbol tree, and what to ask the author for. Take Reviewing by symbol first."
+  mr         "The review loop in gmr: an MR opens by symbol with its threads beside each symbol, nvim for comments inline, drafts until you submit, viewed marks, what changed since your last review, catching up when the author pushes."
+  claude     "C has Claude Code review an MR in the background, reading it by symbol with tsgo's callers elsewhere, as you do, and leave drafts on the symbols they are about. You edit them before anything posts, and each says where its symbol sits in the tree, why Claude wrote it and how sure it is. On your own MR it proposes fixes for the threads instead, and folds the ones you accept into the right commits."
+  verify     "V finds out whether a change actually works: Claude writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and Claude judges the evidence, claim by claim. With what you need set up to run one."
+  ship       "From an open MR to production without the browser: CI jobs and logs, merge when the pipeline passes, rebase, whether your merged MR is live yet, gd's deploys, and D, where Claude watches Datadog after your deploy and tells you whether a problem is yours."
+  dashboard  "otis, where a morning starts: everything that wants you in one list, ordered by what a delay costs, one row a thing. And gag, everything Claude is doing in the background."
+  commits    "ga, gcm, gam, gfx, gl, gundo and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and undo any of it."
+  branches   "gb with each branch's MR and drift, worktrees for what runs beside your checkout (gw, gwn), gup, and glab stacks (gstack)."
+  settings   "What is set in your repo now, and the settings that change the most: a remote workspace for checks, what Claude may run, lint before folding fixes, Claude's lessons, your editor and theme."
+  cheatsheet "Every key worth knowing, on one page."
+)
+ptitle=(
+  why "Why read a change by symbol"  gitlab "The change as GitLab shows it"
+  side "The same change, side by side"  recap "What symbols gave you"
+  files "The file picker"  reading "The symbol view: reading"
+  radius "The symbol view: what it breaks"  more "The symbol view: other ways in"
+  seam "seam's page"  staging "Staging by symbol"  log "The log"
+  score "Reading the score"  sweep "The sweep: big by file, safe by symbol"
+  tangle "The tangle: eight stories in one branch"  chain "The chain: nine layers for one line"
+  carry "The carry: one file that breaks three"  knot "The knot: a circle, and a bug"
+  heavy "The heavy one: 300 lines in one function"  gallery "Side by side"
+  mr "The review loop"
+  claude_review "Claude reviews an MR"  claude_fix "Claude fixes your MR"
+  verify_how "How a verification works"  verify_run "Reading one"  verify_setup "What it needs"
+  ship_merge "Pipelines and merging"  ship_prod "Deploys and production"
+  dashboard "otis and gag"
+  commits "Committing and fixing history"
+  branches_gb "Branches"  branches_more "Worktrees, rebasing and stacks"
+  settings "Settings worth turning on"
+  cheatsheet "Cheat sheet"
+)
+
+# --- output
+
+# wrap <width> <indent> <text>: the text in lines of at most <width>
+# visible columns (colors take none), the first as it is and the rest after
+# <indent> spaces.
+wrap() {
+  setopt localoptions extendedglob
+  local line= word pad=${(l:$2:: :)}
+  integer n=0 wl
+  for word in ${=3}; do
+    wl=${#${word//$'\e'\[[0-9;]#m/}}
+    if (( n && n + 1 + wl > $1 )); then
+      print -r -- "$line"; line=$pad$word; n=wl
+    else
+      line+=${line:+ }$word; (( n += (n ? 1 : 0) + wl ))
+    fi
+  done
+  print -r -- "$line"
+}
+# say <text>: a paragraph, wrapped and indented.
+say() { print -n "  "; wrap $w 2 "$*"; print; }
+# heading <n>: the part's title, and where it sits in its tour.
+heading() {
+  clear
+  if (( $#cur > 1 )); then print -r -- "${m}otis tour · ${ttitle[$cur_tour]} · $1 of $#cur${r}"
+  else print -r -- "${m}otis tour${r}"; fi
+  print -r -- "${a}${ptitle[${cur[$1]}]}${r}"
+  print
+}
+# hang <indent> <text>: wrapped to the page, every line after the first
+# indented to line up under the first's text.
+hang() { wrap $(( w - $1 )) $1 "$2"; }
+# key <keys> <what>: one line of a list of keys, the keys $kw wide.
+kw=12
+key() { printf "    ${k}%-${kw}s${r} " "$1"; hang $(( kw + 5 )) "$2"; }
+# look <n> <what>: one numbered thing to find.
+look() { printf "    ${a}%s${r}  " "$1"; hang 7 "$2"; }
+
+# One keypress: enter goes on (0), s skips the rest of this part (1), q
+# leaves the tour for the menu (each tour runs in a subshell of its own).
+pause() {
+  local c
+  printf "\n  ${m}enter${r} ${1:-go on}   ${m}s${r} skip   ${m}q${r} back to the menu "
+  read -rsk1 c </dev/tty
+  print; print
+  case $c in
+    q|Q) exit 0 ;;
+    s|S) return 1 ;;
+  esac
+  return 0
+}
+# ask <question>: y/N, one keypress.
+ask() { git-confirm "  $1"; }
+
+# launch <command...>: the real thing, in the demo repo; q comes back.
+launch() {
+  pause "open it (${a}q${r} in it comes back here)" || return 1
+  (cd $repo && "$@")
+  return 0
+}
+# shell: your own shell in the demo repo, for commands rather than pickers.
+shell() {
+  pause "open a shell in the demo (${a}exit${r} comes back here)" || return 1
+  (cd $repo && ${SHELL:-zsh} -i)
+  return 0
+}
+# mine: a GitLab repo to open the real thing in, the one the tour ran from.
+mine() { (cd $here && git rev-parse --git-dir >/dev/null 2>&1 && otis-config gitlab); }
+# offer <question> <command...>: run it in your repo, if the tour ran from
+# one; else say where to run it.
+offer() {
+  local q=$1; shift
+  if mine; then
+    print
+    ask "$q in $(cd $here && basename "$(git rev-parse --show-toplevel)")?" || return 0
+    (cd $here && "$@")
+  else
+    say "${a}Run $1 in your repo to try it.${r} Run otis-tour from there and this offers to open it."
+    pause
+  fi
+}
+# status <ok|need|note> <name> <what>: one line of a setup check.
+status() {
+  local c=$g; [[ $1 == need ]] && c=$b; [[ $1 == note ]] && c=$m
+  printf "    ${c}%-4s${r}  ${k}%-18s${r} " "$1" "$2"; hang 29 "$3"
+}
+
+# --- the demo repo
+
+# A returns service that starts charging a restocking fee on late returns.
+# Small, but with what makes real MRs hard to read: a generated file and a
+# migration that sort first, a test before the code it tests, the entry point
+# in the middle, a helper several calls down, a function whose signature
+# changed, and a caller the change never touched that no longer type checks.
+build() {
+  rm -rf $tour && mkdir -p $tour || exit 1
+  git init -q --bare $tour/origin.git
+  git init -q -b main $repo && cd $repo || exit 1
+  git config user.email tour@otis.invalid; git config user.name "otis tour"
+  mkdir -p src/api src/__generated__ migrations
+  print '{ "name": "@tour/returns", "private": true, "type": "module" }' > package.json
+  print '{ "compilerOptions": { "strict": true, "target": "es2022", "module": "esnext", "moduleResolution": "bundler", "noEmit": true }, "include": ["src"] }' > tsconfig.json
+  print 'src/__generated__/** linguist-generated' > .gitattributes
+  gen() {
+    print '// generated from schema.graphql: do not edit'; print 'export type ReturnRecord = {'
+    for f; do print "  $f: string | null;"; done; print '};'
+  }
+  gen id orderId customerId sku quantity currency status reason createdAt updatedAt > src/__generated__/schema.ts
+  cat > src/order.ts <<'EOF'
+export interface Order {
+  id: string;
+  total: number;
+  deliveredAt: Date;
+}
+EOF
+  cat > src/policy.ts <<'EOF'
+import type { Order } from "./order";
+
+// What the customer gets back for a return.
+export function refundAmount(order: Order): number {
+  return order.total;
+}
+EOF
+  cat > src/email.ts <<'EOF'
+export function receiptLine(amount: number): string {
+  return `Refund: $${amount.toFixed(2)}`;
+}
+EOF
+  cat > src/api/returns.ts <<'EOF'
+import type { Order } from "../order";
+import { refundAmount } from "../policy";
+import { receiptLine } from "../email";
+
+export async function handleReturn(order: Order): Promise<string> {
+  const amount = refundAmount(order);
+  return receiptLine(amount);
+}
+EOF
+  cat > src/api/exchanges.ts <<'EOF'
+import type { Order } from "../order";
+import { refundAmount } from "../policy";
+
+export interface Exchange {
+  order: Order;
+  requestedAt: Date;
+}
+
+// An exchange is store credit worth what a refund would have been.
+export function exchangeCredit(exchange: Exchange): number {
+  return refundAmount(exchange.order);
+}
+EOF
+  git add -A && git commit -qm "Refund the order total on a return"
+  gallery_base
+  git add -A && git commit -qm "Add the jobs, checkout, billing and shipping rates"
+  git remote add origin $tour/origin.git
+  git push -q origin main && git remote set-head origin main >/dev/null
+
+  git switch -qc tour/restocking-fee
+  gen id orderId customerId sku quantity currency status reason returnedAt restockingFee restockingFeeCurrency restockingWaivedBy restockingWaivedAt createdAt updatedAt > src/__generated__/schema.ts
+  print 'ALTER TABLE returns ADD COLUMN restocking_fee numeric(10, 2);' > migrations/0042_restocking_fee.sql
+  cat > src/fees.ts <<'EOF'
+import type { Order } from "./order";
+
+export const RESTOCKING_WINDOW_DAYS = 30;
+const FEE_RATE = 0.15;
+
+export function daysSince(from: Date, to: Date): number {
+  return Math.floor((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+// Returns inside the window are free; after it, a share of the total.
+export function restockingFee(order: Order, returnedAt: Date): number {
+  if (daysSince(order.deliveredAt, returnedAt) <= RESTOCKING_WINDOW_DAYS) return 0;
+  return Math.round(order.total * FEE_RATE * 100) / 100;
+}
+EOF
+  cat > src/fees.test.ts <<'EOF'
+import { restockingFee } from "./fees";
+
+const order = { id: "o1", total: 100, deliveredAt: new Date("2026-01-01") };
+
+export function testInsideWindowIsFree() {
+  if (restockingFee(order, new Date("2026-01-20")) !== 0) throw new Error("charged inside the window");
+}
+
+export function testAfterWindowCharges() {
+  if (restockingFee(order, new Date("2026-03-01")) !== 15) throw new Error("wrong fee");
+}
+EOF
+  cat > src/policy.ts <<'EOF'
+import type { Order } from "./order";
+import { restockingFee } from "./fees";
+
+// What the customer gets back for a return, less any restocking fee.
+export function refundAmount(order: Order, returnedAt: Date): number {
+  return order.total - restockingFee(order, returnedAt);
+}
+EOF
+  cat > src/email.ts <<'EOF'
+export function receiptLine(amount: number, fee = 0): string {
+  const line = `Refund: $${amount.toFixed(2)}`;
+  return fee > 0 ? `${line} (after a $${fee.toFixed(2)} restocking fee)` : line;
+}
+EOF
+  cat > src/api/returns.ts <<'EOF'
+import type { Order } from "../order";
+import { refundAmount } from "../policy";
+import { receiptLine } from "../email";
+import { restockingFee } from "../fees";
+
+export async function handleReturn(order: Order, returnedAt = new Date()): Promise<string> {
+  const amount = refundAmount(order, returnedAt);
+  return receiptLine(amount, restockingFee(order, returnedAt));
+}
+EOF
+  git add -A && git commit -qm "Charge a restocking fee on late returns"
+  git config otis-tour.head "$(git rev-parse HEAD)"
+  gallery
+  git switch -q tour/restocking-fee
+  cd $here
+}
+
+# The bad changes tour's gallery: code on main for them to change, then one
+# branch each off main, every one going wrong in a way seam's score names.
+jobs=(nightlyExport retryWebhooks expireLabels syncCarriers pruneDrafts reconcileRefunds sendDigests archiveOrders rotateKeys warmCaches)
+steps=(checkoutRoute startCheckout buildQuote quoteCart cartTotal lineTotal unitPrice applyTax roundCents)
+gallery_base() {
+  local j i
+  mkdir -p src/jobs src/checkout src/billing src/reports
+  print 'export const log = { info: (m: string) => console.info(new Date().toISOString(), m) };' > src/log.ts
+  for j in $jobs; do
+    print "export async function $j(): Promise<number> {\n  console.log(\"$j: start\");\n  const n = 0;\n  console.log(\"$j: done\");\n  return n;\n}" > src/jobs/$j.ts
+  done
+  for (( i = 1; i < $#steps; i++ )); do
+    print "import { $steps[i+1] } from \"./$steps[i+1]\";\n\nexport function $steps[i](amount: number): number {\n  return $steps[i+1](amount);\n}" > src/checkout/$steps[i].ts
+  done
+  print "export function $steps[-1](amount: number): number {\n  return Math.round(amount * 100) / 100;\n}" > src/checkout/$steps[-1].ts
+  cat > src/billing/money.ts <<'EOF'
+export type Money = number;
+
+export type LineItem = { sku: string; price: Money };
+
+export type Invoice = { id: string; items: LineItem[] };
+
+export type Refund = { invoice: Invoice; amount: Money };
+
+export function invoiceTotal(invoice: Invoice): Money {
+  return invoice.items.reduce((sum, item) => sum + item.price, 0);
+}
+
+export function refundFor(invoice: Invoice): Refund {
+  return { invoice, amount: invoiceTotal(invoice) };
+}
+EOF
+  cat > src/reports/revenue.ts <<'EOF'
+import { invoiceTotal, type Invoice } from "../billing/money";
+
+export function revenue(invoices: Invoice[]): number {
+  return invoices.reduce((sum, invoice) => sum + invoiceTotal(invoice), 0);
+}
+EOF
+  cat > src/reports/refunds.ts <<'EOF'
+import { refundFor, type Invoice } from "../billing/money";
+
+export function refundedShare(invoices: Invoice[], refunded: Invoice[]): number {
+  const out = refunded.reduce((sum, invoice) => sum + refundFor(invoice).amount, 0);
+  return out / invoices.length;
+}
+EOF
+  cat > src/api/invoices.ts <<'EOF'
+import { invoiceTotal, type Invoice } from "../billing/money";
+
+export function invoiceLine(invoice: Invoice): string {
+  return `Invoice ${invoice.id}: $${invoiceTotal(invoice).toFixed(2)}`;
+}
+EOF
+  print "export function zoneRate(zone: string, weight: number): number {\n  switch (zone) {" > src/rates.ts
+  for (( i = 1; i <= 100; i++ )); do
+    printf '    case "Z%03d": return %d.%02d * weight;\n' $i $(( 3 + i % 7 )) $(( i * 37 % 100 )) >> src/rates.ts
+  done
+  print "    default: throw new Error(\`no rate for \${zone}\`);\n  }\n}" >> src/rates.ts
+}
+gallery() {
+  local j i
+  typeset -A helper=(nightlyExport csvRow retryWebhooks backoff expireLabels labelAge syncCarriers carrierIds
+    pruneDrafts isStale reconcileRefunds unmatched sendDigests digestFor archiveOrders archiveCutoff)
+  # A sweep: the same edit to ten bodies.
+  git switch -qc tour/sweep main
+  for j in $jobs; do perl -0pi -e 's/console\.log/log.info/g; s/^/import { log } from "..\/log";\n\n/' src/jobs/$j.ts; done
+  git commit -qam "Log through log.info, not console.log"
+  # A tangle: eight jobs, each calling a new helper, nothing in common.
+  git switch -qc tour/tangle main
+  for j in ${(k)helper}; do
+    perl -0pi -e "s/const n = 0;/const n = $helper[$j]();/; \$_ .= qq{\nexport function $helper[$j](): number {\n  return 1;\n}\n}" src/jobs/$j.ts
+  done
+  git commit -qam "Friday fixes"
+  # A chain: one parameter threaded down nine layers for the last one's sake.
+  git switch -qc tour/chain main
+  for j in $steps; do
+    perl -pi -e 's/\(amount: number\)/(amount: number, currency: string)/; s/\((amount)\);/($1, currency);/' src/checkout/$j.ts
+  done
+  perl -pi -e 's/return Math.round/if (currency === "JPY") return Math.round(amount);\n  return Math.round/' src/checkout/$steps[-1].ts
+  git commit -qam "Round yen to whole units"
+  # Carry: a type change that travels through every signature naming it,
+  # and past the diff, into callers it never touched.
+  git switch -qc tour/carry main
+  cat > src/billing/money.ts <<'EOF'
+export type Money = { cents: number; currency: string };
+
+export type LineItem = { sku: string; price: Money; quantity: number };
+
+export type Invoice = { id: string; currency: string; items: LineItem[] };
+
+export type Refund = { invoice: Invoice; amount: Money; reason: string };
+
+export function invoiceTotal(invoice: Invoice): Money {
+  const cents = invoice.items.reduce((sum, item) => sum + item.price.cents * item.quantity, 0);
+  return { cents, currency: invoice.currency };
+}
+
+export function refundFor(invoice: Invoice, reason: string): Refund {
+  return { invoice, amount: invoiceTotal(invoice), reason };
+}
+EOF
+  git commit -qam "Keep money in cents with its currency"
+  # A knot: the refund asks the discount, which asks the refund.
+  git switch -qc tour/knot main
+  cat > src/policy.ts <<'EOF'
+import type { Order } from "./order";
+import { isFinalSale } from "./sale";
+
+// What the customer gets back for a return: nothing on a final sale.
+export function refundAmount(order: Order): number {
+  if (isFinalSale(order)) return 0;
+  return order.total;
+}
+EOF
+  cat > src/sale.ts <<'EOF'
+import type { Order } from "./order";
+import { refundAmount } from "./policy";
+
+// Anything discounted by more than half is a final sale.
+export function isFinalSale(order: Order): boolean {
+  return discountRate(order) > 0.5;
+}
+
+export function discountRate(order: Order): number {
+  return 1 - refundAmount(order) / order.total;
+}
+EOF
+  git add -A && git commit -qm "Make heavily discounted orders final sale"
+  # Heavy: three hundred lines of one function.
+  git switch -qc tour/heavy main
+  perl -pi -e 's/^(\s+case "Z\d+":) return ([\d.]+) \* weight;/sprintf("%s\n      return %.2f * weight + surcharge(weight);", $1, $2 * 1.06)/e' src/rates.ts
+  print "\n// Parcels over 20kg pay by the kilo on top.\nexport function surcharge(weight: number): number {\n  return weight > 20 ? (weight - 20) * 0.4 : 0;\n}" >> src/rates.ts
+  git commit -qam "Raise rates 6% and add a surcharge on heavy parcels"
+}
+
+# Back to the change as built: a part may have staged, committed, or taken
+# Claude's fix into the checkout.
+demo_reset() {
+  [[ -e $tour/built.$$ ]] || { build; : > $tour/built.$$; }
+  git -C $repo switch -qf tour/restocking-fee 2>/dev/null
+  git -C $repo reset -q --hard "$(git -C $repo config otis-tour.head)"
+  git -C $repo clean -qfd
+}
+
+# --- the parts
+
+part_why() {
+  heading $1
+  say "A diff is sorted by path. A change is not. GitLab hands you files in alphabetical order, so you meet generated code and migrations first, tests before the code they test, a helper before you know who calls it, and the entry point wherever its filename happens to land."
+  say "So the reading order is yours to rebuild, in your head, while you also judge the code: who calls this, did its signature change, where was I. And the question a review most exists to answer, what this breaks, is often not in the diff at all: the code that breaks is the code the author did not touch."
+  say "otis reads a change by symbol instead. seam parses both sides of every changed file (ast-grep, no model, under a second), and the symbol view lays the change out as a tree: the entry points first, each opening to what it uses, each row a signature saying whether its interface changed or only its body. Under anything exported, tsgo finds the callers the change did not touch and type checks them before and after, so what it breaks is a row with a ${b}✗${r} on it."
+  say "This tour shows the same small change three ways, so you can feel the difference rather than take it on trust: as GitLab shows it, as files, and by symbol. Then everything else the symbol view does. About fifteen minutes."
+  pause
+}
+
+part_gitlab() {
+  heading $1
+  demo_reset
+  say "The change: a returns service starts charging a restocking fee on late returns. Here it is the way GitLab's Changes tab shows it: every file, by path, one long scroll. Read it and try to answer:"
+  look 1 "Where does the change start? What would you read first?"
+  look 2 "Which function's contract changed, so every caller has to change too?"
+  look 3 "What does it break?"
+  pause "show the diff (${a}q${r} leaves it)" || return
+  (cd $repo && { git diff --stat origin/main...HEAD; print; git diff origin/main...HEAD | FZF_PREVIEW_COLUMNS=$cols git-delta; } | less -R)
+  heading $1
+  say "The answers:"
+  look 1 "handleReturn, in src/api/returns.ts: the third of seven files, after a generated type and a migration."
+  look 2 "refundAmount gained a required argument. It is in the last file, src/policy.ts, and nothing marks it as different from an edit to a function body."
+  look 3 "exchangeCredit, in src/api/exchanges.ts, still calls refundAmount(order) with one argument, so it no longer type checks. It is in no file of the diff. CI would tell you eventually; the diff never will."
+  say "None of that is hard in a 40-line change. In a 1,500-line one it is the whole job, and it is where the time goes."
+  pause
+}
+
+# The same change both ways on one screen: GitLab's order beside the symbol
+# tree as gdm opens it (abridged: tests, generated code and the SQL sit under
+# their own headings below it), with the three answers pointed at.
+part_side() {
+  heading $1
+  setopt localoptions extendedglob
+  local -a left right
+  left=(
+    "${m}1 migrations/0042_restocking_fee.sql${r}"
+    "${m}2 src/__generated__/schema.ts${r}"
+    "${a}3 src/api/returns.ts${r}"
+    "${m}4 src/email.ts${r}"
+    "${m}5 src/fees.test.ts${r}"
+    "${m}6 src/fees.ts${r}"
+    "${a}7 src/policy.ts${r}"
+    ""
+    "${b}  src/api/exchanges.ts: not here${r}"
+  )
+  right=(
+    "${a}~${r} handleReturn          ${y}← start here${r}"
+    "  ${a}~${r} refundAmount        ${y}← contract${r}"
+    "      restockingFee"
+    "        daysSince"
+    "    ${k}▸ callers elsewhere${r}"
+    "      exchangeCredit ${b}✗${r}  ${y}← breaks${r}"
+    "  ${a}~${r} receiptLine"
+    "    restockingFee"
+    "${m}── tests, generated, SQL${r}"
+  )
+  say "The same change, the two ways, on one screen:"
+  local i pad
+  if (( w >= 76 )); then
+    printf "  ${k}%-38s${r}${k}%s${r}\n" "by file, as GitLab orders it" "by symbol, as gdm opens it"
+    for (( i = 1; i <= $#left; i++ )); do
+      # Pad by what shows, since the colors take no columns.
+      pad=${left[i]//$'\e'\[[0-9;]#m/}
+      print -r -- "  $left[i]${(l:38 - $#pad:: :)}$right[i]"
+    done
+  else
+    print -r -- "  ${k}by file, as GitLab orders it${r}"; for i in $left; do print -r -- "  $i"; done; print
+    print -r -- "  ${k}by symbol, as gdm opens it${r}"; for i in $right; do print -r -- "  $i"; done
+  fi
+  print
+  say "Three questions, three rows, all on the first screen. By file you read seven files in the filesystem's order and still never met the third answer, since exchanges.ts is not in the diff. By symbol, where to start is the top row, a changed contract is a ${a}~${r}, and what breaks is a ${b}✗${r} with the caller under it."
+  say "And what the file list cannot say at all: restockingFee is used in two places, and the tree shows it under both; daysSince is three calls down, and you meet it there, after the code that needs it; the tests and the generated type are there, but under their own headings, out of the way."
+  pause
+}
+
+part_files() {
+  heading $1
+  say "Before symbols, the file picker, which every otis view shares (ga, gdm, a commit from gl, an MR in gmr). It is still by file, but already better than the scroll:"
+  key "" "each row: lines added and removed, a bar for the split, the directory dimmed"
+  key "" "added files, tests and generated files each sit under a heading, tests and generated last"
+  key t "collapses them to just those headings"
+  key "ctrl-d/u" "scroll the preview to a hunk; enter opens your editor at the line in view"
+  key "j k / q" "move, search, back"
+  say "In a real MR each file also carries its viewed mark, its unresolved threads and the drafts waiting on it. Notice what it cannot do: the order is still the filesystem's, and exchanges.ts is still nowhere."
+  demo_reset
+  launch git-commit-open origin/main...HEAD
+}
+
+part_reading() {
+  heading $1
+  say "Now the same change by symbol: what gdm opens on this branch, and what enter opens on an MR in gmr. Things to try, in order:"
+  look 1 "The top row is the only entry point, handleReturn. The footer says how many symbols there are and how many to start from."
+  look 2 "${a}~${r} at the start of a row: its signature changed, so whatever calls it is worth reading again. No mark: only its body did, and nothing outside it can break. Then the lines it added and removed (+5 alone is new), and ${k}▸ 3${r}: three changed symbols under it."
+  look 3 "${k}l${r} opens a row to the changed symbols it uses, in the order it uses them: refundAmount, receiptLine, and restockingFee, which it now calls itself. Keep going, down to daysSince. ${k}h${r} closes, from the row or anything under it; ${k}L${r} and ${k}H${r} open and close everything."
+  look 4 "${k}⇢${r} before a row: the mention is new in this change. That is rewiring, as against behavior, and worth knowing apart."
+  look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow with a dim ↳ line saying what each is. ${k}i${r} shows all of those whole instead."
+  look 6 "${k}enter${r} opens nvim on the symbol in a diff against the base, on the hunk in view. ${k}:q${r} comes back."
+  if (( $+commands[claude] )); then
+    look 7 "Meanwhile Claude Haiku glosses it: a few words on what each symbol does, the change aside, heading its preview, and a few on what the change does to it, on the diff's header. Nothing moves under you, so the rest shows the next time it opens: the entry points in the order to read them, with why, and one line at the top on what the change introduces. It sees only the symbol table and each symbol's diff, has no tools, and posts nothing."
+  else
+    look 7 "With Claude Code installed, Haiku also glosses each row in a few words and says which entry point to read first. It is not installed here, so the rows stay bare."
+  fi
+  say "${k}?${r} in the picker lists every key it has."
+  demo_reset
+  launch gdm
+}
+
+part_radius() {
+  heading $1
+  say "What the diff could not show you. Open the tree again (${k}L${r} opens it all):"
+  look 1 "Under refundAmount, a dim row: its callers elsewhere, the code the change did not touch that uses it. tsgo found them. ${k}l${r} opens it to each caller as a signature, by package."
+  look 2 "exchangeCredit carries ${b}✗${r}: the caller was type checked with the changed files as they were, then as the change leaves them, and gained an error. An error it had already is not held against the change."
+  look 3 "Its preview is the caller whole, the calls underlined, and the error under its line. ${k}enter${r} opens it on the error."
+  if (( $+commands[claude] )); then
+    look 4 "Claude Sonnet looks at every broken caller in the background. Under the error goes its read of it: whether the fix belongs in the caller or in the change, and, when it is sure of one, the edit as a diff. It takes a minute; the footer says while it works. ${k}F${r} makes the edit in this checkout, uncommitted, and tsgo checks it again: the ${b}✗${r} turns ${g}✓${r}, fixed in your checkout. The demo is thrown away, so go ahead."
+  else
+    look 4 "With Claude Code installed, Sonnet proposes a fix under each error, and ${k}F${r} makes it in the checkout, where tsgo checks it again."
+  fi
+  (( $+commands[tsgo] && $+commands[node] )) ||
+    say "${a}tsgo or node is not installed here, so there is no callers row.${r} brew install tsgo (and node) to see it; the rest of the tour works without."
+  say "This is the reason to review by symbol even when the diff looks fine: a reviewer reading files has no way to see this row, and it is the one that pages someone."
+  demo_reset
+  launch gdm
+}
+
+part_more() {
+  heading $1
+  say "More ways into the same tree:"
+  look 1 "${k}b${r} turns it over: the sinks first, the changed symbols that use nothing else changed (daysSince, the constants), each opening to what uses it. New pieces before the plumbing that carries them, for when you want to judge the parts before the wiring."
+  look 2 "${k}s${r} is the shape of it, in the preview: seam's score of what makes this change hard to read. How many separate stories, how deep the chain goes, how many interfaces changed, how many definitions are only a body edit and so safe. Worth a look before a big MR, to know whether it is one change or a sweep of unrelated ones. The next tour is six branches that each score badly a different way."
+  look 3 "${k}t${r} hides tests and generated code, which have their own sections below the source. A spec mentions everything it tests, so it never gets to pull a source symbol off the top level."
+  look 4 "${k}f${r} is the file list, ${k}s${r} there comes back. Schema, SQL and anything seam cannot parse follow the symbols as plain file rows, like the migration here."
+  demo_reset
+  launch gdm
+}
+
+part_seam() {
+  heading $1
+  say "seam is the engine under the symbol view, and it has a view of its own: a page with the change as a graph, one box a definition and an arrow a mention. A solid arrow is a mention in a signature, so a change carries outward along it; a dashed one is in a body, where it stops."
+  say "${k}g${r} on the page switches to the reading order: the same change as numbered threads, and ${k}space${r} marks one definition read and moves on. The page is one self-contained file, so it can be sent to someone."
+  local kw=20
+  key "seam <range> --html" "the page"
+  key "seam <range> --score" "the shape, as s showed it"
+  key "seam --mr 1234" "any GitLab MR, through glab"
+  ask "Open this change's page in your browser?" || return
+  demo_reset
+  (cd $repo && seam origin/main...HEAD --html)
+  pause
+}
+
+part_staging() {
+  heading $1
+  demo_reset
+  cat > $repo/src/fees.ts <<'EOF'
+import type { Order } from "./order";
+
+export const RESTOCKING_WINDOW_DAYS = 30;
+const FEE_RATE = 0;
+
+export function daysSince(from: Date, to: Date): number {
+  return Math.floor((to.getTime() - from.getTime()) / 86_400_000);
+}
+
+// Returns inside the window are free; after it, a share of the total.
+export function restockingFee(order: Order, returnedAt: Date): number {
+  if (feeWaived(order)) return 0;
+  if (daysSince(order.deliveredAt, returnedAt) <= RESTOCKING_WINDOW_DAYS) return 0;
+  return Math.round(order.total * FEE_RATE * 100) / 100;
+}
+
+// Orders over $500 never pay a restocking fee.
+export function feeWaived(order: Order): boolean {
+  return order.total > 500;
+}
+EOF
+  say "The symbol view works on your own uncommitted work too: it is what ga opens. The demo now has two changes in one file, src/fees.ts: a new feeWaived rule with restockingFee calling it, which you want to commit, and FEE_RATE set to 0 while you were testing, which you do not."
+  look 1 "Each row has the stage cells ga's file rows have: staged, then unstaged."
+  look 2 "${k}space${r} on feeWaived stages that function alone, then restockingFee. The file's diff is cut to the symbol's lines, so FEE_RATE stays unstaged in the same file."
+  look 3 "${k}c${r} commits what is staged, in your editor with the diff below. ${k}f${r} is the file panel, where ${k}p${r} stages by hunk and ${k}d${r} discards."
+  say "Hunk staging gets you there too, when the hunks happen to fall apart. By symbol, the unit is the thing you meant to change."
+  launch ga
+  demo_reset
+}
+
+part_log() {
+  heading $1
+  say "Any commit reads the same way. gl is the log; ${k}enter${r} on a commit opens it by symbol, ${k}o${r} lists its files. Try it on the restocking fee commit."
+  demo_reset
+  launch gl
+}
+
+part_recap() {
+  heading $1
+  say "What reading by symbol gave you, against what the file list could:"
+  local q f s
+  printf "  ${k}%-22s %-22s %s${r}\n" "" "by file" "by symbol"
+  for q f s in \
+    "where to start" "wherever it sorts" "the top row" \
+    "a changed contract" "read every function" "${a}~${r} on its row" \
+    "what it breaks" "nothing, until CI" "${b}✗${r} on the caller, a fix under it" \
+    "what is safe to skim" "nothing says" "no ${a}~${r}: only the body changed" \
+    "rewiring" "nothing says" "${k}⇢${r}: a mention the change added" \
+    "committing a part" "hunks, if they split" "${k}space${r} on the function" \
+    "how hard it is" "the line count" "${k}s${r}: the shape, and what to ask for"
+  do
+    printf "  %-22s ${m}%-22s${r} %s\n" "$q" "$f" "$s"
+  done
+  print
+  say "None of it needs a model or a guess: seam parses both sides, tsgo type checks the callers, and the answer is the same every time. Claude comes on top of that, not instead of it."
+  say "Next, ${k}Bad changes, and how symbols show them${r}: six branches that go wrong in six ways, and how the tree and the score catch each."
+}
+
+# The bad changes: each a branch of the demo off main. demo_on <name> checks
+# one out as it was built; byfile <name> is what GitLab would give you;
+# score <name> is seam's score of it.
+demo_on() { demo_reset; git -C $repo switch -q tour/$1; }
+byfile() {
+  print -r -- "  ${m}by file${r}"
+  (cd $repo && git diff --stat=$(( w - 2 )) --stat-graph-width=20 origin/main...tour/$1) | sed 's/^/  /'
+  print
+}
+score() { (cd $repo && COLUMNS=$(( w + 4 )) SEAM_COLOR=1 seam origin/main...tour/$1 --score) | sed 's/^/  /'; }
+# guess <n> <name> <question...>: the change as files and what to wonder
+# about it, then the score on part <n>'s next page.
+guess() {
+  local n=$1 b=$2; shift 2
+  byfile $b
+  local q; for q; do look "?" "$q"; done
+  pause "show seam's score" || return 1
+  heading $n
+  score $b
+}
+
+part_score() {
+  heading $1
+  demo_reset
+  say "seam scores a change on what makes it hard to read: not whether the code is good, but whether a reviewer can hold it in their head. Here is the restocking fee change from the last tour, by symbol, scored:"
+  score restocking-fee
+  pause "what each line means" || return
+  heading $1
+  say "Each line is a count, with a bar: ${g}green${r}, ${a}amber${r} or ${b}red${r}. Anything not green says what to do about it, underneath. There is no total, since one number hides which of the problems you have; the verdict is the worst line, because a change with one terrible dimension is hard however tidy the rest is."
+  local kw=10
+  key stories "threads that nothing makes you read together. Four is four reviews in one branch"
+  key loose "changed definitions nothing else in the change touches. All loose is a sweep"
+  key knots "a circle: no end of it can be read first"
+  key chain "how many layers you follow down from one entry point"
+  key carry "changed interfaces named in other changed signatures, so the change travels on"
+  key heaviest "the most changed lines in one definition"
+  key spread "files and directories: each one a context switch"
+  key safe "definitions whose body alone changed, which nothing outside them can break. The good news, never rated"
+  print
+  say "No model: the same change scores the same every time, and each line names the definition to blame, so it can be argued with. ${k}s${r} in any symbol view shows it in the preview; ${k}seam <range> --score${r} prints it."
+  say "Each part after this is a made-up branch that goes wrong one way. You get it as files first, the way GitLab would show it. Guess what is wrong, then see what the score and the tree say."
+  pause
+}
+
+part_sweep() {
+  heading $1
+  demo_on sweep
+  say "Someone swapped console.log for the new log.info in every job. Ten files, sixty lines: the kind of MR that sits in the queue because nobody has half an hour."
+  guess $1 sweep "How long would you give it? What could it break?" || return
+  say "${b}Red${r}, and the easiest review in the tour. ${k}loose${r}: ten of ten definitions touch nothing else in the change. ${k}safe${r}: ten of ten changed only their bodies. No signature moved, so nothing outside them can break."
+  say "It is red because it is not one change but one edit made ten times, and wants reading as a list, not as a story. Which is fast, once you know."
+  look 1 "In the tree every row is flat: no ${a}~${r}, no ${k}▸${r}, nothing to open. j down the rows with the preview on; a glance each."
+  look 2 "What to ask for: nothing, as it stands. The mistake is a sweep inside a feature branch, where these ten rows bury the three that matter. By symbol they are easy to tell apart: the three have a ${a}~${r} or something under them."
+  launch gdm
+}
+
+part_tangle() {
+  heading $1
+  demo_on tangle
+  say "A branch called Friday fixes. Eight jobs each got a small change. Eight files, 48 lines, all in one directory: it looks like one thing."
+  guess $1 tangle "Is this one review, or several?" || return
+  say "${k}stories${r}: eight threads, and nothing makes you read any two of them together. The tree says it before the score does: eight top-level rows, each opening to the one helper it now calls, marked ${k}⇢${r} as a new mention. No row reaches into another."
+  look 1 "Each top-level row is an MR that could ship on its own. Reviewed together, each gets an eighth of your attention and you pay eight context switches for it."
+  look 2 "By file you would find that out a file at a time. By symbol it is the first screen: count the top-level rows."
+  look 3 "What to ask for: split the branch at the top-level rows. Or review it as a list of eight small things, knowing that is what you are doing."
+  launch gdm
+}
+
+part_chain() {
+  heading $1
+  demo_on chain
+  say "Yen has no cents, so the checkout should round yen to whole units. Nine files, each +2 -2, and the diff reads the same nine times."
+  guess $1 chain "Which line changes what the checkout does?" "How many functions' contracts changed?" || return
+  say "${k}chain${r}: one entry point, nine layers down, and every row has ${a}~${r}: its signature changed, because currency is threaded through all nine. That is why nine functions changed, and why they all look alike."
+  look 1 "${k}L${r} opens the whole chain: eight rows of plumbing, then roundCents at the bottom, the only one with a line that does anything. ${k}b${r} turns the tree over and puts it first."
+  look 2 "The preview of each plumbing row shows the ${a}~${r} is the new parameter and nothing else: skim them. Read roundCents."
+  look 3 "What to ask for: currency on something the chain already carries, like the cart, so the next thing that needs threading through does not change nine signatures again."
+  launch gdm
+}
+
+part_carry() {
+  heading $1
+  demo_on carry
+  say "Money was a number. Now it is cents with a currency, so no amount is ever read in the wrong one. One file, fifteen lines: the smallest diff in the tour."
+  guess $1 carry "Is a one-file change safe to approve quickly?" || return
+  say "${k}carry${r}: four changed interfaces named in other changed signatures. Money is in LineItem's, Refund's and invoiceTotal's; LineItem in Invoice's; Invoice in Refund's. A type change travels through every signature that names it, and none of them stops it."
+  say "Nor does the edge of the diff. The score measures what is in the change; what it breaks outside is the symbol view's callers row:"
+  look 1 "${k}L${r}, and give tsgo a moment. Under Invoice, invoiceTotal and refundFor, a callers elsewhere row: revenue, refundedShare and invoiceLine, code the change never touched, each with ${b}✗${r}. None of their files is in the diff."
+  (( $+commands[claude] )) &&
+    look 2 "Sonnet proposes a fix under each ${b}✗${r}; ${k}F${r} makes it here, and tsgo checks it again."
+  look 3 "What to ask for: those callers, in this MR. They are what breaks the build, and the one-file diff was never going to show them."
+  (( $+commands[tsgo] && $+commands[node] )) ||
+    say "${a}tsgo or node is not installed here, so there is no callers row.${r} brew install tsgo (and node) to see it."
+  launch gdm
+}
+
+part_knot() {
+  heading $1
+  demo_on knot
+  say "Heavily discounted orders become final sale: no refund. Two files, fifteen lines, and each reads fine: refundAmount asks isFinalSale, isFinalSale asks the discount."
+  guess $1 knot "What happens when you call refundAmount?" || return
+  say "${k}knots${r}: refundAmount asks isFinalSale, which asks discountRate, which works the discount out from refundAmount. It recurses until the stack runs out. ${k}chain${r} says 13+ for the same reason: a circle has no bottom."
+  look 1 "The tree opens refundAmount to isFinalSale to discountRate and stops there: discountRate uses refundAmount, which is already above it. seam cut the circle at refundAmount, where the score says."
+  look 2 "seam runs nothing. It flags a circle because a change that brings one is worth a look every time. By path, the two halves are in two files, and you have to hold both at once to see it."
+  look 3 "What to ask for: the discount from the order's list price, not from the refund. Untangle it before anyone reviews the rest."
+  launch gdm
+}
+
+part_heavy() {
+  heading $1
+  demo_on heavy
+  say "Shipping rates go up 6%, and parcels over 20kg pay a surcharge. One file, +205 -100."
+  guess $1 heavy "Where is the surcharge applied? Is any rate wrong?" || return
+  say "${k}heaviest${r}: 300 changed lines in zoneRate. The tree is two rows, zoneRate and the new surcharge under it, and that is all symbols can do here: one definition is one row, however big."
+  look 1 "The score is honest about it. Where the others said where to look, this one says the definition is the problem: a hundred cases each changed the same way, and nobody checks a hundred rates by eye."
+  look 2 "What to ask for: the rates as data, a table the code reads, checked against the carrier's sheet; and the surcharge as its own small change, where it is five lines."
+  launch gdm
+}
+
+part_gallery() {
+  heading $1
+  demo_reset
+  say "All of them, as ${k}seam --score --brief${r} says them: one line each, for a footer or a comment on an MR."
+  local b
+  for b in restocking-fee sweep tangle chain carry knot heavy; do
+    printf "    ${k}%-15s${r} " $b
+    hang 20 "$(cd $repo && seam origin/main...tour/$b --score --brief)"
+  done
+  print
+  say "By file, the line counts pointed the wrong way: the sixty-line sweep was the safest thing here, the fifteen-line carry broke the build, and the fifteen-line knot never returns. A file list says how big a change is. The symbol tree says what shape it is, and the shape is what the review costs."
+  local kw=24
+  key "s" "in any symbol view: the score of what you are reading"
+  key "seam <range> --score" "a branch or range, from the command line"
+  key "seam --mr 1234 --score" "any GitLab MR, through glab: worth a look before you say yes to a review"
+  if mine; then
+    print
+    ask "Score the branch you are on, in $(cd $here && basename "$(git rev-parse --show-toplevel)")?" &&
+      (cd $here && seam "$(otis-config base)...HEAD" --score)
+  fi
+}
+
+part_mr() {
+  heading $1
+  say "A review in gmr is the symbol view with GitLab's threads laid over it. The loop:"
+  key gmr "every MR: to review, yours, merged this week; ? names every glyph"
+  key enter "review one, by symbol, each symbol with its open threads and drafts beside it and the threads under their lines in the preview. It opens in a shared review worktree, never your checkout"
+  key f "by file and back: each file with its viewed mark, unresolved threads and waiting drafts"
+  key "then enter" "nvim, side by side against the MR's base, comments inline"
+  print
+  print -r -- "  ${m}in nvim${r}"
+  key "<leader>mc" "comment on the line, or reply to its thread; a visual selection starts a new one"
+  key "<leader>mr" "resolve or unresolve"
+  key "<leader>me md" "edit or delete your comment"
+  key "<leader>ml" "every thread in the quickfix list"
+  key "<leader>mo" "threads on no line: overview, whole-file, outdated"
+  key "]r [r" "next or previous file in the MR"
+  key "<leader>ms" "submit your drafts"
+  print
+  print -r -- "  ${m}back in the picker${r}"
+  key v "mark a file viewed"
+  key o "threads on no line, to reply or resolve"
+  key n "only what changed since your last review"
+  key u "catch up when the author pushes"
+  key S "submit your drafts, optionally approving"
+  key A "approve the commit you are looking at"
+  key c "the commits view"
+  print
+  say "Comments are drafts until you submit them, as with GitLab's Start a review; on your own MR they go at once (${k}<leader>mt${r} switches). Enter on one of your own MRs in gmr opens its comments to address, where its branch is checked out."
+  offer "Open gmr" gmr
+}
+
+part_claude_review() {
+  heading $1
+  say "${k}C${r} on an MR you are reviewing, in gmr or from inside the review, has Claude Code read it in the background and propose comments. Everything it writes is a draft of yours: nothing reaches GitLab until you submit."
+  look 1 "It runs on its own. ${k}q${r} goes back to the picker while it works; ${k}C${r} again opens its view, every step it reads and says, following the newest. ${k}v${r} adds its thinking and what each tool returned, ${k}/${r} searches, ${k}x${r} stops it, ${k}r${r} runs it again."
+  look 2 "It reads the change the way you do and knows what the symbol view already shows you: seam's symbols and what each newly uses, Haiku's gloss, tsgo's callers elsewhere with their errors, and Sonnet's fix under each. It adds to that rather than repeat it. It spends its time where the tree says a change can break things, a ${a}~${r} signature or a ${k}⇢${r} new mention, and most of all on the callers with no ${b}✗${r}, which nothing else checks. If tsgo has not found the callers yet, C asks whether to wait for them. Say ${k}y${r}: without them Claude has to hunt for callers with grep."
+  look 3 "Its drafts sit on their symbols in the tree, ${y}✎${r} on the row, and are marked as Claude's in the preview, in nvim and in S's prompt. A comment about a caller the MR does not touch goes on the signature that breaks it, beside its callers row."
+  look 4 "Under each draft, for you alone and never posted: first where its symbol sits (what happened to it, the entry point it is reached from, which callers break), then why Claude wrote it, where in the tree to look, and how sure it is. Edit or delete drafts in nvim, then ${k}S${r} posts what is left, under your name."
+  look 5 "It cannot publish anything: it gets read-only file tools, no MCP servers and none of your settings, and answers in JSON. otis's one write is creating drafts, and if the MR moves while Claude reads, nothing is drafted."
+  look 6 "With otis.remote and otis.claudeCommand set (the settings tour), it can run the checks you named, a type check or a test, in your workspace when a comment rests on one, and says what it ran. A hook blocks any other command."
+  look 7 "Up to four run at once, each in a worktree of its own. Start one on every MR in your queue and read them as they land; the row in gmr shows each one's drafts waiting."
+  say "${k}git config --global otis.lessons true${r} has every comment also name the principle behind it and teach it, with where to read more. Also for you alone."
+  pause
+}
+
+part_claude_fix() {
+  heading $1
+  say "On your own MR, ${k}C${r} proposes fixes instead: for the unresolved threads that want a code change, and for anything it finds itself. ${k}C${r} in gb does the same for a branch with no MR yet."
+  look 1 "It plans, then makes each change in a worktree of its own, never your checkout. Start one, leave, start another: gmr and gb show ${k}◌${r} while it works and ${k}✎N${r} when N fixes are waiting for you."
+  look 2 "Enter shows the proposals, each a diff beside the thread it answers, with why. Take them one of three ways:"
+  key space "accept it, or take it back; h keeps only some of its hunks"
+  key F "fold what you accepted: checks each patch still applies, lints (otis.lintCommand), shows which of your commits each goes into, folds them in with one rebase, then offers to push and to reply \"Fixed in <commit>\" and resolve the threads"
+  key "a A" "put one, or every accepted one, in your checkout uncommitted, when a proposal is a starting point"
+  key B "every accepted one on a branch of its own off origin/main, one commit a fix, for what belongs in a separate MR"
+  key d "discard one you do not want"
+  key "l r" "Claude's run, or run it again"
+  print
+  say "Runs survive a closed laptop. Sleep pauses them; a run killed outright picks up where it left off the next time gmr or gb draws, keeping every fix it had already made."
+  offer "Open gmr" gmr
+}
+
+part_verify_how() {
+  heading $1
+  say "${k}V${r} on an open MR in gmr, or a pushed branch in gb, finds out whether the change actually works by using it. Two agents, and the one that grades never does the work:"
+  look 1 "The judge, Claude on your machine and read-only, reads the change and writes the few observable claims that would prove it works."
+  look 2 "The tester, a Cursor Cloud agent in a VM with the repo's .cursor environment, starts the sandbox, uses the app in a real browser, records a video per claim, runs what needs running, and reports."
+  look 3 "The judge looks at the evidence itself: screenshots, frames from the videos, command output. Then it sends the tester back with what is still unproven, or gives a verdict, pass, fail or inconclusive, claim by claim. Up to three rounds."
+  look 4 "Every five minutes the judge looks in. A tester that is merely slow is left alone; one stuck on the same error, off doing what no claim needs, or about to give up on a claim it could check is interrupted with a note, and carries on in the same VM."
+  look 5 "After the verdict, a fresh Claude looks the whole exchange over as an outside eye: what cost either agent time or a round, and what to change, in the repo's verify-env brief, the sandbox or the criteria."
+  say "It takes 15 to 30 minutes, mostly the VM's boot and the sandbox's, billed by Cursor. Verifying again while the last VM is up sends it the new commit instead of booting another."
+  pause
+}
+
+part_verify_run() {
+  heading $1
+  say "A verification's row in gmr or gb shows where it has got to, and then its verdict. Its view (${k}V${r} again, or enter in gag) works like Claude's other runs, plus the evidence:"
+  key enter "the step under the cursor in full; G follows the newest"
+  key "v l /" "more detail, all of it in less, search"
+  key "x r c" "stop it (asks; the tester goes too), run it again, pick up a failed run"
+  key o "the tester in Cursor"
+  key a "the artifacts: recordings, screenshots, output; enter opens each"
+  key h "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
+  key p "after a confirm, upload the report to the MR and link it at the end of its description"
+  key i "act on the retrospective: a fix run whose proposals edit the verify-env brief; B puts them on a branch of their own"
+  print
+  say "Nothing else is posted to GitLab. The tester is told not to commit or push; that is a prompt, not a guarantee."
+  say "What the tester knows about your repo, how to run the environment, how to get into the app and where secrets come from, is the repo's .agents/skills/verify-env/SKILL.md. A real phone number can stand in for the customer (otis.phone, through Bandwidth); otis-config describes the settings it needs."
+  pause
+}
+
+part_verify_setup() {
+  heading $1
+  say "What a verification needs, as it stands here:"
+  if [[ -n $CURSOR_API_KEY ]]; then status ok CURSOR_API_KEY "exported"
+  else status need CURSOR_API_KEY "export it in your shell: Cursor's dashboard, Integrations"; fi
+  if (( $+commands[claude] )); then status ok claude "the judge"; else status need claude "Claude Code, which is the judge"; fi
+  if (( $+commands[ffmpeg] )); then status ok ffmpeg "for the judge to see the videos"; else status need ffmpeg "brew install ffmpeg, for the judge to see the videos"; fi
+  if mine; then
+    local top=$(cd $here && git worktree list --porcelain | sed -n '1s/^worktree //p') v
+    if [[ -e $top/.agents/skills/verify-env/SKILL.md || -e $top/.claude/skills/verify-env/SKILL.md ]]; then
+      status ok verify-env "the repo's brief for the tester"
+    else
+      status note verify-env "no .agents/skills/verify-env/SKILL.md here, so the tester has only AGENTS.md or the README"
+    fi
+    for v in cursorEnv cursorModel checkInModel verifyCheckIn verifyRetro; do
+      status note otis.$v "${$(cd $here && git config --get otis.$v):-not set}"
+    done
+  else
+    status note "your repo" "run otis-tour from your repo to check its verify-env brief and settings"
+  fi
+  print
+  say "The branch has to be pushed as it is. otis.cursorEnv runs the tester in a saved Cursor environment (a snapshot with the sandbox ready) rather than a plain checkout; otis.checkInModel sonnet makes the judge's look-ins cheaper."
+  offer "Open gmr" gmr
+}
+
+part_ship_merge() {
+  heading $1
+  say "From gmr, an MR goes from open to merged without the browser. Each row leads with glyph columns that are never cut off: the pipeline, where review stands, unresolved threads, and what Claude has waiting. A pipeline failing only on approval gates shows as waiting, not broken."
+  key c "CI jobs and logs: r retries a job, P plays a manual one, X cancels, ctrl-x cancels the pipeline"
+  key "R N" "retry what failed, start a new pipeline"
+  key v "the pipeline's stage graph; p opens it in the browser"
+  key m "merge, or merge when the pipeline succeeds; with no pipeline yet (the next layer of a stack), starts one first"
+  key r "have GitLab rebase it onto its target, after a confirm; on a glab stack, the whole stack"
+  key d "draft or ready, on yours"
+  key "A l a" "approve, labels, reviewers"
+  key "s W" "switch to its branch, or open it in its own worktree"
+  key "w y" "open it in the browser, copy its link"
+  pause
+}
+
+part_ship_prod() {
+  heading $1
+  say "Merged is not shipped. gmr's merged section says for each of yours this week whether it is live in production, and its heading carries the last 40 deploys as one glyph each. ${k}enter${r} on a merged MR opens gd on the deploy that carried it."
+  key gd "production deploys, newest first: when, how long, whether it went live, and the MRs it carried; a failed one's preview ends with its log. enter is its jobs"
+  print
+  say "${k}D${r} on one of your merged MRs has Claude watch production for it. It waits for the deploy, then checks Datadog ten minutes after and every ten minutes for 30 or 60 minutes by the change's risk, comparing with the hour before and with what else shipped in the same deploy."
+  look 1 "The row says ${k}◌ watching prod${r}, then ${g}✓ prod: not this MR${r}, ${a}⚠ possibly${r} or ${b}✗ likely${r}, the moment a check finds something worrying."
+  look 2 "The preview has the evidence, the reasoning and what to do. An alert comes the first time a check finds trouble, and again when the watch ends."
+  look 3 "It only reads, through your Datadog MCP server's query tools, following the repo's watch-prod skill."
+  say "Desktop alerts, in Ghostty, need no setup: a review requested of you, a mention, a comment or an approval on yours, your pipeline failing, your MR no longer mergeable or going live, and production rolled back."
+  offer "Open gd" gd
+}
+
+part_dashboard() {
+  heading $1
+  say "${k}otis${r} is where a morning starts: everything that wants you in one list, ordered by what a delay costs."
+  look 1 "Production trouble first, a watch that found something. Then what is broken: a rollback, a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what Claude has left you, then what you can finish: a verdict in, one ready to merge, one nobody is reviewing."
+  look 2 "One row a thing, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, the pipeline, because that is what you would do next."
+  look 3 "Under that, what is moving without you: Claude's runs, your pipelines, and your merged MRs production has not taken yet, each saying where it has got to. Last, the branch you are on: uncommitted, unpushed, behind."
+  look 4 "${k}enter${r} does what the row says. ${k}m b d a w${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}D${r} discards otis's own note, never the MR's state. It reloads every 10 seconds."
+  say "Nothing waiting is the point: a section with nothing in it is simply gone."
+  key gag "everything Claude is doing or has done here in the background, reviews, fixes, watches and verifications, running ones first. enter is every step; d forgets a finished run"
+  offer "Open otis" otis
+}
+
+part_commits() {
+  heading $1
+  demo_reset
+  (cd $repo
+    cat >> src/fees.ts <<'EOF'
+
+// Orders over $500 never pay a restocking fee.
+export function feeWaived(order: Order): boolean {
+  return order.total > 500;
+}
+EOF
+    git commit -qam "Waive the restocking fee on large orders"
+    perl -pi -e 's|^export function daysSince|// Whole days, rounded down.\nexport function daysSince|; s/order.total > 500/order.total >= 500/' src/fees.ts)
+  say "The demo branch now has two commits, and two uncommitted edits in src/fees.ts: a comment on daysSince, which belongs in the first commit, and >= in feeWaived, which belongs in the second. Put each where it belongs:"
+  look 1 "${k}ga${r}, then ${k}space${r} on feeWaived only, and ${k}q${r}. ${k}gam${r} folds what is staged into the last commit (on a stack, it restacks the branches above)."
+  look 2 "${k}ga${r} again, stage daysSince, ${k}q${r}. ${k}gfx${r} lists the branch's commits: pick \"Charge a restocking fee\". The edit goes into the commit that made daysSince, and the one above it is replayed on top."
+  look 3 "${k}gl${r} is the log: ${k}r${r} rewords a commit, ${k}f${r} folds what is staged into the one under the cursor. Try a subject like \"feat: stuff\" to meet the message rules: no type prefix, 72 characters, no em dash."
+  look 4 "${k}gundo${r} lists every state HEAD has been in. Pick one from before the folds and it is all taken back."
+  look 5 "${k}gwip${r} sets everything aside as a commit, not a stash, which every worktree shares; ${k}gunwip${r} brings it back."
+  say "Also: ${k}gcm${r} commits in your editor with the diff below, ${k}gcp \"subject\"${r} stages, commits and pushes, ${k}gdd${r} discards (asks first), ${k}gpark${r} stashes a selection instead, ${k}gp${r} pushes, refusing to overwrite commits you have not seen."
+  shell
+  demo_reset
+}
+
+part_branches_gb() {
+  heading $1
+  demo_reset
+  (cd $repo
+    git branch -qf tour/old-idea main
+    git switch -qC tour/receipt-copy main
+    perl -pi -e 's/Refund: /Your refund: /' src/email.ts
+    git commit -qam "Say whose refund it is"
+    git switch -q tour/restocking-fee)
+  say "${k}gb${r} lists branches laid out as gmr is, main first. The demo has three besides main: the restocking fee, a receipt tweak, and tour/old-idea, which you are done with."
+  look 1 "Each row: whether Claude is working there or has fixes waiting, the MR's state (none here, with no GitLab), how far it has drifted from origin/main, then the name, its prefix dimmed. ${k}?${r} names every glyph."
+  look 2 "${k}enter${r} switches to it; a branch checked out in a worktree takes you there instead. ${k}c${r} is its commits in gl. ${k}W${r} opens it in a worktree of its own."
+  look 3 "${k}d${r} on tour/old-idea deletes it, or every branch marked with ${k}space${r}, leaving anything checked out. In your repo ${k}M${r} marks the ones safe to delete: their MR merged or closed, with nothing committed since."
+  look 4 "In your repo: ${k}n${r} opens an MR for it, ${k}C${r} has Claude propose fixes before there is one, ${k}V${r} verifies it in Cursor Cloud, pushing it first if origin is behind."
+  launch gb
+}
+
+part_branches_more() {
+  heading $1
+  demo_reset
+  say "A worktree is a second checkout of the same repo, for what runs beside yours: a review, Claude's runs, a branch you are waiting on. otis keeps its own under .claude/worktrees."
+  key "gwn <name>" "a new branch, <prefix>/<name> off origin/main, in a worktree of its own, and takes you there"
+  key gw "worktrees and what each holds: enter goes there, d removes (to the Trash, ignored files and all), M marks the safe ones"
+  key "gbn <name>" "a new branch here"
+  key gup "rebase onto a fresh origin/main, and print how to undo it"
+  key grb "interactive rebase from a commit you pick"
+  key gstack "the branch's commits as a glab stack: one branch and MR a commit, pushed bottom first, synced"
+  print
+  say "Worktrees on merged or closed branches go by themselves once an hour, unless a shell has been in one in the last half hour or anything there is uncommitted, and each sends an alert with the line that brings it back."
+  [[ -n $(git config --get otis.branchPrefix) ]] ||
+    say "${a}gwn and gbn need a branch prefix:${r} git config --global otis.branchPrefix <your name>."
+  say "Try ${k}gwn receipts${r} then ${k}gw${r} in the demo. gw and gwn change your shell's directory only where otis is sourced in it, as otis-setup does."
+  shell
+  demo_reset
+}
+
+part_settings() {
+  heading $1
+  local v src=$here
+  mine || src=$HOME
+  say "The settings that change the most, and what each is set to $( [[ $src == $here ]] && print "in $(basename $(cd $here && git rev-parse --show-toplevel))" || print "globally"):"
+  setting() {
+    v=$(cd $src && git config --get-all otis.$1 2>/dev/null | paste -sd, -)
+    [[ -n $v ]] && v=$g$v$r || v="${m}not set${r}"
+    printf "    ${k}%-18s${r} %s\n" otis.$1 "$v"
+    printf "    %-18s " ""; hang 23 "$2"
+  }
+  setting remote "an ssh host (a Coder workspace) where heavy commands run, with otis.remotePath its checkout; git-remote-run sends your checkout there as it stands and brings back what changed"
+  setting claudeCommand "what Claude may run there, one prefix each (bazel test), targets named outright or with :all, never a glob. Without it Claude's runs have no shell at all"
+  setting lintCommand "lint run before F folds Claude's fixes in"
+  setting lessons "true: each of Claude's comments and fixes also teaches the principle behind it, for you alone"
+  setting editor "what opens files from the pickers: cursor, code, zed, nvim"
+  setting theme "otis-theme shows each theme on otis's own rows and keeps the one you pick"
+  setting sideBySide "always, or auto from 120 columns: diffs side by side"
+  setting branchPrefix "the <prefix>/ that gbn and gwn put on a branch"
+  print
+  say "${k}otis-setup --check${r} says what is installed and what is missing, and which optional features are set up in the repo you run it in."
+  ask "Pick a theme now?" && otis-theme
+  pause
+}
+
+part_cheatsheet() {
+  heading $1
+  local kw=14
+  print -r -- "  ${m}anywhere${r}"
+  key "j k / esc q" "move, search, stop searching, quit"
+  key "?" "every key this picker has, and what its glyphs mean"
+  key "otis gg" "the dashboard; every command"
+  print
+  print -r -- "  ${m}by symbol${r}   gdm, ga, enter in gl, an MR in gmr"
+  key "l h L H" "open, close, open all, close all"
+  key "~ ⇢ ✗" "signature changed; a new mention; a caller it breaks"
+  key "i b s t" "what it uses; bottom up; the shape; hide tests"
+  key "F f enter" "Claude's fix for a broken caller; by file; nvim"
+  key "space c" "in ga: stage one symbol, commit"
+  print
+  print -r -- "  ${m}gmr${r}"
+  key "enter" "review, or address comments on yours"
+  key "v o n u" "viewed, threads on no line, since last review, catch up"
+  key "S A" "submit drafts, approve"
+  key "C" "Claude drafts comments, or proposes fixes on yours"
+  key "V D" "verify in Cursor Cloud; watch production (merged)"
+  key "c m r" "CI jobs, merge, rebase"
+  key "<leader>m…" "in nvim: c comment, r resolve, l list, s submit"
+  print
+  print -r -- "  ${m}fixes${r}      enter on a fix run"
+  key "space h" "accept, keep some hunks"
+  key "F a B d" "fold in, apply uncommitted, own branch, discard"
+  print
+  print -r -- "  ${m}history${r}"
+  key "gam gfx" "fold staged into the last commit, into an earlier one"
+  key "gundo gwip" "undo from the reflog; set work aside"
+}
+
+# --- run
+
+# run <tour> [part]: a tour in a subshell of its own, so q anywhere in it
+# comes back to the menu.
+run() {
+  (
+    cur_tour=$1 cur=(${=tparts[$1]})
+    integer i from=1
+    [[ -n $2 ]] && from=${cur[(i)$2]}
+    for (( i = from; i <= $#cur; i++ )); do part_${cur[$i]} $i; done
+    [[ $#cur -gt 1 || $1 == cheatsheet ]] && pause "back to the menu"
+  )
+  mkdir -p ${seen:h} && { grep -qxF $1 $seen 2>/dev/null || print $1 >> $seen; }
+}
+
+menu() {
+  local sel t rows
+  while :; do
+    theme
+    rows=
+    for t in $tours; do
+      rows+="$(grep -qxF $t $seen 2>/dev/null && print "${g}✓${r}" || print " ") ${ttitle[$t]}${(l:$(( 46 - ${#ttitle[$t]} )):: :)}${m}${tkind[$t]}${r}"$'\t'"$t"$'\n'
+    done
+    sel=$(print -rn -- $rows | git-fzf 'tour ' 'enter=take this tour' --ansi --no-sort \
+      --delimiter=$'\t' --with-nth=1 --preview 'otis-tour --about {2}' --preview-window 'right,45%,wrap') || return
+    [[ -n $sel ]] || return
+    run ${sel##*$'\t'}
+  done
+}
+
+case $1 in
+  --about)
+    [[ -n ${ttitle[$2]} ]] || exit 0
+    print -r -- "${a}${ttitle[$2]}${r}"
+    print -r -- "${m}${tkind[$2]}${r}"
+    print
+    wrap $(( ${FZF_PREVIEW_COLUMNS:-80} - 2 )) 0 "${tabout[$2]}"
+    ps=(${=tparts[$2]})
+    if (( $#ps > 1 )); then
+      print
+      for t in $ps; do print -r -- "  ${m}·${r} ${ptitle[$t]}"; done
+    fi
+    exit 0 ;;
+  --list)
+    for t in $tours; do
+      printf "  ${k}%-11s${r} %s\n" $t "${ttitle[$t]}"
+      ps=(${=tparts[$t]})
+      (( $#ps > 1 )) && for p in $ps; do printf "      ${m}%-14s${r} %s\n" $p "${ptitle[$p]}"; done
+    done
+    exit 0 ;;
+esac
+
+missing=()
+for c in git fzf delta nvim ast-grep seam; do (( $+commands[$c] )) || missing+=($c); done
+if (( $#missing )); then
+  print -u2 "otis-tour needs ${(j:, :)missing}. otis-setup offers to install them; seam is brew install booka66/seam/seam."
+  exit 1
+fi
+trap 'rm -f $tour/built.$$' EXIT
+
+if [[ -n $1 ]]; then
+  if [[ -n ${ttitle[$1]} ]]; then run $1
+  else
+    for t in $tours; do
+      ps=(${=tparts[$t]})
+      (( $ps[(Ie)$1] )) && { run $t $1; exit 0; }
+    done
+    print -u2 "otis-tour: no tour or part called $1 (otis-tour --list)"; exit 2
+  fi
+  exit 0
+fi
+menu

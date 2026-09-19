@@ -1,0 +1,87 @@
+#!/bin/sh
+# git-fzf-bg [--tick | --landing] [--then <actions>] <list command...>
+# Reload the open picker with a list command's rows without blocking it: the
+# command runs in the background, and only once its rows are written does the
+# picker reload, from the file. Use it as execute-silent(git-fzf-bg ...) in
+# place of reload(...) for any reload that is not the picker's first.
+#
+# fzf blocks the picker while a reload hunts the row --track is holding: keys
+# typed meanwhile are dropped, not queued, until that row comes down the
+# stream. A list that takes half a second to build (gmr, gb, gw) locked the
+# picker that long on every timer tick, every u and every background fetch
+# landing. Reading a finished file takes a few milliseconds, which shrinks the
+# lock to the moment fzf takes to find the row again: still enough to eat a key
+# from a held j. So rows identical to the last ones shown do not reload at all,
+# which is nearly every timer tick; only the footer redraws, since the list
+# command may have changed what it says (a transform, which queues keys rather
+# than dropping them). A picker's first load saves what it shows as
+# bg.shown (start:reload(... | tee "$GIT_FZF_STATE/bg.shown")), or its first
+# refresh reloads for nothing.
+#
+# A newer request for the same command wins: an older run that finishes after
+# it never reloads, so the list cannot step back to older rows. <actions> go
+# after the reload in the same request, e.g. refresh-preview.
+#
+# --tick is a timer's request, and waits while you read. fzf puts the preview
+# back at the top on every reload and never says where it was, so a reload
+# under a preview you had scrolled threw you back to the top: git-fzf-scroll
+# replays a wheel's or ctrl-d's lines afterwards, a visible jump, and a drag
+# of the scrollbar it never hears of at all. So while the focused row's
+# preview is longer than its pane, and you have touched the picker in the
+# last five minutes, new rows wait in bg.pending and go in when you move off
+# it (--pending, from git-fzf's preview), when the preview is reset anyway.
+# The <actions> wait too, refresh-preview being the same jump: the preview
+# you move to is drawn fresh, and so is this one when you come back to it.
+# A row whose preview fits, or a picker left alone, reloads as before.
+#
+# --landing is background work landing (Claude's glosses, tsgo's callers),
+# which never changes what you are looking at: its rows always wait in
+# bg.pending for you to move off the row, whatever the preview, and its
+# <actions> are dropped, the row you move to being drawn fresh anyway. Only a
+# picker with nothing focused yet takes them at once.
+# --pending: put the rows a tick or a landing held back in.
+st=$GIT_FZF_STATE
+[ -n "$st" ] && [ -d "$st" ] && [ -n "$FZF_PORT" ] || exit 0
+post() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$1" >/dev/null; }
+if [ "$1" = --pending ]; then
+  mv "$st/bg.pending" "$st/bg.caught" 2>/dev/null || exit 0
+  cp "$st/bg.caught" "$st/bg.shown"
+  post "reload(cat $st/bg.caught)"
+  exit 0
+fi
+then= tick= landing=
+[ "$1" = --tick ] && { tick=1; shift; }
+[ "$1" = --landing ] && { landing=1; shift; }
+[ "$1" = --then ] && { then="+$2"; shift 2; }
+reading() {
+  f=$(cat "$st/focus" 2>/dev/null) && [ -n "$f" ] &&
+    [ "$(cat "$st/lines.$f" 2>/dev/null || echo 0)" -gt "$(cat "$st/plines" 2>/dev/null || echo 0)" ] &&
+    [ "${FZF_IDLE_TIME:-300}" -lt 300 ]
+}
+key=$st/bg.$(printf '%s' "$*" | cksum | cut -d' ' -f1)
+(
+  printf '%s\n' $$ > "$key.gen.$$"
+  mv "$key.gen.$$" "$key.gen"
+  "$@" > "$key.rows.$$" 2>/dev/null
+  if [ "$(cat "$key.gen" 2>/dev/null)" = $$ ]; then
+    held=
+    [ -n "$tick" ] && reading && held=1
+    [ -n "$landing" ] && [ -s "$st/focus" ] && held=1
+    if cmp -s "$key.rows.$$" "$st/bg.shown"; then
+      rm -f "$key.rows.$$" "$st/bg.pending"
+      act="transform-footer(git-fzf-footer)"
+      [ -n "$held" ] || act="$act$then"
+    elif [ -n "$held" ]; then
+      mv "$key.rows.$$" "$st/bg.pending"
+      act="transform-footer(git-fzf-footer)"
+    else
+      rm -f "$st/bg.pending"
+      mv "$key.rows.$$" "$key.rows"
+      cp "$key.rows" "$st/bg.shown"
+      act="reload(cat $key.rows)$then"
+    fi
+    post "$act"
+  else
+    rm -f "$key.rows.$$"
+  fi
+) </dev/null >/dev/null 2>&1 &

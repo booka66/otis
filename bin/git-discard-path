@@ -1,0 +1,37 @@
+#!/bin/sh
+# git-discard-path <status> <path> [<rename source>]: discard one path from ga.
+# The status is the two characters from git-file-list ("." for blank), and it
+# alone decides what discarding means: an untracked path is deleted, a new file
+# (added, or intent-to-add) is deleted along with any edits to it, a rename is
+# undone, and anything else goes back to HEAD. Confirms first, because this is
+# the one git operation with no reflog. ga reloads the path's row afterwards.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+st=$1
+p=$2
+from=$3
+[ -n "$p" ] || exit 0
+
+
+case $st in
+  '??') printf "${GK_BAD}delete${GK_R} untracked %s\n" "$p" ;;
+  A?|?A) printf "${GK_BAD}delete${GK_R} new file %s, and any edits to it\n" "$p" ;;
+  R?)   printf "${GK_ATTENTION}undo${GK_R} the rename of %s to %s, losing every change to it\n" "$from" "$p" ;;
+  *)    printf "${GK_ATTENTION}revert${GK_R} %s to HEAD, losing every change to it\n" "$p" ;;
+esac
+printf "this cannot be undone. proceed? [y/N] "
+# fzf's execute gives a real tty; when there isn't one, fall back to stdin so
+# this stays testable. An unreadable answer means no.
+ans=""
+read ans < /dev/tty 2>/dev/null || read ans 2>/dev/null || ans=""
+case "$ans" in
+  y|Y) ;;
+  *) echo "aborted"; exit 0 ;;
+esac
+
+if [ "$st" = '??' ]; then
+  rm -rf -- "$p"
+else
+  # restore takes a path HEAD does not have out of the index and the tree.
+  git restore --staged --worktree -- "$p" ${from:+"$from"}
+fi

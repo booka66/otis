@@ -1,0 +1,14 @@
+#!/bin/sh
+# Remove a stale index.lock, then print the refreshed list for ga. git-lock
+# refuses while a git command in this worktree is writing, or the lock is too
+# new to be sure nothing is, since deleting a live lock lets two writers clobber
+# the index; its reason (naming the git command, if one) shows as a row.
+
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+if ! why=$(git-lock --no-wait 2>&1); then
+  printf "${GK_BAD}✗${GK_R}  ${GK_BAD}%s${GK_R}\t\t..\n" "left the lock alone"
+  printf "${GK_ATTENTION}→${GK_R}  ${GK_ATTENTION}%s${GK_R}\t\t..\n" "$why"
+  exec git-file-list --cached
+fi
+exec git-file-list

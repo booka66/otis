@@ -1,0 +1,195 @@
+#!/bin/sh
+# git-branch-list --switch [--refresh]   rows for gb
+# git-branch-list --safe                fzf actions marking rows safe to delete (M)
+# git-branch-list --safe-after          the same, once a search M cleared is gone
+#
+# A row is what you see, then tab-separated branch, kind, worktree path, MR
+# iid, place, ahead, behind and what Claude has here ("fixing", a count of
+# fixes waiting, or nothing). kind and its label come from git-branch-facts,
+# which also keeps the MR cache fresh. place is where the branch is checked
+# out, if anywhere: here (a mark at the start of the row), or worktree, which
+# names the worktree in blue after the branch ("in mine", "in main checkout");
+# both keep d and M away from it. The preview (git-branch-preview) is handed
+# these fields, so moving through the list never asks git or GitLab again.
+#
+# The fixed zone is the state you act on and is never cut: the mark, whether
+# Claude is working here or has fixes waiting for you (as gmr shows it), the
+# branch's state, its MR and how far it has drifted from origin/main. Then the
+# branch name, with its prefix dimmed so the eye lands on the part that differs,
+# shortened from the front if the pane is narrow. The tail is context that can
+# go: where it is checked out, and when it last moved (the list is already
+# sorted by that).
+#
+# Stacks read as stacks, growing up: a branch built on another sits above it,
+# indented, top of the stack first. Built on means the nearest branch tip in its
+# history past origin/main (one git log, pushed or not), or failing that, the
+# branch its open MR targets. A parent whose MR merged or closed does not count.
+st=$GIT_FZF_STATE
+mode=$1
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+# Claude's runs that a closed laptop killed go on from where they stopped
+# (share/claude-run.sh), in a subshell so its helpers stay out of this script.
+( . "$share/claude-run.sh" && resume_all )
+
+# M marks by position in the whole list, and a search filters it: so with a
+# search the list is cleared first, and the marking waits for the cleared
+# list to be there (fzf's result event, bound in gb to --safe-after).
+case $mode in
+  --safe) if [ -n "$FZF_QUERY" ]; then : > "$st/mark-safe"; echo 'rebind(result)+clear-query'; exit 0; fi ;;
+  --safe-after) [ -e "$st/mark-safe" ] || exit 0; rm -f "$st/mark-safe"; mode=--safe ;;
+esac
+if [ "$mode" = "--safe" ]; then
+  awk -F'\t' -v cur="${FZF_POS:-1}" '
+    ($3 == "merged" || $3 == "closed" || $3 == "theirs") && $6 == "" { printf "pos(%d)+select+", NR }
+    END { printf "pos(%d)\n", cur }' "$st/branches"
+  exit 0
+fi
+
+cols=${FZF_COLUMNS:-0}
+[ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
+[ -n "$cols" ] || cols=100
+
+# What Claude is doing, the way gmr shows it. A run started from gb is filed
+# under the branch and one from gmr under the MR's iid, so a row asks about both.
+marks=$(git-mr-fix --marks 2>/dev/null |
+  jq -r 'to_entries[] | [.key, (.value.fixing | tostring), (.value.fixes | tostring)] | @tsv' 2>/dev/null)
+# Verifications in Cursor Cloud (git-verify), under the MR's iid or the branch
+# as fixes are: going, how it ended, the verdict and the commit it verified.
+verify=$(git-verify --marks 2>/dev/null |
+  jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' 2>/dev/null)
+
+git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
+  GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v now="$(date +%s)" -v cols="$cols" -v main="$(otis-config main)" \
+     "$(cat "$share/rowfmt.awk")"'
+  BEGIN {
+    # Thirty-one columns of fixed zone, then the name takes the rest.
+    budget = gk_list_width(cols) - 31
+    if (budget < 16) budget = 16
+    # Through the environment, not -v: macOS awk refuses a newline inside a -v
+    # value outright ("newline in string") and exits, which empties the list.
+    # git-mr-file-preview passes its multi-line lists the same way.
+    mn = split(ENVIRON["GK_MARKS"], mrows, "\n")
+    for (mi = 1; mi <= mn; mi++) {
+      if (split(mrows[mi], mf, "\t") < 3) continue
+      fixing[mf[1]] = mf[2]; fixes[mf[1]] = mf[3]
+    }
+    vn = split(ENVIRON["GK_VERIFY"], vrows, "\n")
+    for (vi = 1; vi <= vn; vi++) {
+      if (split(vrows[vi], vf, "\t") < 5) continue
+      vgoing[vf[1]] = vf[2]; vstatus[vf[1]] = vf[3]; vverdict[vf[1]] = vf[4]; vhead[vf[1]] = vf[5]
+    }
+  }
+  # Two columns, as in gmr: Claude working, or something of its waiting on you,
+  # and how much. A run from gb is filed under the branch and one from gmr
+  # under the iid, and a branch can have both, so a row asks about both.
+  function claude(b, mrid,   k) {
+    k = "b-" b; gsub(/\//, "%", k)
+    if (fixing[k] == "true" || (mrid != "" && fixing[mrid] == "true")) return "fixing"
+    if (fixes[k] + 0 > 0) return fixes[k] + 0
+    if (mrid != "" && fixes[mrid] + 0 > 0) return fixes[mrid] + 0
+    return ""
+  }
+  # Its two columns in the row, as gmr shows them.
+  function claude_glyph(w) {
+    if (w == "fixing") return GK_ATTENTION "\342\227\214 " GK_R
+    if (w != "") return GK_YOURS "\342\234\216" w GK_R
+    return "  "
+  }
+  # Its verification, as gmr shows it: going, the verdict at the tip of the branch,
+  # or that it broke. Filed under the MR when there is one.
+  function verify_glyph(b, mrid, tip,   k) {
+    k = (mrid != "") ? mrid : "b-" b; gsub(/\//, "%", k)
+    if (vgoing[k] == "true") return GK_ATTENTION "\342\227\216 " GK_R
+    if (vstatus[k] == "failed") return GK_BAD "\342\227\213 " GK_R
+    if (vstatus[k] != "done" || vhead[k] != tip) return "  "
+    if (vverdict[k] == "pass") return GK_GOOD "\342\227\217 " GK_R
+    if (vverdict[k] == "fail") return GK_BAD "\342\227\217 " GK_R
+    if (vverdict[k] == "inconclusive") return GK_CONTEXT "\342\227\217 " GK_R
+    return "  "
+  }
+  $1 == "CURRENT" { current = $2; next }
+  $1 == "WT"      { if (mainpath == "") mainpath = $2; if ($3 != "") wt[$3] = $2; next }
+  $1 == "UP"      { split($3, ps, " "); up[$2] = ps[1]; next }
+  $1 == "BRANCH" {
+    b = $2; kind = $3; age = now - $7
+    place = (b == current) ? "here" : (b in wt) ? "worktree" : ""
+
+    if (age < 3600) when = int(age / 60) "m"
+    else if (age < 86400) when = int(age / 3600) "h"
+    else if (age < 86400 * 14) when = int(age / 86400) "d"
+    else if (age < 86400 * 60) when = int(age / 604800) "w"
+    else when = int(age / 2592000) "mo"
+
+    # Ahead of and behind origin/main, padded by display columns rather than
+    # bytes: the arrows are three bytes each and one column each.
+    drift = ""; driftlen = 0
+    if ($8 > 0) { drift = GK_ATTENTION "\342\206\221" $8 GK_R; driftlen = 1 + length($8 "") }
+    if ($9 > 0) {
+      if (driftlen) { drift = drift " "; driftlen++ }
+      drift = drift GK_CONTEXT "\342\206\223" $9 GK_R; driftlen += 1 + length($9 "")
+    }
+    while (driftlen < 7) { drift = drift " "; driftlen++ }
+
+    # The MR sits in the fixed zone beside the state, since "open MR" and its
+    # number are the same fact and belong together.
+    iid = ($5 != "") ? GK_ATTENTION gk_padr("!" $5, 6) GK_R : "      "
+
+    mark = (place == "here") ? GK_ELSEWHERE "\342\226\266 " GK_R : "  "
+    where = ""
+    if (place == "worktree") {
+      if (wt[b] == mainpath) where = "main checkout"
+      else { k = split(wt[b], parts, "/"); where = parts[k] }
+      if (length(where) > 28) where = substr(where, 1, 27) "\342\200\246"
+      where = "  " GK_ELSEWHERE "in " where GK_R
+    }
+    name = gk_path(b, budget, GK_TEXT)
+
+    cw = claude(b, $5)
+    head = mark claude_glyph(cw) verify_glyph(b, $5, $10) $4 " " iid " " drift "  "
+    tail = name where "  " GK_CONTEXT when GK_R "\t" b "\t" kind "\t" wt[b] "\t" $5 "\t" place "\t" $8 "\t" $9 "\t" cw
+    if (kind == "main") pinned = head tail
+    else {
+      n++; heads[n] = head; tails[n] = tail; branch[n] = b; at[b] = n; tipsha[n] = $10; kinds[n] = kind; target[n] = $6
+      if (!($10 in tipat)) tipat[$10] = n
+    }
+  }
+  # A row, preceded by the branches stacked on it (their open MR targets it),
+  # top of the stack first.
+  function emit(i, depth,    k, ks, pad) {
+    if (depth < 30) { k = split(kids[i], ks, " "); for (; k >= 1; k--) emit(ks[k], depth + 1) }
+    pad = ""
+    if (depth > 0) { for (k = 1; k < depth; k++) pad = pad "  "; pad = GK_CONTEXT pad "\342\224\214 " GK_R }
+    print heads[i] pad tails[i]
+  }
+  END {
+    if (pinned != "") print pinned
+    for (i = 1; i <= n; i++) {
+      p = 0
+      if ((tipsha[i] in up) && (up[tipsha[i]] in tipat)) p = tipat[up[tipsha[i]]]
+      t = target[i]
+      if (!p && kinds[i] ~ /^(open|theirs)$/ && t != "" && t != main && (t in at)) p = at[t]
+      if (p && p != i && kinds[p] !~ /^(merged|merged-diff|closed|closed-diff)$/) {
+        kids[p] = kids[p] (kids[p] == "" ? "" : " ") i; stacked[i] = 1
+      }
+    }
+    for (i = 1; i <= n; i++) if (!stacked[i]) emit(i, 0)
+  }' > "$st/branches"
+
+# What the row's columns mean, for the ? help view (git-fzf-help), as gmr does
+# it. A column may be a glyph wide only because this is a keypress away.
+{
+  printf "${GK_CONTEXT}columns${GK_R}\n"
+  printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
+  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R}      Claude is working \302\267 Claude has fixes waiting for you (C)\n"
+  printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
+  printf "  ${GK_ATTENTION}!1234${GK_R}    its merge request\n"
+  printf "  ${GK_ATTENTION}\342\206\2213${GK_R} ${GK_CONTEXT}\342\206\22312${GK_R}  commits it has that origin/main does not, and the other way round\n"
+  printf "\n${GK_CONTEXT}state${GK_R}\n"
+  printf "  ${GK_MAIN}main${GK_R}      ${GK_ATTENTION}open MR${GK_R}   ${GK_GOOD}merged${GK_R}   ${GK_GOOD}closed${GK_R}   ${GK_GOOD}their MR${GK_R}\n"
+  printf "  ${GK_BAD}merged+${GK_R} ${GK_BAD}closed+${GK_R}  the MR is done but the branch has moved since\n"
+  printf "  ${GK_CONTEXT}no MR${GK_R}     ${GK_CONTEXT}unpushed${GK_R}  origin has it, or it is only here\n"
+} > "$st/legend"
+
+git remote get-url origin >/dev/null 2>&1 && git-test-files state > "$st/footer"
+cat "$st/branches"

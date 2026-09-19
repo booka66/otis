@@ -1,0 +1,136 @@
+#!/bin/sh
+# git-mr-preview <iid> <kind> [row id]: a gmr row at a glance, from the JSON
+# git-mr-list saved, so moving through the list never waits on GitLab. Yours and
+# merged ones show what gci did (git-ci-preview): approvals, threads, reviewers,
+# labels and the pipeline, or where a merged one is on its way to production.
+# One to review shows its summary and description. Open ones end with their
+# unresolved threads on the MR itself (git-mr-threads), which no file shows.
+#
+# A section heading gets the section: what is in it, and which of it is waiting
+# on you. The row is a heading rather than an MR, so without this the pane would
+# just be empty while the cursor passed over it.
+iid=$1 kind=$2 row=$3
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+
+if [ "$kind" = sep ]; then
+  case $row in
+    sep-to-review|sep-reviewed*) src=$st/mrs.json ;;
+    sep-yours)                   src=$st/ci.json ;;
+    sep-merged*)                 src=$st/ci-merged.json ;;
+    *) exit 0 ;;
+  esac
+  [ -s "$src" ] || exit 0
+  # Claude's marks and the gate jobs, as git-mr-list worked them out for this draw.
+  [ -s "$st/marks.json" ] || echo '{"gates": [], "watch": {}, "claude": {}, "fixes": {}, "verify": {}}' > "$st/marks.json"
+  jq -r -L "$share" --arg row "$row" --slurpfile marks "$st/marks.json" '
+    include "otis";
+    $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
+    def days: (now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) / 86400 | floor;
+    def line($n; $what; $color): if $n > 0 then "  " + $color + ($n | tostring) + r + " " + $what else empty end;
+    def title($text; $n; $noun):
+      attention + $text + r + context + "  \($n) \(plural($n; $noun; $noun + "s"))" + r, "";
+    # Verifications in Cursor Cloud (git-verify): going, and verdicts at the head of the MR.
+    def verifying($these):
+      ([$these[] | select($verify[.iid].verifying)] as $g |
+       if ($g | length) > 0 then "", attention + "  verifying " + ($g | map("!" + .iid) | join(", ")) + " in Cursor Cloud" + r else empty end),
+      ([$these[] | select(($verify[.iid] // {}) | .status == "done" and .verdict != "") | select($verify[.iid].head == .diffRefs.headSha)
+        | "!\(.iid) \($verify[.iid].verdict)"] as $v |
+       if ($v | length) > 0 then "", context + "  verified: " + ($v | join(", ")) + r else empty end);
+
+    (.data.currentUser.username // "") as $me |
+    if $row == "sep-merged-this-week" then
+      (.mrs // []) as $all |
+      title("merged this week"; ($all | length); "merge request"),
+      line([$all[] | select(.state == "live")] | length; "live in production"; good),
+      line([$all[] | select(.state == "deploying")] | length; "deploying now"; attention),
+      line([$all[] | select(.state == "queued")] | length; "queued behind the running deploy"; attention),
+      line([$all[] | select(.state == "rolledback")] | length; "rolled back"; bad),
+      line([$all[] | select(.state == "merged")] | length; "merged, not out yet"; elsewhere),
+      ([$all[] | select($watch[.iid].verdict | IN("likely", "possible"))] as $bad |
+       if ($bad | length) > 0 then
+         "", yours + "  the production watch flagged "
+           + ($bad | map("!" + .iid) | join(", ")) + r
+       else empty end),
+      ([$all[] | select($watch[.iid].watching)] | length) as $w |
+      (if $w > 0 then "", context + "  Claude is watching production for \($w) of them" + r else empty end)
+
+    elif $row == "sep-yours" then
+      (.data.currentUser.authoredMergeRequests.nodes // []) as $all |
+      title("yours"; ($all | length); "open merge request"),
+      line([$all[] | select(.approved)] | length; "approved"; good),
+      line([$all[] | select((.approved | not) and ((.approvalsLeft // 0) > 0))] | length; "still need approvals"; context),
+      line([$all[] | select((.draft | not) and (.reviewers.nodes | length) == 0)] | length; "with nobody asked to review"; attention),
+      line([$all[] | select((.headPipeline | effective($gates)) == "FAILED")] | length; "with a failing pipeline"; bad),
+      line([$all[] | select((.headPipeline | effective($gates)) == "APPROVAL")] | length; "waiting only on approval gates"; elsewhere),
+      line([$all[] | select(.draft)] | length; "still a draft"; context),
+      line([$all[] | select(.autoMergeEnabled)] | length; "set to merge when the pipeline succeeds"; good),
+      ([$all[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0) as $t |
+      (if $t > 0 then "  " + yours + ($t | tostring) + r + " unresolved "
+         + plural($t; "thread"; "threads") + " across them" else empty end),
+      ([$all[] | select(($fixes[.iid].fixes // 0) > 0)] as $f |
+       if ($f | length) > 0 then
+         "", yours + "  fixes from Claude to fold in on "
+           + ($f | map("!" + .iid) | join(", ")) + r
+       else empty end),
+      ([$all[] | select($fixes[.iid].fixing)] as $g |
+       if ($g | length) > 0 then "", attention + "  Claude is fixing " + ($g | map("!" + .iid) | join(", ")) + r else empty end),
+      verifying($all)
+
+    else
+      (.data.currentUser.reviewRequestedMergeRequests.nodes // []) as $all |
+      def mine_state: [.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED";
+      ($all | map(select(mine_state | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES") | not))) as $todo |
+      ($all | map(select(mine_state | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES")))) as $done |
+      (if $row == "sep-to-review" then $todo else $done end) as $these |
+      title(if $row == "sep-to-review" then "to review" else "reviewed, waiting on them" end;
+            ($these | length); "merge request"),
+      line([$these[] | select(.headPipeline.status == "FAILED")] | length; "with a failing pipeline"; bad),
+      line([$these[] | select(.headPipeline.status == null)] | length; "with no pipeline yet"; context),
+      ([$these[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0) as $t |
+      (if $t > 0 then "  " + yours + ($t | tostring) + r + " unresolved "
+         + plural($t; "thread"; "threads") + " across them" else empty end),
+      ([$these[] | .updatedAt | days] | max) as $old |
+      (if $old != null and $old > 0 then
+         "  " + context + "the quietest has not moved in \($old) " + plural($old; "day"; "days") + r
+       else empty end),
+      ([$these[] | select(($claude[.iid].drafts // 0) > 0)] as $d |
+       if ($d | length) > 0 then
+         "", yours + "  drafts from Claude waiting on "
+           + ($d | map("!" + .iid) | join(", ")) + r
+       else empty end),
+      ([$these[] | select($claude[.iid].clean != null and $claude[.iid].clean == .diffRefs.headSha)] as $c |
+       if ($c | length) > 0 then
+         "", good + "  Claude found nothing to comment on in " + ($c | map("!" + .iid) | join(", ")) + r
+       else empty end),
+      ([$these[] | select($claude[.iid].reviewing)] as $g |
+       if ($g | length) > 0 then
+         "", attention + "  Claude is reviewing " + ($g | map("!" + .iid) | join(", ")) + r
+       else empty end),
+      verifying($these)
+    end' "$src" 2>/dev/null
+  exit 0
+fi
+
+[ -n "$iid" ] || exit 0
+case $kind in
+  merged)
+    exec git-ci-preview "$iid" ;;
+  mine)
+    # Listed from every open MR (f), yours may not be in the pipelines JSON.
+    if jq -e --arg iid "$iid" '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid)' "$st/ci.json" >/dev/null 2>&1; then
+      git-ci-preview "$iid"
+      exec git-mr-threads --overview "$iid"
+    fi ;;
+esac
+mr='first((.data.currentUser.reviewRequestedMergeRequests, .data.project.mergeRequests) | .nodes[]? | select(.iid == $iid))'
+jq -r -L "$share" --arg iid "$iid" '
+  include "otis";
+  '"$mr"' |
+  attention + "!\(.iid)  " + text + .title + r + "\n"
+  + context + "\(.author.username) · \(.sourceBranch) → \(.targetBranch) · \(.detailedMergeStatus | ascii_downcase | gsub("_"; " ")) · updated \(.updatedAt[0:10])" + r + "\n"
+' "$st/mrs.json"
+git-verify --preview "$iid"
+jq -r --arg iid "$iid" "$mr"' | .description // ""' "$st/mrs.json" |
+  glow -s "${OTIS_T_GLOW:-dark}" -w "${FZF_PREVIEW_COLUMNS:-100}" - 2>/dev/null
+git-mr-threads --overview "$iid"

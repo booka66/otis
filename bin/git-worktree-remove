@@ -1,0 +1,56 @@
+#!/bin/sh
+# git-worktree-remove <path>...: gw's d. Asks once, then removes each worktree
+# the way git does without --force, so one with uncommitted or untracked
+# changes stays, but to the Trash (git-worktree-trash), so what git would
+# delete with the directory, the ignored files, is not lost. A branch goes with its worktree only when nothing is lost
+# locally, on the terms gb's M uses: its MR merged or closed, or it is someone
+# else's MR that GitLab has all of (kind, from gw's rows in git-worktree-list).
+# Any other branch stays, for gb's d to decide. What happened goes to the footer,
+# with how to bring back each branch it deleted, as gb's d does.
+st=$GIT_FZF_STATE
+main=$(git-worktree-path main)
+row() { awk -F'\t' -v p="$1" '$2 == p { print $3 "\t" $4; exit }' "$st/worktrees"; }
+tab=$(printf '\t')
+# The dedicated heading has no path; drop it, and do nothing if it was all there was.
+for p; do shift; [ -n "$p" ] && set -- "$@" "$p"; done
+[ $# -gt 0 ] || exit 0
+
+printf 'remove\n'
+for p; do
+  IFS=$tab read -r b kind <<EOF
+$(row "$p")
+EOF
+  case $kind in
+    merged|closed|theirs) printf '  %s  and its branch %s (%s)\n' "${p##*/}" "$b" "$kind" ;;
+    *) printf '  %s\n' "${p##*/}" ;;
+  esac
+done
+git-confirm "remove?" || exit 0
+
+removed= left= branches= restore=
+for p; do
+  IFS=$tab read -r b kind <<EOF
+$(row "$p")
+EOF
+  if [ "$p" = "$main" ]; then
+    left="$left, ${p##*/} (the main checkout)"
+  elif out=$(git-worktree-trash "$p" 2>&1); then
+    removed="$removed, ${p##*/}"
+    case $kind in
+      merged|closed|theirs)
+        sha=$(git rev-parse --short "$b")
+        git branch -q -D "$b" && branches="$branches, $b" restore="$restore; git branch $b $sha" ;;
+    esac
+  else
+    case $out in
+      *"modified or untracked"*) why="uncommitted changes" ;;
+      *) why=$(printf '%s' "$out" | head -1 | sed 's/^fatal: //') ;;
+    esac
+    left="$left, ${p##*/} ($why)"
+  fi
+done
+note=
+[ -n "$removed" ] && note="trashed ${removed#, }"
+[ -n "$branches" ] && note="$note and branch ${branches#, } · restore: ${restore#; }"
+[ -n "$left" ] && note="${note:+$note · }left ${left#, }"
+printf '%s\n' "$note" > "$st/note"

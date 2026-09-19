@@ -1,0 +1,123 @@
+#!/bin/sh
+# git-file-list [--cached | -- <path>...]
+# One row per changed path: staged marker, unstaged marker, how big the change
+# is, then the path with its directory dimmed, shortened to fit the list pane;
+# then tab-separated the real path, the raw status ("." for blank), for a
+# rename the path it came from, "deleted" for a deletion staged or not (its
+# section, git-test-files), and last the row's identity for fzf --track.
+# Paths are relative to the repo root, so the pickers run from there.
+#
+# The fixed zone is never cut: two status characters, the +/- counts (sized to
+# the widest in the list) and the bar. The path takes what is left, and the row
+# ends with anything that can be lost on a narrow pane (a rename's source).
+# Test files are listed last, under a heading of their own.
+#
+# --cached renders from the status saved by the previous full run instead of
+# asking git again. -- <path>... asks git about just those paths and swaps
+# their rows in the saved status, which keeps a keypress in ga (git-stage-toggle,
+# a discard) down to one small status call in a repo where a full one is slow.
+#
+# The saved status is one line per record: status, path, the rename source or
+# nothing, then the lines the change adds and removes. It comes from status -z,
+# since the plain format writes a rename as "old -> new" and quotes any path
+# with non-ASCII bytes in it.
+# --no-optional-locks, and diff-index rather than diff: both otherwise take the
+# index lock to refresh it, and an agent's git add or commit running alongside
+# would fail on that lock.
+
+cache_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 1
+cache="$cache_dir/ga-status-cache"
+share=$(cd "$(dirname "$0")/../share" && pwd)
+
+# The status rows for <path>... (or everything), each with how many lines the
+# change adds and removes. Untracked and binary files have no counts, and say
+# so by leaving those fields empty.
+status() {
+  head=$(git rev-parse -q --verify HEAD || git hash-object -t tree /dev/null)
+  git --no-optional-locks -c core.quotePath=false diff-index --numstat -M "$head" -- "$@" 2>/dev/null > "$cache.numstat"
+  git --no-optional-locks status --porcelain -z "$@" | tr '\0' '\n' | awk '
+    { st = substr($0, 1, 2); p = substr($0, 4); from = "" }
+    st ~ /[RC]/ { getline from }
+    { printf "%s\t%s\t%s\n", st, p, from }' |
+  awk -F'\t' -v ns="$cache.numstat" "$(cat "$share/rowfmt.awk")"'
+    BEGIN {
+      while ((getline line < ns) > 0) {
+        if (split(line, f, "\t") < 3 || f[1] !~ /^[0-9]+$/) continue
+        p = gk_numstat_path(f[3]); add[p] = f[1]; del[p] = f[2]
+      }
+      close(ns)
+    }
+    { print $0 "\t" (($2 in add) ? add[$2] : "") "\t" (($2 in del) ? del[$2] : "") }'
+  rm -f "$cache.numstat"
+}
+
+mode=full
+case $1 in
+  --cached) mode=cached ;;
+  --)
+    shift
+    # An error row has no path, and a row that is not a rename no source; fzf
+    # hands those over as empty arguments.
+    for a do shift; [ -n "$a" ] && set -- "$@" "$a"; done
+    mode=paths
+    [ $# -gt 0 ] || mode=cached ;;
+esac
+[ -f "$cache" ] || mode=full
+
+if [ "$mode" = full ]; then
+  status > "$cache.new" && mv "$cache.new" "$cache"
+elif [ "$mode" = paths ]; then
+  # A path given, or one under a directory given ("tmp/", as status lists an
+  # untracked directory), loses its row, and a rename both of its paths; the
+  # fresh rows go where the first of those was, so the list does not jump.
+  status -- "$@" > "$cache.fresh"
+  awk -F'\t' '
+    BEGIN { for (i = 3; i < ARGC; i++) { want[ARGV[i]] = 1; ARGV[i] = "" } }
+    FILENAME == ARGV[1] { fresh[++n] = $0; seen[$2] = 1; next }
+    function gone(p,   w) {
+      if (p == "") return 0
+      if ((p in want) || (p in seen)) return 1
+      for (w in want) if (w ~ /\/$/ && substr(p, 1, length(w)) == w) return 1
+      return 0
+    }
+    gone($2) || gone($3) { if (!put) for (i = 1; i <= n; i++) print fresh[i]; put = 1; next }
+    { print }
+    END { if (!put) for (i = 1; i <= n; i++) print fresh[i] }
+  ' "$cache.fresh" "$cache" "$@" > "$cache.new" && mv "$cache.new" "$cache"
+  rm -f "$cache.fresh"
+fi
+[ -s "$cache" ] || { git-test-files filter --section 2 </dev/null; exit 0; }
+
+# fzf reports 0 columns to a start:reload, before it has drawn, and COLUMNS is
+# a shell variable that is not exported, so fall back to asking the terminal.
+cols=${FZF_COLUMNS:-0}
+[ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
+[ -n "$cols" ] || cols=100
+
+awk -F'\t' -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+  # Two passes: the +/- column is sized to the widest counts actually in the
+  # list, so it is never ragged and never wider than it needs to be. The rows
+  # are few (what you have changed), so holding them costs nothing.
+  {
+    rows[++n] = $0
+    if (gk_digits($4) > wa) wa = gk_digits($4)
+    if (gk_digits($5) > wd) wd = gk_digits($5)
+  }
+  END {
+    budget = gk_list_width(cols) - (wa + wd + 13)
+    if (budget < 22) budget = 22
+    for (i = 1; i <= n; i++) {
+      $0 = rows[i]
+      x = substr($1,1,1); y = substr($1,2,1); p = $2
+      staged   = (x != " " && x != "?")
+      unstaged = (y != " ")
+      name = staged ? (unstaged ? GK_ATTENTION : GK_GOOD) : GK_BAD
+      sx = staged   ? GK_GOOD x GK_R : GK_FAINT "." GK_R
+      sy = unstaged ? (staged ? GK_ATTENTION y GK_R : GK_BAD y GK_R) : GK_FAINT "." GK_R
+      rx = (x == " ") ? "." : x
+      ry = (y == " ") ? "." : y
+      from = ($3 == "") ? "" : GK_CONTEXT "  from " $3 GK_R
+      printf "%s%s  %s %s  %s%s\t%s\t%s%s\t%s\t%s\t%s\n",
+        sx, sy, gk_stat($4, $5, wa, wd), gk_bar($4, $5), gk_path(p, budget, name), from, p, rx, ry, $3, (x == "D" || y == "D") ? "deleted" : "", p
+    }
+  }' "$cache" | git-test-files filter --section 2 --state 5

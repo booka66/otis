@@ -1,0 +1,13 @@
+#!/bin/sh
+# git-ci-run <iid>: start a new pipeline for an open MR after a y/N. It is the
+# MR's own pipeline, as a push would start (merged results where the project
+# runs them), not a rerun of the old one: every job runs again, against the
+# target branch as it is now. Success goes straight back to the picker; only a
+# failure waits, so its error can be read.
+iid=$1
+[ -n "$iid" ] || exit 0
+git-confirm "start a new pipeline for !$iid (every job runs again)?" || exit 0
+out=$(glab api -X POST "projects/:fullpath/merge_requests/$iid/pipelines" 2>&1) && exit 0
+printf '%s\n' "$out" | tail -3
+printf 'starting the pipeline failed. press enter\n'
+read -r _

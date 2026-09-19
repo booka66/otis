@@ -1,0 +1,17 @@
+#!/bin/sh
+# git-worktree-add <name> [git worktree add options and commit-ish]
+# Make a worktree the one way otis does, at <otis-config worktrees>/<name>
+# under the main checkout (git-worktree-path): gwn, W in gb and gmr, gmr's
+# review and mine, and Claude's pool (git-claude-worktree). That directory
+# sits inside the main checkout, so unless the repo already ignores it, it
+# goes in the repo's info/exclude first; otherwise the main checkout would
+# show every worktree as untracked, and could never look clean.
+dir=$(git-worktree-path named "$1") || exit 1
+shift
+main=$(git-worktree-path main)
+if ! git -C "$main" check-ignore -q "$dir"; then
+  exclude="$(git rev-parse --path-format=absolute --git-common-dir)/info/exclude"
+  mkdir -p "$(dirname "$exclude")"
+  printf '/%s/\n' "$(otis-config worktrees)" >> "$exclude"
+fi
+git worktree add "$dir" "$@"

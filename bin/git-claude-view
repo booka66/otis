@@ -1,0 +1,280 @@
+#!/bin/sh
+# git-claude-view <dir>             a background Claude run's progress, full screen
+# git-claude-view --events [who]    claude's stream-json on stdin as the progress events
+#
+# Shared by Claude's MR review (git-mr-claude), its fix runs (git-mr-fix), its
+# production watch (git-mr-watch) and verification (git-verify), whose Cursor
+# tester's steps come in as the same events. The run keeps its state in <dir>:
+#   title         what it is, one line
+#   root          optional: a directory the paths it reads are shown relative to
+#   pid           the run, while it runs
+#   started ended when it started and ended, in epoch seconds
+#   status        once over: done, or how it stopped short
+#   events.jsonl  what it did, as the view shows it: what the agents say and
+#                 think, the tools they call and the start of what each
+#                 returned (--events makes these from claude's stream), and
+#                 the run's own lines, {type: "otis", text}. who names the
+#                 agent where a run has two (judge, tester).
+#   claude.jsonl  optional: claude's stream as it came, everything in full
+#   tester.sse    optional: the Cursor tester's stream as it came
+#   agent-url     optional: the tester's page in Cursor
+#
+# A git-fzf picker over the run's steps, one a row, fed as they happen: the
+# list follows the newest step until you move up, and G takes you back to
+# following. The step under the cursor shows in full below the list. The
+# footer says where the run stands, redrawn every second. q leaves, and the
+# run keeps going; x, after a confirm, stops it (it sees <dir>/stopping, and
+# what it runs is killed); c, when it failed, picks it up from its last
+# finished step; r, once it is over, exits 3 so the caller starts it afresh.
+# v shows or hides the detail (thinking, what tools returned), enter and l
+# open a step, or the whole progress, in less, o opens the tester in Cursor,
+# a lists what the run brought back (git-verify --artifacts), h opens a
+# verification's report in the browser (git-verify-html), and p links it
+# from the MR's description (git-verify --attach).
+if [ "$1" = --events ]; then
+  exec jq --unbuffered -c --arg who "$2" '
+    (if .type == "system" and .subtype == "init" then {type: "init", model, mcp: [.mcp_servers[]? | {name, status}]}
+    elif .type == "assistant" then .message.content[]
+      | if .type == "text" then {type: "text", text}
+        elif .type == "thinking" and (.thinking // "") != "" then {type: "thinking", text: .thinking}
+        elif .type == "tool_use" then {type: "tool", name,
+          input: (.input | with_entries(select(.key | IN("file_path", "pattern", "path", "glob", "offset", "query", "command"))))}
+        else empty end
+    elif .type == "user" then .message.content[]? | select(type == "object" and .type == "tool_result")
+      | {type: "output", error: (.is_error // false),
+         text: (.content | if type == "array" then map(.text? // "") | join("\n") else tostring end | .[0:600])}
+    elif .type == "result" then {type: "result", is_error, subtype, session_id, total_cost_usd,
+      result: ((.result // "") | tostring | .[0:500]), structured_output}
+    else empty end)
+    | if $who != "" then . + {who: $who} else . end'
+fi
+
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/claude-run.sh"
+. "$share/palette.sh"
+
+# Everything the run runs, and what that runs (claude's own tools too), but
+# not the run itself, which then sees stopping and finishes.
+stop_children() {
+  for c in $(pgrep -P "$1"); do
+    stop_children "$c"
+    kill -TERM "$c" 2>/dev/null
+  done
+}
+
+# lines <detail> [from]: events on stdin as kind<tab>text<tab>id lines, one a
+# row; with detail 1, the agents' thinking and the start of what their tools
+# returned too. id is the event's line in events.jsonl, from + its line here,
+# which is what --show reads.
+lines() {
+  jq -r --arg ctx "$d/context/" --arg root "$(cat "$d/root" 2>/dev/null)/" --argjson detail "$1" --argjson from "${2:-0}" '
+    def rel: if startswith($ctx) then .[($ctx | length):] elif $root != "/" and startswith($root) then .[($root | length):] else . end;
+    (if .who then "\(.who) › " else "" end) as $by |
+    (input_line_number + $from) as $id |
+    (if .type == "init" then "tool\t\($by)started, \(.model)"
+    elif .type == "text" then
+      # A message a row a line, but a fenced block is one row with its
+      # length, and a long message stops at a dozen rows: the tester ends
+      # with a code block and a JSON report, which is for the preview.
+      (reduce (.text | split("\n"))[] as $line ({rows: [], fence: null, n: 0};
+        if .fence != null then
+          (if ($line | test("^\\s*```")) then .rows[-1] += " … \(.n) line\(if .n == 1 then "" else "s" end)" | .fence = null | .n = 0 else .n += 1 end)
+        elif ($line | test("^\\s*```")) then .fence = ($line | sub("^\\s*```"; "")) | .rows += ["```" + .fence] | .n = 0
+        elif ($line | test("\\S")) then .rows += [$line] else . end)
+       | if .fence != null then .rows[-1] += " … \(.n) line\(if .n == 1 then "" else "s" end)" else . end | .rows
+       | if length > 12 then .[0:12] + ["(+\(length - 12) more lines, enter shows it all)"] else . end)[]
+      | "text\t\($by)" + .
+    elif .type == "thinking" then if $detail == 1 then .text | split("\n")[] | select(test("\\S")) | "think\t\($by)… " + . else empty end
+    elif .type == "output" then
+      if $detail == 1 then (.text | split("\n") | map(select(test("\\S")))) as $l
+        | (if .error then "bad" else "out" end) + "\t\($by)  ↳ " + ($l[0] // "(nothing)")
+          + (if ($l | length) > 1 then "  (+\($l | length - 1) lines)" else "" end)
+      else empty end
+    elif .type == "result" then (if .who == "tester" then empty else "tool\t\($by)finished\(if .total_cost_usd then ", $\(.total_cost_usd * 100 | round / 100)" else "" end)" end)
+    elif .type == "tool" then "tool\t\($by)" + (
+      if .name == "Read" then "read  \(.input.file_path | rel)\(if .input.offset then " from line \(.input.offset)" else "" end)"
+      elif .name == "Grep" then "grep  \(.input.pattern)\(if .input.path then " in \(.input.path | rel)" else "" end)\(if .input.glob then " \(.input.glob)" else "" end)"
+      elif .name == "Glob" then "glob  \(.input.pattern)\(if .input.path then " in \(.input.path | rel)" else "" end)"
+      elif .name == "Bash" then "$ \(.input.command // "")"
+      elif .name == "StructuredOutput" then "writing it up"
+      # The Cursor tester, with the same verbs as Claude.
+      elif .name == "run_terminal_cmd" then "$ " + ((.input.detail // "") | split("\n")[0]) + (if ((.input.detail // "") | test("\n")) then " …" else "" end)
+      elif .name == "read_file" then "read  \(.input.detail // "")"
+      elif .name == "grep_search" then "grep  \(.input.detail // "")"
+      elif .name == "file_search" then "glob  \(.input.detail // "")"
+      elif .name == "edit_file" or .name == "write" or .name == "search_replace" then "edit  \(.input.detail // "")"
+      elif .name == "list_dir" then "ls  \(.input.detail // "")"
+      elif .name == "delete_file" then "delete  \(.input.detail // "")"
+      elif .name | startswith("mcp__") then (.name | split("__") | "\(.[1])  \(.[2:] | join("__"))") + "  \(.input.query // "")"
+      elif .input.path then "\(.name)  \(.input.path | rel)"
+      elif .input.command then "\(.name)  \(.input.command)"
+      elif .input.detail then "\(.name)  \(.input.detail)"
+      else .name end)
+    elif .type == "otis" then "otis\t" + .text
+    else empty end) | . + "\t\($id)"' 2>/dev/null
+}
+
+
+# paint <width>: color kind<tab>text[<tab>id] lines, each cut to <width> (0:
+# never), the id kept after a tab for fzf.
+paint() {
+  awk -F'\t' -v w="$1" "$(cat "$share/rowfmt.awk")"'
+    BEGIN {
+      c["head"] = GK_ATTENTION; c["keys"] = GK_CONTEXT; c["tool"] = GK_ELSEWHERE; c["text"] = GK_TEXT; c["otis"] = GK_YOURS
+      c["think"] = GK_CONTEXT; c["out"] = GK_FAINT; c["bad"] = GK_BAD
+    }
+    {
+      text = $2
+      gsub(/\033\[[0-9;]*[a-zA-Z]/, "", text)
+      gsub(/[\002-\010\013-\036\177]/, "", text)
+      if (w > 0 && length(text) > w - 1) text = substr(text, 1, w - 2) "…"
+      printf "%s%s%s%s\n", c[$1], text, GK_R, (NF >= 3 ? "\t" $3 : "")
+    }'
+}
+
+# state: running, or how it ended, and the time it took, one line for the footer.
+state() {
+  started=$(cat "$d/started" 2>/dev/null || date +%s) ended=$(cat "$d/ended" 2>/dev/null || date +%s)
+  took=$((ended - started))
+  took="$((took / 60))m$(printf '%02d' $((took % 60)))s"
+  title=$(cat "$d/title" 2>/dev/null)
+  spent=$(costs "$d")
+  if running "$d"; then
+    printf "${GK_YOURS}◌ %s · running for %s%s${GK_R}\n" "$title" "$took" "$spent"
+  else
+    case $(cat "$d/status" 2>/dev/null) in
+      done) printf "${GK_GOOD}✓ %s · done in %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
+      stopped) printf "${GK_CONTEXT}■ %s · stopped after %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
+      *) printf "${GK_BAD}✗ %s · stopped short after %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
+    esac
+  fi
+}
+
+case $1 in
+  # --stream <dir> <detail>: the rows, every event so far and then each new one
+  # as it lands, until the run is over (and its last events are out) or the
+  # picker is gone. fzf reads it as it comes.
+  --stream)
+    d=$2 detail=$3 n=0
+    while :; do
+      total=$(wc -l < "$d/events.jsonl" 2>/dev/null | tr -d ' ')
+      if [ "${total:-0}" -gt "$n" ]; then
+        sed -n "$((n + 1)),${total}p" "$d/events.jsonl" | lines "$detail" "$n" | paint 0
+        n=$total
+      fi
+      running "$d" || { [ "$(wc -l < "$d/events.jsonl" 2>/dev/null | tr -d ' ')" -gt "$n" ] && continue; exit 0; }
+      kill -0 "$PPID" 2>/dev/null || exit 0
+      sleep 0.5
+    done ;;
+  # --show <dir> <id>: one event in full, for the preview and enter.
+  --show)
+    d=$2
+    [ -n "$3" ] || exit 0
+    sed -n "${3}p" "$d/events.jsonl" | jq -r --arg ctx "$d/context/" --arg root "$(cat "$d/root" 2>/dev/null)/" '
+      def rel: if startswith($ctx) then .[($ctx | length):] elif $root != "/" and startswith($root) then .[($root | length):] else . end;
+      (if .who then "\(.who) · " else "" end) as $by |
+      if .type == "tool" then "\($by)\(.name)\n\n" + (.input | to_entries | map("\(.key): \(.value | if type == "string" then rel else tostring end)") | join("\n"))
+      elif .type == "output" then "\($by)what it returned" + (if .error then " (an error)" else "" end) + "\n\n" + .text
+        + (if (.text | length) >= 600 then "\n\n… the first 600 characters; l opens the raw log with all of it" else "" end)
+      elif .type == "thinking" then "\($by)thinking\n\n" + .text
+      elif .type == "text" then "\($by)said\n\n" + .text
+      elif .type == "result" then "\($by)finished: \(.subtype)" + (if .total_cost_usd then ", $\(.total_cost_usd * 100 | round / 100)" else "" end) + "\n\n" + (.result // "")
+      elif .type == "init" then "\($by)started with \(.model)" + (if (.mcp | length) > 0 then "\n\nMCP: " + (.mcp | map("\(.name) (\(.status))") | join(", ")) else "" end)
+      else .text // tostring end' 2>/dev/null ;;
+  # --tick <dir>: every second: the footer, and the cursor kept on the newest
+  # row while following.
+  --tick)
+    d=$2
+    state > "$GIT_FZF_STATE/footer"
+    printf 'transform-footer(git-fzf-footer)'
+    [ -e "$GIT_FZF_STATE/follow" ] && printf '+last'
+    echo ;;
+  # --x <dir>: x, as fzf actions: the confirm needs the terminal, so it runs
+  # through execute, which hands it over and redraws afterwards; a transform
+  # that wrote to the terminal would draw over the picker.
+  --x)
+    d=$2
+    running "$d" || exec git-fzf-note "it is over; r runs it again"
+    echo "execute(git-claude-view --stop '$d')" ;;
+  # --stop <dir>: the confirm, on the terminal, then the stop.
+  --stop)
+    d=$2
+    if git-confirm "Stop it? It will not pick up again"; then
+      touch "$d/stopping"
+      stop_children "$(cat "$d/pid")"
+    fi
+    exit 0 ;;
+  # --again <dir>: r, only once it is over.
+  --again)
+    d=$2
+    if running "$d"; then exec git-fzf-note "still running; x stops it"; else echo 'print(again)+accept'; fi ;;
+  # --continue <dir>: c, a run that failed started again from its last
+  # finished step (resume, share/claude-run.sh), and followed.
+  --continue)
+    d=$2
+    running "$d" && exec git-fzf-note "still running"
+    [ "$(cat "$d/status" 2>/dev/null)" = failed ] || exec git-fzf-note "only a run that failed picks up again; r runs it again"
+    [ -s "$d/cmd" ] || exec git-fzf-note "this one cannot pick up again; r runs it again"
+    rm -f "$d/status" "$d/ended"
+    resume "$d"
+    [ -e "$GIT_FZF_STATE/detail" ] && v=1 || v=0
+    echo "reload(git-claude-view --stream '$d' $v)" ;;
+  # --detail <dir>: v, the other way round.
+  --detail)
+    d=$2
+    if [ -e "$GIT_FZF_STATE/detail" ]; then rm -f "$GIT_FZF_STATE/detail"; v=0; else : > "$GIT_FZF_STATE/detail"; v=1; fi
+    echo "reload(git-claude-view --stream '$d' $v)" ;;
+  # --improve <dir>: i, as fzf actions: a fix run on your checkout from the
+  # verification's retrospective (git-mr-fix, key v-<verification>).
+  --improve)
+    d=$2
+    [ -s "$d/retro.json" ] || exec git-fzf-note "no retrospective here to act on"
+    echo "execute(git-mr-fix 'v-${d##*/}' \"\$(otis-config base)..HEAD\")" ;;
+  --less)
+    d=$2
+    { printf 'keys\traw logs, in full: %s\nkeys\t\n' "$(cd "$d" && ls claude.jsonl tester.sse 2>/dev/null | sed "s#^#$d/#" | tr '\n' ' ')"
+      lines 1 < "$d/events.jsonl"; } | paint 0 | cut -f1 | less -R +G ;;
+  --artifacts)
+    d=$2
+    [ -n "$(ls "$d/artifacts" 2>/dev/null)" ] || exec git-fzf-note "nothing brought back yet"
+    echo "execute(git-verify --artifacts '$d')" ;;
+  # --html <dir>: h, the report written first for a run from before it had one.
+  --html)
+    d=$2
+    [ -s "$d/verdict.json" ] || exec git-fzf-note "no verdict yet, so no report"
+    [ -s "$d/report.html" ] || git-verify-html "$d" || exec git-fzf-note "could not write the report"
+    echo "execute-silent(otis-open '$d/report.html')" ;;
+  # --attach <dir>: p, only on a verification that has a verdict.
+  --attach)
+    d=$2
+    [ -s "$d/verdict.json" ] || exec git-fzf-note "only a verification with a verdict has a report to link"
+    echo "execute(git-verify --attach '$d')" ;;
+  *)
+    d=$1
+    out=$(git-fzf 'run ' 'enter=this step in full,v=more or less detail,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,l=all of it in less,o=tester in Cursor,a=artifacts,h=report in the browser,p=link the report from the MR,G=follow the newest' \
+      --ansi --no-sort --tail=20000 --delimiter="$(printf '\t')" --with-nth=1 --id-nth=2 \
+      --preview-window='down,35%,border-top,wrap' \
+      --bind "start:reload(git-claude-view --stream '$d' 0)+execute-silent(touch \"\$GIT_FZF_STATE/follow\")" \
+      --bind "every(1):transform(git-claude-view --tick '$d')" \
+      --bind 'k:up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
+      --bind 'up:up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
+      --bind 'page-up:page-up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
+      --bind 'g:first+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
+      --bind 'j:down+execute-silent([ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && touch "$GIT_FZF_STATE/follow")' \
+      --bind 'down:down+execute-silent([ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && touch "$GIT_FZF_STATE/follow")' \
+      --bind 'G:last+execute-silent(touch "$GIT_FZF_STATE/follow")' \
+      --bind "enter:execute(git-claude-view --show '$d' {2} | less -R)" \
+      --bind "v:transform(git-claude-view --detail '$d')" \
+      --bind "x:transform(git-claude-view --x '$d')" \
+      --bind "r:transform(git-claude-view --again '$d')" \
+      --bind "c:transform(git-claude-view --continue '$d')" \
+      --bind "l:execute(git-claude-view --less '$d')" \
+      --bind "i:transform(git-claude-view --improve '$d')" \
+      --bind "o:execute-silent([ -s '$d/agent-url' ] && otis-open \"\$(cat '$d/agent-url')\")" \
+      --bind "a:transform(git-claude-view --artifacts '$d')" \
+      --bind "h:transform(git-claude-view --html '$d')" \
+      --bind "p:transform(git-claude-view --attach '$d')" \
+      --preview "git-claude-view --show '$d' {2}" </dev/null | head -1)
+    [ "$out" = again ] && exit 3
+    exit 0 ;;
+esac

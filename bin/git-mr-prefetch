@@ -1,0 +1,56 @@
+#!/bin/sh
+# git-mr-prefetch <mrs.json>: fetch the commits of the MRs requesting your
+# review that are not here yet, from the JSON git-mr-list saved, so that opening
+# one (git-mr-review) finds them and starts without the network. One fetch for
+# all of them: each missing MR's head ref, and its target branch when its base
+# is missing too. Their comment threads are cached too, for the file picker's
+# counts and previews. Only one runs at a time; the list reloads often.
+json=$1
+[ -r "$json" ] || exit 0
+common=$(git rev-parse --git-common-dir) || exit 0
+lock="$common/gmr-prefetch.lock"
+# A lock older than two minutes is from a fetch that died.
+[ -n "$(find "$lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$lock" 2>/dev/null
+mkdir "$lock" 2>/dev/null || exit 0
+trap 'rmdir "$lock"' EXIT
+
+have() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
+refspecs=$(jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
+  | select(.author.username != $u.username)
+  | [.iid, .targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
+  while IFS="$(printf '\t')" read -r iid target head base start; do
+    have "$head" || printf '+refs/merge-requests/%s/head:refs/mr/%s\n' "$iid" "$iid"
+    { have "$base" && { [ -z "$start" ] || have "$start"; }; } || printf '+refs/heads/%s:refs/remotes/origin/%s\n' "$target" "$target"
+  done | sort -u)
+# Threads not cached yet; with no picker to reload, git-cached-json fetches them now.
+jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]? | select(.author.username != $u.username) | .iid' "$json" |
+  while read -r iid; do
+    FZF_PORT= git-cached-json "mr-$iid-threads" 15 true -- \
+      git-mr-pages "projects/:fullpath/merge_requests/$iid/discussions?per_page=100" >/dev/null 2>&1 &
+  done
+[ -n "$refspecs" ] && GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin $refspecs
+wait
+
+# Claude's gloss of each (git-symbols-gloss), started now rather than when
+# you open it, so a review opens glossed and stays as it opened: keyed as
+# git-mr-review's list keys it (git-mr-base's base, the head), and cached
+# by those shas for good, so each MR is glossed once a push. Only the gloss:
+# the callers' tsgo is gigabytes a run, for when you are in the review.
+command -v seam >/dev/null 2>&1 && command -v claude >/dev/null 2>&1 &&
+  [ "$(git config --get otis.symbolsModel)" != off ] || exit 0
+gdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-gloss
+jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
+  | select(.author.username != $u.username)
+  | [.targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
+  while IFS="$(printf '\t')" read -r target head base start; do
+    have "$head" && have "$base" || continue
+    # Glossed or being glossed at this head already: the usual case, a glob.
+    for f in "$gdir"/*-"$head".json; do [ -s "$f" ] && continue 2; done
+    for f in "$gdir"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && continue 2; done
+    have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
+    b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue
+    t=$(mktemp) || continue
+    SEAM_KINDS="git-test-files kinds" seam "$b..$head" > "$t" 2>/dev/null &&
+      OTIS_SYMBOLS_KEY=$b-$head git-symbols-gloss "$b..$head" "$t" >/dev/null 2>&1
+    rm -f "$t"
+  done

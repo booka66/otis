@@ -1,0 +1,21 @@
+# Catppuccin Macchiato.
+attention=38;2;238;212;159
+good=38;2;166;218;149
+bad=38;2;237;135;150
+elsewhere=38;2;138;173;244
+yours=38;2;245;169;127
+text=38;2;202;211;245
+context=38;2;110;115;141
+faint=38;2;73;77;100
+main=38;2;139;213;202
+codebg=48;2;54;58;79
+errbg=48;2;72;56;75
+delta_syntax=Catppuccin Macchiato
+bat=OneHalfDark
+file=#8aadf4
+rule=#494d64
+minus=#4c3a4c
+plus=#3e4b4c
+minus_emph=#744d5f
+plus_emph=#586f5e
+glow=dark

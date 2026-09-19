@@ -1,0 +1,106 @@
+# Shared by the scripts that run Claude in the background (git-mr-claude,
+# git-mr-fix, git-mr-fold, git-mr-watch, git-mr-watch-run, git-verify) and by
+# git-claude-view, which shows a run: . "$share/claude-run.sh". A run keeps
+# its state in a directory, $d, which git-claude-view describes; each script
+# defines its own finish <state> <summary>, since what to reload and whom to
+# alert differ.
+
+# running <dir>: the run is going: its pid is alive and it has not said how it
+# ended (a pid alone can be some other process by now).
+running() { [ ! -s "$1/status" ] && [ -r "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
+# say <text>: a line in $d's progress.
+say() { jq -nc --arg t "$*" '{type: "otis", text: $t}' >> "$d/events.jsonl"; }
+oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
+# stopping: x in git-claude-view leaves $d/stopping; the run ends at its next look.
+stopping() { [ -e "$d/stopping" ] && finish stopped "stopped"; }
+# alert <title> <body> [state]: a desktop notification, through the terminal
+# tab the run was started from, or from the system when that tab is gone or
+# cannot send one (otis-notify). A failed state marks it ✗.
+alert() {
+  if [ "$3" = failed ]; then otis-notify --sound Basso "✗ $1" "$2"; else otis-notify "$1" "$2"; fi
+}
+# tell_picker <action>: an fzf action to the picker the run was started from,
+# if it is still open.
+tell_picker() { [ -n "$FZF_PORT" ] && curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$1" >/dev/null; }
+
+# Surviving a closed laptop. Sleep only pauses a run, but the call it was in
+# the middle of fails on waking; a shutdown kills it outright. So a run that
+# can pick up again keeps each step's result in $d as it goes, skips steps
+# that already have one, and retries a Claude turn that broke off. Its start
+# leaves $d/cmd (the --run command) and $d/cwd, which is what resume runs.
+
+# results: how many result events $d's progress holds; a turn's own result is
+# one more than there were before it.
+results() { awk '/"type":"result"/ { n++ } END { print n + 0 }' "$d/events.jsonl" 2>/dev/null || echo 0; }
+
+# attempt <command...>: one Claude turn that appends its events to
+# $d/events.jsonl, tried again when it broke off rather than failed: no
+# result at all (the process died, the connection dropped), or an API or
+# network error. Three more tries, a minute apart. The turn's result event
+# ends in $result, empty when it never got one; 1 when it gave up.
+attempt() {
+  tries=0
+  while :; do
+    before=$(results)
+    "$@"
+    stopping
+    result=
+    [ "$(results)" -gt "$before" ] && result=$(jq -c 'select(.type == "result")' "$d/events.jsonl" | tail -1)
+    if [ -n "$result" ] && ! printf '%s' "$result" |
+      jq -e '.is_error and ((.result // "") | test("API Error|[Cc]onnection|network|ECONN|ETIMEDOUT|socket|overloaded|fetch failed"))' >/dev/null; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    [ "$tries" -le 3 ] || return 1
+    say "Claude's turn broke off$([ -n "$result" ] && printf ': %s' "$(oneline "$(printf '%s' "$result" | jq -r .result)")"); trying again in a minute ($tries of 3)"
+    sleep "${OTIS_RETRY_WAIT:-60}" &
+    wait $!
+    stopping
+  done
+}
+
+# orphaned <dir>: a run that can pick up again, was started, is not going, and
+# never said how it ended: its process died under it.
+# What a run writes (Claude's transcript, tool output) is for its owner. A
+# script that also writes your files puts otis_umask back first.
+otis_umask=$(umask)
+umask 077
+
+# costs <dir>: what the run has cost so far, as " · Claude $1.20 · Cursor $0.68"
+# (empty parts left out): Claude from its turns' results in the progress,
+# Cursor from usage.json, which a verification keeps from Cursor's usage API.
+costs() {
+  c=$(jq -r 'select(.type == "result") | .total_cost_usd // empty' "$1/events.jsonl" 2>/dev/null | awk '{ s += $1 } END { if (s > 0) printf " · Claude $%.2f", s }')
+  u=$(jq -r '.cost.chargedCents // empty' "$1/usage.json" 2>/dev/null | awk '{ if ($1 > 0) printf " · Cursor $%.2f", $1 / 100 }')
+  printf '%s%s' "$c" "$u"
+}
+
+orphaned() { [ -s "$1/cmd" ] && [ ! -s "$1/status" ] && [ -r "$1/pid" ] && ! kill -0 "$(cat "$1/pid")" 2>/dev/null; }
+
+# resume <dir>: start an orphaned run again, where it was started, to pick up
+# from its last finished step. mkdir is the lock, so two pickers drawing at
+# once start it once; a lock older than a minute was left by one that died.
+resume() {
+  [ -n "$(find "$1/resuming" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$1/resuming" 2>/dev/null
+  mkdir "$1/resuming" 2>/dev/null || return 0
+  if orphaned "$1"; then
+    where=$(cat "$1/cwd" 2>/dev/null)
+    [ -d "$where" ] || where=$(git-worktree-path main)
+    jq -nc --arg t "picking up where it left off" '{type: "otis", text: $t}' >> "$1/events.jsonl"
+    # cmd holds the argv one a line (a branch name can hold shell syntax).
+    dir=$1
+    (cd "$where" && IFS='
+' && set -f && set -- $(cat "$dir/cmd") && nohup "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
+  fi
+  rmdir "$1/resuming"
+}
+
+# resume_all: every orphaned run of this repo, started again. gmr and gb call
+# it as they draw, so a run the laptop killed goes on the next time you look.
+resume_all() {
+  c=$(git rev-parse --path-format=absolute --git-common-dir) || return 0
+  for r in "$c"/gmr-claude/*/ "$c"/gmr-fix/*/ "$c"/otis-verify/*/; do
+    [ -d "$r" ] && orphaned "${r%/}" && resume "${r%/}"
+  done
+  return 0
+}

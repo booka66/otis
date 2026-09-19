@@ -1,0 +1,78 @@
+#!/bin/sh
+# git-mr-base <base> <head> <start>: the commit an MR's file picker diffs from,
+# so it shows what merging the MR would change now, as GitLab's own diff does.
+#
+# GitLab's base is the merge base of the MR's head and its target. That is
+# right until something the branch also carries lands on the target as other
+# commits: an MR it was stacked on, squash-merged. The squash is a new commit,
+# so the branch's copies of those changes are not in the target's history,
+# the merge base stays behind them, and base..head shows them as this MR's.
+#
+# So the base is built instead, with the head's tree as its start, so a file
+# the MR does not really change shows no diff at all. Real changes are the
+# files merging the head into the target (<start>, the target's tip GitLab
+# diffs against) would change. For each of those, the base holds whichever
+# of the old base's and the target's version is closer to the head: the
+# target's when the target already has part of the change (the squash), the
+# old base's when the target has moved on in that file for other reasons,
+# which would otherwise show as this MR undoing them. The commit is made with
+# fixed dates, so the same inputs give the same sha, and nothing is written
+# but objects.
+#
+# Prints the base to use: <base> itself when there is nothing to correct (the
+# target has not moved past it, or has only moved on elsewhere), or when the
+# merge conflicts (GitLab cannot show the merge either). Where it is built,
+# comments on removed lines are refused in nvim, which needs GitLab's base.
+base=$1 head=$2 start=$3
+[ -n "$start" ] && [ "$start" != "$base" ] && git cat-file -e "$start^{commit}" 2>/dev/null || { echo "$base"; exit 0; }
+merged=$(git merge-tree --write-tree --no-messages "$start" "$head" 2>/dev/null) || { echo "$base"; exit 0; }
+
+idx=$(mktemp)
+trap 'rm -f "$idx" "$idx.paths" "$idx.list" "$idx.mine"' EXIT
+git diff --no-renames --name-only -z "$start" "$merged" > "$idx.paths"
+[ -s "$idx.paths" ] || { echo "$base"; exit 0; }
+tr '\0' '\n' < "$idx.paths" > "$idx.list"
+
+# Per real path, how many lines each candidate is from the head; the target's
+# version where it is nearer, the old base's otherwise (a tie included).
+pick=$({
+  xargs -0 git diff --no-renames --numstat -z "$base" "$head" -- < "$idx.paths" |
+    tr '\0' '\n' | awk -F'\t' 'NF == 3 { print "base\t" ($1 + $2) "\t" $3 }'
+  xargs -0 git diff --no-renames --numstat -z "$start" "$head" -- < "$idx.paths" |
+    tr '\0' '\n' | awk -F'\t' 'NF == 3 { print "start\t" ($1 + $2) "\t" $3 }'
+} | awk -F'\t' -v list="$idx.list" '
+  { n[$1, $3] = $2 }
+  END {
+    while ((getline p < list) > 0) {
+      s = (("start", p) in n) ? n["start", p] : 0
+      b = (("base", p) in n) ? n["base", p] : 0
+      print (s < b ? "start" : "base") "\t" p
+    }
+  }')
+
+# Nothing to correct when the real paths are the MR's own and each is best
+# shown from the old base: an MR merely behind its target. GitLab's base stays,
+# which nvim needs to comment on removed lines.
+git -c core.quotePath=false diff --no-renames --name-only "$base" "$head" > "$idx.mine"
+if ! printf '%s\n' "$pick" | grep -q '^start' && [ "$(sort "$idx.list")" = "$(sort "$idx.mine")" ]; then
+  echo "$base"
+  exit 0
+fi
+
+# The head, with each real path as the version picked for it (gone where that
+# version has none). A fresh index file: git takes an empty one for a broken one.
+rm -f "$idx"
+export GIT_INDEX_FILE="$idx"
+{
+  git read-tree "$head" &&
+    tr '\0' '\n' < "$idx.paths" | git update-index --force-remove --stdin &&
+    for from in base start; do
+      printf '%s\n' "$pick" | awk -F'\t' -v f="$from" '$1 == f { printf "%s%c", $2, 0 }' |
+        xargs -0 -r git ls-tree "$([ "$from" = start ] && echo "$start" || echo "$base")" --
+    done | git update-index --index-info &&
+    tree=$(git write-tree)
+} || { echo "$base"; exit 0; }
+unset GIT_INDEX_FILE
+GIT_AUTHOR_NAME=otis GIT_AUTHOR_EMAIL=otis GIT_AUTHOR_DATE='@0 +0000' \
+GIT_COMMITTER_NAME=otis GIT_COMMITTER_EMAIL=otis GIT_COMMITTER_DATE='@0 +0000' \
+  git commit-tree "$tree" -p "$start" -m "otis: the base merging $(printf '%.8s' "$head") into $(printf '%.8s' "$start") diffs from" || echo "$base"

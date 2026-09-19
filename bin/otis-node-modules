@@ -1,0 +1,78 @@
+#!/bin/sh
+# otis-node-modules [<root>]: a worktree's node_modules, mirrored from the
+# main worktree's, so the tools that resolve imports through it (tsgo, for
+# nvim and for git-callers) work in a worktree that never ran an install.
+#
+# The main checkout's node_modules is how the workspace resolves: a package
+# of the repo is a relative link into it (@acme/x -> ../../packages/x), and a
+# third-party one a relative link into .content, where the install put the
+# files. The mirror keeps every link as it is, so a package of the repo
+# resolves to this worktree's own source and a third-party one, through a
+# .content that links to main's, to the one install; the scope directories
+# and .bin are walked one level for the same, and a file is linked. A few
+# hundred links, made once and kept while main's node_modules is not newer;
+# .otis-mirror in the mirror says it is one, so an install of your own is
+# never touched. Nothing happens in the main worktree, or where main has no
+# node_modules to mirror.
+root=${1:-$(git rev-parse --show-toplevel 2>/dev/null)}
+[ -n "$root" ] || exit 0
+main=$(git -C "$root" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
+[ -n "$main" ] && [ "$main" != "$root" ] && [ -d "$main/node_modules" ] || exit 0
+src=$main/node_modules dst=$root/node_modules
+
+# The repo's own packages, as this worktree has them: main's install only
+# links those that were there when it ran, so a package added since (on main
+# after that install, or on this branch) resolved to nothing, and tsgo read
+# everything imported from it as unknown. Each package.json of the worktree
+# whose name the mirror has no link for gets one, relative like the install's
+# (@acme/x -> ../../packages/x); a name it has is left as it is. Kept by the
+# package.json files' hashes, so a checkout that adds or moves one links again.
+workspace() {
+  stamp=$(git -C "$root" ls-files -s -- 'package.json' '*/package.json' 2>/dev/null | git hash-object --stdin)
+  [ "$(cat "$dst/.otis-workspace" 2>/dev/null)" = "$stamp" ] && return
+  # One jq a file: one that is not JSON (a template's) would end a jq given
+  # them all, and every package after it would go unlinked.
+  (cd "$root" && git ls-files -z -- '*/package.json' | xargs -0 -n1 jq -r '[(input_filename | sub("/package.json$"; "")), (.name // "")] | @tsv' 2>/dev/null) |
+    while IFS="$(printf '\t')" read -r d name; do
+      [ -n "$name" ] || continue
+      case $d in */node_modules/*) continue ;; esac
+      [ -e "$dst/$name" ] || [ -L "$dst/$name" ] && continue
+      case $name in
+        @*/*) mkdir -p "$dst/${name%%/*}" && ln -s "../../$d" "$dst/$name" ;;
+        */*) ;;
+        *) ln -s "../$d" "$dst/$name" ;;
+      esac
+    done
+  printf '%s\n' "$stamp" > "$dst/.otis-workspace"
+}
+
+if [ -e "$dst" ]; then
+  [ -f "$dst/.otis-mirror" ] || exit 0
+  if [ ! "$src" -nt "$dst/.otis-mirror" ]; then workspace; exit 0; fi
+  rm -rf "$dst"
+fi
+mkdir -p "$dst" || exit 1
+# One cp for the links: -P keeps a link as it is, relative target and all.
+# The scope directories and .bin are walked one level the same way, so one
+# that holds real packages (npm's layout) is linked, not copied. Any other
+# directory and every file is a link to main's, .content among them.
+set --
+for e in "$src"/* "$src"/.[!.]*; do
+  [ -e "$e" ] || [ -L "$e" ] || continue
+  n=${e##*/}
+  if [ -L "$e" ]; then set -- "$@" "$n"
+  elif [ -d "$e" ]; then
+    case $n in
+      @*|.bin)
+        mkdir -p "$dst/$n"
+        for s in "$e"/* "$e"/.[!.]*; do
+          [ -e "$s" ] || [ -L "$s" ] || continue
+          if [ -L "$s" ]; then cp -P "$s" "$dst/$n/"; else ln -s "$s" "$dst/$n/"; fi
+        done ;;
+      *) ln -s "$e" "$dst/$n" ;;
+    esac
+  else ln -s "$e" "$dst/$n"; fi
+done
+[ $# -gt 0 ] && (cd "$src" && cp -RP "$@" "$dst/")
+: > "$dst/.otis-mirror"
+workspace

@@ -1,0 +1,91 @@
+#!/bin/sh
+# git-mr-do <web | copy | labels | reviewers> <iid> [then]
+# git-mr-do open <kind> <iid> <target> <url> <source> <head> <base> <pipeline id> [start]
+# git-mr-do claude <kind> <iid> <target> <url> <source> <head> <base> <pipeline id> [start]
+# git-mr-do approve <kind> <iid> <head> <base>
+# git-mr-do draft <kind> <iid>
+# The MR keys shared by gb and gmr, as fzf actions for a transform binding.
+# A row with no MR gets a footer note instead of a dead key. [then] is an action
+# to chain after labels and reviewers, such as a reload.
+#
+# open is gmr's enter, by the row's kind (git-mr-list): an MR to review opens
+# for review (git-mr-review), one of yours in its branch's checkout to address
+# its comments (git-mr-mine), a merged one the deploys (gd) with the one that
+# carries it, or will, under the cursor.
+# claude is gmr's C, the same by kind but with Claude doing it: drafting
+# comments on an MR to review (git-mr-claude), proposing fixes on one of
+# yours (git-mr-fix), as C in the file picker does; the list then refreshes,
+# for the row's marks.
+# approve only takes MRs you review; GitLab does not let you approve your own.
+# It approves the head the row shows (git-mr-approve).
+#
+# The actions name the row's fields as fzf placeholders rather than repeating
+# the values: fzf quotes a placeholder when it runs the action, and a branch
+# name or title written into the action itself would be parsed as shell. So
+# gmr's columns are fixed here: {2} iid, {3} target, {4} url, {5} source,
+# {7} head, {8} base, {12} start sha.
+if [ "$1" = open ] || [ "$1" = claude ]; then
+  what=$1 kind=$2 iid=$3 target=$4 url=$5 source=$6 head=$7 base=$8 pipeline=$9 start=${10}
+  flag=
+  [ "$what" = claude ] && flag="--claude "
+  case $kind in
+    sep)    [ "$what" = claude ] && exec git-fzf-note "that row is a section heading"; exit 0 ;;
+    review) act="execute(git-mr-review $flag{2} {3} {4} {5} {7} {8} {12})" ;;
+    mine)   act="execute(git-mr-mine $flag{2} {3} {4} {5} {7} {8} {12})" ;;
+    merged)
+      [ "$what" = claude ] && exec git-fzf-note "C is for open MRs, and !$iid has merged"
+      act="execute(gd $pipeline)" ;;
+  esac
+  [ "$what" = claude ] && act="$act+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  echo "$act"
+  exit 0
+fi
+if [ "$1" = approve ]; then
+  [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
+  [ "$2" = review ] || exec git-fzf-note "approve is for MRs you review, and !$3 is not one"
+  echo "execute(git-mr-approve $3 $4 $5)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  exit 0
+fi
+# draft is gmr's d on one of yours: draft to ready or back, whichever it is
+# now, adding or dropping the ready label with it (otis-config readyLabel), in
+# the background; the footer says so at once and again when it
+# lands, and the list refreshes then (flip is that background part).
+if [ "$1" = draft ]; then
+  [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
+  [ "$2" = mine ] || exec git-fzf-note "d marks your own open MRs draft or ready, and !$3 is not one"
+  printf '%s\n' "marking !$3 draft or ready…" > "$GIT_FZF_STATE/note"
+  echo "execute-silent(git-mr-do flip $3)+rebind(focus)+transform-footer:git-fzf-footer"
+  exit 0
+fi
+if [ "$1" = flip ]; then
+  iid=$2
+  (
+    if mr=$(glab api "projects/:fullpath/merge_requests/$iid" 2>&1); then
+      # Ready takes the ready label (otis-config readyLabel), which the
+      # project's CI waits for; back to draft drops it. One update does both.
+      label=$(otis-config readyLabel)
+      if [ "$(printf '%s' "$mr" | jq -r .draft)" = true ]; then
+        set -- --ready ${label:+--label "$label"}; said="!$iid is ready for review${label:+, labeled $label}"
+      else
+        set -- --draft ${label:+--unlabel "$label"}; said="!$iid is a draft now${label:+, without $label}"
+      fi
+      out=$(glab mr update "$iid" "$@" 2>&1) || said="could not mark !$iid ${1#--}: $(printf '%s' "$out" | tail -1)"
+    else
+      said="could not read !$iid from GitLab: $(printf '%s' "$mr" | head -1)"
+    fi
+    printf '%s\n' "$said" > "$GIT_FZF_STATE/note"
+    git-fzf-bg --then "rebind(focus)+transform-footer(git-fzf-footer)" git-mr-list --refresh
+  ) </dev/null >/dev/null 2>&1 &
+  exit 0
+fi
+action=$1 iid=$2 then=$3
+# True both ways: a branch with no MR in gb, and a section heading in gmr.
+[ -n "$iid" ] || exec git-fzf-note "no MR on that row"
+case $action in
+  web)       echo "execute-silent(otis-open '$(git-mr-url "$iid")')" ;;
+  copy)
+    git-mr-url "$iid" | tr -d '\n' | otis-copy && exec git-fzf-note "copied link to !$iid"
+    exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $(git-mr-url "$iid")" ;;
+  labels)    echo "execute(git-mr-labels $iid)${then:++$then}" ;;
+  reviewers) echo "execute(git-mr-reviewers $iid)${then:++$then}" ;;
+esac

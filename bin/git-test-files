@@ -1,0 +1,242 @@
+#!/bin/sh
+# git-test-files: test files in the file pickers, like <leader>ut in nvim (snacks.lua):
+# *.spec.* and *.test.* for js, jsx, ts and tsx. Shown by default, under a
+# heading of their own at the bottom of the list, and t collapses them to just
+# that heading. Build and config files (BUILD.bazel, package.json, tsconfig)
+# and generated files get the same treatment in a list headed for a picker. The choice is one flag file, so it holds across pickers and
+# shells until toggled again.
+#
+#   git-test-files filter [--section] FIELD [--state FIELD] [--keep FIELD VALUES]
+#                            drop rows whose tab-separated FIELD is a test path;
+#                            with --section keep them, under a heading at the
+#                            bottom that says how many there are, collapsed
+#                            while they are hidden. A list that is going into a
+#                            picker wants --section: "3 test files hidden" in
+#                            the footer told you they existed but not which, and
+#                            the heading is in the list where you are looking.
+#                            With --state, rows whose state FIELD says added or
+#                            deleted sit under a heading each, ahead of the
+#                            sections above and never hidden; one that is also
+#                            a test, config or generated file stays in its
+#                            section, tagged instead. With --keep, a row whose
+#                            FIELD is one of the comma-separated VALUES stays
+#                            where it is whatever its path: a caller the
+#                            symbol view lists under a symbol belongs there
+#   git-test-files kinds          paths on stdin, each back as path, tab, its kind:
+#                            tests, gen, cfg, or nothing for source
+#   git-test-files toggle         flip hidden/shown
+#   git-test-files hidden         exit 0 when tests are hidden
+#   git-test-files state          one footer line saying which way it is set
+#   git-test-files count          count test paths on stdin
+#   git-test-files excludes       git pathspecs that leave test files out
+#
+# filter writes the picker's footer (how many it hid) into $GIT_FZF_STATE,
+# which is why the pickers load their lists from inside fzf (start:reload)
+# rather than a pipe.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+flag=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/hide-tests
+# What a path is, for filter and kinds alike: tests by name, then what the
+# repo declares generated (said, from .gitattributes), then these fallbacks.
+classify='
+  function kindof(p) {
+    if (p ~ /\.(spec|test)\.[jt]sx?$/) return "tests"
+    if (generated(p)) return "gen"
+    if (config(p)) return "cfg"
+    return ""
+  }
+  # Nobody reads a lockfile or a codegen dump in a review, and either is
+  # long enough to bury the changes under it. The repo has the last word
+  # above; this is the fallback for one that says nothing.
+  function generated(p) {
+    if (p in said) return 1
+    if (p ~ /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Cargo\.lock|Gemfile\.lock|composer\.lock|poetry\.lock|go\.sum|flake\.lock|uv\.lock)$/) return 1
+    if (p ~ /(^|\/)__generated__\//) return 1
+    if (p ~ /\.(gen|generated)\.[A-Za-z0-9]+$/) return 1
+    if (p ~ /\.pb\.(go|ts|js)$/ || p ~ /_pb2(_grpc)?\.pyi?$/) return 1
+    if (p ~ /\.min\.(js|css)$/) return 1
+    if (p ~ /\.snap$/) return 1
+    return 0
+  }
+  # Wiring that changes alongside the real change and rarely needs reading:
+  # a new import touches BUILD.bazel, a new package its package.json and
+  # tsconfig. In a big monorepo these three alone can outnumber any source
+  # file in a month of commits. Still one keypress away, since a dependency bump
+  # in package.json is sometimes the whole point.
+  function config(p) {
+    if (p ~ /(^|\/)(BUILD|BUILD\.bazel|MODULE\.bazel|WORKSPACE|WORKSPACE\.bazel|\.bazelrc|\.bazelversion|\.bazel-packages)$/) return 1
+    if (p ~ /\.(bzl|bazelrc)$/) return 1
+    if (p ~ /(^|\/)(package\.json|\.npmrc|\.nvmrc|\.yarnrc|\.yarnrc\.yml|\.editorconfig|\.gitignore|\.dockerignore|\.babelrc)$/) return 1
+    if (p ~ /(^|\/)[tj]sconfig[^\/]*\.json$/) return 1
+    if (p ~ /(^|\/)\.(eslintrc|prettierrc)[^\/]*$/) return 1
+    if (p ~ /(^|\/)(eslint|prettier|vitest|vite|jest|babel)\.config\.[a-z]+$/) return 1
+    return 0
+  }
+'
+# declared_generated FIELDS FILE: the paths in those tab fields of FILE that
+# .gitattributes marks linguist-generated, the standard declaration and what
+# GitHub and GitLab collapse diffs by. Only asked when the repo root says
+# something, so the usual case costs one file test.
+# A path's answer never changes while a picker is open, so a picker keeps
+# the answers it has had in its state and asks git only about new paths.
+declared_generated() {
+  top=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -n "$top" ] && [ -f "$top/.gitattributes" ] && grep -q linguist-generated "$top/.gitattributes" 2>/dev/null; then
+    known=${GIT_FZF_STATE:+$GIT_FZF_STATE/declared}
+    [ -n "$known" ] && : >> "$known"
+    awk -F'\t' -v fs="$1" '{ n = split(fs, f, ","); for (i = 1; i <= n; i++) if ($f[i] != "") print $f[i] }' "$2" | sort -u > "$2.paths"
+    if [ -n "$known" ]; then
+      awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$known" "$2.paths" |
+        git check-attr --stdin linguist-generated 2>/dev/null |
+        awk -F': linguist-generated: ' 'BEGIN { OFS = "\t" } NF == 2 { print $1, ($2 == "set" ? 1 : 0) }' >> "$known"
+      awk -F'\t' 'FILENAME == ARGV[1] { if ($2 == 1) yes[$1] = 1; next } $1 in yes' "$known" "$2.paths"
+    else
+      git check-attr --stdin linguist-generated < "$2.paths" 2>/dev/null | sed -n 's/: linguist-generated: set$//p'
+    fi
+    rm -f "$2.paths"
+  fi
+}
+
+case $1 in
+  filter)
+    section=
+    [ "$2" = --section ] && { section=1; shift; }
+    show=1
+    [ -e "$flag" ] && show=0
+    field=$2; shift 2
+    state=0 keepf=0 keepv=
+    while [ $# -gt 0 ]; do
+      case $1 in --state) state=$2; shift 2 ;; --keep) keepf=$2 keepv=$3; shift 3 ;; *) shift ;; esac
+    done
+
+    rows= declared=
+    if [ -n "$section" ]; then
+      rows=$(mktemp) || exit 1
+      declared=$(mktemp) || exit 1
+      cat > "$rows"
+      declared_generated "$field" "$rows" > "$declared"
+      set -- "$rows"
+    else
+      set --
+    fi
+
+    awk -F'\t' -v field="$field" -v keepf="$keepf" -v keepv="$keepv" -v show="$show" -v section="$section" -v declared="$declared" -v state="$state" \
+        -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" "$(cat "$share/rowfmt.awk")$classify"'
+      function rule(text,   s) {
+        s = "\342\224\200\342\224\200 " text " "
+        while (length(s) < 62) s = s "\342\224\200"
+        return s
+      }
+      BEGIN {
+        OFS = "\t"
+        if (declared != "") { while ((getline p < declared) > 0) if (p != "") said[p] = 1; close(declared) }
+      }
+      BEGIN { n = split(keepv, kv, ","); for (i = 1; i <= n; i++) if (kv[i] != "") keep[kv[i]] = 1 }
+      { if (NF > nf) nf = NF }
+      keepf && ($keepf in keep) { print; next }
+      {
+        kind = kindof($field)
+        if (!section && kind != "tests") kind = ""
+        st = (section && state) ? $state : ""
+        if (st != "added" && st != "deleted") st = ""
+        # Under its own heading the state is said once; in a section, per row.
+        if (st != "" && kind != "") $1 = $1 (st == "added" ? GK_GOOD "  added" : GK_BAD "  deleted") GK_R
+        if (kind == "tests") {
+          tests++; held[tests] = $0
+          if (!section && show) print
+          next
+        }
+        if (kind == "gen") { gen++; genheld[gen] = $0; next }
+        if (kind == "cfg") { cfg++; cfgheld[cfg] = $0; next }
+        if (st == "added") { add++; addheld[add] = $0; next }
+        if (st == "deleted") { del++; delheld[del] = $0; next }
+        print
+      }
+      # A heading is a row like any other, so it carries the same number of
+      # fields -- every key that acts on a path sees an empty one and says so
+      # -- and its identity goes last, where these lists keep theirs: fzf
+      # --track blocks cursor movement while it hunts the tracked row through
+      # a reload, and a row with an empty key is never found.
+      function emit(head, id,   line, i) {
+        line = GK_FAINT head GK_R
+        for (i = 1; i < nf; i++) line = line "\t"
+        print line id
+      }
+      END {
+        if (section) {
+          if (add) {
+            emit(rule(add " " (add == 1 ? "added file" : "added files")), "gk-added-heading")
+            for (i = 1; i <= add; i++) print addheld[i]
+          }
+          if (del) {
+            emit(rule(del " " (del == 1 ? "deleted file" : "deleted files")), "gk-deleted-heading")
+            for (i = 1; i <= del; i++) print delheld[i]
+          }
+          if (tests) {
+            noun = tests == 1 ? "test file" : "test files"
+            emit(rule(tests " " noun " \302\267 t " (show ? "hides" : "shows") " them"), "gk-tests-heading")
+            if (show) for (i = 1; i <= tests; i++) print held[i]
+          }
+          if (cfg) {
+            noun = cfg == 1 ? "build or config file" : "build and config files"
+            emit(rule(cfg " " noun " \302\267 t " (show ? "hides" : "shows") " them"), "gk-config-heading")
+            if (show) for (i = 1; i <= cfg; i++) print cfgheld[i]
+          }
+          if (gen) {
+            noun = gen == 1 ? "generated file" : "generated files"
+            emit(rule(gen " " noun " \302\267 t " (show ? "hides" : "shows") " them"), "gk-generated-heading")
+            if (show) for (i = 1; i <= gen; i++) print genheld[i]
+          }
+          if (out != "") printf "" > out
+          exit
+        }
+        if (out == "") exit
+        if (!tests) { printf "" > out; exit }
+        noun = tests == 1 ? "test file" : "test files"
+        if (show) printf "%sshowing %d %s%s\n", GK_CONTEXT, tests, noun, GK_R > out
+        else printf "%s%d %s hidden%s\n", GK_ATTENTION, tests, noun, GK_R > out
+      }' "$@"
+    rm -f "$rows" "$declared"
+    ;;
+  hidden)
+    [ -e "$flag" ]
+    ;;
+  state)
+    if [ -e "$flag" ]; then
+      printf "${GK_ATTENTION}test files hidden in diffs${GK_R}\n"
+    else
+      printf "${GK_CONTEXT}showing test files in diffs${GK_R}\n"
+    fi
+    ;;
+  count)
+    awk '/\.(spec|test)\.[jt]sx?$/ { n++ } END { print n + 0 }'
+    ;;
+  kinds)
+    paths=$(mktemp) || exit 1
+    declared=$(mktemp) || exit 1
+    cat > "$paths"
+    declared_generated 1 "$paths" > "$declared"
+    awk -F'\t' -v declared="$declared" "$classify"'
+      BEGIN { OFS = "\t"; if (declared != "") { while ((getline p < declared) > 0) if (p != "") said[p] = 1; close(declared) } }
+      { print $1, kindof($1) }' "$paths"
+    rm -f "$paths" "$declared"
+    ;;
+  excludes)
+    # Same set as the filter regex. top anchors them at the repo root whatever the
+    # cwd, and glob lets ** match the top level too.
+    for kind in spec test; do
+      printf ':(top,exclude,glob)**/*.%s.[jt]s\n:(top,exclude,glob)**/*.%s.[jt]sx\n' "$kind" "$kind"
+    done
+    ;;
+  toggle)
+    # The list is about to renumber, and scroll memory is keyed by row.
+    git-fzf-scroll reset
+    if [ -e "$flag" ]; then
+      rm -f "$flag"
+    else
+      mkdir -p "$(dirname "$flag")" && touch "$flag"
+    fi
+    # The old flag meant the opposite; leaving it would be confusing later.
+    rm -f "${flag%/*}/show-tests"
+    ;;
+esac

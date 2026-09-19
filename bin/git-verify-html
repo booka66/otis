@@ -1,0 +1,74 @@
+#!/bin/sh
+# git-verify-html <dir>: a verification's report as one HTML file, <dir>/report.html,
+# for a reviewer, who wants to know whether the change works and to see the
+# proof: the verdict, what is worth knowing, and claim by claim what was
+# shown, with its recordings playing, its screenshots to open, and the output
+# it cites folded under it. What the run cost, how the agents went about it
+# and the look back are otis's business and stay in the run's view.
+# git-verify-run writes it once the verdict is in; h in the run's view opens
+# it, writing it first for a run from before.
+#
+# Everything is in the one file, images and videos as data URIs, so it can be
+# attached to the MR or sent on as it is. The cost is size: a video is a
+# megabyte or so. Output is whole up to 64K; a longer log keeps the lines
+# that say how it went (git-verify --keylines) and its end.
+d=${1%/}
+[ -s "$d/verdict.json" ] || { echo "no verdict in $d yet" >&2; exit 1; }
+share=$(cd "$(dirname "$0")/../share" && pwd)
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+key=${d##*/}
+case $key in
+  b-*)
+    mr=
+    # A branch has no title of its own; one commit's subject is one.
+    title=$(printf '%s' "${key#b-}" | tr '%' '/')
+    [ "$(grep -c '^- ' "$d/context/commits.md" 2>/dev/null)" = 1 ] &&
+      title=$(sed -n 's/^- [0-9a-f]* //p' "$d/context/commits.md")
+    what=$(printf '%s' "${key#b-}" | tr '%' '/') ;;
+  *)
+    mr=$(git-mr-url "$key" 2>/dev/null)
+    title=$(head -1 "$d/context/change.md" 2>/dev/null | sed 's/^# *![0-9]* *//')
+    what="!$key" ;;
+esac
+ended=$(cat "$d/ended" 2>/dev/null)
+
+# One JSON line a file the verdict cites. A video's frames are the judge's
+# way of watching it, so the video stands for them.
+jq -r '.criteria[].artifacts[]? | select(startswith("frames/") | not)' "$d/verdict.json" | awk '!seen[$0]++' |
+while IFS= read -r name; do
+  f=$d/artifacts/$name
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f" | tr -d ' ')
+  case $name in
+    *.png) mime=image/png ;;
+    *.jpg|*.jpeg) mime=image/jpeg ;;
+    *.gif) mime=image/gif ;;
+    *.webp) mime=image/webp ;;
+    *.mp4|*.mov) mime=video/mp4 ;;
+    *.webm) mime=video/webm ;;
+    *) mime= ;;
+  esac
+  if [ -n "$mime" ]; then
+    base64 < "$f" | tr -d '\n' > "$tmp/b64"
+    jq -nc --arg name "$name" --arg mime "$mime" --rawfile b64 "$tmp/b64" \
+      '{name: $name, kind: ($mime | split("/")[0]), src: "data:\($mime);base64,\($b64)"}'
+  else
+    if [ "$size" -le 65536 ]; then
+      cp "$f" "$tmp/text"
+    else
+      { said=$(git-verify --keylines < "$f")
+        [ -n "$said" ] && printf '%s\n\n…\n\n' "$said"
+        tail -n 200 "$f"; } > "$tmp/text"
+    fi
+    jq -nc --arg name "$name" --argjson size "$size" --rawfile text "$tmp/text" \
+      '{name: $name, kind: "text", size: $size, text: $text, cut: ($size > 65536)}'
+  fi
+done > "$tmp/files.jsonl"
+
+jq -r -L "$share" --slurpfile plan "$d/plan.json" --slurpfile files "$tmp/files.jsonl" \
+  --arg title "$title" --arg what "$what" --arg mr "$mr" \
+  --arg when "$([ -n "$ended" ] && { date -r "$ended" '+%b %-d, %Y' 2>/dev/null || date -d "@$ended" '+%b %-d, %Y'; })" \
+  'include "verify-html"; page' "$d/verdict.json" > "$d/report.html.new" &&
+  mv "$d/report.html.new" "$d/report.html"

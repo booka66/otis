@@ -1,0 +1,6 @@
+# Working files for the picker design canvas: the .dc.html artboards and the
+# seeded page published as an Artifact. Drafts of a drawing, not of the tool.
+.design/
+
+# macOS Finder metadata.
+.DS_Store

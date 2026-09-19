@@ -1,0 +1,21 @@
+# Tokyo Night.
+attention=38;2;224;175;104
+good=38;2;158;206;106
+bad=38;2;247;118;142
+elsewhere=38;2;122;162;247
+yours=38;2;255;158;100
+text=38;2;192;202;245
+context=38;2;115;122;162
+faint=38;2;59;66;97
+main=38;2;115;218;202
+codebg=48;2;41;46;66
+errbg=48;2;63;37;48
+delta_syntax=Visual Studio Dark+
+bat=Visual Studio Dark+
+file=#7aa2f7
+rule=#3b4261
+minus=#37222c
+plus=#20303b
+minus_emph=#5a2d3a
+plus_emph=#2c4a55
+glow=dark

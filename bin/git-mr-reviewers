@@ -1,0 +1,89 @@
+#!/bin/sh
+# git-mr-reviewers <iid>                            reviewer picker for one MR (gci, gb)
+# git-mr-reviewers --list <iid> [query]             its rows
+# git-mr-reviewers --toggle <iid> <user id> <on|off>
+#
+# With no search, the MR's current reviewers with where each one stands. Press /
+# and type to search the project's members on GitLab as you type; fzf cancels a
+# search the moment the next keystroke starts one, and the short sleep keeps a
+# fast typist from firing a request per letter. tab adds or removes the
+# highlighted person, even mid-search: the tick moves at once and GitLab is
+# told in the background (share/mr-sync.sh). The MR comes through the cache
+# (git-cached-json), so a lookup that fails shows in the footer with ? for
+# why. A change GitLab refuses puts back the reviewers it has, and says so
+# the same way.
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+. "$share/mr-sync.sh"
+
+fetch_current() {
+  mr=$(git-cached-json "mr-$1" 15 "reload(git-mr-reviewers --list $1)" -- glab api "projects/:fullpath/merge_requests/$1" 2>/dev/null) &&
+    jq '[.reviewers[] | {id, username, name}]' "$mr" > "$st/reviewers"
+  [ -s "$st/reviewers" ] || echo '[]' > "$st/reviewers"
+}
+
+case $1 in
+  --list)
+    iid=$2 query=$3
+    [ -s "$st/reviewers" ] || fetch_current "$iid"
+    if [ -s "$st/footer.error" ]; then
+      mv "$st/footer.error" "$st/footer"
+    else
+      jq -r -L "$share" --arg iid "$iid" 'include "otis"; context + "!\($iid) reviewers: "
+        + (if length == 0 then "none" else map(.username) | join(", ") end)
+        + r' "$st/reviewers" > "$st/footer"
+    fi
+    if [ -z "$query" ]; then
+      cat "$st/reviewers"
+    elif found=$(glab api "projects/:fullpath/members/all?per_page=20&query=$(printf '%s' "$query" | jq -sRr @uri)" 2>&1); then
+      # Kept for tab, which adds a person by id and draws their name at once.
+      printf '%s' "$found" | jq '[.[] | select(.state == "active") | {id, username, name}]' | tee "$st/found"
+    else
+      printf "${GK_BAD}could not search members: %s${GK_R}\n" "$(printf '%s' "$found" | head -1)" > "$st/footer"
+      echo '[]'
+    fi | jq -r -L "$share" --slurpfile current "$st/reviewers" '
+      include "otis";
+      ($current[0] | map(.id)) as $ids |
+      .[] | (.id | IN($ids[])) as $on |
+      [ (if $on then good + "✓" + r + " " else "  " end)
+          + (if $on then "[1m" else "" end) + .username + r
+          + "  " + context + .name + r,
+        (.id | tostring), (if $on then "on" else "off" end)
+      ] | join("\t")'
+    ;;
+  --toggle)
+    iid=$2 id=$3 state=$4
+    [ -n "$id" ] || exit 0
+    if [ "$state" = on ]; then
+      jq --argjson id "$id" 'map(select(.id != $id))' "$st/reviewers"
+    else
+      jq --argjson id "$id" --slurpfile found "$st/found" '. + [$found[0][] | select(.id == $id)] | unique_by(.id)' "$st/reviewers"
+    fi > "$st/reviewers.new" && mv "$st/reviewers.new" "$st/reviewers"
+    failed() {
+      git-fzf-error "change reviewers" "$1"
+      glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq '[.reviewers[] | {id, username, name}]' > "$st/reviewers.new" &&
+        mv "$st/reviewers.new" "$st/reviewers"
+      mr_post "reload(git-mr-reviewers --list $iid)"
+    }
+    # -F parses the JSON array; -f would send "[...]" as a string, and field
+    # names like reviewer_ids[] reach GitLab as a literal key it ignores.
+    mr_sync "reviewers-$iid" "$(mr_gen "reviewers-$iid")" failed \
+      glab api -X PUT "projects/:fullpath/merge_requests/$iid" -F "reviewer_ids=$(jq -c 'map(.id)' "$st/reviewers")"
+    ;;
+  *)
+    iid=$1
+    if [ -z "$iid" ]; then
+      printf 'no MR for this branch yet, so there is nobody to request a review from. press enter\n'
+      read -r _
+      exit 0
+    fi
+    toggle="execute-silent(git-mr-reviewers --toggle $iid {2} {3})+reload(git-mr-reviewers --list $iid {q})"
+    git-fzf "!$iid reviewers " 'tab=add or remove,space=,enter=close' --ansi --track --disabled --search \
+      --delimiter="$(printf '\t')" --with-nth=1 \
+      --bind "start:reload(git-mr-reviewers --list $iid)" \
+      --bind "change:reload:sleep 0.2; git-mr-reviewers --list $iid {q}" \
+      --bind "tab:$toggle" --bind "space:$toggle" \
+      </dev/null >/dev/null
+    ;;
+esac

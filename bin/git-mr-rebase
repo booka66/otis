@@ -1,0 +1,96 @@
+#!/bin/sh
+# git-mr-rebase --check <kind> <iid>   gmr's r, as fzf actions for a transform binding
+# git-mr-rebase <iid>                  confirm, then rebase the MR onto its target
+#
+# GitLab does the rebase, on its side, onto the branch the MR targets: main,
+# or the branch below it in a stack. Nothing local is touched, so it works for
+# a branch checked out nowhere, or in a worktree with uncommitted changes, and
+# a rebase that would conflict is refused with GitLab's reason rather than
+# left half done in a checkout. For that, gup in the branch's checkout.
+#
+# The branch on GitLab moves to new commits and a new pipeline starts. Your
+# local branch follows when that loses nothing: when it is exactly the commit
+# the MR was at before the rebase, it moves to the rebased one, checked out or
+# not (reset --keep where it is checked out, which keeps uncommitted changes
+# and refuses if the rebase touched a file they are in). With commits of its
+# own it is left alone and you are told; gp refuses to push over the rebase
+# (--force-if-includes) until git pull --rebase there picks it up.
+#
+# --check says in the footer when there is nothing to do: already on top of
+# its target, a rebase already running, or not an open MR. It also refuses an
+# MR that is part of a stack. Rebasing one layer on GitLab leaves the MRs above
+# it carrying the old copies of its commits, and glab stack keeps each layer's
+# sha in .git/stacked, so its next sync would push the old commits back over
+# the rebase. A stack moves as a whole: r on any layer of a glab stack rebases
+# all of it (git-stack --update), and gup with --update-refs moves a branch
+# stack.
+mr() { glab api "projects/:fullpath/merge_requests/$iid$1"; }
+pause() { printf '%s. press enter\n' "$1"; read -r _; }
+
+if [ "$1" = --check ]; then
+  kind=$2 iid=$3
+  [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
+  [ -n "$iid" ] || exit 0
+  [ "$kind" = merged ] && exec git-fzf-note "!$iid is merged; nothing to rebase"
+  json=$(mr "?include_diverged_commits_count=true&include_rebase_in_progress=true") ||
+    exec git-fzf-note "could not reach GitLab for !$iid"
+  printf '%s' "$json" | jq -e '.rebase_in_progress' >/dev/null &&
+    exec git-fzf-note "GitLab is already rebasing !$iid"
+  src=$(printf '%s' "$json" | jq -r .source_branch) target=$(printf '%s' "$json" | jq -r .target_branch)
+  # A glab stack rebases as a whole, through glab (git-stack --update).
+  stack=$(git-stack --of "$src") &&
+    exec echo "execute(git-stack --update $stack)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  [ "$target" = "$(otis-config main)" ] ||
+    exec git-fzf-note "!$iid is stacked on $target; gup in the top branch's checkout rebases the stack"
+  above=$(glab api "projects/:fullpath/merge_requests?state=opened&target_branch=$(printf '%s' "$src" | jq -sRr @uri)" 2>/dev/null | jq -r 'map("!\(.iid)") | join(", ")')
+  [ -z "$above" ] ||
+    exec git-fzf-note "$above stack on !$iid, and would keep its old commits; gup in the top branch's checkout rebases the stack"
+  behind=$(printf '%s' "$json" | jq -r '.diverged_commits_count // 0')
+  [ "$behind" -gt 0 ] ||
+    exec git-fzf-note "!$iid already has everything on $(printf '%s' "$json" | jq -r .target_branch)"
+  exec echo "execute(git-mr-rebase $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+fi
+
+iid=$1
+[ -n "$iid" ] || exit 0
+json=$(mr "?include_diverged_commits_count=true") || { pause "could not load !$iid"; exit 1; }
+old=$(printf '%s' "$json" | jq -r .sha)
+printf '%s' "$json" | jq -r '
+  "!\(.iid)  \(.title)",
+  "  \(.source_branch) onto \(.target_branch), \(.diverged_commits_count) new commit\(if .diverged_commits_count == 1 then "" else "s" end) there",
+  "  GitLab rewrites the branch and starts a new pipeline"'
+git-confirm "rebase it?" || exit 0
+out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/rebase" 2>&1) ||
+  { printf '%s\n' "$out" | head -3; pause "GitLab would not start the rebase"; exit 1; }
+
+# The rebase runs in the background on GitLab; wait for it to say how it went.
+printf 'rebasing ...'
+tries=0
+while :; do
+  sleep 1
+  tries=$((tries + 1))
+  state=$(mr "?include_rebase_in_progress=true") || { printf '\n'; pause "could not ask GitLab how the rebase went"; exit 1; }
+  printf '%s' "$state" | jq -e '.rebase_in_progress' >/dev/null || break
+  [ $tries -lt 60 ] || { printf '\n'; pause "still rebasing after a minute; u in gmr shows when it lands"; exit 0; }
+  printf '.'
+done
+printf '\n'
+err=$(printf '%s' "$state" | jq -r '.merge_error // empty')
+[ -z "$err" ] || { pause "the rebase failed: $err"; exit 1; }
+b=$(printf '%s' "$state" | jq -r .source_branch) new=$(printf '%s' "$state" | jq -r .sha)
+local=$(git rev-parse -q --verify "refs/heads/$b") || exit 0
+[ "$local" != "$new" ] || exit 0
+if [ "$local" != "$old" ]; then
+  pause "rebased. your local $b has commits the MR did not, so it was left alone; git pull --rebase there picks the rebase up"
+  exit 0
+fi
+git fetch --quiet origin "+refs/heads/$b:refs/remotes/origin/$b" || { pause "rebased, but fetching it failed; git pull --rebase in $b picks it up"; exit 1; }
+wt=$(git-worktree-path of "$b")
+if [ -z "$wt" ]; then
+  git update-ref "refs/heads/$b" "$new" "$old" || pause "rebased, but your local $b moved meanwhile, so it was left alone"
+elif [ "$(git -C "$wt" rev-parse HEAD)" != "$old" ]; then
+  pause "rebased, but $b in $wt moved meanwhile, so it was left alone"
+elif ! git -C "$wt" reset --quiet --keep "$new"; then
+  pause "rebased, but uncommitted changes in $wt are in files the rebase changed, so $b there was left alone"
+fi
+exit 0

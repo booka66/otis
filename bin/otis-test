@@ -1,0 +1,941 @@
+#!/bin/sh
+# otis-test: run otis's tests. Each one runs a script or a shared function on
+# a fixture and compares the output; a failure prints what was expected and
+# what came out. Everything runs in a throwaway repo under $TMPDIR, so no real
+# repo is touched and no GitLab is asked. Exit 1 if anything failed.
+root=$(cd "$(dirname "$0")/.." && pwd)
+PATH=$root/bin:$PATH
+share=$root/share
+export PATH
+unset GIT_FZF_STATE
+# The tests check hues, so they run in one theme whatever yours is.
+export OTIS_THEME=gruvbox
+eval "$(otis-theme --env)"
+failed=0 passed=0
+
+# expect <name> <got> <want>
+expect() {
+  if [ "$2" = "$3" ]; then
+    passed=$((passed + 1))
+  else
+    failed=$((failed + 1))
+    printf 'FAIL %s\n  want: %s\n  got:  %s\n' "$1" "$3" "$2"
+  fi
+}
+# strip: ANSI colors out of stdin, so a test checks words, not hues.
+strip() { sed -E 's/\x1b\[[0-9;]*m//g'; }
+# awk_fn <expression>: evaluate one rowfmt.awk expression.
+awk_fn() { awk "$(cat "$share/rowfmt.awk")"'BEGIN { print '"$1"' }' </dev/null | strip; }
+jq_fn() { jq -nr -L "$share" "include \"otis\"; $1" | strip; }
+
+# --- git-commit-check
+expect commit-check/ok "$(printf 'Fix the thing\n\nBecause.\n' | git-commit-check; echo "rc=$?")" "rc=0"
+expect commit-check/long "$(printf '%081d\n' 0 | git-commit-check)" "subject is 81 characters; keep it to 72"
+expect commit-check/prefix "$(printf 'feat: add\n' | git-commit-check)" "no type prefix like feat: or fix(area):, just say what it does"
+expect commit-check/blank "$(printf 'Subject\nbody\n' | git-commit-check)" "leave a blank line between the subject and the body"
+expect commit-check/curly-quote-is-one "$(printf 'don\342\200\231t %066d\n' 0 | git-commit-check; echo "rc=$?")" "rc=0"
+expect commit-check/dash "$(printf 'Subject \342\200\224 no\n' | git-commit-check)" "em dash in the message; use a colon, a comma, or two sentences"
+
+# --- git-commit-tidy
+expect tidy/blank-after-subject "$(printf 'Subject\nbody\n' | git-commit-tidy)" "$(printf 'Subject\n\nbody')"
+expect tidy/wrap "$(printf 'S\n\n%s %s\n' "$(printf 'word%.0s ' $(seq 1 20))" x | git-commit-tidy | awk '{ if (length($0) > 72) print "too long" }')" ""
+expect tidy/list-kept "$(printf 'S\n\n- one\n- two\n' | git-commit-tidy)" "$(printf 'S\n\n- one\n- two')"
+expect tidy/trailer-kept "$(printf 'S\n\nCo-Authored-By: a\nChangelog: fixed\n' | git-commit-tidy)" "$(printf 'S\n\nCo-Authored-By: a\nChangelog: fixed')"
+expect tidy/fence-kept "$(printf 'S\n\n```\na   b\n```\n' | git-commit-tidy)" "$(printf 'S\n\n```\na   b\n```')"
+expect tidy/collapse-blanks "$(printf 'S\n\n\n\nbody\n\n\n' | git-commit-tidy)" "$(printf 'S\n\nbody')"
+
+# --- share/rowfmt.awk
+expect rowfmt/fit-short "$(awk_fn 'gk_fit("a/b/c.ts", 20)')" "a/b/c.ts"
+expect rowfmt/fit-drop-dirs "$(awk_fn 'gk_fit("packages/billing/src/index.ts", 16)')" "…/src/index.ts"
+expect rowfmt/fit-name-from-front "$(awk_fn 'gk_fit("averyveryverylongname.ts", 10)')" "…ngname.ts"
+expect rowfmt/fit-untracked-dir "$(awk_fn 'gk_fit("tmp/", 10)')" "tmp/"
+expect rowfmt/dir "$(awk_fn 'gk_dir("a/b/c")')" "a/b/"
+expect rowfmt/dir-bare "$(awk_fn 'gk_dir("c")')" ""
+expect rowfmt/bar-empty "$(awk_fn 'gk_bar(0, 0)')" "..."
+expect rowfmt/bar-all-add "$(awk_fn 'gk_bar(10, 0)')" "███"
+expect rowfmt/bar-keeps-a-block "$(awk "$(cat "$share/rowfmt.awk")"'BEGIN { print gk_bar(300, 1) }' </dev/null | grep -c '251;73;52')" "1"
+expect rowfmt/stat "$(awk_fn 'gk_stat(4, 12, 2, 2)')" "+ 4 -12"
+expect rowfmt/stat-blank "$(awk_fn 'gk_stat("", "", 2, 2)')" "       "
+expect rowfmt/numstat-rename "$(awk_fn 'gk_numstat_path("dir/{old => new}.ts")')" "dir/new.ts"
+expect rowfmt/numstat-plain "$(awk_fn 'gk_numstat_path("old.ts => new.ts")')" "new.ts"
+expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(100)')" "94"
+expect rowfmt/width-wide "$(awk_fn 'gk_list_width(220)')" "95"
+
+# --- share/otis.jq
+expect jq/gid "$(jq_fn '"gid://gitlab/Ci::Pipeline/123" | gid')" "123"
+expect jq/gid-null "$(jq_fn 'null | gid')" ""
+expect jq/ago "$(jq_fn '(now - 7200 | todate) | ago')" "2h"
+expect jq/padr "$(jq_fn '"!12" | padr(6) | "[\(.)]"')" "[!12   ]"
+expect jq/padl "$(jq_fn '3 | padl(2) | "[\(.)]"')" "[ 3]"
+expect jq/effective-gate "$(jq_fn '{status: "FAILED", jobs: {nodes: [{name: "gate", status: "FAILED", allowFailure: false}]}} | effective(["gate"])')" "APPROVAL"
+expect jq/effective-real "$(jq_fn '{status: "FAILED", jobs: {nodes: [{name: "gate", status: "FAILED", allowFailure: false}, {name: "test", status: "FAILED", allowFailure: false}]}} | effective(["gate"])')" "FAILED"
+expect jq/glyph "$(jq_fn '"SUCCESS" | pipe_glyph')" "✓"
+
+# --- share/markdown.awk: HTML tags go, but not out of code
+md_fn() { LC_ALL=C awk -v width=80 "$(cat "$share/markdown.awk")"' BEGIN { md("'"$1"'", 80, "") }' </dev/null | strip; }
+expect md/tags-stripped "$(md_fn 'a <b>bold</b> &lt;x&gt;')" "a bold <x>"
+expect md/code-span-kept "$(md_fn 'x `Promise<void>` y')" "x Promise<void> y"
+expect md/fence-kept "$(md_fn '```ts\037const a: Array<string> = [];\037```')" "  const a: Array<string> = [];"
+
+# --- a throwaway repo for the scripts that read git
+tmp=$(mktemp -d) && tmp=$(cd "$tmp" && pwd -P) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+export HOME=$tmp XDG_CACHE_HOME=$tmp/cache GIT_CONFIG_GLOBAL=$tmp/gitconfig FZF_COLUMNS=100
+git init -q -b main "$tmp/origin" && (
+  cd "$tmp/origin" && git config user.email t@t && git config user.name t &&
+  printf 'a\n' > a.ts && printf 'b\n' > b.spec.ts && mkdir -p src && printf 'c\n' > src/c.ts &&
+  git add -A && git commit -qm "First" && printf 'a2\n' > a.ts && git commit -qam "Second"
+) && git clone -q "$tmp/origin" "$tmp/repo" 2>/dev/null && cd "$tmp/repo" || exit 1
+git config user.email t@t; git config user.name t
+git remote set-url origin git@gitlab.example.com:group/sub/repo.git
+# No test ever calls Claude: the symbol view would gloss its fixture otherwise.
+git config otis.symbolsModel off
+git config otis.callersFixModel off
+git config otis.callers off
+
+expect config/host "$(otis-config host)" "gitlab.example.com"
+expect config/url "$(otis-config url)" "https://gitlab.example.com"
+expect config/project "$(otis-config project)" "group/sub/repo"
+expect config/main "$(otis-config main)" "main"
+expect config/base "$(otis-config base)" "origin/main"
+expect config/gitlab "$(otis-config gitlab; echo $?)" "0"
+expect config/gates-default "$(otis-config gateJobs)" '[]'
+expect config/deploy-default "$(otis-config deployJob)" "deploy"
+# The repo's own .otis, under your git config, and only for what a team shares.
+printf '[otis]\n\tgateJob = shared-gate\n\tdeployJob = ship\n\tclaudeCommand = rm\n\tworktrees = /elsewhere\n' > .otis
+expect config/repo-file "$(otis-config gateJobs deployJob | tr '\n' ' ')" '["shared-gate"] ship '
+expect config/repo-file-not-commands "$(otis-config claudeCommands)" ""
+expect config/repo-file-not-worktrees "$(otis-config worktrees)" ".claude/worktrees"
+git config otis.gateJob one; git config --add otis.gateJob two
+expect config/gates-set "$(otis-config gateJobs)" '["one","two"]'
+git config --replace-all otis.gateJob ''
+expect config/gates-none "$(otis-config gateJobs)" '[]'
+rm .otis
+expect config/lessons-default "$(otis-config lessons; echo $?)" "1"
+git config otis.lessons true
+expect config/lessons-on "$(otis-config lessons; echo $?)" "0"
+git config otis.host code.example.com; git config otis.project other/path; git config otis.mainBranch develop
+expect config/host-set "$(otis-config host)" "code.example.com"
+expect config/project-set "$(otis-config project)" "other/path"
+expect config/main-set "$(otis-config main)" "develop"
+expect config/base-fallback "$(otis-config base)" "HEAD"
+git config --unset otis.host; git config --unset otis.project; git config --unset otis.mainBranch
+git remote set-url origin https://github.com/x/y.git
+expect config/not-gitlab "$(otis-config gitlab; echo $?)" "1"
+expect config/several "$(otis-config project main host | tr '\n' ' ')" "x/y main github.com "
+expect config/several-unset "$(otis-config main cursorEnv main | tr '\n' '|')" "main||main|"
+expect config/project-https "$(otis-config project)" "x/y"
+git remote set-url origin gitlab.example.com:group/repo.git
+expect config/project-scp-no-user "$(otis-config project)" "group/repo"
+git remote set-url origin git@gitlab.example.com:group/sub/repo.git
+
+# --- otis-claude-gate: one git-remote-run of a named check, nothing around it
+gate() { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | otis-claude-gate >/dev/null 2>&1; echo $?; }
+git config otis.claudeCommand 'bazel test'
+expect gate/allowed "$(gate 'git-remote-run bazel test //a:b')" "0"
+expect gate/other-command "$(gate 'git-remote-run rm -rf /')" "2"
+expect gate/chained "$(gate 'git-remote-run bazel test //a:b; curl x')" "2"
+expect gate/glob "$(gate 'git-remote-run bazel test a*')" "2"
+expect gate/bracket "$(gate 'git-remote-run bazel test //a:[bc]')" "2"
+git config --unset otis.claudeCommand
+
+expect worktree-path/named "$(git-worktree-path named x)" "$tmp/repo/.claude/worktrees/x"
+git config otis.worktrees .wt
+expect worktree-path/config "$(git-worktree-path named x)" "$tmp/repo/.wt/x"
+git config --unset otis.worktrees
+
+# --- git-test-files
+rows=$(printf 'x\ta.ts\ny\tb.spec.ts\nz\tsrc/c.test.tsx\n')
+expect test-files/count "$(printf '%s\n' "$rows" | cut -f2 | git-test-files count)" "2"
+expect test-files/filter-shown "$(printf '%s\n' "$rows" | git-test-files filter 2 | wc -l | tr -d ' ')" "3"
+expect test-files/section-heading "$(printf '%s\n' "$rows" | git-test-files filter --section 2 | strip | sed -n 2p | cut -c1-15)" "── 2 test files"
+cfg=$(printf 'x\tsrc/a.ts\ny\tsrc/BUILD.bazel\nz\tpackage.json\nw\tlibs/tsconfig.build.json\nv\tlibs.bzl\nu\tpackage-json.ts\n')
+expect test-files/config-heading "$(printf '%s\n' "$cfg" | git-test-files filter --section 2 | strip | sed -n 3p | sed 's/ ·.*//')" "── 4 build and config files"
+expect test-files/config-not-source "$(printf '%s\n' "$cfg" | git-test-files filter --section 2 | sed -n 2p | cut -f2)" "package-json.ts"
+git-test-files toggle
+expect test-files/hidden "$(git-test-files hidden; echo $?)" "0"
+expect test-files/filter-hidden "$(printf '%s\n' "$rows" | git-test-files filter 2 | wc -l | tr -d ' ')" "1"
+git-test-files toggle
+expect test-files/shown-again "$(git-test-files hidden; echo $?)" "1"
+
+# --- gg lists every command there is. A command nobody can find is a command
+# nobody uses: gstack and gag were both missing, so a session that needed a
+# glab stack wrote the whole sequence out by hand instead of running it.
+gg_out=$(gg 2>/dev/null | strip)
+unlisted=
+for fn in $(cd "$root/bin" && for f in *; do [ -L "$f" ] && [ "$f" != gg ] && echo "$f"; done); do
+  printf '%s\n' "$gg_out" | grep -qE "^  $fn( |\$)|^  [a-z-]+ $fn( |\$)| $fn " || unlisted="$unlisted $fn"
+done
+expect gg/lists-every-command "$unlisted" ""
+
+# --- git-stack --sweep: glab stacks left behind by merged ones
+git branch alive-layer
+st=$(git rev-parse --path-format=absolute --git-common-dir)/stacked
+mkdir -p "$st/gone" "$st/kept"
+printf '{"branch":"cahoon-gone-853ee756","sha":"x","prev":"","next":""}' > "$st/gone/1.json"
+printf '{"branch":"alive-layer","sha":"y","prev":"","next":""}' > "$st/kept/1.json"
+git config glab.currentstack gone
+git-stack --sweep > "$tmp/sweep.out"
+expect stack/sweep-forgets "$(ls "$st" | tr '\n' ' ')" "kept "
+expect stack/sweep-says-so "$(strip < "$tmp/sweep.out")" "gstack: forgot the glab stack gone, whose branches are all gone from here"
+expect stack/sweep-unsets "$(git config --get glab.currentstack; echo "rc=$?")" "rc=1"
+# One whose layers are still here is left alone, currentstack included.
+git config glab.currentstack kept
+git-stack --sweep > /dev/null
+expect stack/sweep-keeps-live "$(ls "$st" | tr '\n' ' ')" "kept "
+expect stack/sweep-keeps-current "$(git config --get glab.currentstack)" "kept"
+rm -rf "$st"; git config --unset glab.currentstack; git branch -D alive-layer >/dev/null 2>&1
+
+# --- git-log-list, git-file-list: the row shape the pickers rely on
+expect log-list/fields "$(git-log-list | strip | awk -F'\t' '{ print NF }' | sort -u)" "2"
+expect log-list/sha-last "$(git-log-list -1 | cut -f2)" "$(git rev-parse --short HEAD)"
+expect log-list/cap "$(git-log-list | wc -l | tr -d ' ')" "2"
+# Your commits are the ones the base has not got, and they stay bright once the
+# branch is pushed; the upstream only says which are still in your hands.
+shade() { git-log-list -1 | awk 'NR == 1 { match($0, /38;2;[0-9;]+/); print substr($0, RSTART, RLENGTH) }'; }
+printf 'yours\n' > yours.txt && git add yours.txt && git commit -qm "one of yours"
+expect log-list/held "$(shade)" "38;2;254;128;25"
+git update-ref refs/remotes/origin/pushed HEAD && git branch --set-upstream-to=origin/pushed >/dev/null 2>&1
+expect log-list/pushed-still-yours "$(shade)" "38;2;250;189;47"
+git branch --unset-upstream >/dev/null 2>&1; git update-ref -d refs/remotes/origin/pushed
+git reset -q --hard HEAD~1
+printf 'a3\n' > a.ts && printf 'new\n' > d.ts
+expect file-list/fields "$(git-file-list | strip | awk -F'\t' '{ print NF }' | sort -u)" "6"
+expect file-list/paths "$(git-file-list | cut -f2 | sort | tr '\n' ' ')" "a.ts d.ts "
+expect file-list/status "$(git-file-list | awk -F'\t' '$2 == "d.ts" { print $3 $4 }')" "??"
+git checkout -q -- a.ts && rm d.ts
+
+# --- git-deploy-list: rows, strip and footer from a fixture, no GitLab
+cat > "$tmp/deploys.json" <<'JSON'
+{"deploys": [
+  {"id": 3, "status": "running", "kind": "deploy", "sha": "cccccccc1", "at": "2026-09-17T17:33:00Z", "duration": 61, "pipeline": "30", "url": "u3", "job": 3, "user": "c", "prev": "bbbbbbbb1", "commits": 2, "mrs": ["7", "9"]},
+  {"id": 2, "status": "failed", "kind": "deploy", "sha": "bbbbbbbb1", "at": "2026-09-17T17:20:00Z", "duration": 0, "pipeline": "20", "url": "u2", "job": 2, "user": "b", "prev": "aaaaaaaa1", "commits": 0, "mrs": []},
+  {"id": 1, "status": "success", "kind": "deploy", "sha": "aaaaaaaa1", "at": "2026-09-17T17:00:00Z", "duration": 476, "pipeline": "10", "url": "u1", "job": 1, "user": "a", "prev": "", "commits": 0, "mrs": []}]}
+JSON
+mkdir -p "$tmp/dl"
+expect deploy-list/fields "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" | awk -F'\t' '{ print NF }' | sort -u)" "7"
+expect deploy-list/order "$(git-deploy-list --from "$tmp/deploys.json" | cut -f4 | tr '\n' ' ')" "30 20 10 "
+expect deploy-list/glyphs "$(git-deploy-list --from "$tmp/deploys.json" | strip | cut -c3 | tr '\n' ' ')" "◐ ⊘ ✓ "
+expect deploy-list/strip "$(git-deploy-list --from "$tmp/deploys.json" --strip | strip)" "✓⊘◐"
+expect deploy-list/pos "$(git-deploy-list --from "$tmp/deploys.json" --pos 20)" "pos(2)"
+expect deploy-list/mrs "$(git-deploy-list --from "$tmp/deploys.json" | strip | head -1 | grep -o '![0-9]*' | tr '\n' ' ')" "!7 !9 "
+expect deploy-list/footer "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" >/dev/null; strip < "$tmp/dl/footer" | grep -o '[0-9]* live · [0-9]* failed')" "1 live · 1 failed"
+
+# --- otis-list, otis-do: the dashboard's rows, and what enter does with one.
+# Origin points at GitHub for this, so nothing here asks GitLab anything.
+git remote set-url origin https://github.com/x/y.git
+mkdir -p "$tmp/dash"
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
+expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "14"
+expect otis-list/here-last "$(printf '%s\n' "$rows" | tail -1 | cut -f6,11,14 | tr '\t' ' ')" "here here here"
+expect otis-list/here-always "$(printf '%s\n' "$rows" | strip | grep -c '── here ')" "1"
+expect otis-list/quiet "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "nothing waiting on you"
+expect otis-list/no-gitlab "$(strip < "$tmp/dash/footer" | sed 's/.* · //')" "origin is not on GitLab, so this is your work here alone"
+# Fixes Claude left on a branch with no MR: a waiting row that needs no GitLab.
+mkdir -p "$common/gmr-fix/b-feature" && printf 'patch\n' > "$common/gmr-fix/b-feature/01.patch"
+rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
+expect otis-list/waiting "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 == "w-fix-b-feature" { print $1 }' | tr -s ' ')" " ✎1 fold in 1 fix feature"
+expect otis-list/waiting-first "$(printf '%s\n' "$rows" | strip | head -1 | cut -f1 | sed 's/ ─*$//')" "── waiting on you"
+expect otis-list/waiting-count "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "1 thing waiting on you"
+# Leaving what enter opened comes back to the dashboard's own rows, not gag's.
+expect otis-do/run "$(otis-do enter run run "$common/gmr-fix/b-feature" "" "" "" "" "" "" "" "")" "execute(git-mr-fix 'b-feature' '')+execute-silent(git-fzf-bg otis-list)"
+expect agent-list/open-default "$(git-agent-list --open "$common/gmr-fix/b-feature")" "execute(git-mr-fix 'b-feature' '')+reload(git-agent-list)"
+# A verification opens through git-verify, so r there starts it again.
+expect agent-list/open-verify "$(git-agent-list --open "$common/otis-verify/b-a%b" back)" "execute(git-verify --branch 'a/b')+back"
+expect otis-do/gone "$(GIT_FZF_STATE=$tmp/dash otis-do enter run run "$common/gmr-fix/nope" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that run is not here any more"
+# y on a run copies its folder and what is in it, for Claude; the clipboard
+# here is a file, so the tests never touch yours.
+mkdir -p "$tmp/clip" "$common/otis-verify/b-y/artifacts"
+printf '#!/bin/sh\ncat > "%s/clip/got"\n' "$tmp" > "$tmp/clip/pbcopy" && chmod +x "$tmp/clip/pbcopy"
+printf 'Verifying y\n' > "$common/otis-verify/b-y/title" && printf '{"verdict":"pass"}\n' > "$common/otis-verify/b-y/verdict.json"
+touch "$common/otis-verify/b-y/artifacts/a.log"
+GIT_FZF_STATE=$tmp/dash PATH=$tmp/clip:$PATH otis-do copy run run "$common/otis-verify/b-y" "" "" "" "" "" "" "" "" >/dev/null
+expect otis-do/copy-run "$(sed -n 1p "$tmp/clip/got"):$(grep -c 'verdict.json\|artifacts/ .*1 files' "$tmp/clip/got")" "An otis verification, \"Verifying y\", verdict: pass.:2"
+expect otis-do/sep "$(GIT_FZF_STATE=$tmp/dash otis-do enter sep "" "" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that row is a section heading"
+expect otis-do/mr "$(otis-do enter review mr "" 42 main u b h ba 9 st)" "execute(git-mr-review {2} {3} {4} {5} {7} {8} {12})"
+# The three ways of being done with a fix, none of which leaves it waiting:
+# folded into your commits, applied to your checkout, or on a branch of its own.
+printf 'patch\n' > "$common/gmr-fix/b-feature/02.patch"
+printf 'patch\n' > "$common/gmr-fix/b-feature/03.patch"
+printf 'patch\n' > "$common/gmr-fix/b-feature/04.patch"
+expect mr-fix/marks-all-waiting "$(git-mr-fix --marks | jq -r '.["b-feature"].fixes')" "4"
+printf '2\n' > "$common/gmr-fix/b-feature/folded"
+printf '3\n' > "$common/gmr-fix/b-feature/applied"
+printf '4\n' > "$common/gmr-fix/b-feature/branched"
+expect mr-fix/marks-branched-done "$(git-mr-fix --marks | jq -r '.["b-feature"].fixes')" "1"
+expect otis-list/fixes-left "$(GIT_FZF_STATE=$tmp/dash otis-list | strip | awk -F'\t' '$11 == "w-fix-b-feature" { print $1 }' | tr -s ' ')" " ✎1 fold in 1 fix feature"
+rm -f "$common/gmr-fix/b-feature"/0[234].patch "$common/gmr-fix/b-feature/folded" \
+  "$common/gmr-fix/b-feature/applied" "$common/gmr-fix/b-feature/branched"
+# d discards one you do not want, which is the fourth way of being done with a
+# proposal and the only one that takes nothing. It asks first, and takes it back
+# without asking, since nothing was destroyed either way.
+printf 'patch\n' > "$common/gmr-fix/b-feature/02.patch"
+printf '2\n' > "$common/gmr-fix/b-feature/accepted"
+printf '2\n' > "$common/gmr-fix/b-feature/declined"
+expect mr-fix/marks-discarded "$(git-mr-fix --marks | jq -r '.["b-feature"].fixes')" "1"
+expect otis-list/discarded "$(GIT_FZF_STATE=$tmp/dash otis-list | strip | awk -F'\t' '$11 == "w-fix-b-feature" { print $1 }' | tr -s ' ')" " ✎1 fold in 1 fix feature"
+# d on a discarded one takes it back with no question asked, and it counts again.
+git-mr-fix --discard b-feature 2 </dev/null
+expect mr-fix/undiscard "$(cat "$common/gmr-fix/b-feature/declined")" ""
+expect mr-fix/undiscard-counts "$(git-mr-fix --marks | jq -r '.["b-feature"].fixes')" "2"
+# space on a discarded one is you changing your mind: the discard goes and it is accepted.
+printf '2\n' > "$common/gmr-fix/b-feature/declined"
+: > "$common/gmr-fix/b-feature/accepted"
+git-mr-fix --toggle b-feature 2 >/dev/null
+expect mr-fix/space-undiscards "$(cat "$common/gmr-fix/b-feature/declined")" ""
+expect mr-fix/space-accepts "$(cat "$common/gmr-fix/b-feature/accepted")" "2"
+# One already dealt with is refused rather than discarded.
+printf '2\n' > "$common/gmr-fix/b-feature/folded"
+expect mr-fix/discard-refused "$(git-mr-fix --discard b-feature 2 </dev/null | head -1)" "that one is folded into your commits already. press enter"
+rm -f "$common/gmr-fix/b-feature"/02.patch "$common/gmr-fix/b-feature/folded" \
+  "$common/gmr-fix/b-feature/accepted" "$common/gmr-fix/b-feature/declined"
+expect otis-preview/heading "$(GIT_FZF_STATE=$tmp/dash otis-preview sep "" sep-waiting "" | strip | head -1)" "waiting on you"
+# D discards what otis is telling you, and nothing else: a merge request's own
+# state is the merge request's to change.
+expect otis-do/dismiss-refused "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss mine mr "" 42 "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "otis discards what it is telling you, Claude's fixes and its runs' verdicts; that row is the merge request's own state"
+expect otis-do/dismiss-gone "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss run run "$common/gmr-fix/nope" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that run is not here any more"
+# Discarding a whole run asks first, and git-confirm reads the terminal, so
+# with none there is nothing discarded: the confirm is not a formality.
+printf 'patch\n' > "$common/gmr-fix/b-feature/02.patch"
+git-mr-fix --discard-rest b-feature </dev/null >/dev/null 2>&1
+expect mr-fix/discard-rest-asks "$(cat "$common/gmr-fix/b-feature/declined" 2>/dev/null)" ""
+expect mr-fix/discard-rest-waiting "$(git-mr-fix --marks | jq -r '.["b-feature"].fixes')" "2"
+rm -f "$common/gmr-fix/b-feature"/02.patch
+# A verdict you have said you have seen, and what you saw when you did.
+mkdir -p "$common/otis-verify/99" && printf 'abc123\n' > "$common/otis-verify/99/seen"
+GIT_FZF_STATE=$tmp/dash otis-list >/dev/null
+expect otis-list/seen-scan "$(cat "$tmp/dash/seen.tsv")" "otis-verify/99	abc123"
+rm -rf "$common/otis-verify"
+# A run that failed waits on you until you have seen it, and comes back when
+# it fails again; a branch's verdict shows as an MR's does.
+v=$common/otis-verify/b-feature
+mkdir -p "$v" && printf '100\n' > "$v/started" && printf '200\n' > "$v/ended" && printf 'failed\n' > "$v/status"
+failed_row() { GIT_FZF_STATE=$tmp/dash otis-list | strip | awk -F'\t' '$11 == "w-failed-otis-verify-b-feature" { print $1 }' | awk '{ print $2, $3 }'; }
+expect otis-list/failed-run "$(failed_row)" "verify failed"
+printf '#!/bin/sh\n' > "$tmp/yes" && mkdir -p "$tmp/yesbin" && mv "$tmp/yes" "$tmp/yesbin/git-confirm" && chmod +x "$tmp/yesbin/git-confirm"
+expect otis-do/dismiss-asks "$(otis-do dismiss run run "$v" "" "" "" "" "" "" "" "")" 'execute(otis-do confirm {6} {14} {13} {2} {3} {4} {5} {7} {8} {9} {12})+execute-silent(git-fzf-bg otis-list)'
+PATH=$tmp/yesbin:$PATH otis-do confirm run run "$v" "" "" "" "" "" "" "" ""
+expect otis-do/dismiss-failed "$(cat "$v/seen")" "200"
+expect otis-list/failed-seen "$(failed_row)" ""
+printf '300\n' > "$v/ended"
+expect otis-list/failed-again "$(failed_row)" "verify failed"
+printf 'done\n' > "$v/status" && printf 'abc\n' > "$v/head" && printf '{"verdict":"fail"}\n' > "$v/verdict.json"
+expect otis-list/branch-verdict "$(GIT_FZF_STATE=$tmp/dash otis-list | strip | awk -F'\t' '$11 == "w-verify-b-feature" { print $1 }' | tr -s ' ')" " ● verified: failed feature"
+rm -rf "$common/otis-verify" "$tmp/yesbin"
+
+# Your merged MRs on their way to production, from a seeded cache so nothing
+# asks GitLab: each state lands in the section that fits it, and a live one
+# says nothing at all.
+git remote set-url origin git@gitlab.example.com:g/r.git
+cache=$common/git-alias-cache
+mkdir -p "$cache" && echo '{}' > "$cache/mrs-review.json" && echo '{}' > "$cache/ci-mine.json"
+echo '{"deploys": []}' > "$cache/deploys.json"
+jq -n '{mrs: [
+  {iid:"101",title:"Deploying one",sourceBranch:"a",targetBranch:"main",mergedAt:"2026-01-01T00:00:00Z",webUrl:"u",state:"deploying",deploy:{pipeline:"900",url:"d"}},
+  {iid:"102",title:"Queued one",sourceBranch:"b",targetBranch:"main",mergedAt:"2026-01-01T00:01:00Z",webUrl:"u",state:"queued",deploy:{pipeline:"901",url:"d"}},
+  {iid:"103",title:"Waiting one",sourceBranch:"c",targetBranch:"main",mergedAt:"2026-01-01T00:02:00Z",webUrl:"u",state:"waiting"},
+  {iid:"104",title:"Stacked one",sourceBranch:"d",targetBranch:"e",mergedAt:"2026-01-01T00:03:00Z",webUrl:"u",state:"branch"},
+  {iid:"105",title:"Rolled back one",sourceBranch:"f",targetBranch:"main",mergedAt:"2026-01-01T00:04:00Z",webUrl:"u",state:"rolledback",deploy:{pipeline:"902",url:"d"}},
+  {iid:"106",title:"Live one",sourceBranch:"g",targetBranch:"main",mergedAt:"2026-01-01T00:05:00Z",webUrl:"u",state:"live",deploy:{pipeline:"903",url:"d"}}]}' > "$cache/ci-merged.json"
+rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
+expect otis-list/shipping "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 ~ /^g-merged-/ { print $11 "=" $1 }' | sed 's/  */ /g; s/ merged .*//' | tr '\n' ' ')" "g-merged-104= · !104 merged, not on main g-merged-103= · !103 merged, not out yet g-merged-102= ○ !102 queued to deploy g-merged-101= ◐ !101 deploying "
+expect otis-list/rolled-back "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 == "w-mr-105" { print $1 }' | tr -s ' ')" " ▼ !105 rolled back Rolled back one"
+expect otis-list/rolled-back-key "$(printf '%s\n' "$rows" | awk -F'\t' '$11 == "w-mr-105" { print $14 }')" "rollback"
+expect otis-do/rolled-back-dismiss "$(otis-do dismiss merged rollback '' 105 main u f '' '' '' '' | grep -c 'otis-do confirm')" "1"
+printf 'rollback/105\trolledback\n' >> "$common/otis-dismissed"
+expect otis-list/rolled-back-dismissed "$(GIT_FZF_STATE=$tmp/dash otis-list | grep -c 'w-mr-105')" "0"
+rm -f "$common/otis-dismissed"
+expect otis-list/live-is-quiet "$(printf '%s\n' "$rows" | grep -c '106')" "0"
+# The deploy of its own only shows while it is carrying none of yours.
+jq -n '{deploys:[{id:7,status:"running",kind:"deploy",sha:"abc",at:"2026-01-01T00:06:00Z",duration:0,pipeline:"900",url:"u",mrs:["101"]}]}' > "$cache/deploys.json"
+expect otis-list/deploy-stands-down "$(GIT_FZF_STATE=$tmp/dash otis-list | awk -F'\t' '$11 ~ /^g-deploy-/' | wc -l | tr -d ' ')" "0"
+jq '.mrs |= map(if .state == "deploying" or .state == "queued" then .state = "live" else . end)' "$cache/ci-merged.json" > "$cache/m.tmp" && mv "$cache/m.tmp" "$cache/ci-merged.json"
+expect otis-list/deploy-alone "$(GIT_FZF_STATE=$tmp/dash otis-list | awk -F'\t' '$11 ~ /^g-deploy-/' | wc -l | tr -d ' ')" "1"
+rm -rf "$cache"
+git remote set-url origin https://github.com/x/y.git
+rm -rf "$common/gmr-fix"
+# The trash: a worktree otis took out of the way rather than deleting, which
+# keeps what git would have dropped with it, and the row that says so.
+case $(uname) in
+  Darwin) trashdir=$HOME/.Trash ;;
+  *) trashdir=${XDG_DATA_HOME:-$HOME/.local/share}/Trash/files ;;
+esac
+# The kept file has to be ignored, or git refuses to remove the worktree at
+# all, which is the point: the trash is for what git would have dropped.
+printf '*.o\n' >> "$common/info/exclude"
+git worktree add -q "$tmp/repo/.claude/worktrees/spare" -b spare
+printf 'build\n' > "$tmp/repo/.claude/worktrees/spare/local.o"
+git-worktree-trash "$tmp/repo/.claude/worktrees/spare"
+expect trash/gone "$(git worktree list | grep -c spare)" "0"
+expect trash/noted "$(git-worktree-trash --list | awk -F'\t' '{ print $4 }')" "spare"
+expect trash/keeps-ignored "$(cat "$trashdir"/spare-*/local.o 2>/dev/null)" "build"
+expect trash/not-a-checkout "$(ls -a "$trashdir"/spare-*/.git 2>/dev/null | wc -l | tr -d ' ')" "0"
+rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
+expect otis-list/trash "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 == "trash" { print $1 }' | tr -s ' ' | sed -E 's/[0-9]+[smhd] ago/just now/')" " $(printf '\357\207\270') 1 in the trash a worktree you removed, just now"
+expect otis-list/trash-under-here "$(printf '%s\n' "$rows" | awk -F'\t' '{ print $11 }' | tail -2 | tr '\n' ' ')" "here trash "
+expect otis-do/trash "$(otis-do enter trash trash "$trashdir" "" "" "" "" "" "" "" "")" "execute-silent(otis-open '$trashdir')"
+# Emptying the trash forgets it, so the count is what the trash actually holds.
+rm -rf "$trashdir"/spare-*
+expect trash/pruned "$(git-worktree-trash --list | wc -l | tr -d ' ')" "0"
+expect otis-list/trash-gone "$(GIT_FZF_STATE=$tmp/dash otis-list | awk -F'\t' '$11 == "trash"' | wc -l | tr -d ' ')" "0"
+git branch -D spare >/dev/null 2>&1
+sed -i.bak '/^\*\.o$/d' "$common/info/exclude" && rm -f "$common/info/exclude.bak"
+git remote set-url origin git@gitlab.example.com:group/sub/repo.git
+
+# --- git-symbols: the symbol table behind s in the file pickers, from a
+# two-commit branch whose commits stay in the object store once the branch is
+# gone; then ga's view of the worktree on that branch, staging by symbol
+if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
+  git checkout -qb sym
+  printf 'export type Opts = { a: number };\nexport function run(o: Opts): number {\n  return o.a;\n}\nfunction helper() {\n  return 1;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size++;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\n' > lib.ts
+  # app.ts calls run and the change never touches it: a caller elsewhere, for
+  # tsgo to find (the tsconfig makes the repo a project, the package.json
+  # names it for git-callers --spec).
+  # main has a type error of its own already; only the one run's new
+  # parameter brings is the change's.
+  printf 'import { run } from "./lib";\n\nexport function main(): number {\n  const bad: number = "x";\n  return run({ a: 1 });\n}\n' > app.ts
+  printf 'import { run } from "./lib";\nexport const r = run({ a: 1 });\n' > lib.spec.ts
+  # other.ts never names Opts, only build, which is unchanged; Opts gaining
+  # b breaks its literal all the same: what the change breaks without a call.
+  printf 'import { build } from "./lib";\n\nexport const z: ReturnType<typeof build> = { a: 1 };\n' > other.ts
+  printf '{ "compilerOptions": { "strict": true, "module": "esnext", "moduleResolution": "bundler" } }\n' > tsconfig.json
+  printf '{ "name": "fx", "type": "module" }\n' > package.json
+  git add lib.ts app.ts lib.spec.ts other.ts tsconfig.json package.json && git commit -qm "Base" && base=$(git rev-parse HEAD)
+  printf 'export type Opts = { a: number; b: string };\nexport function run(o: Opts, twice: boolean): number {\n  return o.a;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size += 2;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\n\n/** the new one */\nexport const fresh = (o: Opts) => o.b;\n\nconsole.log(fresh);\nexport type Wide = Opts extends { a: 1 } ? 1 : 0;\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\n' > lib.ts
+  # A const and a type of one name, Effect's schema pattern: two symbols.
+  printf 'export const Pair = { a: 1 };\nexport type Pair = typeof Pair;\nexport function usePair(p: Pair) { return p; }\nexport function usePairToo(p: Pair) { return p; }\nexport class Svc extends Base<Svc>()("Svc", { a: 1 }) {}\nexport const tpl = `Svc ${usePair(1)}`;\n' > pair.ts
+  # A generated file that uses run: listed in its own section, and no edge
+  # to run, which stays an entry point.
+  printf 'export const G = run({ a: 1 }, true);\n' > gen.generated.ts
+  git add pair.ts gen.generated.ts && git commit -qam "Head" && head=$(git rev-parse HEAD)
+  mkdir -p "$tmp/symst"
+  rows=$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head")
+  table=$tmp/symst/symbols.tsv
+  # Roots first (nothing changed mentions them), then what they use: Opts is
+  # under run and fresh.
+  expect symbols/order "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box grow helper fresh Wide Opts "
+  expect symbols/changes "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $6 }' "$table" | tr '\n' ' ')" "signature body body removed added added signature "
+  expect symbols/uses "$(awk -F'\t' '$3 == "run" || $3 == "fresh" { print $18 }' "$table" | tr '\n' ' ')" "lib.ts#Opts lib.ts#Opts "
+  expect symbols/roots "$(awk -F'\t' '$19 == 1 && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box helper fresh Wide "
+  expect symbols/same-name "$(awk -F'\t' '$1 == "pair.ts" && $3 ~ /Pair$/ { print $3 ":" $6 ":" $18 }' "$table" | tr '\n' ' ')" "Pair:added: type Pair:added:pair.ts#Pair usePair:added:pair.ts#type Pair "
+  expect symbols/gen-isolated "$(awk -F'\t' '$1 == "gen.generated.ts" { print $3 ":" $18 ":" $19 }' "$table")" "G::1"
+  expect symbols/gen-section "$(printf '%s\n' "$rows" | strip | grep -A1 'generated file' | grep -c 'const G')" "1"
+  # In a template literal the interpolation is code and the text is not.
+  expect symbols/template "$(awk -F'\t' '$3 == "tpl" { print $18 }' "$table")" "pair.ts#usePair"
+  expect symbols/class-head "$(printf '%s\n' "$rows" | strip | grep 'class Svc' | cut -f1 | sed 's/^ *+ *1  *//')" "export class Svc extends Base<Svc>()(…)"
+  expect symbols/run-head "$(awk -F'\t' '$3 == "run" { print $13 }' "$table")" "function run(o: Opts, twice: boolean): number"
+  # S puts the shape of the change in the preview, where ? puts the help: a
+  # flag the preview reads, so the next keypress takes it away again.
+  GIT_FZF_STATE=$tmp/symst git-symbols --shape
+  expect symbols/shape-on "$(GIT_FZF_STATE=$tmp/symst FZF_PREVIEW_COLUMNS=90 SEAM_COLOR=0 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c 'stories')" "1"
+  GIT_FZF_STATE=$tmp/symst git-symbols --shape
+  expect symbols/shape-off "$(GIT_FZF_STATE=$tmp/symst FZF_PREVIEW_COLUMNS=90 SEAM_COLOR=0 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c 'stories')" "0"
+  # Only s puts it there: a list, Claude or tsgo still working or not, never does.
+  GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" > /dev/null
+  expect symbols/shape-kept-off "$(test -e "$tmp/symst/shape" && echo on || echo off)" "off"
+  expect symbols/fresh-head "$(awk -F'\t' '$3 == "fresh" { print $13 }' "$table")" "const fresh = (o: Opts)"
+  expect symbols/removed-side "$(awk -F'\t' '$3 == "helper" { print $7, $8 }' "$table")" "old 5"
+  # v on run marks it and Opts under it; Opts is the symbol's, so fresh,
+  # which uses it too, is half read. v again clears both.
+  GIT_FZF_STATE=$tmp/symst git-symbols --viewed "$base..$head" toggle 'lib.ts#run'
+  expect symbols/viewed-marks "$(cut -f1 "$common/otis-viewed" | sort | tr '\n' ' ')" "lib.ts#Opts lib.ts#run "
+  rows=$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip)
+  expect symbols/viewed-row "$(printf '%s\n' "$rows" | awk -F'\t' '$12 == "lib.ts#run" { print ($1 ~ /✓/) }')" "1"
+  expect symbols/viewed-shared "$(printf '%s\n' "$rows" | awk -F'\t' '$12 == "lib.ts#fresh" { print ($1 ~ / 1\/2 /) }')" "1"
+  GIT_FZF_STATE=$tmp/symst git-symbols --viewed "$base..$head" toggle 'lib.ts#run'
+  expect symbols/viewed-cleared "$(wc -l < "$common/otis-viewed" | tr -d ' ')" "0"
+  # Callers elsewhere, from tsgo: main in app.ts, r in lib.spec.ts and again
+  # in lib.ts call run and the change touches none; the row under run, the
+  # callers under that in place (the spec one too, not filed under tests),
+  # and a caller's preview with run underlined. The preview of again reads
+  # lib.ts as the change leaves it even once the disk copy has moved on,
+  # since its lines are the change's.
+  if command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    expect callers/spec "$(git-callers --spec lib.ts)" "fx/lib"
+    git-callers --run "$base..$head" "$table" 2>/dev/null
+    cf=$(git-callers --file "$base..$head" "$table")
+    expect callers/found "$(cut -f1,4,6,7,8 "$cf" | tr '\t' ' ' | tr '\n' ' ')" "- other.ts#z 3 3 0 lib.ts#Opts lib.ts#build 21 21 2 lib.ts#run app.ts#main 3 6 1 lib.ts#run lib.spec.ts#r 2 2 1 lib.ts#run lib.ts#again 20 20 1 "
+    # run took one argument and takes two: both callers break, checked since
+    # the checkout is at head; both are in the one package, fx.
+    expect callers/errors "$(awk -F'\t' '{ print $9 ":" $11 }' "$cf" | tr '\n' ' ')" "1:fx 0:fx 1:fx 1:fx 1:fx "
+    # Claude's review drafts (git-mr-claude), placed by symbol: one on Opts,
+    # which is under run, and one on app.ts, which the change does not touch,
+    # naming run. They come back in the tree's order, the second on run's
+    # signature, each why opening with where its symbol sits.
+    printf '{"base_sha":"%s","head_sha":"%s","start_sha":"%s"}' "$base" "$head" "$base" > "$tmp/refs.json"
+    printf '[{"path":"app.ts","side":"new","first_line":5,"last_line":5,"symbol":"lib.ts#run","body":"b1","why":"w1"},{"path":"lib.ts","side":"new","first_line":%s,"last_line":%s,"symbol":"","body":"b2","why":"w2"}]' \
+      "$(awk -F'\t' '$3 == "Opts" { print $10 }' "$table")" "$(awk -F'\t' '$3 == "Opts" { print $10 }' "$table")" > "$tmp/findings.json"
+    cut -f1 "$table" | sort -u | git-test-files kinds > "$tmp/kinds.tsv"
+    drafts=$(nvim --clean -l "$share/mr-claude-drafts.lua" "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv")
+    expect claude-drafts/order "$(printf '%s\n' "$drafts" | jq -r '.symbol + " " + .note' | tr '\n' ' ')" "run b1 Opts b2 "
+    expect claude-drafts/moved "$(printf '%s\n' "$drafts" | jq -r 'select(.note == "b1") | "\(.where) \(.position.new_path)"')" "lib.ts:$(awk -F'\t' '$3 == "run" { print $10 }' "$table") lib.ts"
+    expect claude-drafts/why "$(printf '%s\n' "$drafts" | jq -r '.why | split("\n")[0]' | tr '\n' '|')" "**\`run\`** · ~ signature changed · an entry point · 3 callers elsewhere, ✗ main, r, again · about app.ts:5|**\`Opts\`** · ~ signature changed · reached from \`run\` › \`Opts\` · 1 caller elsewhere|"
+    # With a gloss, the tree lists its reading order first, so Opts is met
+    # under fresh before run.
+    printf 'lib.ts#fresh\n' > "$tmp/order.txt"
+    expect claude-drafts/gloss-order "$(nvim --clean -l "$share/mr-claude-drafts.lua" "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv" "$tmp/order.txt" | jq -r 'select(.note == "b2") | .why | split("\n")[0]')" "**\`Opts\`** · ~ signature changed · reached from \`fresh\` › \`Opts\` · 1 caller elsewhere"
+    # The break the change reaches through a type: a row of its own, last.
+    expect callers/broken-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 == "->callers" { print $1 }' | sed 's/^ *//')" "▸   1 broken elsewhere without calling anything changed, in 1 package"
+    GIT_FZF_STATE=$tmp/symst git-symbols --open '->callers'
+    expect callers/broken-open "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 == "->callers>other.ts#z" { print $2 ":" $3 " " $1 }' | sed 's/  */ /g; s/^ //')" "other.ts:3 ✗ const z: ReturnType<typeof build> = { a: 1 };"
+    expect callers/broken-preview "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" other.ts file 3 3 '->callers>other.ts#z' | strip | sed -n 1p | grep -c 'no longer type-checks')" "1"
+    GIT_FZF_STATE=$tmp/symst git-symbols --close '->callers'
+    GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#run'; GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#run>callers'
+    expect callers/rows "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 ~ /^lib.ts#run>callers/ && $11 != "package" { print $12 }' | tr '\n' ' ')" "lib.ts#run>callers lib.ts#run>callers>app.ts#main lib.ts#run>callers>lib.spec.ts#r lib.ts#run>callers>lib.ts#again "
+    expect callers/text "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 == "lib.ts#run>callers" { print $1 }' | sed 's/^ *//')" "▾   3 callers elsewhere, in 1 package · 1 in specs · 3 with type errors"
+    expect callers/caller-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 ~ /^lib.ts#run>callers>/ && $11 == "caller" { print $2 ":" $3 " " $1 }' | sed 's/  */ /g; s/^ //' | tr '\n' ' ')" "app.ts:5 ✗ function main(): number lib.spec.ts:2 ✗ const r = run({ a: 1 }); lib.ts:20 ✗ function again(): number "
+    expect callers/package-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 == "package" { print $1 ":" $12 }' | sed 's/^ *//')" "fx:lib.ts#run>callers>fx"
+    expect callers/preview-errors "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | sed -n 1p | grep -c 'type error')" "1"
+    # The error under its line, and the preview scrolled to it on first view.
+    expect callers/preview-inline "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -A1 '^ *5 ' | tail -1 | sed 's/^ *┃ //' | cut -c1-30)" "✗ Expected 2 arguments, but go"
+    expect callers/preview-scrolled "$(cat "$tmp/symst/off.lib.ts#run>callers>app.ts#main" 2>/dev/null | grep -c '^[0-9]')" "1"
+    rm -f "$tmp/symst/off.lib.ts#run>callers>app.ts#main"
+    # Claude's fix for it under the error, from a cache written by hand,
+    # keyed by the answer's shape and the broken rows: its sentence, then its
+    # edit, where it goes and that F can make it, as a diff.
+    fxdir=$(dirname "$cf")/../callers-fix; mkdir -p "$fxdir"
+    printf '{"fixes":[{"caller":"app.ts#main","line":5,"where":"caller","fix":"pass twice as false","edits":[{"path":"app.ts","old":"  return run({ a: 1 });\\n","new":"  return run({ a: 1 }, false);\\n"}]}]}' > "$fxdir/$( { echo v2; awk -F'\t' '$9 > 0' "$cf" | cut -f1,4,12; } | git hash-object --stdin).json"
+    expect callers/fix "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -A3 '✦' | sed 's/^ *┃ *//' | tr '\n' '|')" "✦ pass twice as false|app.ts:5 · F makes it|-return run({ a: 1 });|+return run({ a: 1 }, false);|"
+    expect callers/fix-prompt "$(git-callers-fix --prompt "$base..$head" "$cf" "$table" | grep -c '^## caller ')" "4"
+    # enter on a broken caller opens on its first error.
+    expect callers/at-error "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' 3)" "5"
+    # F makes the edit and saves it, staying in the picker; the preview then
+    # marks it made, and a second F says it is made already.
+    expect callers/fix-apply "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)'):$(sed -n 5p app.ts)" "reload(x)+rebind(focus)+transform-footer:git-fzf-footer:  return run({ a: 1 }, false);"
+    expect callers/fix-apply-note "$(cat "$tmp/symst/note")" "made Claude's fix in app.ts · uncommitted, git diff shows it"
+    expect callers/fix-made "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -c 'app.ts:5 · made, uncommitted')" "1"
+    GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)' >/dev/null
+    expect callers/fix-apply-again "$(cat "$tmp/symst/note")" "Claude's fix for this caller is made already; git diff shows it"
+    expect callers/fix-not-caller "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run' 'reload(x)' >/dev/null; cat "$tmp/symst/note")" "F makes Claude's fix to a broken caller, and this row is not one"
+    git checkout -q -- app.ts
+    rm -rf "$fxdir"
+    expect callers/preview "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 5 'lib.ts#run>callers>app.ts#main' | grep -c $'\e\[1;4;38;2;250;189;47mrun\e\[22;24m')" "1"
+    # From a checkout at the base, the change's files are handed to tsgo as
+    # the change leaves them, so the check holds there too.
+    git switch -q --detach "$base" && rm -f "$cf" && git-callers --run "$base..$head" "$table" 2>/dev/null; git switch -q sym
+    expect callers/checked-from-base "$(awk -F'\t' '{ print $9 }' "$(git-callers --file "$base..$head" "$table")" | tr '\n' ' ')" "1 0 1 1 1 "
+    printf '\n\n\n' | cat - lib.ts > lib.ts.moved && mv lib.ts.moved lib.ts
+    expect callers/preview-as-changed "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts file 20 20 'lib.ts#run>callers>lib.ts#again' | strip | grep -c 'function again')" "1"
+    git checkout -q -- lib.ts
+    GIT_FZF_STATE=$tmp/symst git-symbols --close 'lib.ts#run>callers'; GIT_FZF_STATE=$tmp/symst git-symbols --close 'lib.ts#run'
+  fi
+  # fresh starts at its doc comment and opens on its keyword. The file row is
+  # the console.log alone: the blank lines count for nothing, and its preview
+  # is that line as a hunk of its own, not the file's diff over again.
+  expect symbols/comment-claimed "$(awk -F'\t' '$3 == "fresh" { print $8, $9, $10, $11 }' "$table")" "15 16 16 2"
+  expect symbols/unclaimed-count "$(awk -F'\t' '$2 == "file" && $1 == "lib.ts" { print $11, $12 }' "$table")" "1 0"
+  expect symbols/unclaimed-preview "$(GIT_SYMBOLS_PLAIN=1 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new | grep '^@@\|^[-+][^-+]' | tr '\n' ' ')" "@@ -16,0 +18,1 @@ +console.log(fresh); "
+  expect symbols/fields "$(printf '%s\n' "$rows" | strip | awk -F'\t' '{ print NF }' | sort -u)" "12"
+  expect symbols/class-collapsed "$(printf '%s\n' "$rows" | strip | grep -c 'grow()')" "0"
+  expect symbols/class-count "$(printf '%s\n' "$rows" | strip | cut -f1 | grep -c '▸ 1 export class Box$')" "1"
+  expect symbols/child-hidden "$(printf '%s\n' "$rows" | strip | grep -c 'type Opts')" "0"
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#Box'
+  expect symbols/class-open "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'grow()')" "1"
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#run'
+  expect symbols/root-open "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -A1 'function run' | tail -1 | cut -f1 | sed 's/.*    //; s/  *$//')" "▸ 1 export type Opts = { a: number; b: string };"
+  # h on the child closes run and, as the picker's transform, puts the
+  # cursor on run's row, the first, before the reload.
+  expect symbols/close-actions "$(GIT_FZF_STATE=$tmp/symst git-symbols --close 'lib.ts#run>lib.ts#Opts' git-symbols --rows x)" "pos(1)+reload(git-symbols --rows x)"
+  expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
+  # run used Opts before the change and fresh is new, so only under fresh is
+  # the mention a new call.
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#run'; GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#fresh'
+  expect symbols/new-call "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'type Opts' | grep -c '⇢')" "1"
+  expect symbols/new-call-under-fresh "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -A1 'const fresh' | tail -1 | grep -c '⇢  ')" "1"
+  # Bottom up: the sinks first, Opts opening to run and fresh, its callers.
+  GIT_FZF_STATE=$tmp/symst git-symbols --flip
+  expect symbols/up-roots "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 != "" && $11 != "file" && $11 != "callers" { print $12 }' | tr '\n' ' ')" "lib.ts#Opts lib.ts#Box lib.ts#helper pair.ts#Pair pair.ts#Svc gen.generated.ts#G "
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#Opts'
+  expect symbols/up-callers "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 != "callers" { print $12 }' | grep -c '^lib.ts#Opts>')" "3"
+  expect symbols/up-new-caller "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'const fresh' | grep -c '⇢')" "1"
+  GIT_FZF_STATE=$tmp/symst git-symbols --flip
+  expect symbols/down-again "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 != "" && $11 != "file" { print $12 }' | head -1)" "lib.ts#run"
+  # Claude's glosses, from a cache written by hand: the prompt's shape, the
+  # gloss after the signature, its order for the roots, and the preview's head.
+  expect gloss/prompt "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" roots | grep -c '^## s[0-9]* lib.ts#\|, root$')" "14"
+  expect gloss/prompt-rest "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" rest | grep '^## ' | tr '\n' ' ')" "## s4 lib.ts#Box.grow ## s11 lib.ts#Opts ## s12 pair.ts#Pair ## s13 pair.ts#type Pair ## s14 pair.ts#usePair "
+  gdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-gloss
+  mkdir -p "$gdir"
+  printf '{"symbols":[{"id":"lib.ts#run","does":"runs the options once","gloss":"takes a twice flag"},{"id":"lib.ts#Box.grow","does":"enlarges the box","gloss":"grows by two"},{"id":"lib.ts#Opts","does":"options for one run","gloss":"gains a b flag"}],"edges":[{"from":"lib.ts#fresh","to":"lib.ts#Opts","gloss":"reads b off the options"}],"order":[{"id":"lib.ts#fresh","why":"the new entry point"},{"id":"lib.ts#run","why":"then the changed one"}],"spine":"Adds a b option and a fresh reader of it."}' > "$gdir/$base-$head.json"
+  expect gloss/state "$(git-symbols-gloss --state "$base..$head" "$tmp/symst/symbols.tsv")" "done"
+  # A gloss landing while the picker is open moves nothing: the layout it
+  # opened with stays until it opens again.
+  expect gloss/order-waits "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 != "" && $12 !~ /^gk-/ { print $12 }' | head -3 | tr '\n' ' ')" "lib.ts#run lib.ts#Box lib.ts#helper "
+  rm -f "$tmp"/symst/layout.*
+  expect gloss/order "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 != "" && $12 !~ /^gk-/ { print $12 }' | head -3 | tr '\n' ' ')" "lib.ts#fresh lib.ts#run lib.ts#Box "
+  expect gloss/not-in-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'takes a twice flag')" "0"
+  # The spine heads the picker, where the cursor never lands; no row is it.
+  expect gloss/spine-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'gk-spine'):$(strip < "$tmp/symst/header")" "0:Adds a b option and a fresh reader of it."
+  expect symbols/legend "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" >/dev/null; strip < "$tmp/symst/legend" | grep -c '⇢ a call new')" "1"
+  expect gloss/prompt-edges "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" roots | grep -c '^newly uses: s[0-9]* lib.ts#Opts$')" "2"
+  expect gloss/preview-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#fresh>lib.ts#Opts' | strip | sed -n 3p)" "new call from fresh: reads b off the options"
+  expect gloss/preview-no-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#run>lib.ts#Opts' | strip | grep -c 'new call')" "0"
+  expect gloss/preview-why "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 3p)" "then the changed one"
+  expect gloss/preview-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c 'takes a twice flag')" "1"
+  expect gloss/preview-does "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 1p)" "runs the options once"
+  # Under run's mention of Opts, what Opts does and then what the change does to it.
+  expect gloss/note-does "$(FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -A2 '↳' | sed 's/^[ │]*//; s/ *$//' | sed -n '2,3p' | tr '\n' '|')" "options for one run|gains a b flag|"
+  expect gloss/member-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 7 9 'lib.ts#Box+grow' | strip | grep -c 'grows by two')" "1"
+  rm -f "$gdir/$base-$head.json"
+  GIT_FZF_STATE=$tmp/symst git-symbols --open-all "$base..$head"
+  expect symbols/open-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "4"
+  # type Pair sits under usePairToo and under tpl's usePair; open-all opens it once.
+  expect symbols/open-once "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'const Pair')" "1"
+  expect symbols/open-once-marked "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'type Pair')" "2"
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'pair.ts#tpl>pair.ts#usePair>pair.ts#type Pair'
+  expect symbols/open-again "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'const Pair')" "2"
+  GIT_FZF_STATE=$tmp/symst git-symbols --close-all
+  expect symbols/close-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "0"
+  expect symbols/preview "$(git-symbols --preview "$base..$head" lib.ts new 2 4 | strip | grep -c 'twice\|return o.a')" "2"
+  # enter opens where the preview is scrolled to: with no scroll the row's
+  # own line, scrolled to the preview's last row the symbol's last line, 4.
+  expect symbols/at-unscrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "2"
+  printf '100\n' > "$tmp/symst/cols"
+  FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | wc -l | tr -d ' ' > "$tmp/symst/off.lib.ts#run"
+  expect symbols/at-scrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "4"
+  # A changed line on the screen wins: scrolled two rows above run's changed
+  # signature with a five-row screen, enter lands on it, line 2, not on the
+  # header row itself.
+  n=$(FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -n 'function run' | cut -d: -f1)
+  printf '%s\n' "$((n - 2))" > "$tmp/symst/off.lib.ts#run"; printf '5\n' > "$tmp/symst/plines"
+  expect symbols/at-hunk-in-view "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 9)" "2"
+  rm -f "$tmp/symst/off.lib.ts#run" "$tmp/symst/plines"
+  # What run uses, Opts, is marked in its preview, once per mention, and
+  # shown under the diff: its name, where it is, and its lines.
+  expect symbols/preview-uses "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c $'\e\[1;4;38;2;250;189;47mOpts\e\[22;24m')" "1"
+  expect symbols/preview-uses-note "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳ type Opts = { a: number; b: string };  signature.changed')" "1"
+  # p hides the notes, and the names stay marked; p again brings them back.
+  GIT_FZF_STATE=$tmp/symst git-symbols --peeks
+  expect symbols/peeks-off "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "0"
+  GIT_FZF_STATE=$tmp/symst git-symbols --peeks
+  expect symbols/peeks-on "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "1"
+  # In a narrow pane the signature keeps to its one row, on the code
+  # background, giving up the object type before anything else.
+  note=$(FZF_PREVIEW_COLUMNS=56 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep "$(printf '\033\\[%sm' "$OTIS_T_CODEBG")")
+  expect symbols/preview-uses-note-fits "$(printf '%s\n' "$note" | strip | sed "s/$(printf '\302\240')/ /g; s/^.*│ *//; s/ *$//")" "↳ type Opts = {…};  signature changed"
+  # i: the row's preview is what it uses, whole, and i again is its diff,
+  # scrolled where it was.
+  printf '5\n' > "$tmp/symst/off.lib.ts#run"
+  GIT_FZF_STATE=$tmp/symst git-symbols --uses 'lib.ts#run' 2 new
+  expect symbols/uses-view "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '^Opts  lib.ts:\|type Opts = ')" "2"
+  expect symbols/uses-view-top "$(cat "$tmp/symst/off.lib.ts#run" 2>/dev/null)" ""
+  GIT_FZF_STATE=$tmp/symst git-symbols --uses 'lib.ts#run' 2 new
+  expect symbols/uses-view-back "$(cat "$tmp/symst/off.lib.ts#run" 2>/dev/null):$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '^Opts  lib.ts:')" "5:0"
+  rm -f "$tmp/symst/off.lib.ts#run"
+  # usePair uses type Pair, which is typeof the const: shown as the pair.
+  GIT_FZF_STATE=$tmp/symst git-symbols --uses 'pair.ts#usePair' 3 new
+  expect symbols/uses-view-pair "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" pair.ts new 3 3 'pair.ts#usePair' | strip | grep -c 'export const Pair\|export type Pair')" "2"
+  GIT_FZF_STATE=$tmp/symst git-symbols --uses 'pair.ts#usePair' 3 new
+  # A space is a boundary: Opts before "extends" is a mention.
+  expect symbols/preview-uses-space "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 19 19 'lib.ts#Wide' | grep -c $'\e\[1;4;38;2;250;189;47mOpts\e\[22;24m')" "1"
+  expect symbols/preview-uses-none "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#run>lib.ts#Opts' | grep -c $'\e\[1;4')" "0"
+  expect symbols/commit-rev "$(rm -rf "$tmp/symst"; mkdir "$tmp/symst"; GIT_FZF_STATE=$tmp/symst git-symbols --rows "$head" >/dev/null; awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $3 }' "$tmp/symst/symbols.tsv" | tr '\n' ' ')" "run Box grow helper fresh Wide Opts "
+  # ga's view: two symbols edited and one untracked file; stage one symbol,
+  # then unstage it, then stage the untracked file's.
+  sed -i.bak 's/return o.a;/return o.a + 1;/; s/this.size--;/this.size -= 2;/' lib.ts && rm lib.ts.bak
+  printf 'export function extra(): number {\n  return 2;\n}\n' > u.ts
+  rm -rf "$tmp/symst"; mkdir "$tmp/symst"
+  wt() { GIT_FZF_STATE=$tmp/symst git-symbols --rows worktree >/dev/null; awk -F'\t' '$2 != "file" { print $3 ":" $16 $17 }' "$tmp/symst/symbols.tsv" | tr '\n' ' '; }
+  expect symbols/wt "$(wt)" "run:01 Box:01 shrink:01 extra:01 "
+  git-symbols --stage worktree lib.ts new 2 4 2 4 0 1
+  expect symbols/stage-lines "$(git diff --cached | grep -c '^[+-] ')" "2"
+  expect symbols/stage-only-that "$(git diff --cached | grep -c 'size -=')" "0"
+  expect symbols/wt-staged "$(wt)" "run:10 Box:01 shrink:01 extra:01 "
+  git-symbols --stage worktree lib.ts new 2 4 2 4 1 0
+  expect symbols/unstage "$(git diff --cached | wc -l | tr -d ' ')" "0"
+  git-symbols --stage worktree u.ts new 1 3 "" "" 0 1
+  expect symbols/stage-untracked "$(git diff --cached --name-only) $(git diff --cached | grep -c '^+[^+]')" "u.ts 3"
+  git reset -q && git checkout -q -- lib.ts && rm -f u.ts
+  # A symbol added between two others stages there, not at the file's end,
+  # though the cut leaves it no context, and unstages again.
+  printf 'function a() {\n  return 1;\n}\n\nfunction c() {\n  return 3;\n}\n' > mid.ts && git add mid.ts && git commit -qm Mid
+  printf 'function a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n\nfunction c() {\n  return 3;\n}\n' > mid.ts
+  git-symbols --stage worktree mid.ts new 5 7 5 7 0 1
+  expect symbols/stage-middle "$(git show :mid.ts | grep -o '^function [a-z]' | tr '\n' ' ')" "function a function b function c "
+  git-symbols --stage worktree mid.ts new 5 7 5 7 1 0
+  expect symbols/unstage-middle "$(git diff --cached | wc -l | tr -d ' ')" "0"
+  git reset -q --hard HEAD^
+  # A range naming HEAD follows a commit made while the picker is open.
+  rm -rf "$tmp/symst"; mkdir "$tmp/symst"
+  GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..HEAD" > /dev/null
+  printf 'export const late = 1;\n' >> lib.ts && git commit -qam "Late"
+  expect symbols/moving-head "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..HEAD" | strip | grep -c 'const late')" "1"
+  git reset -q --hard "$head"
+  git checkout -q main && git branch -qD sym
+fi
+
+# --- otis-node-modules: a worktree's node_modules mirrored from main's: the
+# repo's own packages as the same relative links, so they resolve here, the
+# install's content through one link to main's, scopes walked, files linked,
+# and a mirror only made where there is none and never over a real install.
+mkdir -p "$tmp/nm" && ( cd "$tmp/nm" && git init -q -b main . && git config user.email t@t && git config user.name t &&
+  mkdir -p pkg/one node_modules/.content/one_1.0/files node_modules/@scope node_modules/.bin &&
+  printf 'x\n' > pkg/one/index.ts && printf 'node_modules\n' > .gitignore && git add -A && git commit -qm base &&
+  ln -s ../../pkg/one node_modules/@scope/one && ln -s .content/one_1.0/files node_modules/third &&
+  ln -s ../.content/one_1.0/files/bin node_modules/.bin/one && printf '{}\n' > node_modules/.state.json &&
+  git worktree add -q "$tmp/nm-wt" -b wt >/dev/null 2>&1 ) &&
+  otis-node-modules "$tmp/nm-wt"
+expect nm/repo-package "$(readlink "$tmp/nm-wt/node_modules/@scope/one")" "../../pkg/one"
+expect nm/resolves-here "$(cd "$tmp/nm-wt/node_modules/@scope/one" && pwd -P)" "$(cd "$tmp/nm-wt/pkg/one" && pwd -P)"
+expect nm/third-party "$(readlink "$tmp/nm-wt/node_modules/third")" ".content/one_1.0/files"
+expect nm/content-is-mains "$(cd "$tmp/nm-wt/node_modules/.content" && pwd -P)" "$(cd "$tmp/nm/node_modules/.content" && pwd -P)"
+expect nm/bin "$(readlink "$tmp/nm-wt/node_modules/.bin/one")" "../.content/one_1.0/files/bin"
+expect nm/file "$(readlink "$tmp/nm-wt/node_modules/.state.json")" "$tmp/nm/node_modules/.state.json"
+expect nm/marked "$([ -f "$tmp/nm-wt/node_modules/.otis-mirror" ] && echo mirror)" "mirror"
+rm -rf "$tmp/nm-wt/node_modules" && mkdir "$tmp/nm-wt/node_modules" && printf 'mine\n' > "$tmp/nm-wt/node_modules/real"
+otis-node-modules "$tmp/nm-wt"
+expect nm/real-install-kept "$(ls "$tmp/nm-wt/node_modules")" "real"
+expect nm/main-untouched "$(otis-node-modules "$tmp/nm"; ls "$tmp/nm/node_modules" | tr '\n' ' ')" "@scope third "
+git -C "$tmp/nm" worktree remove --force "$tmp/nm-wt" >/dev/null 2>&1
+
+# --- git-fzf-scroll: an id longer than a filename keeps its last 200 characters
+mkdir -p "$tmp/scroll" && : > "$tmp/scroll/lock"
+GIT_FZF_STATE=$tmp/scroll git-fzf-scroll note "$(printf 'a/%.0s' $(seq 1 150))x" 1
+expect scroll/long-key "$(ls "$tmp/scroll" | grep '^off\.' | awk '{ print length($0) }')" "204"
+# reset forgets every position in a picker keyed by {n}, and none in one keyed
+# by --id-nth, whose ids survive the reload (t in the symbol picker).
+: > "$tmp/scroll/by-id"
+GIT_FZF_STATE=$tmp/scroll git-fzf-scroll reset
+expect scroll/reset-by-id "$(ls "$tmp/scroll" | grep -c '^off\.')" "1"
+rm "$tmp/scroll/by-id"
+GIT_FZF_STATE=$tmp/scroll git-fzf-scroll reset
+expect scroll/reset-by-index "$(ls "$tmp/scroll" | grep -c '^off\.')" "0"
+
+# --- the pickers themselves, headless: fzf runs on a pty (zsh's zpty) and
+# the test drives it through fzf's port (git-fzf takes OTIS_FZF_LISTEN and
+# OTIS_FZF_API_KEY for exactly this) and by typing into the pty.
+#   picker_open <zsh command>   start it; picker_state prints fzf's state JSON
+#   picker_key <keys>           type into it   picker_act <action>  an fzf action
+#   picker_close                end it, and wait for it to go
+port=$((40000 + $$ % 20000)) drive=$tmp/drive
+picker_open() {
+  rm -f "$drive"; mkfifo "$drive"
+  # The driver types what comes down the fifo into the pty, and drains what
+  # the picker draws, since a pty nobody reads fills up and stalls it.
+  OTIS_FZF_LISTEN=$port OTIS_FZF_API_KEY=otis-test TERM=xterm-256color FZF_COLUMNS= \
+    zsh -fc 'zmodload zsh/zpty; zpty -b p "stty rows 40 cols 140; $1"; exec 3< "$2"
+      while zpty -t p; do
+        if read -t 0.1 -r -u 3 line; then k=${line#key:}; [ "$k" = space ] && k=" "; zpty -wn p "$k"; fi
+        while zpty -r p buf; do :; done
+      done' - "$1" "$drive" &
+  driver=$!
+  # The fifo needs a writer open for the driver to keep reading.
+  exec 7> "$drive"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    curl -s -H 'x-api-key: otis-test' "localhost:$port" >/dev/null 2>&1 && return 0
+    sleep 0.25
+  done
+  return 1
+}
+picker_state() { curl -s -H 'x-api-key: otis-test' "localhost:$port"; }
+# picker_rows: the row count once the first load has landed; the port answers
+# before the list does.
+picker_rows() {
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    n=$(picker_state | jq .matchCount); [ "${n:-0}" -gt 0 ] && { echo "$n"; return; }
+    sleep 0.25
+  done
+  echo "${n:-0}"
+}
+# An action sent while the picker reloads is dropped, so wait for the reload.
+picker_act() {
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    [ "$(picker_state | jq -r .reading 2>/dev/null)" = false ] && break
+    sleep 0.25
+  done
+  curl -s -H 'x-api-key: otis-test' -XPOST "localhost:$port" -d "$1"; sleep 0.3
+}
+picker_key() { printf 'key:%s\n' "$1" >&7; sleep 0.4; }
+picker_close() { picker_act abort; exec 7>&-; wait "$driver" 2>/dev/null; }
+git remote set-url origin "$tmp/origin"
+git switch -q -c feature && printf 'f\n' > f.ts && git add f.ts && git commit -qm "Feature" && git switch -q main
+git branch stale main~1
+printf 'stale\tmerged\t6\t%s\tmine\tmain\n' "$(git rev-parse stale)" > "$(git rev-parse --git-common-dir)/branch-mrs.tsv"
+
+if picker_open "gb"; then
+  expect gb/rows "$(picker_rows)" "3"
+  expect gb/main-first "$(picker_state | jq -r .current.text | strip | grep -c 'main')" "1"
+  picker_key j
+  expect gb/j-moves "$(picker_state | jq .position)" "1"
+  picker_key /; picker_key feat
+  expect gb/search "$(picker_state | jq -c '[.query, .matchCount]')" '["feat",1]'
+  picker_key "$(printf '\033')"
+  expect gb/esc-keeps-query "$(picker_state | jq -r .query)" "feat"
+  # M with the search still there clears it, then marks the merged branch
+  # by where it sits in the whole list, not in what the search left.
+  picker_key M; sleep 1
+  expect gb/M-after-search "$(picker_state | jq -c '[.query, ([.matches[] | select(.text | test("\tstale\t"))] | length), (.selected // [] | map(.text | split("\t")[1]))]')" '["",1,["stale"]]'
+  picker_close
+else
+  expect gb/opens "no picker on port $port" "opened"
+fi
+git branch -qD stale; rm -f "$(git rev-parse --git-common-dir)/branch-mrs.tsv"
+
+# The dashboard. Origin is a path here, so it draws from the checkout alone:
+# the here section, and nothing waiting.
+if picker_open "otis"; then
+  expect otis/rows "$(picker_rows)" "2"
+  expect otis/here "$(picker_state | jq -r '.matches[-1].text' | strip | cut -f1 | tr -s ' ')" "▶ main nothing to commit or push"
+  picker_key j
+  expect otis/j-moves "$(picker_state | jq .position)" "1"
+  picker_close
+else
+  expect otis/opens "no picker on port $port" "opened"
+fi
+
+printf 'a4\n' > a.ts && printf 'new\n' > d.ts
+# ga opens by symbol; these two files have none, so they list under a
+# heading, and j steps off it.
+if picker_open "ga"; then
+  expect ga/rows "$(picker_rows)" "3"
+  picker_key j
+  first=$(picker_state | jq -r .current.text | cut -f2)
+  picker_key space
+  expect ga/space-stages "$(git diff --cached --name-only)" "$first"
+  # fzf drops a key typed while it reloads; give the reload after space its time.
+  sleep 1
+  picker_key U
+  expect ga/U-unstages "$(git diff --cached --name-only)" ""
+  picker_close
+else
+  expect ga/opens "no picker on port $port" "opened"
+fi
+git checkout -q -- a.ts && rm -f d.ts
+
+# --- gb's n: an MR in one key, drafted from the branch's commits as gp's
+# first push offers one; refused, in the footer, where there is one already
+expect mr-new/draft "$(zsh -fc "source '$root/share/otis.zsh'; _g_mr_draft feature && print -r -- \"\$mr_target|\$mr_title\"")" "main|Feature"
+expect mr-new/has-one "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature 12 >/dev/null; strip < "$tmp/dash/note")" "feature already has !12; w opens it"
+expect mr-new/not-gitlab "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature >/dev/null; strip < "$tmp/dash/note")" "origin is not on GitLab"
+GIT_FZF_STATE=$tmp/dash git-mr-new --ask feature </dev/null >/dev/null 2>&1
+expect mr-new/not-pushed "$(GIT_FZF_STATE=$tmp/dash git-mr-new --said >/dev/null; strip < "$tmp/dash/note")" "feature is not pushed yet; gp pushes it and offers the MR"
+
+# --- gb's enter brings a branch here from its worktree (_g_goto_branch)
+case $(uname) in Darwin) trash=$HOME/.Trash ;; *) trash=$HOME/.local/share/Trash/files ;; esac
+goto() { zsh -fc "source '$root/share/otis.zsh'; _g_goto_branch $* >/dev/null 2>&1 && git rev-parse --show-toplevel" 2>/dev/null; }
+git branch -q away main
+git-worktree-add away away >/dev/null 2>&1
+expect goto/away-in-worktree "$(git-worktree-path of away)" "$tmp/repo/.claude/worktrees/away"
+printf 'w\n' > "$tmp/repo/.claude/worktrees/away/w.ts"
+expect goto/dirty-refused "$(goto away)$(git branch --show-current)" "main"
+rm "$tmp/repo/.claude/worktrees/away/w.ts"
+expect goto/W-goes-there "$(goto away worktree)" "$tmp/repo/.claude/worktrees/away"
+expect goto/comes-here "$(goto away)" "$tmp/repo"
+expect goto/worktree-gone "$(git-worktree-path of away)$([ -e "$tmp/repo/.claude/worktrees/away" ] && echo still)" "$tmp/repo"
+expect goto/trashed "$(ls -d "$trash"/away-* 2>/dev/null | wc -l | tr -d ' ') $(ls "$trash"/away-*/.git 2>/dev/null | wc -l | tr -d ' ')" "1 0"
+git switch -q main
+git-worktree-add mine --detach main >/dev/null 2>&1 && git -C "$tmp/repo/.claude/worktrees/mine" switch -q away
+expect goto/mine-detached "$(goto away) $(git -C "$tmp/repo/.claude/worktrees/mine" branch --show-current)$([ -e "$tmp/repo/.claude/worktrees/mine" ] && echo kept)" "$tmp/repo kept"
+git switch -q main
+expect goto/main-checkout-is-home "$(cd "$tmp/repo/.claude/worktrees/mine" && goto main)" "$tmp/repo"
+git worktree remove --force "$tmp/repo/.claude/worktrees/mine" && git branch -qD away
+
+# --- a command that moves you hands the directory to the shell that ran it:
+# each shell's wrapper follows it, and with none it says where to go
+git config otis.branchPrefix t
+wt=$tmp/repo/.claude/worktrees
+expect cd/zsh "$(zsh -fc "source '$root/git.zsh'; gwn zhop >/dev/null 2>&1; pwd")" "$wt/zhop"
+expect cd/bash "$(bash --norc --noprofile -c "source '$root/otis.bash'; gwn bhop >/dev/null 2>&1; pwd")" "$wt/bhop"
+if command -v fish >/dev/null 2>&1; then
+  expect cd/fish "$(fish --no-config -c "source '$root/otis.fish'; gwn fhop >/dev/null 2>&1; pwd")" "$wt/fhop"
+  git worktree remove "$wt/fhop" && git branch -qD t/fhop
+fi
+expect cd/no-wrapper "$(gwn nhop 2>&1 >/dev/null | tail -1; pwd)" "now: cd ~/repo/.claude/worktrees/nhop
+$tmp/repo"
+for n in zhop bhop nhop; do git worktree remove "$wt/$n" && git branch -qD "t/$n"; done
+git config --unset otis.branchPrefix
+# An alias or function of the same name (oh-my-zsh's gb, gst) would win over
+# the command, so sourcing takes it away.
+expect shell/zsh-clash "$(zsh -fc "alias gst='git stash'; gd() { echo mine; }; source '$root/git.zsh'; whence -w gst gd gb")" "gst: command
+gd: command
+gb: function"
+expect shell/bash-clash "$(bash --norc --noprofile -c "shopt -s expand_aliases; alias gst='git stash'; source '$root/otis.bash'; type -t gst gb")" "file
+function"
+
+# --- otis-edit: nvim unless told otherwise, and each editor's way to a line
+mkdir -p "$tmp/eds"
+for e in cursor nvim zed hx; do printf '#!/bin/sh\necho "$@"\n' > "$tmp/eds/$e"; chmod +x "$tmp/eds/$e"; done
+expect edit/default "$(otis-edit --name)" "nvim"
+expect edit/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-edit -R +3 -- a.ts)" "-R +3 -- a.ts"
+expect edit/cursor "$(OTIS_EDITOR=$tmp/eds/cursor otis-edit -R +12 -- a.ts)" "--goto a.ts:12"
+expect edit/zed "$(OTIS_EDITOR=$tmp/eds/zed otis-edit +7 -- -odd.ts)" "./-odd.ts:7"
+git config otis.editor "$tmp/eds/hx"
+expect edit/git-config "$(otis-edit +2 -- b.ts)" "b.ts:2"
+git config --unset otis.editor
+
+# --- themes: each one whole, loading one clears another, and the terminal's
+# own colors wherever no theme is loaded
+for f in "$root"/share/themes/*; do
+  for k in attention good bad elsewhere yours text context faint main delta_syntax bat glow; do
+    grep -q "^$k=." "$f" || expect "theme/${f##*/}-has-$k" "missing" "set"
+  done
+  out=$( (eval "$(otis-theme --env "${f##*/}")"; otis-theme --sample 2>&1 >/dev/null) )
+  expect "theme/${f##*/}-sample-clean" "$out" ""
+done
+expect theme/unknown "$(otis-theme --env nope 2>/dev/null | grep NAME)" "export OTIS_T_NAME='terminal'"
+expect theme/default "$(env -u OTIS_THEME otis-theme --env | grep ATTENTION)" "export OTIS_T_ATTENTION='33'"
+expect theme/switch-clears "$( (eval "$(otis-theme --env gruvbox)"; eval "$(otis-theme --env terminal)"; printf '%s' "$OTIS_T_MINUS") )" ""
+expect theme/awk-without "$(env -u OTIS_T_ATTENTION awk "$(cat "$share/rowfmt.awk")"'BEGIN { printf "%s", GK_ATTENTION }' </dev/null | cat -v)" "^[[33m"
+expect theme/jq-without "$(env -u OTIS_T_ATTENTION jq -nj -L "$share" 'include "otis"; attention' | cat -v)" "^[[33m"
+
+# --- git-worktree-sweep: merged branches' worktrees go on their own
+cache=$(git rev-parse --git-common-dir)/branch-mrs.tsv
+git branch -q old main && git branch -q keep main && git branch -q live main
+git-worktree-add old old >/dev/null 2>&1 && git-worktree-add keep keep >/dev/null 2>&1 && git-worktree-add live live >/dev/null 2>&1
+printf 'old\tmerged\t7\t%s\tmine\tmain\nkeep\tmerged\t8\t%s\tmine\tmain\nlive\topened\t9\t%s\tmine\tmain\n' "$(git rev-parse old)" "$(git rev-parse keep)" "$(git rev-parse live)" > "$cache"
+touch "$tmp/repo/.claude/worktrees/keep/scratch.ts"
+printf '.env\n' >> "$tmp/repo/.git/info/exclude" && printf 'secret\n' > "$tmp/repo/.claude/worktrees/old/.env"
+touch "$(git -C "$tmp/repo/.claude/worktrees/old" rev-parse --absolute-git-dir)/autofetch-stamp"
+expect sweep/shell-there-kept "$(git-worktree-sweep)$([ -d "$tmp/repo/.claude/worktrees/old" ] && echo kept)" "kept"
+touch -t 202001010000 "$(git -C "$tmp/repo/.claude/worktrees/old" rev-parse --absolute-git-dir)/autofetch-stamp"
+expect sweep/merged-goes "$(git-worktree-sweep | cut -d' ' -f1-6)" "old and its branch old (merged)"
+expect sweep/gone "$([ -d "$tmp/repo/.claude/worktrees/old" ] && echo still)$(git rev-parse -q --verify old)" ""
+expect sweep/ignored-kept "$(cat "$trash"/old-*/.env 2>/dev/null)" "secret"
+expect sweep/dirty-kept "$([ -d "$tmp/repo/.claude/worktrees/keep" ] && echo kept) $(git branch --list keep | tr -d ' +')" "kept keep"
+expect sweep/open-kept "$([ -d "$tmp/repo/.claude/worktrees/live" ] && echo kept)" "kept"
+git worktree remove --force "$tmp/repo/.claude/worktrees/keep" && git worktree remove "$tmp/repo/.claude/worktrees/live" && git branch -qD keep live && rm -f "$cache"
+
+# --- gam on a layer: the branches above follow the amended commit
+git switch -q -c low main && printf 'l\n' > l.ts && git add l.ts && git commit -qm "Low" &&
+  git switch -q -c high && printf 'h\n' > h.ts && git add h.ts && git commit -qm "High" &&
+  git switch -q -c higher && printf 'i\n' > i.ts && git add i.ts && git commit -qm "Higher" &&
+  git switch -q low
+git worktree add -q "$tmp/wt" higher
+printf 'x\n' > "$tmp/wt/h.ts" && printf 'l2\n' > l.ts && git add l.ts
+gam >/dev/null 2>&1
+expect gam/dirty-worktree-refused "$(git show low:l.ts)" "l"
+git -C "$tmp/wt" checkout -q -- h.ts
+gam >/dev/null 2>&1
+expect gam/stays-on-layer "$(git branch --show-current)" "low"
+expect gam/one-commit "$(git rev-list --count main..low)" "1"
+expect gam/middle-follows "$(git rev-list --count low..high) $(git show high:l.ts)" "1 l2"
+expect gam/top-follows "$(git rev-list --count high..higher) $(git show higher:l.ts)" "1 l2"
+expect gam/worktree-back "$(git -C "$tmp/wt" branch --show-current) $(cat "$tmp/wt/l.ts")" "higher l2"
+stack-push >/dev/null 2>&1
+expect stack-push/whole-stack "$(git -C "$tmp/origin" rev-parse low high higher 2>&1 | tr '\n' ' ')" "$(git rev-parse low high higher | tr '\n' ' ')"
+expect stack-push/back-where-it-was "$(git branch --show-current)" "low"
+git worktree remove "$tmp/wt"
+git switch -q -c side low && git commit -q --allow-empty -m "Side" && git switch -q low
+printf 'l3\n' > l.ts && git add l.ts
+gam >/dev/null 2>&1
+expect gam/fan-out-refused "$(git show low:l.ts) $(git diff --cached --name-only)" "l2 l.ts"
+git reset -q --hard && git switch -q main
+# Nothing staged: gam lists the changes and asks, one key, on the terminal.
+# answer <key> <command>: run it on a pty and press <key> at its question.
+answer() {
+  zsh -fc 'zmodload zsh/zpty; zpty -b q "$2"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      zpty -r q out "*\[y/N\] " && break; sleep 0.2
+    done
+    zpty -wn q "$1"; while zpty -t q; do zpty -r q out >/dev/null 2>&1 || sleep 0.1; done' - "$1" "$2" >/dev/null 2>&1
+}
+git switch -q -c solo main && printf 's\n' > s.ts && git add s.ts && git commit -qm "Solo" && printf 's2\n' > s.ts
+answer n gam
+expect gam/declined "$(git show HEAD:s.ts) $(git diff --cached --name-only)" "s "
+answer y gam
+expect gam/stages-and-amends "$(git show HEAD:s.ts) $(git rev-list --count main..HEAD) $(git status --porcelain)" "s2 1 "
+git switch -q main && git branch -qD solo
+
+printf '\n%s passed, %s failed\n' "$passed" "$failed"
+[ "$failed" -eq 0 ]

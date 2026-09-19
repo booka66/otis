@@ -1,0 +1,21 @@
+# Catppuccin Frappé.
+attention=38;2;229;200;144
+good=38;2;166;209;137
+bad=38;2;231;130;132
+elsewhere=38;2;140;170;238
+yours=38;2;239;159;118
+text=38;2;198;208;245
+context=38;2;115;121;148
+faint=38;2;81;87;109
+main=38;2;129;200;190
+codebg=48;2;65;69;89
+errbg=48;2;81;66;81
+delta_syntax=Catppuccin Frappe
+bat=OneHalfDark
+file=#8caaee
+rule=#51576d
+minus=#554452
+plus=#485353
+minus_emph=#79535f
+plus_emph=#5f7361
+glow=dark

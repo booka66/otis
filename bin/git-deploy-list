@@ -1,0 +1,118 @@
+#!/bin/sh
+# git-deploy-list [--refresh]          gd's rows: production deploys, newest first
+# git-deploy-list --fetch              the deploys as JSON, from GitLab and the repo (what the cache holds)
+# git-deploy-list --strip              the last 40 deploys as one glyph each, oldest left, for gmr's heading
+# git-deploy-list --pos <pipeline id>  the fzf action that puts the cursor on that pipeline's deploy
+# git-deploy-list --from <json> ...    any of those from a JSON file instead of the cache (the tests)
+#
+# A deploy is a GitLab deployment of the deploy job (otis-config deployJob) to
+# the production environment (deployEnv), and a rollback one of the rollback
+# job that was actually played: every main pipeline also leaves a manual
+# rollback job that is a deployment GitLab calls blocked, and those are not
+# deploys. Each row is one, with what it carried: the merge requests whose
+# commits landed on main after the previous successful deploy and up to this
+# one, read from the merge commits' "See merge request" trailers, which is
+# local git once origin/main is fetched. So a failed deploy shows what it
+# would have shipped, and the next one that succeeds carries that too. Rows
+# that carry one of your MRs (git-ci-merged's list) lead with a mark.
+#
+# The rows come from a cache (git-cached-json, a minute), so the picker draws
+# at once; --refresh fetches now. Fields: the row, deployment id, sha,
+# pipeline id, job url, status, kind.
+#
+# The glyphs, one column: ✓ live, ✗ failed, ⊘ failed at once or canceled
+# (a deploy that ran for no time was refused, behind production), ◐ running,
+# ○ queued, ↺ a rollback.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+env=$(otis-config deployEnv) job=$(otis-config deployJob) rollback_job=$(otis-config rollbackJob)
+dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+mkdir -p "$dir"
+from=
+[ "$1" = --from ] && { from=$2; shift 2; }
+
+if [ "$1" = --fetch ]; then
+  all=$(glab api "projects/:fullpath/deployments?environment=$env&order_by=created_at&sort=desc&per_page=100") || exit 1
+  deploys=$(printf '%s' "$all" | jq -e --arg job "$job" --arg rb "$rollback_job" '
+    [.[] | select((.deployable.name == $job and (.status | IN("blocked", "skipped") | not))
+              or (.deployable.name == $rb and (.status | IN("success", "failed", "running"))))
+      | {id, iid, status, kind: (if .deployable.name == $rb then "rollback" else "deploy" end), sha,
+         at: (.deployable.finished_at // .deployable.started_at // .created_at), started: .deployable.started_at,
+         duration: (.deployable.duration // 0 | floor), pipeline: (.deployable.pipeline.id | tostring),
+         url: .deployable.web_url, job: .deployable.id, user: .user.username}]') || exit 1
+  # What each deploy carried: from the previous successful deploy's commit to
+  # its own, oldest deploy first so prev is known when its turn comes.
+  git fetch --quiet --no-tags origin "$(otis-config main)" 2>/dev/null
+  carried=$(printf '%s' "$deploys" | jq -r 'reverse | .[] | [.id, .kind, .status, .sha] | @tsv' |
+    { prev=
+      while IFS="$(printf '\t')" read -r id kind status sha; do
+        [ "$kind" = deploy ] || { printf '%s\t\t0\t\n' "$id"; continue; }
+        mrs= n=0
+        if [ -n "$prev" ] && git cat-file -e "$sha^{commit}" 2>/dev/null && git cat-file -e "$prev^{commit}" 2>/dev/null; then
+          n=$(git rev-list --count "$prev..$sha" 2>/dev/null || echo 0)
+          mrs=$(git log --format=%B "$prev..$sha" 2>/dev/null | grep -oE 'merge request [^ ]*![0-9]+' | grep -oE '[0-9]+$' | sort -u | tr '\n' ',')
+        fi
+        printf '%s\t%s\t%s\t%s\n' "$id" "$prev" "$n" "${mrs%,}"
+        [ "$status" = success ] && prev=$sha
+      done; })
+  printf '%s' "$deploys" | jq --arg carried "$carried" '
+    ($carried | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: {prev: .[1], commits: (.[2] | tonumber), mrs: (.[3] | split(",") | map(select(. != "")))}}) | from_entries) as $c |
+    {at: now, deploys: map(. + ($c[.id | tostring] // {prev: "", commits: 0, mrs: []}))}'
+  exit
+fi
+
+# The cache, or the file the tests hand over.
+if [ -n "$from" ]; then
+  cache=$from
+else
+  reload='execute-silent(git-fzf-bg git-deploy-list)'
+  if [ "$1" = --refresh ]; then
+    cache=$(git-cached-json --refresh deploys "$reload" -- git-deploy-list --fetch) || exit 1
+  else
+    cache=$(git-cached-json deploys 60 "$reload" -- git-deploy-list --fetch) || exit 1
+  fi
+fi
+mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
+
+case $1 in
+  --strip)
+    jq -r -L "$share" 'include "otis";
+      def glyph: if .kind == "rollback" then bad + "↺" elif .status == "success" then good + "✓"
+        elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)
+        elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
+        else attention + "○" end;
+      .deploys | reverse | .[-40:] | map(glyph) | join("") + r' "$cache" ;;
+  --pos)
+    i=$(jq -r --arg p "$2" '.deploys | map(.pipeline) | index($p) // empty' "$cache")
+    [ -n "$i" ] && echo "pos($((i + 1)))" ;;
+  *)
+    jq -r -L "$share" --argjson mine "$mine" 'include "otis";
+      def glyph: if .kind == "rollback" then bad + "↺" elif .status == "success" then good + "✓"
+        elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)
+        elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
+        else attention + "○" end;
+      def took: if .duration == 0 then "      " else (.duration | "\(. / 60 | floor)m\(. % 60 | tostring | if length < 2 then "0" + . else . end)s" | padl(6)) end;
+      # The MR cell: its plain text first, for the width, then colored, and
+      # padded to one width so the column after it lines up.
+      def what_plain:
+        if .kind == "rollback" then "rollback"
+        elif (.mrs | length) == 0 then (if .commits == 0 then "nothing new" else "\(.commits) commits, no MR" end)
+        else (.mrs[0:4] | map("!" + .) | join(" ")) + (if (.mrs | length) > 4 then " +\(.mrs | length - 4)" else "" end) end;
+      def what:
+        (if .kind == "rollback" then bad + "rollback" + r
+         elif (.mrs | length) == 0 then context + what_plain + r
+         else (.mrs[0:4] | map(if IN($mine[]) then yours + "!" + . + r else text + "!" + . + r end) | join(" "))
+           + (if (.mrs | length) > 4 then context + " +\(.mrs | length - 4)" + r else "" end) end)
+        + ((what_plain | length) as $l | if $l < 32 then " " * (32 - $l) else "" end);
+      def ours: if any(.mrs[]; IN($mine[])) then yours + "● " + r else "  " end;
+      .deploys[] |
+      [ ours + glyph + r + " " + context + (.at | ago | padl(3)) + r + " " + context + took + r + " "
+          + elsewhere + .sha[0:8] + r + "  " + what + "  " + context + "by " + .user + r,
+        .id, .sha, .pipeline, .url, .status, .kind ] | @tsv' "$cache"
+    # The footer: the strip, and the count either side of it.
+    if [ -n "$GIT_FZF_STATE" ]; then
+      jq -r -L "$share" --arg strip "$(git-deploy-list ${from:+--from "$from"} --strip)" 'include "otis";
+        .deploys as $d | ([$d[] | select(.kind == "deploy")] | length) as $n |
+        ([$d[] | select(.status == "success")] | length) as $ok | ([$d[] | select(.status == "failed")] | length) as $bad |
+        context + "last \($n) deploys, oldest left  " + r + $strip + context + "  \($ok) live · \($bad) failed" + r' "$cache" > "$GIT_FZF_STATE/footer"
+    fi ;;
+esac

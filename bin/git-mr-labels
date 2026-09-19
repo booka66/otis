@@ -1,0 +1,76 @@
+#!/bin/sh
+# git-mr-labels <iid>                          label picker for one MR (gci, gb)
+# git-mr-labels --list <iid>                   its rows
+# git-mr-labels --toggle <iid> <label> <on|off>
+#
+# Every label that already exists for the project, its groups' included, one
+# per row in its own color, ticked when the MR has it. tab (or space) adds or
+# removes the highlighted label: the tick moves at once and GitLab is told in
+# the background (share/mr-sync.sh); the order never changes, so the cursor
+# stays put. The label set is cached for a day (git-cached-json), since it
+# rarely changes, and the MR itself for a moment, both drawn at once and
+# refreshed behind. A change GitLab refuses puts back the labels it has, and
+# the footer says so, with ? for why.
+st=$GIT_FZF_STATE
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/mr-sync.sh"
+
+case $1 in
+  --list)
+    iid=$2
+    reload="reload(git-mr-labels --list $iid)"
+    labels=$(git-cached-json project-labels 86400 "$reload" -- \
+      git-mr-pages "projects/:fullpath/labels?per_page=100&include_ancestor_groups=true" 2>/dev/null) || labels=/dev/null
+    [ -s "$st/current" ] || {
+      mr=$(git-cached-json "mr-$iid" 15 "$reload" -- glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null) &&
+        jq '.labels // []' "$mr" > "$st/current"
+    }
+    [ -s "$st/current" ] || echo '[]' > "$st/current"
+    if [ -s "$st/footer.error" ]; then
+      # A failed change says so in the footer until the next list.
+      mv "$st/footer.error" "$st/footer"
+    else
+      jq -r -L "$share" --arg iid "$iid" 'include "otis"; context + "!\($iid): "
+        + (if length == 0 then "no labels" else join(", ") end)
+        + r' "$st/current" > "$st/footer"
+    fi
+    jq -r -L "$share" --slurpfile current "$st/current" '
+      include "otis";
+      def hexval: ascii_downcase | explode | map(if . >= 97 then . - 87 else . - 48 end) | .[0] * 16 + .[1];
+      def rgb: .[1:] as $h | [($h[0:2] | hexval), ($h[2:4] | hexval), ($h[4:6] | hexval)] | map(tostring) | join(";");
+      sort_by(.name | ascii_downcase)[] | (.name | IN($current[0][])) as $on |
+      [ (if $on then good + "✓" + r + " " else "  " end)
+          + "[38;2;" + (.color | rgb) + "m●" + r + " "
+          + (if $on then "[1m" else "" end) + .name + r
+          + (if .description then "  " + context + (.description | gsub("[\t\n]"; " ")) + r else "" end),
+        .name, (if $on then "on" else "off" end)
+      ] | join("\t")' "$labels"
+    ;;
+  --toggle)
+    iid=$2 name=$3 state=$4
+    if [ "$state" = on ]; then f='map(select(. != $n))'; else f='. + [$n] | unique'; fi
+    jq --arg n "$name" "$f" "$st/current" > "$st/current.new" && mv "$st/current.new" "$st/current"
+    failed() {
+      git-fzf-error "change labels" "$1"
+      glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq '.labels // []' > "$st/current.new" &&
+        mv "$st/current.new" "$st/current"
+      mr_post "reload(git-mr-labels --list $iid)"
+    }
+    mr_sync "labels-$iid" "$(mr_gen "labels-$iid")" failed \
+      glab api -X PUT "projects/:fullpath/merge_requests/$iid" -f "labels=$(jq -r 'join(",")' "$st/current")"
+    ;;
+  *)
+    iid=$1
+    if [ -z "$iid" ]; then
+      printf 'no MR for this branch yet, so there is nothing to label. press enter\n'
+      read -r _
+      exit 0
+    fi
+    toggle="execute-silent(git-mr-labels --toggle $iid {2} {3})+reload(git-mr-labels --list $iid)"
+    git-fzf "!$iid labels " 'tab=add or remove,space=,enter=close' --ansi --track \
+      --delimiter="$(printf '\t')" --with-nth=1 \
+      --bind "start:reload(git-mr-labels --list $iid)" \
+      --bind "tab:$toggle" --bind "space:$toggle" \
+      </dev/null >/dev/null
+    ;;
+esac

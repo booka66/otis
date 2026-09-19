@@ -1,0 +1,204 @@
+#!/bin/sh
+# git-mr-file-preview <iid> <range> <path>   the review picker's file preview
+# git-mr-file-preview --annotate <iid> <range> <path>   the threads onto a rendered diff on stdin (the symbol view's)
+# git-mr-file-preview --files <iid> <range>  its file list, with open thread counts
+# git-mr-file-preview --note <iid> <range>   the list's footer note alone, for the symbol view's footer
+# git-mr-file-preview --refresh <iid> <range> refetch the MR's threads now
+#
+# A file's diff from git-preview-commit with the MR's comment threads printed
+# under the lines they sit on, the way share/mr-comments.lua shows them in nvim,
+# your drafts among them. Threads on lines the diff does not show are listed
+# after it, then outdated ones (on lines a push has changed since) and those on
+# the whole file. They come from per-MR caches (git-mr-threads), refetched in
+# the background when over 15 seconds old, and by the picker right after nvim
+# closes, so comments made there show on return. The first time, the list and
+# diff show at once and the threads join them when they arrive; gmr usually
+# has them cached by then. A fetch that finds changes reloads both the list and
+# the preview, whichever asked. With the picker's n on (git-mr-since), the
+# preview is what changed in the file since your last review instead.
+#
+# The list is git-commit-open's, deleted files included, each file followed by
+# a check when you have viewed it (git-mr-viewed), "deleted" when the MR deletes
+# it, how many unresolved threads it has, and how many drafts of yours or
+# Claude's wait on it to be submitted; the footer
+# gets how many are viewed, the MR's unresolved total and your drafts waiting
+# to be submitted (how many are Claude's), and whether Claude is reviewing
+# (git-mr-claude). With n on, only the files changed since your last review.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+mode=
+case $1 in --refresh|--files|--note|--annotate) mode=$1; shift ;; esac
+iid=$1 range=$2 path=$3
+reload="reload(git-mr-files --list $iid $range)+refresh-preview"
+
+if [ "$mode" = --refresh ]; then
+  git-mr-threads --refresh "$iid" "$reload"
+  exit 0
+fi
+
+if [ "$mode" = --files ] || [ "$mode" = --note ]; then
+  json=$(git-mr-threads --json "$iid" "$range" "$reload" 2>/dev/null)
+  open=$(printf '%s' "$json" | jq -r '.[] | select(.resolvable and (.resolved | not) and .where.path) | .where.path' 2>/dev/null)
+  drafts=$(printf '%s' "$json" | jq '[.[].notes[] | select(.draft)] | length' 2>/dev/null)
+  drafted=$(printf '%s' "$json" | jq -r '.[] | select(.where.path) | .where.path as $p | .notes[] | select(.draft) | $p' 2>/dev/null)
+  claude=$(printf '%s' "$json" | jq '[.[].notes[] | select(.claude)] | length' 2>/dev/null)
+  # Once you have submitted or deleted the last of Claude's drafts, its ids go,
+  # so gmr stops saying there are drafts waiting here (git-mr-claude --marks;
+  # --prune itself makes sure the list is newer than the ids).
+  [ -n "$json" ] && [ "${claude:-0}" -eq 0 ] && git-mr-claude --prune "$iid"
+  viewed=$(git-mr-viewed list "$iid" "${range#*..}")
+  since=
+  [ -e "$GIT_FZF_STATE/since" ] && since=$(git-mr-since files "$iid" "$range")
+  # How big each file's change is, so a row can be triaged without moving the
+  # cursor onto it. A commit range diffs two trees, so this never takes the
+  # index lock a worktree diff would.
+  numstat=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/numstat.$$
+  git --no-optional-locks -c core.quotePath=false diff --numstat -M "$range" 2>/dev/null > "$numstat"
+  cols=${FZF_COLUMNS:-0}
+  [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
+  [ -n "$cols" ] || cols=100
+  # git-commit-open writes the footer (hidden test files) as it lists; add to it after.
+  counts=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/counts.$$
+  git-commit-open --files --deleted --all "$range" |
+    OPEN=$open DRAFTED=$drafted VIEWED=$viewed SINCE=$since SINCE_ON=$([ -e "$GIT_FZF_STATE/since" ] && echo 1) \
+    awk -F'\t' -v counts="$counts" -v ns="$numstat" -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+    BEGIN {
+      n = split(ENVIRON["OPEN"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") count[paths[i]]++
+      n = split(ENVIRON["DRAFTED"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") drafts[paths[i]]++
+      n = split(ENVIRON["VIEWED"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") seen[paths[i]] = 1
+      n = split(ENVIRON["SINCE"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") changed[paths[i]] = 1
+      while ((getline line < ns) > 0) {
+        if (split(line, f, "\t") < 3 || f[1] !~ /^[0-9]+$/) continue
+        p = gk_numstat_path(f[3]); add[p] = f[1]; del[p] = f[2]
+      }
+      close(ns)
+    }
+    NF {
+      all++
+      if (ENVIRON["SINCE_ON"] != "" && !($1 in changed)) next
+      files++; if ($1 in seen) done++
+      path[files] = $1; state[files] = $2
+      # The +/- column is sized to the widest counts in this MR, not guessed.
+      if (gk_digits(add[$1]) > wa) wa = gk_digits(add[$1])
+      if (gk_digits(del[$1]) > wd) wd = gk_digits(del[$1])
+    }
+    END {
+      budget = gk_list_width(cols) - (wa + wd + 17)
+      if (budget < 22) budget = 22
+      for (i = 1; i <= files; i++) {
+        p = path[i]
+        th = (p in count)  ? GK_ELSEWHERE "\356\234\277" count[p] GK_R : "  "
+        dr = (p in drafts) ? GK_YOURS "\342\234\216" drafts[p] GK_R : "  "
+        print ((p in seen) ? GK_GOOD "\342\234\223" GK_R : " ") " " \
+          gk_stat(add[p], del[p], wa, wd) " " gk_bar(add[p], del[p]) " " th " " dr "  " \
+          gk_path(p, budget, state[i] == "deleted" ? GK_CONTEXT : GK_TEXT) "\t" p "\t" state[i] "\t" p
+      }
+      print done + 0, files + 0, all + 0 > counts
+    }' | if [ "$mode" = --note ]; then cat > /dev/null; else git-test-files filter --section 2 --state 3; fi
+  rm -f "$numstat"
+  read -r done files all < "$counts"
+  rm -f "$counts"
+  [ -n "$GIT_FZF_STATE" ] || exit 0
+  total=$(printf '%s' "$open" | grep -c .)
+  note=$(printf "${GK_CONTEXT}%s of %s viewed${GK_R}" "$done" "$files")
+  [ -e "$GIT_FZF_STATE/since" ] &&
+    note=$(printf "${GK_ATTENTION}%s: %s of %s files · n shows all${GK_R} · %s" "$(cat "$GIT_FZF_STATE/since")" "$files" "$all" "$note")
+  [ "$total" -gt 0 ] && note="$note · $(printf "${GK_ELSEWHERE}%s unresolved thread%s${GK_R}" "$total" "$([ "$total" -eq 1 ] || echo s)")"
+  if [ "${drafts:-0}" -gt 0 ]; then
+    mark="$drafts draft$([ "$drafts" -eq 1 ] || echo s)"
+    [ "${claude:-0}" -gt 0 ] && mark="$mark ($claude Claude's)"
+    note="$note · $(printf "${GK_YOURS}%s, S submits${GK_R}" "$mark")"
+  fi
+  working=$(git-mr-claude --footer "$iid" "$range"; git-mr-fix --footer "$iid")
+  [ -n "$working" ] && note="$note · $working"
+  [ "$mode" = --note ] && { printf '%s\n' "$note"; exit 0; }
+  footer=$(cat "$GIT_FZF_STATE/footer" 2>/dev/null)
+  printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
+  exit 0
+fi
+
+[ -n "$path" ] || exit 0
+[ "$mode" = --annotate ] || [ ! -e "$GIT_FZF_STATE/since" ] || exec git-mr-since diff "$iid" "$range" "$path"
+
+threads=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/threads.$$
+trap 'rm -f "$threads"' EXIT
+# One row per note in this file: thread id, where (line, outdated or file),
+# side, line, the first line of a multi-line comment, the thread's state (open,
+# resolved, draft, or comment for one that cannot be resolved), author, whether
+# the note is a draft, the body with newlines as \037, and for a draft of
+# Claude's, why it wrote it (git-mr-claude), which only you ever see.
+git-mr-threads --json "$iid" "$range" "$reload" 2>/dev/null |
+  jq -r --arg p "$path" '.[] | select(.where.path == $p) | . as $t
+    | (if .draft then "draft" elif .resolved then "resolved" elif .resolvable then "open" else "comment" end) as $state
+    | .notes[] | [$t.id, $t.where.state, $t.where.side, $t.where.line, $t.where.from, $state,
+        .author.username, (.draft // false), (.body | gsub("\t"; " ") | gsub("\n"; "")),
+        ((.why // "") | gsub("\t"; " ") | gsub("\n"; "\u001f"))]
+    | map(tostring) | join("\t")' > "$threads" 2>/dev/null
+
+# Comment bodies render as markdown (share/markdown.awk). --annotate takes the
+# rendered diff from stdin instead: the symbol view's cut of the file.
+if [ "$mode" = --annotate ]; then cat; else git-preview-commit --diff "$range" "$path"; fi | LC_ALL=C awk -F'\t' -v width="${FZF_PREVIEW_COLUMNS:-100}" "$(cat "$share/rowfmt.awk")
+$(cat "$share/markdown.awk")"'
+  BEGIN { pad = "           " }
+  FILENAME != "-" {
+    key = $1
+    if (!(key in count)) {
+      order[++nkeys] = key; where[key] = $2; side[key] = $3; line[key] = $4; from[key] = $5; state[key] = $6
+      # Several threads can start on one line.
+      if ($2 == "line") at[$3 ":" $4] = at[$3 ":" $4] " " key
+    }
+    gsub(/[\002-\010\013-\036\177]/, "", $9); gsub(/[\002-\010\013-\036\177]/, "", $10)
+    n = ++count[key]; author[key, n] = $7; draft[key, n] = $8; body[key, n] = $9; why[key, n] = $10
+    next
+  }
+  function show(key,    color, i) {
+    color = state[key] == "resolved" ? GK_CONTEXT : state[key] == "draft" ? GK_YOURS : GK_ELSEWHERE
+    print pad color "▍ " (state[key] == "resolved" ? "✓ resolved" : state[key] == "draft" ? (author[key, 1] == "Claude" ? "✎ Claude\047s draft" : "✎ your draft") : state[key] == "open" ? " open" : " comment") \
+      (where[key] == "line" && from[key] < line[key] ? " · lines " from[key] "-" line[key] : "") GK_R
+    for (i = 1; i <= count[key]; i++) {
+      if (draft[key, i] == "true" && state[key] != "draft") print pad color "▍ " GK_R GK_YOURS "↳ ✎ your draft reply" GK_R
+      else if (state[key] != "draft") print pad color "▍ " GK_R (i == 1 ? GK_ATTENTION : GK_CONTEXT "↳ " GK_ATTENTION) author[key, i] GK_R
+      md(body[key, i], width - length(pad) - 4, pad color "▍ " GK_R)
+      if (why[key, i] != "") {
+        print pad color "▍ " GK_R GK_CONTEXT "┆ why · for you only, never posted" GK_R
+        md(why[key, i], width - length(pad) - 6, pad color "▍ " GK_R GK_CONTEXT "┆ " GK_R)
+      }
+    }
+    shown[key] = 1
+  }
+  function show_at(spot,    keys, n, i) {
+    n = split(at[spot], keys, " ")
+    for (i = 1; i <= n; i++) if (!(keys[i] in shown)) show(keys[i])
+  }
+  # A section after the diff: the threads in <kind> not shown yet, each under its place.
+  function section(kind, title,    i, any) {
+    for (i = 1; i <= nkeys; i++) {
+      if (where[order[i]] != kind || order[i] in shown) continue
+      if (!any++) { print ""; print GK_CONTEXT title GK_R }
+      if (kind == "line") print GK_CONTEXT (side[order[i]] == "old" ? "removed line " : "line ") line[order[i]] GK_R
+      else if (kind == "outdated") print GK_CONTEXT "was " (side[order[i]] == "old" ? "removed line " : "line ") line[order[i]] GK_R
+      show(order[i])
+    }
+  }
+  {
+    print
+    # delta numbers each row: "old ⋮ new │" in one column, or side by side,
+    # "│ old │ ... │ new │ ...". Match the numbers once colors are gone.
+    s = $0; gsub(/\033\[[0-9;]*[A-Za-z]/, "", s)
+    if (index(s, "│") == 0) next
+    n = split(s, cols, "│")
+    if (index(s, "⋮") > 0) {
+      split(cols[1], nums, "⋮"); old = nums[1]; new = nums[2]
+    } else if (n >= 5 && cols[1] == "") {
+      old = cols[2]; new = cols[4]
+    } else next
+    gsub(/ /, "", old); gsub(/ /, "", new)
+    if (old !~ /^[0-9]*$/ || new !~ /^[0-9]*$/) next
+    if (new != "") show_at("new:" new)
+    else show_at("old:" old)
+  }
+  END {
+    section("line", "threads on lines this diff does not show:")
+    section("outdated", "outdated threads, on lines changed since they were written:")
+    section("file", "comments on the whole file:")
+  }' "$threads" -

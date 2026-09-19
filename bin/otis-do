@@ -1,0 +1,153 @@
+#!/bin/sh
+# otis-do enter   <kind> <verb> <extra> <iid> <target> <url> <source> <head> <base> <pipeline> <start>
+# otis-do dismiss <kind> <verb> <extra> ...the same (confirm: its second half)
+# otis-do copy    <kind> <verb> <extra> ...the same: y. A background run's
+#                 folder, as a note Claude can start from (what the run was, its
+#                 verdict, and what each file there holds); anything else, the
+#                 MR's link
+# The dashboard's enter, as fzf actions for a transform binding: whatever the
+# row's verb says it is. The row carries the verb worked out once, in otis-list,
+# so the thing you read and the thing enter does can never disagree.
+#
+# An MR row carries gmr's fields in gmr's positions, so the shared key goes
+# through git-mr-do unchanged, placeholders and all.
+# dismiss is d: stop the dashboard saying this one wants you. It only ever
+# acts on what otis itself is telling you, Claude's proposals and the verdicts
+# of its runs, and never on the merge request's own state: a thread is
+# unresolved or it is not, and a dashboard that could hide that would be
+# lying to you rather than triaging for you. It is a transform too: a row it
+# refuses says why in the footer, and one it takes goes on to confirm, the
+# same fields again, which asks in the terminal.
+what=$1
+case $what in enter|dismiss|confirm|copy) ;; *) printf 'usage: otis-do enter|dismiss|copy <kind> <verb> ...\n' >&2; exit 2 ;; esac
+shift
+kind=$1 verb=$2 extra=$3 iid=$4 target=$5 url=$6 source=$7 head=$8 base=$9
+shift 9
+pipeline=$1 start=$2
+. "$(dirname "$0")/../share/claude-run.sh"
+
+if [ "$what" = copy ]; then
+  case $extra in
+    */otis-verify/*|*/gmr-watch/*|*/gmr-fix/*|*/gmr-claude/*) ;;
+    *) exec git-mr-do copy "$iid" ;;
+  esac
+  [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
+  d=$extra
+  case $d in
+    */otis-verify/*) noun=verification ;;
+    */gmr-watch/*)   noun="production watch" ;;
+    */gmr-fix/*)     noun="fix run" ;;
+    *)               noun=review ;;
+  esac
+  # Only what is there, each with what it holds, so Claude reads the right
+  # file first and can check the evidence rather than the summary.
+  has() { [ -e "$d/$1" ] && printf '  %-22s %s\n' "$1" "$2"; }
+  {
+    printf 'An otis %s, "%s"' "$noun" "$(cat "$d/title" 2>/dev/null)"
+    [ -s "$d/branch" ] && printf ' of %s' "$(cat "$d/branch")"
+    [ -s "$d/head" ] && printf ' at %s' "$(cut -c1-8 "$d/head")"
+    v=$(jq -r '.verdict // empty' "$d/verdict.json" 2>/dev/null)
+    [ -n "$v" ] && printf ', verdict: %s' "$v"
+    printf '.\nEverything it kept is in %s:\n' "$d"
+    has report.md "the report: the verdict claim by claim, with the evidence for each"
+    has verdict.json "the verdict as JSON"
+    [ -d "$d/artifacts" ] && printf '  %-22s %s\n' artifacts/ "what the tester brought back, $(find "$d/artifacts" -type f | wc -l | tr -d ' ') files: logs, API responses, screenshots, recordings"
+    has context/ "what the run read and wrote: the change, the plan, the tester's report each round (report-<n>.md), check-ins"
+    has plan.json "what it set out to check"
+    has events.jsonl "every step, as it happened"
+  } | otis-copy && exec git-fzf-note "copied the run's folder and what is in it, for Claude"
+  exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $d"
+fi
+
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+
+if [ "$what" = dismiss ]; then
+  confirm='execute(otis-do confirm {6} {14} {13} {2} {3} {4} {5} {7} {8} {9} {12})+execute-silent(git-fzf-bg otis-list)'
+  [ "$verb" = rollback ] && { echo "$confirm"; exit 0; }
+  if [ "$verb" = run ] && [ -d "$extra" ] && ! running "$extra"; then
+    case $(cat "$extra/status" 2>/dev/null) in failed|'') echo "$confirm"; exit 0 ;; esac
+  fi
+  case $extra in
+    */gmr-fix/*|*/otis-verify/*|*/gmr-watch/*)
+      [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
+      echo "$confirm"; exit 0 ;;
+    *)
+      exec git-fzf-note "otis discards what it is telling you, Claude's fixes and its runs' verdicts; that row is the merge request's own state" ;;
+  esac
+fi
+
+if [ "$what" = confirm ]; then
+  if [ "$verb" = rollback ]; then
+    git-confirm "stop the dashboard showing that !$iid was rolled back? gmr keeps it" || exit 0
+    printf 'rollback/%s\trolledback\n' "$iid" >> "$common/otis-dismissed"
+    exit 0
+  fi
+  # A run that failed, or died and could not pick up: what you saw is when
+  # it ended, so its next failure is news again.
+  if [ "$verb" = run ] && [ -d "$extra" ] && ! running "$extra"; then
+    case $(cat "$extra/status" 2>/dev/null) in
+      failed) at=$(cat "$extra/ended") noun=failed ;;
+      '') at=$(cat "$extra/started") noun=died ;;
+      *) at= ;;
+    esac
+    if [ -n "$at" ]; then
+      git-confirm "stop the dashboard showing that this run $noun? gag keeps it" || exit 0
+      printf '%s\n' "$at" > "$extra/seen"
+      exit 0
+    fi
+  fi
+  case $extra in
+    */gmr-fix/*)
+      exec git-mr-fix --discard-rest "${extra##*/}" ;;
+    */otis-verify/*|*/gmr-watch/*)
+      # What you saw, so the row comes back if it changes its mind: a
+      # verification is about a commit, a production watch about a verdict.
+      case $extra in
+        */otis-verify/*) saw=$(cat "$extra/head" 2>/dev/null); noun="verdict on $(cut -c1-8 "$extra/head" 2>/dev/null)" ;;
+        *) saw=$(jq -r '.verdict // ""' "$extra/verdict.json" 2>/dev/null); noun="verdict" ;;
+      esac
+      git-confirm "stop the dashboard showing that $noun? gag and gmr keep it, and it comes back if it changes" || exit 0
+      printf '%s\n' "$saw" > "$extra/seen"
+      exit 0 ;;
+  esac
+  exit 0
+fi
+
+case $verb in
+  rollback)
+    # Its production watch if there was one, else the MR.
+    [ -d "$extra" ] && exec git-agent-list --open "$extra" 'execute-silent(git-fzf-bg otis-list)'
+    exec git-mr-do open "$kind" "$iid" "$target" "$url" "$source" "$head" "$base" "$pipeline" "$start" ;;
+  run)
+    # One of Claude's runs: its proposals if it is a fix run, else its steps.
+    [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
+    # The dashboard's own rows on the way back, not gag's.
+    exec git-agent-list --open "$extra" 'execute-silent(git-fzf-bg otis-list)' ;;
+  mr)
+    exec git-mr-do open "$kind" "$iid" "$target" "$url" "$source" "$head" "$base" "$pipeline" "$start" ;;
+  merge)
+    exec git-ci-merge --check "$iid" ;;
+  pipeline)
+    exec git-ci-do jobs "$pipeline" "$iid" ;;
+  deploy)
+    echo "execute(gd $pipeline)"
+    exit 0 ;;
+  trash)
+    # The trash is the file manager's, not otis's, so otis opens it and stops
+    # there: nothing here deletes anything of yours for good.
+    [ -d "$extra" ] || exec git-fzf-note "the trash is empty now"
+    echo "execute-silent(otis-open '$extra')"
+    exit 0 ;;
+  here)
+    # What you would do here: settle what is uncommitted, else read the branch.
+    if [ -n "$(git --no-optional-locks status --porcelain 2>/dev/null)" ]; then
+      echo "execute(ga)"
+    elif [ -n "$extra" ] && [ "$(git rev-list --count "$(otis-config base)..HEAD" 2>/dev/null)" != 0 ]; then
+      echo "execute(git-branch-log '$extra')"
+    else
+      exec git-fzf-note "nothing uncommitted, and nothing here past $(otis-config base)"
+    fi
+    exit 0 ;;
+  *)
+    exec git-fzf-note "that row is a section heading" ;;
+esac

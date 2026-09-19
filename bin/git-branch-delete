@@ -1,0 +1,46 @@
+#!/bin/sh
+# git-branch-delete <branch>...: gb's d. Asks once, then deletes each local
+# branch, whatever its MR says: M marks the ones that lose nothing (merged,
+# closed, someone else's MR that GitLab has all of), and anything else is yours
+# to judge from its row. A branch checked out anywhere, or main, stays. The MRs
+# and GitLab copies are never touched. What happened goes to the footer, with
+# how to bring back each branch it deleted, as gw's d does.
+st=$GIT_FZF_STATE
+row() { awk -F'\t' -v b="$1" '$2 == b { print $3 "\t" $6; exit }' "$st/branches"; }
+tab=$(printf '\t')
+
+list=
+for b; do
+  IFS=$tab read -r kind place <<EOF
+$(row "$b")
+EOF
+  case $kind in main) continue ;; esac
+  [ -n "$place" ] && continue
+  list="$list  $b  ($kind)
+"
+done
+if [ -z "$list" ]; then
+  printf '%s\n' "nothing to delete: main and branches checked out anywhere stay" > "$st/note"
+  exit 0
+fi
+printf 'delete these local branches? MRs and GitLab copies are not touched\n%s' "$list"
+git-confirm "delete?" || exit 0
+
+deleted= left= restore=
+for b; do
+  IFS=$tab read -r kind place <<EOF
+$(row "$b")
+EOF
+  if [ "$kind" = main ]; then
+    left="$left, $b (the default branch)"
+  elif [ -n "$place" ]; then
+    left="$left, $b (checked out)"
+  else
+    sha=$(git rev-parse --short "$b")
+    git branch -q -D "$b" && deleted="$deleted, $b" restore="$restore; git branch $b $sha"
+  fi
+done
+note=
+[ -n "$deleted" ] && note="deleted ${deleted#, } · restore: ${restore#; }"
+[ -n "$left" ] && note="${note:+$note · }left ${left#, }"
+printf '%s\n' "$note" > "$st/note"

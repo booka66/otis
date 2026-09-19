@@ -1,0 +1,21 @@
+# Solarized dark.
+attention=38;2;181;137;0
+good=38;2;133;153;0
+bad=38;2;220;50;47
+elsewhere=38;2;38;139;210
+yours=38;2;203;75;22
+text=38;2;131;148;150
+context=38;2;88;110;117
+faint=38;2;7;54;66
+main=38;2;42;161;152
+codebg=48;2;7;54;66
+errbg=48;2;40;44;53
+delta_syntax=Solarized (dark)
+bat=Solarized (dark)
+file=#268bd2
+rule=#073642
+minus=#2c2c35
+plus=#1b412b
+minus_emph=#582e33
+plus_emph=#355720
+glow=dark

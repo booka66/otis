@@ -1,0 +1,8 @@
+#!/bin/sh
+# git-mr-pages <api path>: every page of a GitLab list endpoint as one JSON
+# array. glab api --paginate prints each page's array back to back ([..][..]),
+# which is not one JSON document: jq reads it as several and vim.json.decode
+# not at all, so a list that runs past one page (an MR with over 100
+# discussions, system notes included) has to be merged here.
+out=$(glab api --paginate "$1") || exit 1
+printf '%s' "$out" | jq -s add

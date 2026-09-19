@@ -1,0 +1,22 @@
+# Gruvbox light.
+attention=38;2;181;118;20
+good=38;2;121;116;14
+bad=38;2;157;0;6
+elsewhere=38;2;7;102;120
+yours=38;2;175;58;3
+text=38;2;60;56;54
+context=38;2;146;131;116
+faint=38;2;213;196;161
+main=38;2;66;123;88
+codebg=48;2;235;219;178
+errbg=48;2;237;205;170
+delta_syntax=gruvbox-light
+bat=gruvbox-light
+file=#076678
+rule=#d5c4a1
+minus=#edcdaa
+plus=#e8deab
+minus_emph=#dda489
+plus_emph=#d1c98c
+light=1
+glow=light

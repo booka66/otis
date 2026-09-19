@@ -1,0 +1,19 @@
+#!/bin/sh
+# git-stash-drop <sha>: gst's d. Asks, then drops the stash. The stack is
+# shared by every worktree and session, so stash@{n} shifts whenever anyone
+# pushes or drops: the stash is named by its SHA, and its position looked up
+# only once the answer is in. The footer says how to bring it back.
+sha=$1
+[ -n "$sha" ] || exit 0
+full=$(git rev-parse "$sha")
+at() { git stash list --format='%H%x09%gd%x09%gs' | awk -F'\t' -v s="$full" -v f="$1" '$1 == s { print $f; exit }'; }
+
+msg=$(at 3)
+git-confirm "drop $sha, \"$msg\"?" || exit 0
+n=$(at 2)
+if [ -z "$n" ]; then
+  printf '%s is not in the stash list any more\n' "$sha" > "$GIT_FZF_STATE/note"
+  exit 0
+fi
+git stash drop -q "$n" &&
+  printf 'dropped %s · to bring it back: git stash store -m "%s" %s\n' "$sha" "$msg" "$sha" > "$GIT_FZF_STATE/note"

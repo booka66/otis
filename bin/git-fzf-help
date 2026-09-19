@@ -1,0 +1,45 @@
+#!/bin/sh
+# git-fzf-help show     the last error in full if there was one, every key this
+#                       picker has, the ones every picker has, then what the
+#                       picker's own columns mean, if it said
+# git-fzf-help toggle   flip the help view; prints the fzf actions to show it
+#
+# A list command that spends columns on glyphs rather than words writes the
+# legend to $GIT_FZF_STATE/legend (git-mr-list does), and it shows here. That
+# is the whole bargain: a column may be one glyph wide only if ? spells it out.
+#
+# The help view borrows the preview pane: git-fzf's preview command shows help
+# while $GIT_FZF_STATE/help-on exists, so toggling only flips that file and
+# redraws. A picker with no preview of its own keeps the pane hidden otherwise.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+st=$GIT_FZF_STATE
+case $1 in
+  show)
+    if [ -s "$st/last-error" ]; then
+      printf "${GK_BAD}last error${GK_R}\n"
+      fold -s -w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 2 ))" "$st/last-error" | sed 's/^/  /'
+      printf '\n'
+    fi
+    awk -F'\t' "$(cat "$share/rowfmt.awk")"'
+      BEGIN { ylw = GK_ATTENTION; dim = GK_CONTEXT; r = GK_R }
+      NR == 1 { print dim "this picker" r }
+      $0 == "--" { print ""; print dim "every picker" r; next }
+      NF == 2 { printf "  %s%-9s%s %s\n", ylw, $1, r, $2 }
+    ' "$st/hints"
+    [ -s "$st/legend" ] && { printf '\n'; cat "$st/legend"; }
+    ;;
+  toggle)
+    if [ -e "$st/help-on" ]; then
+      rm -f "$st/help-on"
+      if [ -e "$st/has-preview" ]; then
+        echo 'change-preview-label()+refresh-preview'
+      else
+        echo 'hide-preview'
+      fi
+    else
+      touch "$st/help-on"
+      echo 'change-preview-label( keys · ? closes )+show-preview+refresh-preview'
+    fi
+    ;;
+esac

@@ -1,0 +1,17 @@
+#!/bin/sh
+# git-ci-retry <pipeline id> <iid>: retry a pipeline's failed jobs after a y/N.
+# GitLab's pipeline retry reruns only failed and canceled jobs, never the ones
+# that passed, and leaves running jobs alone. Success goes straight back to the
+# picker, whose refresh then waits on GitLab (git-mr-list --refresh), so the
+# row shows the pipeline running rather than the failure a cache still had;
+# only a failure waits, so its error can be read.
+id=$1 iid=$2
+[ -n "$id" ] || exit 0
+git-confirm "retry the failed jobs in !$iid pipeline $id?" || exit 0
+out=$(glab api -X POST "projects/:fullpath/pipelines/$id/retry" 2>&1) && exit 0
+# A 409 on a stale job is GitLab saying those jobs were retried already (a
+# retry from here or the web a moment ago), which is what was asked for.
+case $out in *"stale job"*) exit 0 ;; esac
+printf '%s\n' "$out" | tail -3
+printf 'retry failed. press enter\n'
+read -r _

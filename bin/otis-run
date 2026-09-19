@@ -1,0 +1,18 @@
+#!/usr/bin/env -S zsh -f
+# otis-run: every otis command (gb, ga, gmr, otis...) is a link to this. It
+# loads the commands (share/otis.zsh) and runs the one it was called as, so
+# they work from any shell, and from fzf bindings and other scripts, which
+# cannot see a shell's functions. The file a shell's wrapper names in OTIS_CD
+# is this command's alone: a command it starts gets no say in where the
+# shell ends up.
+typeset -g _otis_cd_file=$OTIS_CD
+unset OTIS_CD
+# The theme (otis-theme), once, for everything this command starts.
+[[ -n $OTIS_T_NAME ]] || eval "$(otis-theme --env)"
+source "${0:A:h:h}/share/otis.zsh"
+cmd=${0:t}
+if [[ $cmd == otis-run ]] || (( ! $+functions[$cmd] )); then
+  print -u2 "otis-run: run it as one of its links in bin/ (gb, ga, otis...)"
+  exit 2
+fi
+$cmd "$@"

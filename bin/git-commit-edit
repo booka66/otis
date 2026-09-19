@@ -1,0 +1,142 @@
+#!/bin/sh
+# git-commit-edit [--amend | --reword <sha>]
+# Write a commit message in your editor with the diff you are committing below
+# it, colored, under git's cut line so it never reaches the commit. On close its
+# newlines are tidied (git-commit-tidy) and it is checked (git-commit-check); a problem reopens the editor with the
+# reasons at the top of the comments and your text kept. An empty message
+# commits nothing. If gcm's commit itself fails (a hook, say), the message is
+# kept and offered again next time.
+#
+# --reword (gl's r) rewrites the message of <sha>, one of this branch's
+# commits, starting from its own message with its own diff below. Its changes
+# stay as they are, and anything staged stays staged.
+amend= reword=
+case $1 in
+  --amend)  amend=1 ;;
+  --reword) reword=$2 ;;
+esac
+
+gitdir=$(git rev-parse --git-dir) || exit 1
+dir="$gitdir/gcm"
+mkdir -p "$dir"
+file="$dir/COMMIT_EDITMSG"
+draft="$dir/draft"
+scissors='# ------------------------ >8 ------------------------'
+
+if [ -n "$reword" ]; then
+  original=$(git log -1 --format=%B "$reword")
+  message=$original
+  diff() { git show --format= --diff-merges=first-parent "$@" "$reword"; }
+elif [ -n "$amend" ]; then
+  original=$(git log -1 --format=%B)
+  message=$original
+  parent=$(git rev-parse -q --verify HEAD^ || git hash-object -t tree /dev/null)
+  diff() { git diff --cached "$@" "$parent"; }
+else
+  message=$(cat "$draft" 2>/dev/null)
+  diff() { git diff --cached "$@"; }
+fi
+
+# nvim gets the diff in its own read-only split (share/commit-editor.lua); any
+# other editor gets it as comments under git's cut line.
+editor=$(git var GIT_EDITOR)
+case ${editor%% *} in
+  nvim|*/nvim) split_diff=1 ;;
+  *)           split_diff= ;;
+esac
+diff_file="$dir/changes.diff"
+if [ -n "$split_diff" ]; then
+  diff --stat > "$diff_file"
+  printf '\n' >> "$diff_file"
+  diff | grep -v '^index ' >> "$diff_file"
+fi
+
+# Clear the index lock before any writing, so the message is never written
+# only for the commit to fail on a lock; waiting again is offered while another
+# git command in this worktree keeps it.
+clear_lock() {
+  until git-lock; do
+    git-confirm "wait for it and try again?" || return 1
+  done
+}
+clear_lock || exit 1
+
+problems=
+while :; do
+  {
+    printf '%s\n' "$message"
+    [ -n "$problems" ] && printf '\n# fix before this can commit:\n%s\n' "$(printf '%s\n' "$problems" | sed 's/^/#   /')"
+    printf '\n# subject: what it does, sentence case, 72 characters max. blank lines and wrapping are handled.\n'
+    printf '# an empty message commits nothing.%s\n' "${split_diff:+ ctrl-d/u scroll the diff below.}"
+    if [ -z "$split_diff" ]; then
+      printf '%s\n# Everything below the line above is left out of the commit.\n' "$scissors"
+      diff --stat | sed 's/^/# /'
+      diff
+    fi
+  } > "$file"
+
+  # Through sh, as git runs it: core.editor can be a quoted path with spaces.
+  if [ -n "$split_diff" ]; then
+    GCM_DIFF="$diff_file" sh -c "$editor \"\$@\"" editor "+1" -c "luafile $(cd "$(dirname "$0")/../share" && pwd)/commit-editor.lua" "$file"
+  else
+    sh -c "$editor \"\$@\"" editor "+1" "$file"
+  fi
+  if [ $? -ne 0 ]; then
+    [ -z "$amend$reword" ] && printf '%s\n' "$message" > "$draft"
+    echo "the editor exited with an error, so nothing was committed"
+    exit 1
+  fi
+
+  # The message is what is above the cut line, without comment lines, with its
+  # newlines taken care of (blank line after the subject, paragraphs wrapped).
+  message=$(awk -v cut="$scissors" '$0 == cut { exit } !/^#/ { print }' "$file" | git-commit-tidy)
+
+  if [ -z "$(printf '%s' "$message" | tr -d '[:space:]')" ]; then
+    rm -f "$draft"
+    echo "empty message, nothing committed"
+    exit 1
+  fi
+  problems=$(printf '%s\n' "$message" | git-commit-check) || continue
+  break
+done
+
+if [ -n "$amend" ] && [ "$message" = "$original" ] && git diff --cached --quiet; then
+  echo "nothing staged and the message is unchanged, so there is nothing to amend"
+  exit 1
+fi
+# Closing the editor without a change is how a reword is called off.
+[ -n "$reword" ] && [ "$message" = "$original" ] && exit 0
+
+# gcm's message waits in the draft until it commits. An amend or reword starts
+# from the commit's own message, which must not come back as gcm's next draft.
+msg=$draft
+[ -n "$amend$reword" ] && msg="$dir/message"
+printf '%s\n' "$message" > "$msg"
+if [ "$msg" = "$draft" ]; then kept="your message is saved and comes back next time you run gcm"; else kept="your message is in $msg"; fi
+# Writing the message took a while; check the lock again right before committing.
+if ! clear_lock; then
+  echo "nothing committed; $kept"
+  exit 1
+fi
+if [ -z "$reword" ]; then
+  git commit ${amend:+--amend} --cleanup=strip -F "$msg"
+elif [ "$(git rev-parse "$reword")" = "$(git rev-parse HEAD)" ]; then
+  # --only keeps what is staged out of it.
+  git commit --amend --only --cleanup=strip -F "$msg"
+else
+  # An earlier commit: replay the branch from its parent with that one commit's
+  # pick turned into a reword, whose editor copies the new message in.
+  # --update-refs carries any branches stacked above along.
+  GIT_SEQUENCE_EDITOR="sed -i.bak '1s/^[a-z]*/reword/'" GIT_EDITOR="cp '$msg'" \
+    git rebase -i --update-refs "$reword~1"
+fi
+if [ $? -eq 0 ]; then
+  rm -f "$msg"
+  git log -1 --format='%h %s'
+elif [ -n "$reword" ] && [ -d "$gitdir/rebase-merge" ]; then
+  echo "the reword stopped partway; git rebase --abort puts the branch back as it was"
+  exit 1
+else
+  echo "commit failed; $kept"
+  exit 1
+fi
