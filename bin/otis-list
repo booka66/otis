@@ -53,7 +53,8 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 age=15 merged_age=60 now=
 [ "$1" = --refresh ] && age=0 merged_age=0 now=--now
 reload="execute-silent(git-fzf-bg --then refresh-preview otis-list)"
-common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
+. "$share/repo.sh" || exit 1
+common=$OTIS_GITDIR
 # What Claude is doing and what it has left you, and every background run.
 # None of it needs a setting, so it starts before they are read.
 git-mr-watch --marks  > "$st/m.watch"  2>/dev/null &

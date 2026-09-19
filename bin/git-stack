@@ -87,7 +87,9 @@ checked_out() {
 # plan <name>: how to clear the way for sync, as lines of "home <path>",
 # "detach <path>" and "switch <path> <branch>"; or why not, on stderr, and 1.
 plan() {
-  mine=$(git-worktree-path named mine) review=$(git-worktree-path named review)
+  { read -r _; read -r review; read -r mine; } <<EOF
+$(git-worktree-path roots)
+EOF
   holders=$(layers "$1" | while IFS= read -r b; do checked_out | awk -F'\t' -v b="$b" '$1 == b'; done)
   own=$(printf '%s\n' "$holders" | awk -F'\t' -v m="$mine" -v r="$review" 'NF && ($2 == m || $2 == r) { print $2 }' | sort -u)
   yours=$(printf '%s\n' "$holders" | awk -F'\t' -v m="$mine" -v r="$review" 'NF && $2 != m && $2 != r { print $2 }' | sort -u)

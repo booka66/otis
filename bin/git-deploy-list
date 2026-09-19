@@ -25,7 +25,8 @@
 # ○ queued, ↺ a rollback.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 env=$(otis-config deployEnv) job=$(otis-config deployJob) rollback_job=$(otis-config rollbackJob)
-dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+. "$share/repo.sh"
+dir="$OTIS_GITDIR/git-alias-cache"
 mkdir -p "$dir"
 from=
 [ "$1" = --from ] && { from=$2; shift 2; }

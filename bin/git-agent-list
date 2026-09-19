@@ -15,7 +15,8 @@
 # gmr and gb do when they draw.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
-common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
+. "$share/repo.sh" || exit 1
+common=$OTIS_GITDIR
 
 # git-agent-list --open <dir> [<back>]: gag's enter, as fzf actions. Each run
 # opens through the command that starts its kind, as V, C and D do: a fix run

@@ -41,8 +41,9 @@
 # same Cursor agent (git-verify-run says what it keeps).
 mode=
 case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--keylines|--attach) mode=$1; shift ;; esac
-common=$(git rev-parse --path-format=absolute --git-common-dir)
 share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/repo.sh"
+common=$OTIS_GITDIR
 top=$common/otis-verify
 pause() { printf '%s. press enter\n' "$1"; read -r _; exit 0; }
 
@@ -60,7 +61,9 @@ case $mode in
     # Whether one is going, how the last one ended, its verdict once it is
     # over, and the commit it verified, so a row shows a verdict only while
     # the MR is still there.
-    for dir in "$top"/*/; do
+    # With no runs at all the answer is {}, and every list asks on every
+    # draw, so it is worth saying so without starting jq to read nothing.
+    rows=$(for dir in "$top"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
       verifying=false verdict=
@@ -68,7 +71,9 @@ case $mode in
       status=$(cat "$dir/status" 2>/dev/null)
       [ "$status" = done ] && verdict=$(jq -r '.verdict // empty' "$dir/verdict.json" 2>/dev/null)
       printf '%s\t%s\t%s\t%s\t%s\n' "${dir##*/}" "$verifying" "$status" "$verdict" "$(cat "$dir/head" 2>/dev/null)"
-    done | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4]}}] | add // {}'
+    done)
+    [ -n "$rows" ] || { echo '{}'; exit 0; }
+    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4]}}] | add // {}'
     exit 0
     ;;
   --preview)

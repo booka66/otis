@@ -53,24 +53,93 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand worktrees editor lessons'
+sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro'
+nl='
+'
 shared() {
-  case $1 in
-    host | project | mainBranch | gateJob | deployEnv | deployJob | rollbackJob | datadogEnv | readyLabel | \
-      cursorEnv | cursorModel | verifyCheckIn | checkInModel | verifyRetro) ;;
+  case " $sharednames " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
+
+# Every otis.* setting in one git call, and one more for the repo's .otis,
+# rather than a git process for each name asked. A git process costs about
+# 7ms whatever it is asked of it, and a picker asks for a dozen settings
+# before it draws a row, so asking name by name was most of what a list
+# script spent before anything appeared.
+#
+# awk turns each store into assignments: yours_<name> for your git config,
+# repo_<name> for the repo's .otis. Every value of a name is kept, one a
+# line, in the order git config listed them, so the last is what --get would
+# have answered and all of them are what --get-all would. git config matches
+# a name without regard to case and hands it back lowercased, so awk is given
+# the spellings used here and answers in them; a name that is not one of them
+# is dropped rather than turned into a variable, and .otis, which a repo you
+# cloned wrote, is only ever read for the names shared() allows.
+assign() {
+  awk -v pfx="$1" -v names="$2" '
+    BEGIN { n = split(names, N, " "); for (i = 1; i <= n; i++) canon[tolower(N[i])] = N[i]; q = sprintf("%c", 39) }
+    {
+      i = index($0, " ")
+      k = (i ? substr($0, 1, i - 1) : $0); v = (i ? substr($0, i + 1) : "")
+      sub(/^otis\./, "", k); k = tolower(k)
+      if (!(k in canon)) next
+      val[canon[k]] = (canon[k] in val ? val[canon[k]] "\n" : "") v
+    }
+    END {
+      for (k in val) {
+        s = val[k]; gsub(q, q "\\" q q, s)
+        printf "%s%s=%s%s%s\n", pfx, k, q, s, q
+      }
+    }'
+}
+load_yours() {
+  [ -n "$yours_done" ] && return 0
+  yours_done=1
+  eval "$(git config --get-regexp '^otis\.' 2>/dev/null | assign yours_ "$names")"
+  return 0
+}
+# The repo's .otis, only once something shared is not yours to begin with:
+# most repos have no .otis, and finding that out costs a git process of its
+# own to learn where the repo starts.
+load_repo() {
+  [ -n "$repo_done" ] && return 0
+  repo_done=1
+  [ -z "$repofile" ] && repofile=$(git rev-parse --show-toplevel 2>/dev/null)/.otis
+  [ -f "$repofile" ] || return 0
+  repo_exists=1
+  eval "$(git config --file "$repofile" --get-regexp '^otis\.' 2>/dev/null | assign repo_ "$sharednames")"
+  return 0
+}
+# Whether the repo has a .otis that may speak for this name at all, which is
+# what the picker's rows and its preview ask before naming it as the source.
+from_repo() { shared "$1" && { load_repo; [ -n "$repo_exists" ]; }; }
+# Whether otis.<name> is set at all, in either store, leaving its values in $v.
+found() {
+  load_yours
+  eval "v=\${yours_$1-}; has=\${yours_$1+1}"
+  [ -n "$has" ] && return 0
+  shared "$1" || return 1
+  load_repo
+  eval "v=\${repo_$1-}; has=\${repo_$1+1}"
+  [ -n "$has" ]
+}
+# otis.<name>: yours, else the repo's .otis where shared() lets it say. The
+# last value, as git config --get answers, and nothing with a non-zero status
+# where neither sets it.
+cfg() { found "$1" || return 1; printf '%s\n' "${v##*$nl}"; }
+# Every value instead, as --get-all answers.
+cfg_all() { found "$1" || return 1; printf '%s\n' "$v"; }
+# git config --type=bool, on a value this already has: what git calls true,
+# and, for anything else it would have refused, unset, so each caller's own
+# default stands.
+cfg_bool() {
+  found "$1" || return 1
+  case ${v##*$nl} in
+    true | yes | on | 1) echo true ;;
+    false | no | off | 0 | '') echo false ;;
     *) return 1 ;;
   esac
-  if [ -z "$repofile" ]; then
-    repofile=$(git rev-parse --show-toplevel 2>/dev/null)/.otis
-  fi
-  [ -f "$repofile" ]
 }
-# git config <how> otis.<name>: yours, else the repo's .otis where shared()
-# lets it say.
-layered() {
-  how=$1 n=$2
-  git config $how "otis.$n" 2>/dev/null || { shared "$n" && git config --file "$repofile" $how "otis.$n" 2>/dev/null; }
-}
-cfg() { layered --get "$1"; }
 
 keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommands worktrees editor lessons gitlab'
 
@@ -122,7 +191,7 @@ one() {
       done
       echo HEAD ;;
     gateJobs)
-      layered --get-all gateJob | jq -R 'select(. != "")' | jq -sc . ;;
+      cfg_all gateJob | jq -R 'select(. != "")' | jq -sc . ;;
     deployEnv) cfg deployEnv || echo production ;;
     deployJob) cfg deployJob || echo deploy ;;
     rollbackJob) cfg rollbackJob || echo rollback ;;
@@ -132,17 +201,165 @@ one() {
     cursorModel) cfg cursorModel ;;
     verifyCheckIn) cfg verifyCheckIn || echo 5 ;;
     checkInModel) cfg checkInModel ;;
-    verifyRetro) [ "$(layered '--type=bool --get' verifyRetro || echo true)" = true ] ;;
-    claudeCommands) git config --get-all otis.claudeCommand 2>/dev/null | grep -v '^$' ;;
+    verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
+    claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;
-    lessons) [ "$(git config --type=bool --get otis.lessons 2>/dev/null)" = true ] ;;
+    lessons) [ "$(cfg_bool lessons)" = true ] ;;
     gitlab)
       origin_parts || exit 1
       [ "$host" = "$(cfg host)" ] && exit 0
       case $host in *gitlab*) exit 0 ;; *) exit 1 ;; esac ;;
     *) echo "usage: otis-config [$(printf '%s' "$keys" | sed 's/ / | /g')]" >&2; exit 2 ;;
   esac
+}
+
+# ---------------------------------------------------------------- the cache
+# A picker asks for settings constantly: once for its list, and again in every
+# preview and binding, each of them a process of its own that knows nothing of
+# the last. Worked out from scratch each time, a lookup is a git process or
+# two, and a list script spent more of its time deciding what the default
+# branch is called than it spent drawing rows.
+#
+# So every answer is worked out once and kept in the git dir, a value a line,
+# and a lookup reads that file instead of asking git. A picker goes one
+# further: git-fzf loads the file with --env before it opens, the way it
+# already loads the theme, and every command under it answers from the
+# environment, reading nothing at all.
+#
+# The file stands while it is newer than everything a setting can come from:
+# this repo's config, your global one and the repo's .otis. So a git config
+# from anywhere, otis's own settings picker included, is picked up by the next
+# lookup without anything having to be told, and a cache that is merely the
+# same age as what it was built from counts as out of date rather than
+# current. The environment's copy is held to the same file, so a setting
+# changed from the dashboard's c is what that picker's next reload reads.
+#
+# Two keys are left out of both and always looked up live. claudeCommands is
+# the one setting that says what Claude may run, and what decides that should
+# come from git config and nowhere else. editor answers with $OTIS_EDITOR
+# where there is one, and an answer that follows the environment cannot be
+# kept in a file that only watches git config. Worktrees under the checkout the
+# environment was made in share its git config and count as inside it; a .otis
+# that differs between branches checked out there is the one thing this would
+# miss, and nothing here reads a worktree's .otis.
+envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro worktrees lessons gitlab'
+boolkeys='verifyRetro lessons gitlab'
+cachename=otis-config-cache
+tab='	'
+
+# Where this checkout starts and where its git dir is, in one git call, since
+# the cache is keyed by both. The git dir is the common one, so every worktree
+# shares the cache, as they share the config it is built from.
+repo_facts() {
+  [ -n "$facts_done" ] && return $facts_rc
+  facts_done=1 facts_rc=1
+  p=$(git rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null) || return 1
+  root=${p%%"$nl"*} gitdir=${p#*"$nl"}
+  [ -n "$root" ] && [ -n "$gitdir" ] && [ "$root" != "$gitdir" ] && facts_rc=0
+  return $facts_rc
+}
+
+# Whether a cache file is still newer than every file its answers came from.
+# A global config can be in either of the two places git looks, or wherever
+# GIT_CONFIG_GLOBAL names; git's system-wide one is not watched, since otis
+# settings do not live there.
+cache_fresh() {
+  c=$1 r=$2 d=$3
+  [ -f "$c" ] || return 1
+  [ ! -e "$d/config" ] || [ "$c" -nt "$d/config" ] || return 1
+  [ ! -e "$r/.otis" ] || [ "$c" -nt "$r/.otis" ] || return 1
+  for g in "$GIT_CONFIG_GLOBAL" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "$HOME/.gitconfig"; do
+    [ -z "$g" ] || [ ! -e "$g" ] || [ "$c" -nt "$g" ] || return 1
+  done
+  return 0
+}
+
+# Every key worked out the long way, a key and its value a line, and last the
+# keys that answered with nothing, which is not the same as answering empty.
+# Everything the keys are worked out from is read here first, before any of
+# them is asked: a subshell inherits what this one knows but hands nothing
+# back, and a key asked cold would send it to git again.
+build_cache() {
+  load_yours
+  load_repo
+  origin_parts || :
+  main >/dev/null
+  unset_keys=
+  for key in $envkeys; do
+    # gitlab, lessons and verifyRetro answer with a status alone and end the
+    # run they are in, so those are asked in a subshell; the rest are asked
+    # here, where what they work out is kept for the ones after.
+    case " $boolkeys " in
+      *" $key "*) val=; (one "$key") >/dev/null 2>&1 || unset_keys="$unset_keys $key" ;;
+      *) val=$(one "$key" 2>/dev/null) || { unset_keys="$unset_keys $key"; val=; } ;;
+    esac
+    # A value of more than one line cannot be carried a line a key like this,
+    # so that key is left out and looked up the long way, as claudeCommands is.
+    case $val in
+      *"$nl"*) ;;
+      *) printf '%s\t%s\n' "$key" "$val" ;;
+    esac
+  done
+  printf 'UNSET\t%s\n' "${unset_keys# }"
+}
+
+# The cache for this checkout, built first where it is missing or out of date,
+# read into the same variables --env exports. A repo whose git dir cannot be
+# written to still answers, the long way, every time.
+load_cache() {
+  [ -n "$cache_tried" ] && return $cache_rc
+  cache_tried=1 cache_rc=1
+  repo_facts || return 1
+  c=$gitdir/$cachename
+  if ! cache_fresh "$c" "$root" "$gitdir"; then
+    repofile=$root/.otis
+    t=$c.$$
+    if build_cache > "$t" 2>/dev/null; then mv -f "$t" "$c" 2>/dev/null || rm -f "$t"; else rm -f "$t"; fi
+  fi
+  [ -f "$c" ] || return 1
+  # Read, never sourced: a line of it is a name this file knows and a value,
+  # and nothing it says can run.
+  while IFS="$tab" read -r k v; do
+    if [ "$k" = UNSET ]; then OTIS_C_UNSET=$v; continue; fi
+    case " $envkeys " in *" $k "*) eval "OTIS_C_$k=\$v" ;; esac
+  done < "$c"
+  OTIS_C_ROOT=$root OTIS_C_GITDIR=$gitdir cache_rc=0
+  return 0
+}
+
+# Whether the answers the environment already carries are this checkout's, and
+# still current: the same file, held to the same test, without asking git
+# where anything is.
+env_ok() {
+  [ -n "$OTIS_C_ROOT" ] && [ -n "$OTIS_C_GITDIR" ] || return 1
+  case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) ;; *) return 1 ;; esac
+  cache_fresh "$OTIS_C_GITDIR/$cachename" "$OTIS_C_ROOT" "$OTIS_C_GITDIR"
+}
+
+# One key from what is loaded: its value and its status, or status 2 for a key
+# that is not carried, which is then looked up as it always was.
+env_one() {
+  # By name first: anything else is not a key at all, and must reach the usage
+  # message rather than become a variable to expand.
+  case " $envkeys " in *" $1 "*) ;; *) return 2 ;; esac
+  eval "held=\${OTIS_C_$1+1}"
+  [ -n "$held" ] || return 2
+  case " $OTIS_C_UNSET " in *" $1 "*) return 1 ;; esac
+  case " $boolkeys " in *" $1 "*) return 0 ;; esac
+  eval "printf '%s\\n' \"\$OTIS_C_$1\""
+}
+# The cached answer where there is one, else the long way round.
+answer() {
+  if [ -z "$ready" ]; then
+    ready=no
+    { env_ok || load_cache; } && ready=yes
+  fi
+  if [ "$ready" = yes ]; then
+    env_one "$1"
+    case $? in 0) return 0 ;; 1) return 1 ;; esac
+  fi
+  one "$1"
 }
 
 # The git config name behind a key: url and base follow host and mainBranch,
@@ -159,11 +376,24 @@ source_of() {
   [ "$1" = editor ] && [ -n "$OTIS_EDITOR" ] && { echo OTIS_EDITOR; return; }
   n=$(gitname "$1") s=
   [ -n "$n" ] && s=$(git config --show-scope --get-all "otis.$n" 2>/dev/null | tail -1 | cut -f1)
-  [ -z "$s" ] && [ -n "$n" ] && shared "$n" && git config --file "$repofile" --get-all "otis.$n" >/dev/null 2>&1 && s=.otis
+  [ -z "$s" ] && [ -n "$n" ] && from_repo "$n" && git config --file "$repofile" --get-all "otis.$n" >/dev/null 2>&1 && s=.otis
   echo "${s:-default}"
 }
 
 case $1 in
+  # Every setting worked out once, as exports for sh to eval, for git-fzf to
+  # load before a picker so nothing under it has to ask git again. Outside a
+  # repo there is nothing to say, and every command below carries on as it
+  # would have.
+  --env)
+    load_cache || exit 0
+    awk -F'\t' -v root="$root" -v gitdir="$gitdir" '
+      BEGIN { q = sprintf("%c", 39)
+        printf "export OTIS_C_ROOT=%s%s%s\n", q, root, q
+        printf "export OTIS_C_GITDIR=%s%s%s\n", q, gitdir, q }
+      { v = substr($0, index($0, "\t") + 1); gsub(q, q "\\" q q, v)
+        printf "export OTIS_C_%s=%s%s%s\n", $1, q, v, q }' "$gitdir/$cachename"
+    exit 0 ;;
   # Every key, its source and its value, a row a key with the key after a tab.
   --rows)
     . "$(dirname "$0")/../share/palette.sh"
@@ -192,7 +422,7 @@ case $1 in
       echo "Worked out from origin; nothing to set."
     else
       o=$(git config --show-origin --get-all "otis.$n" 2>/dev/null)
-      shared "$n" && o="$o
+      from_repo "$n" && o="$o
 $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
       if [ -n "$(printf '%s' "$o" | tr -d '\n')" ]; then
         printf '%s\n' "$o" | awk -F'\t' -v n="otis.$n" 'NF { print $1 "   " n " = " $2 }'
@@ -241,7 +471,7 @@ $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
         grep -v -e '^#' -e '^$' "$f" | while IFS= read -r v; do git config "--$scope" --add "otis.$n" "$v"; done
         rm -f "$f" ;;
       *)
-        cur=$(layered --get "$n")
+        cur=$(cfg "$n")
         v=$(zsh -fc 'bindkey -e; v=$1; vared -p "otis.$2 ($3, empty unsets)> " v </dev/tty >/dev/tty && print -r -- "$v"' _ "$cur" "$n" "$scope") || exit 0
         if [ -n "$v" ]; then git config "--$scope" "otis.$n" "$v"
         else git config "--$scope" --unset-all "otis.$n" 2>/dev/null
@@ -268,8 +498,12 @@ fi
 # lessons and verifyRetro are asked that way. Several print one value a line,
 # a blank one for a setting with no value, so the answers line up with the
 # keys however many of them are unset.
+#
+# Asking is where the environment's answers are used, and only here: the rows,
+# what a key is about and where its value came from are what you opened to
+# read, so those ask git itself every time.
 if [ $# -le 1 ]; then
-  one "$1"
+  answer "$1"
   exit $?
 fi
-for key; do one "$key" || echo; done
+for key; do answer "$key" || echo; done

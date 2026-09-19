@@ -82,7 +82,9 @@ case $mode in
     # iid and gb by branch key, so each simply does not find the other's.
     # What is still waiting on you is share/mr-fix.sh's waiting_in, which is
     # the one place that knows the ways of being done with a proposal.
-    for dir in "$top"/*/; do
+    # With no runs at all the answer is {}, and every list asks on every
+    # draw, so it is worth saying so without starting jq to read nothing.
+    rows=$(for dir in "$top"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/} mr=${dir##*/}
       [ -n "$mr" ] || continue
@@ -90,7 +92,9 @@ case $mode in
       running "$dir" && going=true
       left=$(waiting_in "$dir" | grep -c .)
       printf '%s\t%s\t%s\n' "$mr" "$going" "$left"
-    done | jq -Rn '[inputs | split("\t") | {(.[0]): {fixing: (.[1] == "true"), fixes: (.[2] | tonumber)}}] | add // {}'
+    done)
+    [ -n "$rows" ] || { echo '{}'; exit 0; }
+    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {fixing: (.[1] == "true"), fixes: (.[2] | tonumber)}}] | add // {}'
     exit 0
     ;;
   --footer)

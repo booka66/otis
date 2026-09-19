@@ -52,12 +52,22 @@ cols=${FZF_COLUMNS:-0}
 
 # What Claude is doing, the way gmr shows it. A run started from gb is filed
 # under the branch and one from gmr under the MR's iid, so a row asks about both.
-marks=$(git-mr-fix --marks 2>/dev/null |
-  jq -r 'to_entries[] | [.key, (.value.fixing | tostring), (.value.fixes | tostring)] | @tsv' 2>/dev/null)
+# An empty answer ({} : nobody has a run here) is the usual one, and jq
+# started to turn it into no rows at all is a process a draw.
+marks=$(git-mr-fix --marks 2>/dev/null)
+case $marks in
+  '' | '{}') marks= ;;
+  *) marks=$(printf '%s' "$marks" |
+    jq -r 'to_entries[] | [.key, (.value.fixing | tostring), (.value.fixes | tostring)] | @tsv' 2>/dev/null) ;;
+esac
 # Verifications in Cursor Cloud (git-verify), under the MR's iid or the branch
 # as fixes are: going, how it ended, the verdict and the commit it verified.
-verify=$(git-verify --marks 2>/dev/null |
-  jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' 2>/dev/null)
+verify=$(git-verify --marks 2>/dev/null)
+case $verify in
+  '' | '{}') verify= ;;
+  *) verify=$(printf '%s' "$verify" |
+    jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' 2>/dev/null) ;;
+esac
 
 git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
   GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v now="$(date +%s)" -v cols="$cols" -v main="$(otis-config main)" \

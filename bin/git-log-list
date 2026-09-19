@@ -49,7 +49,13 @@ if [ "$remote" != "$main" ] && [ "$remote" != HEAD ]; then
 fi
 mine=$(git log --format=%h "$remote"..HEAD 2>/dev/null | tr '\n' ' ')
 up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
-held=$(git log --format=%h "${up:-$remote}"..HEAD 2>/dev/null | tr '\n' ' ')
+# With no upstream, or one that is the base already, this is the same question
+# twice, and the second asking used to cost another git log over the branch.
+if [ -n "$up" ] && [ "$up" != "$remote" ]; then
+  held=$(git log --format=%h "$up"..HEAD 2>/dev/null | tr '\n' ' ')
+else
+  held=$mine
+fi
 cap=
 [ $# -eq 0 ] && cap=500
 

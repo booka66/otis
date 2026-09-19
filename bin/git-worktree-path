@@ -3,10 +3,16 @@
 # git-worktree-path of <branch>   where <branch> is checked out, if anywhere
 # git-worktree-path named <name>  where the worktree called <name> goes: <otis-config worktrees>/<name>
 #                                 under the main checkout (gwn, and gmr's review and mine)
+# git-worktree-path roots         the main checkout, then review, then mine, a line each: the
+#                                 three every worktree list and preview wants, in one run
+#                                 rather than three, each of which asks git where the
+#                                 worktrees are all over again
 main() { git worktree list --porcelain | awk '/^worktree /{ print substr($0, 10); exit }'; }
 case $1 in
   main)  main ;;
   of)    git worktree list --porcelain | awk -v want="branch refs/heads/$2" '/^worktree /{ p = substr($0, 10) } $0 == want { print p }' ;;
   named) printf '%s/%s/%s\n' "$(main)" "$(otis-config worktrees)" "$2" ;;
-  *)     echo "usage: git-worktree-path main | of <branch> | named <name>" >&2; exit 2 ;;
+  roots) m=$(main) w=$(otis-config worktrees)
+         printf '%s\n%s/%s/review\n%s/%s/mine\n' "$m" "$m" "$w" "$m" "$w" ;;
+  *)     echo "usage: git-worktree-path main | of <branch> | named <name> | roots" >&2; exit 2 ;;
 esac

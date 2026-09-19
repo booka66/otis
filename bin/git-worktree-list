@@ -70,7 +70,9 @@ if [ "$1" = --safe ]; then
   exit 0
 fi
 
-main=$(git-worktree-path main)
+{ read -r main; read -r review; read -r mine; } <<EOF
+$(git-worktree-path roots)
+EOF
 : > "$st/footer"
 refresh=$1
 if [ -n "$refresh" ]; then set -- --refresh wt-status "execute-silent(git-fzf-bg git-worktree-list)"; else set -- wt-status 30 "execute-silent(git-fzf-bg git-worktree-list)"; fi
@@ -79,7 +81,7 @@ status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || stat
   git-branch-facts $refresh "execute-silent(git-fzf-bg git-worktree-list)"
   jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' "$status" 2>/dev/null
 } | awk -F'\t' -v now="$(date +%s)" -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}" \
-  -v review="$(git-worktree-path named review)" -v mine="$(git-worktree-path named mine)" \
+  -v review="$review" -v mine="$mine" \
   -v prefix="$(git config --get otis.branchPrefix)" -v footer="$st/footer.new" "$(cat "$share/rowfmt.awk")"'
   $1 == "WT"     { n++; path[n] = $2; branch[n] = $3; next }
   $1 == "BRANCH" { kind[$2] = $3; label[$2] = $4; iid[$2] = $5; ahead[$2] = $8; behind[$2] = $9; next }

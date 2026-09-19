@@ -129,6 +129,30 @@ git remote set-url origin gitlab.example.com:group/repo.git
 expect config/project-scp-no-user "$(otis-config project)" "group/repo"
 git remote set-url origin git@gitlab.example.com:group/sub/repo.git
 
+# The answers are kept in the git dir and exported by a picker (--env), so the
+# same questions are asked here three ways: worked out fresh, read back from
+# the file, and read from the environment a picker would have set.
+cached() { (eval "$(otis-config --env)"; otis-config "$@"); }
+rm -f "$(git rev-parse --path-format=absolute --git-common-dir)/otis-config-cache"
+expect config/cache-cold "$(otis-config main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
+expect config/cache-warm "$(otis-config main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
+expect config/cache-env "$(cached main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
+expect config/cache-env-status "$(cached cursorEnv; echo $?)" "1"
+expect config/cache-env-bool "$(cached gitlab; echo $?)" "0"
+# A setting changed after the cache was made is what the next question answers,
+# the environment's copy included, since both are held to the files they came from.
+git config otis.deployJob shipped-since
+expect config/cache-after-set "$(otis-config deployJob)" "shipped-since"
+expect config/cache-env-after-set "$(cached deployJob)" "shipped-since"
+git config --unset otis.deployJob
+expect config/cache-after-unset "$(cached deployJob)" "deploy"
+printf '[otis]\n\tdeployJob = from-repo-file\n' > .otis
+expect config/cache-after-repo-file "$(cached deployJob)" "from-repo-file"
+rm -f .otis
+# The editor follows $OTIS_EDITOR, so it is never one of the answers kept.
+expect config/cache-editor-env "$(OTIS_EDITOR=chosen cached editor)" "chosen"
+expect config/cache-editor-none "$(cached editor)" "nvim"
+
 # --- otis-claude-gate: one git-remote-run of a named check, nothing around it
 gate() { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | otis-claude-gate >/dev/null 2>&1; echo $?; }
 git config otis.claudeCommand 'bazel test'
@@ -142,6 +166,8 @@ git config --unset otis.claudeCommand
 expect worktree-path/named "$(git-worktree-path named x)" "$tmp/repo/.claude/worktrees/x"
 git config otis.worktrees .wt
 expect worktree-path/config "$(git-worktree-path named x)" "$tmp/repo/.wt/x"
+# The three a worktree list and its preview want, in one run rather than three.
+expect worktree-path/roots "$(git-worktree-path roots | tr '\n' ' ')" "$tmp/repo $tmp/repo/.wt/review $tmp/repo/.wt/mine "
 git config --unset otis.worktrees
 
 # --- git-test-files

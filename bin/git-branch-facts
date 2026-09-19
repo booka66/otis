@@ -31,8 +31,13 @@
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-cache="$(git rev-parse --git-common-dir)/branch-mrs.tsv"
-base=$(otis-config base) main=$(otis-config main)
+. "$share/repo.sh"
+cache="$OTIS_GITDIR/branch-mrs.tsv"
+# Both in one call: each one is a process, and the second knew everything the
+# first had just worked out.
+{ read -r base; read -r main; } <<EOF
+$(otis-config base main)
+EOF
 
 refresh_cache() {
   repo=$(otis-config project)
@@ -61,9 +66,10 @@ reload=$1
 # Without an origin remote there is no GitLab to ask and no origin/main to
 # measure against: say so, compare with local main, and skip MR lookups.
 # An origin that is not on GitLab has no MRs to look up, which is not a failure.
-gitlab=
-case $(git remote get-url origin 2>/dev/null) in *gitlab*) gitlab=1 ;; esac
-if ! git remote get-url origin >/dev/null 2>&1; then
+gitlab= origin=
+origin=$(git remote get-url origin 2>/dev/null) || origin=
+case $origin in *gitlab*) gitlab=1 ;; esac
+if [ -z "$origin" ]; then
   printf "${GK_CONTEXT}no origin remote, so no MR info; drift is against local main${GK_R}\n" > "$st/footer"
 elif [ -z "$gitlab" ]; then
   printf "${GK_CONTEXT}origin is not on GitLab, so no MR info${GK_R}\n" > "$st/footer"

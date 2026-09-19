@@ -8,7 +8,8 @@
 # verification's retrospective (git-verify-run): what it recommended changing
 # in the repo, as proposals. Its label names the verification.
 label_of() { case $1 in v-*) printf 'the retrospective of %s' "$(label_of "${1#v-}")" ;; b-*) printf '%s' "${1#b-}" | tr '%' '/' ;; *) printf '!%s' "$1" ;; esac; }
-common=$(git rev-parse --path-format=absolute --git-common-dir)
+. "$share/repo.sh"
+common=$OTIS_GITDIR
 case $key in
   v-*) kind=retro;  label=$(label_of "$key"); iid=; retro_of=$common/otis-verify/${key#v-} ;;
   b-*) kind=branch; label=$(printf '%s' "${key#b-}" | tr '%' '/'); iid= ;;

@@ -15,10 +15,12 @@
 # on gb's M terms, as gw's d does, and the line says how to bring it back. A
 # worktree whose directory is gone is left for gw: git worktree prune would
 # also unregister any worktree on a volume that is merely unmounted.
-main=$(git-worktree-path main) || exit 1
+{ read -r main; read -r review; read -r mine; } <<EOF
+$(git-worktree-path roots)
+EOF
+[ -n "$main" ] || exit 1
 cd "$main" || exit 1
 st=$(mktemp -d) && trap 'rm -rf "$st"' EXIT
-review=$(git-worktree-path named review) mine=$(git-worktree-path named mine)
 GIT_FZF_STATE=$st git-branch-facts --wait 2>/dev/null | awk -F'\t' -v OFS='\t' '
   $1 == "WT"     { n++; path[n] = $2; branch[n] = $3 }
   $1 == "BRANCH" { kind[$2] = $3 }

@@ -98,7 +98,8 @@ resume() {
 # resume_all: every orphaned run of this repo, started again. gmr and gb call
 # it as they draw, so a run the laptop killed goes on the next time you look.
 resume_all() {
-  c=$(git rev-parse --path-format=absolute --git-common-dir) || return 0
+  . "$share/repo.sh" || return 0
+  c=$OTIS_GITDIR
   for r in "$c"/gmr-claude/*/ "$c"/gmr-fix/*/ "$c"/otis-verify/*/; do
     [ -d "$r" ] && orphaned "${r%/}" && resume "${r%/}"
   done
