@@ -105,7 +105,7 @@ export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind
 list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
 refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
 
-keys='enter=open in nvim,f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,v=viewed,o=threads on no line,s=the shape of it,S=submit drafts,t=tests/config/generated,c=commits view,w=web,u=refresh'
+keys='enter=open in nvim,f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,v=viewed,o=threads on no line,s=the shape of it,p=peeks on/off,S=submit drafts,t=tests/config/generated,c=commits view,w=web,u=refresh'
 claude="git-mr-claude $iid $range"
 if [ "$kind" = review ]; then
   keys="$keys,C=Claude drafts comments"
@@ -143,6 +143,7 @@ out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
   --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
+  --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "C:execute($claude)+$refresh+refresh-preview" \
   --bind "c:execute(gl $range)" \

@@ -640,6 +640,16 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/peeks-off "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "0"
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks
   expect symbols/peeks-on "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "1"
+  # The review reads a change by symbol through the same preview, so every key
+  # that changes what that preview shows has to be there too. p was missing:
+  # peeks could be turned off everywhere but in a review, which is where you
+  # read a change by symbol most.
+  for k in l h L H b i s p; do
+    for f in git-symbols git-mr-files; do
+      grep -q "bind \"$k:.*git-symbols" "$root/bin/$f" || expect "symbols/$f-binds-$k" "unbound" "bound"
+      grep -q "keys=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
+    done
+  done
   # In a narrow pane the signature keeps to its one row, on the code
   # background, giving up the object type before anything else.
   note=$(FZF_PREVIEW_COLUMNS=56 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep "$(printf '\033\\[%sm' "$OTIS_T_CODEBG")")
