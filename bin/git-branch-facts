@@ -93,16 +93,41 @@ elif [ -n "$refresh" ] || [ ! -e "$cache" ] || [ -z "$(find "$cache" "$cache.tri
 fi
 [ -n "$gitlab" ] && git-fzf-stale "$cache"
 
+# Every local branch and every origin copy of one, each in a single call: the
+# rows below are built from them, and so is the merged check under them, which
+# used to ask git for a branch's tip once per branch of its own.
+refs=$(git for-each-ref refs/heads --sort=-committerdate \
+  --format="REF%09%(refname:short)%09%(committerdate:unix)%09%(ahead-behind:$base)%09%(objectname)")
+remotes=$(git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstrip=3)%09%(objectname)')
+
 # A merged MR only counts as merged if the branch tip is the MR's last commit or
 # behind it; anything committed since is work the MR never had. A closed MR, or
 # someone else's open one, is safe to drop locally on the same terms, or when
 # the tip is already on origin's copy of the branch, since GitLab keeps
 # everything it has.
+#
+# The two ways a branch is plainly done -- its tip is the MR's last commit, or
+# it is exactly what origin has -- are string comparisons against the two lists
+# above, and settle nearly every branch for nothing. Only a tip that is neither,
+# which means someone pushed past what is here, is worth a git process, and
+# those are asked for one at a time as they always were.
 merged_ok=$(
-  [ -s "$cache" ] && awk -F'\t' '$2 == "merged" || $2 == "closed" || ($2 == "opened" && $5 == "theirs") { print $1 "\t" $4 }' "$cache" |
-  while IFS="$(printf '\t')" read -r b mrsha; do
-    sha=$(git rev-parse -q --verify "refs/heads/$b") || continue
-    { [ "$sha" = "$mrsha" ] || git merge-base --is-ancestor "$sha" "$mrsha" 2>/dev/null ||
+  [ -s "$cache" ] || exit 0
+  {
+    printf '%s\n%s\n' "$refs" "$remotes"
+    awk -F'\t' -v OFS='\t' '$2 == "merged" || $2 == "closed" || ($2 == "opened" && $5 == "theirs") { print "MR", $1, $4 }' "$cache"
+  } | awk -F'\t' -v OFS='\t' '
+    $1 == "REF"    { tip[$2] = $5; next }
+    $1 == "REMOTE" { rtip[$2] = $3; next }
+    $1 == "MR" {
+      b = $2; sha = tip[b]
+      if (sha == "") next                      # no local branch by that name
+      if (sha == $3 || sha == rtip[b]) print "OK", b
+      else print "ASK", b, sha, $3
+    }' |
+  while IFS="$(printf '\t')" read -r verdict b sha mrsha; do
+    [ "$verdict" = OK ] && { printf '%s\n' "$b"; continue; }
+    { git merge-base --is-ancestor "$sha" "$mrsha" 2>/dev/null ||
       git merge-base --is-ancestor "$sha" "refs/remotes/origin/$b" 2>/dev/null; } && printf '%s\n' "$b"
   done
 )
@@ -115,11 +140,10 @@ merged_ok=$(
     END          { if (p != "") print "WT\t" p "\t" b }'
   [ -s "$cache" ] && awk '{ print "MR\t" $0 }' "$cache"
   printf '%s\n' "$merged_ok" | awk 'NF { print "OK\t" $0 }'
-  git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstrip=3)'
+  printf '%s\n' "$remotes"
   git log --simplify-by-decoration --decorate-refs=refs/heads/ --parents --format='UP%x09%H%x09%P' \
     --branches --not "$base" 2>/dev/null
-  git for-each-ref refs/heads --sort=-committerdate \
-    --format="REF%09%(refname:short)%09%(committerdate:unix)%09%(ahead-behind:$base)%09%(objectname)"
+  printf '%s\n' "$refs"
 } | awk -F'\t' -v OFS='\t' -v main="$main" "$(cat "$share/rowfmt.awk")"'
   BEGIN {
     # Eight columns each, so every list that leads with one lines up: gb and
