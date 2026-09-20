@@ -48,7 +48,26 @@ branch=$4
 git show-ref --verify -q "refs/heads/$branch" && { printf 'git-split: %s is already a branch. Delete it or name another.\n' "$branch" >&2; exit 2; }
 
 tmp=$(mktemp -d) || exit 2
-trap 'printf "\033[?25h"; rm -rf "$tmp"' EXIT INT TERM
+# Stopping has to leave nothing behind. seam writes the ref only after the
+# last commit passes, so a run cut short has written none — but it may be
+# inside a worktree it made to check in, and killing it leaves that
+# registered. The whole job goes, not just seam: the check is its child and a
+# typechecker will happily carry on alone.
+stop() {
+  printf '\033[?25h'
+  [ -z "$pid" ] || { kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
+  git worktree prune 2>/dev/null
+  git show-ref --verify -q "refs/heads/$branch" && git update-ref -d "refs/heads/$branch" 2>/dev/null
+  rm -rf "$tmp"
+}
+cancelled() {
+  stop
+  printf '\n  %bStopped. Nothing was written, and you are still on %s.%b\n\n' "$GK_TEXT" "$here" "$GK_R"
+  exit 130
+}
+pid=
+trap 'stop' EXIT TERM
+trap 'cancelled' INT
 
 seam "$rev" --split --json > "$tmp/plan" 2>"$tmp/err" || {
   sed 's/^/  /' "$tmp/err" >&2; exit 1; }
@@ -71,8 +90,28 @@ draw() {
   rows=0
   line() { printf '\033[2K%b\n' "$1"; rows=$((rows + 1)); }
   line ""
-  line "  ${GK_MAIN}seam${GK_R}  ${GK_FAINT}$rev${GK_R}  ${GK_FAINT}→${GK_R}  ${GK_YOURS}$branch${GK_R}"
+  line "  ${GK_MAIN}seam${GK_R}  ${GK_FAINT}$rev${GK_R}  ${GK_FAINT}→${GK_R}  ${GK_YOURS}$branch${GK_R}${passnote}"
   line ""
+  # Until the first fuse the plan on screen is the plan seam is building. A
+  # fuse changes it — slices merge and everything after renumbers — so from
+  # then on the rows are what seam has actually reported this pass, and no
+  # total is shown, because seam has not said what the new one is.
+  if [ "$fused" -gt 0 ]; then
+    n2=0
+    while IFS= read -r l; do
+      n2=$((n2 + 1))
+      line "$(printf '%b ✓ %b%s%b %s' "$GK_GOOD" "$GK_R" "$n2" "$GK_R" "$l")"
+    done < "$tmp/rows"
+    if [ -n "$running" ]; then
+      line "$(printf '%b %s %b%s%b %b%s%b' "$GK_ATTENTION" "$spin" "$GK_R" "$((n2 + 1))" "$GK_R" "$GK_CONTEXT" "$checking" "$GK_R")"
+    elif [ -n "$failed" ]; then
+      line "$(printf '%b ✗ %b%s%b %bdid not stand up%b' "$GK_BAD" "$GK_R" "$((n2 + 1))" "$GK_R" "$GK_BAD" "$GK_R")"
+    fi
+    line ""
+    line "  ${GK_FAINT}${foot}${GK_R}"
+    drawn=1
+    return
+  fi
   while IFS='	' read -r k name nf nl; do
     mark="   " ; tail=""
     if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
@@ -96,24 +135,46 @@ cols=$({ stty size < /dev/tty; } 2>/dev/null | cut -d' ' -f2)
 [ "$cols" -le 140 ] || cols=140
 namew=$((cols - 46))
 [ "$namew" -ge 20 ] || namew=20
-at=1 spin='|' drawn= rows=0 running=1
+at=1 spin='|' drawn= rows=0 running=1 pass=1 fused=0
 checking=${check:+checking with $check}
-foot=${check:+nothing is written unless every commit passes}
+foot=${check:+nothing is written unless every commit passes · ctrl-c to stop}
 [ -n "$check" ] || foot="writing the commits"
 printf '\033[?25l'
 draw
 
 # seam prints a line as each commit lands, so a line arriving means that slice
 # is done and the next one is under way. Its own output is kept for the end.
+set -m 2>/dev/null
 ( seam "$rev" --split --branch "$branch" ${check:+--check "$check"} > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
 pid=$!
+set +m 2>/dev/null
 frames='|/-\'
 i=0
-while kill -0 "$pid" 2>/dev/null; do
-  # grep -c prints its count and still exits 1 when that count is zero, so
-  # an `|| echo 0` after it prints the number twice.
-  done_n=$(grep -c '^  [0-9]' "$tmp/out" 2>/dev/null) || :
+# seam says "fused, and building it again" when the check sent it back to the
+# plan, and every commit it makes is a line. Both are read from the same
+# stream: the rows since the last fuse are this pass, and the count of fuses
+# is which pass this is.
+tally() {
+  fused=$(grep -c 'fused, and building it again' "$tmp/out" 2>/dev/null) || :
+  fused=${fused:-0}
+  pass=$((fused + 1))
+  passnote=""
+  [ "$fused" -eq 0 ] || passnote="  ${GK_FAINT}· pass $pass, $fused fused${GK_R}"
+  # A commit seam reported, and only one that stood up: a line ending "... no"
+  # is the slice that failed, and ticking it is the lie this screen exists not
+  # to tell. Without a check there is no "..." at all and the line is done.
+  awk '/fused, and building it again/ { n = 0; next }
+       /^  [0-9]/ {
+         if ($0 ~ / \.\.\. no$/) next
+         sub(/^  [0-9]+  /, ""); sub(/ \.\.\. ok$/, "")
+         rows[++n] = $0
+       }
+       END { for (i = 1; i <= n; i++) print rows[i] }' "$tmp/out" > "$tmp/rows" 2>/dev/null
+  done_n=$(grep -c . "$tmp/rows" 2>/dev/null) || :
   at=$(( ${done_n:-0} + 1 ))
+}
+while kill -0 "$pid" 2>/dev/null; do
+  tally
   i=$(( (i + 1) % 4 ))
   spin=$(printf '%s' "$frames" | cut -c$((i + 1)))
   draw
@@ -125,8 +186,7 @@ running=
 # Only the slices seam actually reported are done. Marking everything done
 # because the run ended put nine ticks against a stack where one slice had
 # run and failed, which is the single worst thing this screen could say.
-done_n=$(grep -c '^  [0-9]' "$tmp/out" 2>/dev/null) || :
-done_n=${done_n:-0}
+tally
 [ "$rc" -eq 0 ] && at=$((n + 1)) || at=$((done_n + 1))
 
 if [ "$rc" -eq 0 ]; then
