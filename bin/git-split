@@ -78,6 +78,8 @@ draw() {
     if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
     elif [ "$k" -eq "$at" ] && [ -n "$running" ]; then
       mark="${GK_ATTENTION} $spin ${GK_R}"; tail="  ${GK_CONTEXT}${checking}${GK_R}"
+    elif [ "$k" -eq "$at" ] && [ -n "$failed" ]; then
+      mark="${GK_BAD} ✗ ${GK_R}"; tail="  ${GK_BAD}did not stand up${GK_R}"
     fi
     line "$(printf "%b%s%b %-${namew}.${namew}s %b%14s · %11s%b%b" \
       "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
@@ -119,7 +121,13 @@ while kill -0 "$pid" 2>/dev/null; do
 done
 wait "$pid" 2>/dev/null
 rc=$(cat "$tmp/rc" 2>/dev/null || echo 1)
-running= at=$((n + 1))
+running=
+# Only the slices seam actually reported are done. Marking everything done
+# because the run ended put nine ticks against a stack where one slice had
+# run and failed, which is the single worst thing this screen could say.
+done_n=$(grep -c '^  [0-9]' "$tmp/out" 2>/dev/null) || :
+done_n=${done_n:-0}
+[ "$rc" -eq 0 ] && at=$((n + 1)) || at=$((done_n + 1))
 
 if [ "$rc" -eq 0 ]; then
   foot="all $n stood up"
@@ -131,6 +139,7 @@ if [ "$rc" -eq 0 ]; then
   printf '    %bdrop it%b   git branch -D %s\n\n' "$GK_FAINT" "$GK_R" "$branch"
   [ -z "$wait" ] || { printf '  %bpress enter%b' "$GK_FAINT" "$GK_R"; read -r _; }
 else
+  failed=1
   foot="nothing written"
   draw
   printf '\033[?25h'
