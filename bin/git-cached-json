@@ -75,6 +75,39 @@ run() {
 }
 tell() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null; }
 
+# A fetch with nothing cached yet holds the picker up on an empty list, which
+# is the one place otis makes you wait with nothing on the screen. So it says
+# what it is waiting on, in the picker's header, and counts while it waits:
+# fzf carries out an action sent over its port even while a reload has the
+# picker blocked, which is what lets the thing doing the blocking speak.
+#
+# Nothing is said for the first two seconds, so a fetch that lands at once
+# never flickers; and only a picker that set no header of its own lends it
+# (git-fzf sets OTIS_FZF_HEADER when it is free), so a caller's own header is
+# never taken. Rows landing take it back down (git-fzf's load binding).
+#
+# The counter stops itself after two minutes: a picker closing kills the fetch
+# rather than this, and a ticker left behind must not outlive the wait it is
+# counting.
+waiting() {
+  waiter=
+  [ -n "$FZF_PORT" ] && [ -n "$OTIS_FZF_HEADER" ] || return 0
+  # The separator as its bytes: this is a payload, not a printf format.
+  said=$(printf '%s \302\267 ' "$1")
+  (
+    i=0
+    while [ "$i" -lt 120 ]; do
+      sleep 1
+      i=$((i + 1))
+      [ "$i" -ge 2 ] || continue
+      curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" \
+        -d "change-header($said${i}s)" >/dev/null 2>&1 || exit 0
+    done
+  ) >/dev/null 2>&1 &
+  waiter=$!
+}
+waited() { [ -n "$waiter" ] && kill "$waiter" 2>/dev/null; waiter=; }
+
 if [ -n "$sync" ]; then
   last=$cache
   [ "$cache.tried" -nt "$cache" ] && last=$cache.tried
@@ -92,10 +125,12 @@ fi
 
 if [ -n "$now" ]; then
   touch "$cache.tried"
+  waiting "refreshing from GitLab"
   if run "$@"; then
     mv "$new" "$cache"
     rm -f "$cache.err"
   fi
+  waited
   git-fzf-stale "$cache"
   [ -s "$cache" ] || { head -1 "$cache.err" >&2; exit 1; }
   echo "$cache"
@@ -121,11 +156,14 @@ if [ ! -s "$cache" ] && [ -n "$nowait" ] && [ -n "$FZF_PORT" ]; then
 fi
 
 if [ ! -s "$cache" ]; then
+  waiting "asking GitLab, the first time in this repo"
   if ! run "$@"; then
+    waited
     head -1 "$cache.err" >&2
     git-fzf-stale "$cache"
     exit 1
   fi
+  waited
   mv "$new" "$cache"
   rm -f "$cache.err"
   echo "$cache"

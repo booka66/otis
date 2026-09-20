@@ -8,6 +8,37 @@
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+
+# once <file> <what it is doing> <function that writes it>: the file, fetched
+# the first time it is wanted and kept for good, since a finished job's log
+# and a rollback's inputs never change.
+#
+# The first look at one used to hold the pane empty for as long as GitLab
+# took. So it says what it is fetching and fetches behind the pane instead,
+# then asks fzf to draw the preview again, which is the moment there is
+# something to draw. A preview does not block fzf the way a list or a key
+# does, so its port is free to be told; returns 1 while there is nothing yet.
+#
+# A fetch that fails is not retried for a minute, so sitting on a failing row
+# does not ask GitLab once a keypress.
+once() {
+  f=$1 doing=$2 fn=$3
+  [ -s "$f" ] && return 0
+  if [ -z "$FZF_PORT" ]; then
+    "$fn" > "$f" 2>/dev/null || rm -f "$f"
+    [ -s "$f" ]
+    return
+  fi
+  if [ -z "$(find "$f.tried" -mmin -1 2>/dev/null)" ]; then
+    : > "$f.tried"
+    (
+      "$fn" > "$f.new" 2>/dev/null && [ -s "$f.new" ] && mv "$f.new" "$f" || rm -f "$f.new"
+      curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d refresh-preview >/dev/null 2>&1
+    ) >/dev/null 2>&1 &
+  fi
+  printf "\n${GK_CONTEXT}%s\342\200\246${GK_R}\n" "$doing"
+  return 1
+}
 cache=$dir/deploys.json
 [ -s "$cache" ] || exit 0
 d=$(jq -c --arg id "$1" '.deploys[] | select((.id | tostring) == $id)' "$cache")
@@ -30,14 +61,14 @@ printf '%s' "$d" | jq -r -L "$share" 'include "otis";
 kind=$(printf '%s' "$d" | jq -r .kind); prev=$(printf '%s' "$d" | jq -r .prev); sha=$(printf '%s' "$d" | jq -r .sha)
 jobid=$(printf '%s' "$d" | jq -r .job); status=$(printf '%s' "$d" | jq -r .status)
 
+rollback_inputs() {
+  glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
+    project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' 2>/dev/null |
+    jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}'
+}
 if [ "$kind" = rollback ]; then
   f=$dir/rollback-$jobid.json
-  if [ ! -s "$f" ]; then
-    glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
-      project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' 2>/dev/null |
-      jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}' > "$f" 2>/dev/null || rm -f "$f"
-  fi
-  if [ -s "$f" ]; then
+  if once "$f" "asking GitLab which build it restored" rollback_inputs; then
     v=$(jq -r .version "$f")
     printf "\n${GK_TEXT}restored the build of pipeline %s${GK_R}\n" "$v"
   fi
@@ -61,10 +92,12 @@ else
   printf "\n${GK_CONTEXT}what it carried is not known: no earlier deploy in the list went live${GK_R}\n"
 fi
 
+job_trace() {
+  glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r'
+}
 if [ "$status" = failed ] || [ "$status" = canceled ]; then
   f=$dir/job-trace-$jobid.log
-  [ -s "$f" ] || glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r' > "$f"
-  if [ -s "$f" ]; then
+  if once "$f" "reading the end of its log from GitLab" job_trace; then
     printf "\n${GK_TEXT}the end of its log${GK_R}\n"
     grep -v '^\s*$' "$f" | tail -25 | sed "s/^/  $(printf "${GK_CONTEXT}")/; s/\$/$(printf "${GK_R}")/"
   fi

@@ -114,6 +114,15 @@ while (( $# )); do
     shift
   fi
 done
+# A picker that sets no header of its own lends it to whatever is about to make
+# you wait: git-cached-json puts what it is fetching there while a cold fetch
+# holds the first list up, and rows landing take it back down. A caller with a
+# header of its own keeps it, and is never lent out.
+if [[ -z $header && ${args[(I)--header*]} -eq 0 ]]; then
+  export OTIS_FZF_HEADER=1
+  header='+change-header()'
+fi
+
 if [[ -n $preview ]]; then
   touch $st/has-preview
   # The preview runs on every move, so it also notes the focused item (a glide
