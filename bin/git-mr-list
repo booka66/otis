@@ -98,8 +98,19 @@ echo '{}' > "$st/ci.json"
 echo '{"mrs": []}' > "$st/ci-merged.json"
 if [ "$scope" = sections ]; then
   printf "${GK_CONTEXT}to review, yours, merged this week${GK_R}\n" > "$st/footer"
-  fetch mrs-review $age mrs.json "$mr_review_query"
-  fetch ci-mine $age ci.json "$mr_mine_query"
+  # Two GitLab queries that know nothing of each other, asked at the same time
+  # rather than one after the other: with no cache yet both are waited for, and
+  # in a big project that was two round trips of an empty screen instead of one.
+  # Each keeps its error row in a file of its own, so the rows still come out in
+  # the order they always did rather than interleaved by whichever lands first.
+  fetch mrs-review $age mrs.json "$mr_review_query" > "$st/fetch-review.row" &
+  review_pid=$!
+  fetch ci-mine $age ci.json "$mr_mine_query" > "$st/fetch-mine.row" &
+  mine_pid=$!
+  wait "$review_pid"
+  wait "$mine_pid"
+  cat "$st/fetch-review.row" "$st/fetch-mine.row" 2>/dev/null
+  rm -f "$st/fetch-review.row" "$st/fetch-mine.row"
   merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
     cp "$merged" "$st/ci-merged.json"
   # The deploy strip on the merged heading, from gd's cache; fetched in the
