@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-split-try <rev>   the split as commits you can step through, and then throw away
+# git-split-try <rev> [<check>]   the split as commits you can step through, and then throw away
 #
 # seam --split says which definition and which file goes in which slice, and
 # --branch writes those slices as commits without checking anything out. This
@@ -11,8 +11,11 @@
 # The point is to see whether a split is one you would actually push before you
 # cut a real branch from it: seam's edges are the names it found inside changed
 # definitions, so an order it has checked is not an order it has proved.
-rev=$1
-[ -n "$rev" ] || { echo "git-split-try <rev>" >&2; exit 2; }
+# With a check, seam runs it on every commit as it makes it and writes nothing
+# unless all of them pass, so what you step through is a stack that stood up
+# rather than one that merely ends in the right place. Without, it is quick.
+rev=$1 check=$2
+[ -n "$rev" ] || { echo "git-split-try <rev> [<check command>]" >&2; exit 2; }
 command -v seam >/dev/null 2>&1 || { echo "git-split-try: seam is not on your PATH" >&2; exit 2; }
 
 base=$(seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
@@ -23,7 +26,7 @@ base=$(seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
 branch=seam/try-$(printf '%s' "$rev" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-$$
 trap 'git update-ref -d "refs/heads/$branch" 2>/dev/null; exit' EXIT INT TERM
 
-if ! seam "$rev" --split --branch "$branch" > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
+if ! seam "$rev" --split --branch "$branch" ${check:+--check "$check"} > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
   # seam refuses an order that does not stand up, and that refusal is the most
   # useful thing it can say: it is shown and waited on rather than flashed
   # past on the way back to the picker.
