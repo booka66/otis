@@ -53,11 +53,15 @@ tmp=$(mktemp -d) || exit 2
 # inside a worktree it made to check in, and killing it leaves that
 # registered. The whole job goes, not just seam: the check is its child and a
 # typechecker will happily carry on alone.
+# On the way out, whatever the way. A run cut short must leave nothing — but a
+# run that finished wrote the branch on purpose, and this is the command whose
+# whole job is to keep it. Deleting it here undid every successful split.
+keep=
 stop() {
   printf '\033[?25h'
   [ -z "$pid" ] || { kill -TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; }
   git worktree prune 2>/dev/null
-  git show-ref --verify -q "refs/heads/$branch" && git update-ref -d "refs/heads/$branch" 2>/dev/null
+  [ -n "$keep" ] || { git show-ref --verify -q "refs/heads/$branch" && git update-ref -d "refs/heads/$branch" 2>/dev/null; }
   rm -rf "$tmp"
 }
 cancelled() {
@@ -200,6 +204,7 @@ tally
 [ "$rc" -eq 0 ] && at=$((n + 1)) || at=$((done_n + 1))
 
 if [ "$rc" -eq 0 ]; then
+  keep=1
   foot="all $n stood up"
   draw
   printf '\033[?25h'
