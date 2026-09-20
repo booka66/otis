@@ -21,6 +21,16 @@ typeset -g OTIS_HOME=${${(%):-%x}:A:h}
 
 alias gs='git status'
 
+# The theme (otis-theme), once, here: it is a property of your terminal rather
+# than of a repo, and every otis command inherits it instead of working it out
+# again, which was two thirds of what a bare command cost. otis-theme below
+# puts a newly picked one into this shell, so it takes without opening a new one.
+[[ -n $OTIS_T_NAME ]] || eval "$(otis-theme --env)"
+otis-theme() {
+  command otis-theme "$@" || return
+  [[ $1 == -* ]] || eval "$(command otis-theme --env)"
+}
+
 # The commands that move you (gb and gmr switching into a worktree, gw, gwn,
 # and otis through any of them) are programs, and a program cannot change its
 # shell's directory. It writes where it went to the file named in OTIS_CD,

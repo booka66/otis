@@ -7,8 +7,10 @@
 # shell ends up.
 typeset -g _otis_cd_file=$OTIS_CD
 unset OTIS_CD
-# The theme (otis-theme), once, for everything this command starts.
-[[ -n $OTIS_T_NAME ]] || eval "$(otis-theme --env)"
+# The theme (otis-theme), once, for everything this command starts. Your shell
+# loaded it when it started, so this is the fallback for a command reached from
+# somewhere else, and for a run that asks for another theme (OTIS_THEME=nord gb).
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 source "${0:A:h:h}/share/otis.zsh"
 cmd=${0:t}
 if [[ $cmd == otis-run ]] || (( ! $+functions[$cmd] )); then

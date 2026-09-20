@@ -1,9 +1,11 @@
 #!/bin/sh
 # otis-theme                pick a theme, each one previewed on otis's own rows
 #                           and a diff; enter keeps it (git config --global otis.theme)
-# otis-theme --env [name]   the theme as exports for sh to eval: what git-fzf,
-#                           otis-run and share/palette.sh load, so every script,
-#                           awk and jq program under them has it
+# otis-theme --env [name]   the theme as exports for sh to eval: what your
+#                           shell loads when it starts, and what git-fzf,
+#                           otis-run and share/palette.sh fall back on, so every
+#                           script, awk and jq program under them has it
+# otis-theme --env-fish     the same in fish's syntax, for otis.fish
 # otis-theme --list         the themes there are, with what each is
 # otis-theme --sample       otis's rows and a diff in the theme loaded now
 #
@@ -12,12 +14,22 @@
 # what delta, bat and glow need to match. The theme is otis.theme, else
 # terminal, which takes the terminal's own 16 colors and so matches whatever
 # theme the terminal has. $OTIS_THEME overrides otis.theme for one run.
+#
+# The theme is a property of your terminal, not of a repo, so your shell loads
+# it once when it starts (git.zsh, otis.bash, otis.fish) and every command
+# under it reads the environment instead of working it out again: that lookup
+# was two thirds of what a bare otis command cost. OTIS_T_WANT carries the
+# $OTIS_THEME the environment was built with, so a command run with a
+# different one (OTIS_THEME=nord gb) notices and loads it, by comparing two
+# strings rather than starting anything.
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir=$root/share/themes
 keys='attention good bad elsewhere yours text context faint main codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph light glow'
 
 case $1 in
-  --env)
+  --env | --env-fish)
+    fish=
+    [ "$1" = --env-fish ] && fish=1
     name=${2:-${OTIS_THEME:-$(git config --get otis.theme 2>/dev/null)}}
     name=${name:-terminal}
     if [ ! -f "$dir/$name" ]; then
@@ -25,14 +37,20 @@ case $1 in
       name=terminal
     fi
     # Every key, empty where the theme has none, so one theme loaded over
-    # another leaves nothing of the first behind. One awk: every command
-    # from a shell pays for this before anything else.
-    awk -v keys="$keys" -v name="$name" '
+    # another leaves nothing of the first behind. One awk: a shell pays for
+    # this once when it starts, and --env-fish says it in fish's own syntax,
+    # which cannot read an export.
+    awk -v keys="$keys" -v name="$name" -v want="$OTIS_THEME" -v fish="$fish" '
+      function set(k, v) {
+        if (fish) printf "set -gx OTIS_T_%s \047%s\047\n", toupper(k), v
+        else printf "export OTIS_T_%s=\047%s\047\n", toupper(k), v
+      }
       { i = index($0, "="); if (i > 1) { k = substr($0, 1, i - 1); if (!(k in v)) v[k] = substr($0, i + 1) } }
       END {
         n = split(keys, K, " ")
-        for (j = 1; j <= n; j++) printf "export OTIS_T_%s=\047%s\047\n", toupper(K[j]), v[K[j]]
-        printf "export OTIS_T_NAME=\047%s\047\n", name
+        for (j = 1; j <= n; j++) set(K[j], v[K[j]])
+        set("name", name)
+        set("want", want)
       }' "$dir/$name"
     exit 0 ;;
   --list)

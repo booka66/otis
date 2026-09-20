@@ -5,7 +5,13 @@
 # Each value is printf's escape form, not the bytes, so it is for a printf
 # FORMAT string: printf "${GK_CONTEXT}%s${GK_R}\n" "$text". Passed as an
 # argument to %s it would print literally; use %b there.
-[ -n "$OTIS_T_NAME" ] || eval "$(otis-theme --env)"
+# Your shell loads the theme when it starts, so this almost never runs: it is
+# here for a script reached from somewhere that is not an otis shell, and for
+# a run that asks for another theme (OTIS_THEME=nord gb), which is the only
+# thing OTIS_T_WANT is compared for. Two string tests, no process.
+if [ -z "$OTIS_T_NAME" ] || [ "$OTIS_THEME" != "$OTIS_T_WANT" ]; then
+  eval "$(otis-theme --env)"
+fi
 GK_ATTENTION="\033[${OTIS_T_ATTENTION}m"  # look here: keys, ids, something waiting
 GK_GOOD="\033[${OTIS_T_GOOD}m"            # passed, approved, safe to remove
 GK_BAD="\033[${OTIS_T_BAD}m"              # failed, deleted, in the way

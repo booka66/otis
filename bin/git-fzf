@@ -17,7 +17,7 @@
 prompt=$1 spec=$2; shift 2
 # The theme (otis-theme), for every list, preview and binding under this
 # picker, where a command above has not loaded it already.
-[[ -n $OTIS_T_NAME ]] || eval "$(otis-theme --env)"
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 # The settings (otis-config), the same way: worked out once here, and read
 # from the environment by the list, every preview and every binding, each of
 # which used to ask git for them again.

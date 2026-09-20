@@ -1014,5 +1014,13 @@ for _ in 1 2 3 4 5; do
 done
 expect resume/progress-clears-the-count "$(cat "$lives/status" 2>/dev/null)" ""
 
+# --- the theme is loaded once, by the shell, and a run asking for another one
+# notices by comparing two strings rather than starting anything
+expect theme/want-carries-the-override "$(OTIS_THEME=nord otis-theme --env | grep WANT)" "export OTIS_T_WANT='nord'"
+expect theme/inherited-is-kept "$( (eval "$(otis-theme --env gruvbox)"; sh -c '. "$0/palette.sh"; printf %s "$OTIS_T_NAME"' "$share") )" "gruvbox"
+expect theme/override-wins "$( (eval "$(otis-theme --env gruvbox)"; OTIS_THEME=nord sh -c '. "$0/palette.sh"; printf %s "$OTIS_T_NAME"' "$share") )" "nord"
+expect theme/fish-syntax "$(otis-theme --env-fish gruvbox | grep NAME)" "set -gx OTIS_T_NAME 'gruvbox'"
+
+
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" -eq 0 ]

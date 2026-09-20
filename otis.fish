@@ -8,6 +8,21 @@ contains -- $otis_home/bin $PATH; or set -gx PATH $otis_home/bin $PATH
 
 alias gs 'git status'
 
+# The theme (otis-theme), once, here: it is a property of your terminal rather
+# than of a repo, and every otis command inherits it instead of working it out
+# again. --env-fish because fish cannot read an export. The function below puts
+# a newly picked theme into this shell, so it takes without opening a new one.
+if not set -q OTIS_T_NAME
+    otis-theme --env-fish | source
+end
+function otis-theme
+    command otis-theme $argv; or return
+    # Only the bare picker changes which theme is yours; every flag just prints.
+    if test (count $argv) -eq 0
+        command otis-theme --env-fish | source
+    end
+end
+
 function _otis_cd
     set -l f (mktemp -t otis-cd.XXXXXX); or return
     env OTIS_CD=$f $argv

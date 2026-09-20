@@ -17,6 +17,16 @@ unset _otis_c
 
 alias gs='git status'
 
+# The theme (otis-theme), once, here: it is a property of your terminal rather
+# than of a repo, and every otis command inherits it instead of working it out
+# again. otis-theme below puts a newly picked one into this shell, so it takes
+# without opening a new one.
+[ -n "$OTIS_T_NAME" ] || eval "$(otis-theme --env)"
+otis-theme() {
+  command otis-theme "$@" || return
+  case $1 in -*) ;; *) eval "$(command otis-theme --env)" ;; esac
+}
+
 _otis_cd() {
   local f rc
   f=$(mktemp -t otis-cd.XXXXXX) || return
