@@ -418,7 +418,9 @@ git remote set-url origin git@gitlab.example.com:group/sub/repo.git
 # gone; then ga's view of the worktree on that branch, staging by symbol
 if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   git checkout -qb sym
-  printf 'export type Opts = { a: number };\nexport function run(o: Opts): number {\n  return o.a;\n}\nfunction helper() {\n  return 1;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size++;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\n' > lib.ts
+  # stale is wrong on both sides and moves down as the change adds lines
+  # above it: an error the changed file had already is not the change's.
+  printf 'export type Opts = { a: number };\nexport function run(o: Opts): number {\n  return o.a;\n}\nfunction helper() {\n  return 1;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size++;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\nexport const stale: number = "x";\n' > lib.ts
   # app.ts calls run and the change never touches it: a caller elsewhere, for
   # tsgo to find (the tsconfig makes the repo a project, the package.json
   # names it for git-callers --spec).
@@ -432,7 +434,7 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   printf '{ "compilerOptions": { "strict": true, "module": "esnext", "moduleResolution": "bundler" } }\n' > tsconfig.json
   printf '{ "name": "fx", "type": "module" }\n' > package.json
   git add lib.ts app.ts lib.spec.ts other.ts tsconfig.json package.json && git commit -qm "Base" && base=$(git rev-parse HEAD)
-  printf 'export type Opts = { a: number; b: string };\nexport function run(o: Opts, twice: boolean): number {\n  return o.a;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size += 2;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\n\n/** the new one */\nexport const fresh = (o: Opts) => o.b;\n\nconsole.log(fresh);\nexport type Wide = Opts extends { a: 1 } ? 1 : 0;\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\n' > lib.ts
+  printf 'export type Opts = { a: number; b: string };\nexport function run(o: Opts, twice: boolean): number {\n  return o.a;\n}\nexport class Box {\n  size = 1;\n  grow(): void {\n    this.size += 2;\n  }\n  shrink(): void {\n    this.size--;\n  }\n}\n\n/** the new one */\nexport const fresh = (o: Opts) => o.b;\n\nconsole.log(fresh);\nexport type Wide = Opts extends { a: 1 } ? 1 : 0;\nexport function again(): number { return run({ a: 1 }); }\nexport function build(a: number): Opts { return { a } as Opts; }\nexport const stale: number = "x";\n' > lib.ts
   # A const and a type of one name, Effect's schema pattern: two symbols.
   printf 'export const Pair = { a: 1 };\nexport type Pair = typeof Pair;\nexport function usePair(p: Pair) { return p; }\nexport function usePairToo(p: Pair) { return p; }\nexport class Svc extends Base<Svc>()("Svc", { a: 1 }) {}\nexport const tpl = `Svc ${usePair(1)}`;\n' > pair.ts
   # A generated file that uses run: listed in its own section, and no edge

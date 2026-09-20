@@ -81,7 +81,7 @@ dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)
 # A cache is for good, its shas never changing, so one an older finder wrote
 # (fewer columns, or found from a checkout without modules) goes when the
 # finder changes: the directory carries the version it was written by.
-version=8
+version=9
 if [ "$(cat "$dir/version" 2>/dev/null)" != "$version" ]; then
   rm -rf "$dir"; mkdir -p "$dir" && printf '%s\n' "$version" > "$dir/version"
 fi

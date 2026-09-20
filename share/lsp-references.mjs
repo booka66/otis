@@ -102,6 +102,7 @@ for (const b of job.base || []) {
   if (!texts.has(b.path)) continue;
   try { base.push([b.path, readFileSync(resolve(root, b.from), "utf8")]); } catch {}
 }
+const swapped = new Set(base.map(([p]) => p));
 const versions = new Map();
 const swap = (path, text) => {
   const v = (versions.get(path) || 1) + 1;
@@ -191,13 +192,17 @@ for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
     const after = await errors(files);
     // A caller's file is the same text in both passes, so an error is the same
     // error by its line; its message may name the types, which the change
-    // may have renamed.
+    // may have renamed. A changed file is read at its base text first, so
+    // its lines move between the passes: there an error is the same by its
+    // message, or an error it had already (an import this checkout cannot
+    // resolve) would count as the change's wherever a line is added above it.
     for (const [p, items] of after) {
+      const key = swapped.has(p) ? (it) => it.message : (it) => it.range.start.line;
       const had = new Map();
-      for (const it of before.get(p) || []) had.set(it.range.start.line, (had.get(it.range.start.line) || 0) + 1);
+      for (const it of before.get(p) || []) had.set(key(it), (had.get(key(it)) || 0) + 1);
       for (const it of items) {
-        const n = had.get(it.range.start.line) || 0;
-        if (n > 0) { had.set(it.range.start.line, n - 1); continue; }
+        const n = had.get(key(it)) || 0;
+        if (n > 0) { had.set(key(it), n - 1); continue; }
         out.push(["D", p, it.range.start.line + 1, it.message.split("\n")[0]].join("\t"));
       }
     }
