@@ -102,9 +102,13 @@ case $mode in
     # Placing is a dozen processes, and the preview asks on every move, so a
     # picker keeps the placed list for as long as what it was placed from
     # (the two caches, Claude's drafts and reasons, the range) stays the same.
+    # Those name the file, spelled out rather than hashed: one stat and one
+    # awk, where the hash was three processes more on every move.
     if [ -n "$GIT_FZF_STATE" ] && [ -d "$GIT_FZF_STATE" ]; then
-      claude="$(git rev-parse --path-format=absolute --git-common-dir)/gmr-claude"
-      placed=$GIT_FZF_STATE/placed.$(printf '%s' "$iid|$range|$(mtimes "$threads" "$drafts" "$claude/$iid.drafts" "$claude/$iid.why.jsonl" 2>/dev/null | tr '\n' ',')" | cksum | cut -d' ' -f1)
+      . "$share/repo.sh"
+      claude="$OTIS_GITDIR/gmr-claude"
+      placed=$GIT_FZF_STATE/placed.$(mtimes "$threads" "$drafts" "$claude/$iid.drafts" "$claude/$iid.why.jsonl" 2>/dev/null |
+        awk -v k="$iid|$range" '{ key = key "," $0 } END { gsub("/", "%", k); print k key }')
       if [ ! -s "$placed" ]; then place "$threads" "$drafts" > "$placed.new" && mv -f "$placed.new" "$placed"; fi
       cat "$placed"
     else

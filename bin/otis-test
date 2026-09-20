@@ -1128,6 +1128,15 @@ expect help/through-a-command "$(gp --help | strip | sed -n 1p)" "gp"
 expect help/gg-is-the-table "$(gg | strip | grep -c '^  gup  *rebase onto a fresh origin/main')" "1"
 expect help/gg-sections "$(gg | strip | grep -c '^\(look\|change\|branch and push\|clean up and undo\|other\)$')" "5"
 
+# --- git-fzf-footer: a status line past the list's width is broken at its
+# " · " into lines that fit, measured without colors; the keys after it.
+mkdir -p "$tmp/foot" && printf 'j/k\tmove\n' > "$tmp/foot/hints" &&
+  printf '\033[33m12 symbols in 3 files, 2 to start from\033[0m · \033[35mtsgo is finding callers elsewhere\033[0m · \033[35minstalling node_modules\033[0m · \033[35mcallers not type-checked: 300 packages import the change\033[0m\n' > "$tmp/foot/footer"
+# The separator is three characters, whatever awk's locale counts · as.
+expect footer/wrapped "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed 's/ · /---/g' | awk '{ print length($0) }' | tr '\n' ' ')" "38 59 56 17 "
+expect footer/wrapped-text "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed -n 2p)" "tsgo is finding callers elsewhere · installing node_modules"
+expect footer/one-line-when-it-fits "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=200 git-fzf-footer | strip | wc -l | tr -d ' ')" "2"
+
 # --- completion: one list of candidates for all three shells
 expect complete/refs "$(otis-complete gl | grep -cx main)" "1"
 expect complete/paths "$(otis-complete ga | sed -n 1p)" "@files"

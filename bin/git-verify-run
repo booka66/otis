@@ -250,8 +250,8 @@ plan_schema='{"type":"object","additionalProperties":false,"required":["verifiab
   "verifiable":{"type":"boolean"},
   "summary":{"type":"string"},
   "brief":{"type":"string"},
-  "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","claim","how"],"properties":{
-    "id":{"type":"string"},"claim":{"type":"string"},"how":{"type":"string"}}}}}}'
+  "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","claim","runtime","how"],"properties":{
+    "id":{"type":"string"},"claim":{"type":"string"},"runtime":{"enum":["sandbox","store","none"]},"how":{"type":"string"}}}}}}'
 review_schema='{"type":"object","additionalProperties":false,"required":["verdict","done","followup","summary","criteria","concerns"],"properties":{
   "verdict":{"enum":["pass","fail","inconclusive"]},
   "done":{"type":"boolean"},
@@ -263,7 +263,7 @@ review_schema='{"type":"object","additionalProperties":false,"required":["verdic
   "concerns":{"type":"array","items":{"type":"string"}}}}'
 
 cat > "$ctx/plan" <<EOF
-You are the judge in a verification of a change to this repository. A tester, a Cursor Cloud agent in a VM with the repo's development environment (a seeded sandbox of the services, a desktop browser, the test suites), will try the change out and bring back evidence: recordings, screenshots, test output. You never test anything yourself; you decide what would prove the change works, and later whether the evidence proves it.
+You are the judge in a verification of a change to this repository. A tester, a Cursor Cloud agent in a VM with the repo's development environment (its services and data, a desktop browser, the test suites), will try the change out and bring back evidence: recordings, screenshots, test output. You never test anything yourself; you decide what would prove the change works, and later whether the evidence proves it.
 
 - The change's title and description: $ctx/change.md
 - Its commits: $ctx/commits.md
@@ -273,7 +273,8 @@ $brief_line
 
 Read the diff and the code around it until you know what the change is meant to do, for whom, and where it shows. Then write:
 
-- criteria: the few claims that, if all true, mean the change works, each one observable: what a user does and sees, what an endpoint returns, what a test run shows. Include the case most likely to be broken (the edge the diff handles, or forgets), and that nothing next to it regressed. Each has a short id (c1, c2, ...), the claim, and how to check it in that VM: which app and page, which data, which command. Prefer checking what a user would see over running unit tests the pipeline runs anyway.
+- criteria: the few claims that, if all true, mean the change works, each one observable: what a user does and sees, what an endpoint returns, what a test run shows. Include the case most likely to be broken (the edge the diff handles, or forgets), and that nothing next to it regressed. Each has a short id (c1, c2, ...), the claim, the runtime it needs, and how to check it in that VM: which app and page, which data, which command. Prefer checking what a user would see over running unit tests the pipeline runs anyway.
+- runtime, for each criterion: which of the environment's runtimes the check needs, as the verify-env brief describes them. sandbox for anything its seeded data can show; store only when the claim itself needs a real merchant, a webhook or a text; none for a test run or a command that needs no services. The store may be empty in the VM, so a change that only shows against one must still have at least one criterion that does not need it: a test, or a check at the database or endpoint. Every criterion of one change should need the same runtime where at all possible; the boot is most of a round.
 - brief: for the tester, a few sentences on what the change does and where to look, with the setup it needs (which apps, which scenario data, logins).
 - verifiable: false only when nothing about the change can be observed running (docs, comments, config the VM cannot exercise); then criteria is empty and summary says why.
 - summary: one sentence, what you will have the tester check.
@@ -283,7 +284,7 @@ EOF
 if [ ! -s "$d/plan.json" ]; then
   say "Claude is working out what would prove it works ..."
   judge "$ctx/plan" "$plan_schema" "$d/plan.json"
-  jq -r '.criteria[] | "\(.id)  \(.claim)"' "$d/plan.json" | while IFS= read -r line; do say "$line"; done
+  jq -r '.criteria[] | "\(.id) (\(.runtime))  \(.claim)"' "$d/plan.json" | while IFS= read -r line; do say "$line"; done
 fi
 [ "$(jq -r .verifiable "$d/plan.json")" = true ] || finish done "nothing to verify in a VM: $(jq -r .summary "$d/plan.json")"
 
@@ -310,7 +311,8 @@ The change is on branch $branch, commit $head. Before anything else, check it ou
 EOF
     sed -n '1p' "$ctx/change.md"
     printf '\n## What to verify\n\n'
-    jq -r '.brief, "", (.criteria[] | "- **\(.id)**: \(.claim)\n  How: \(.how)")' "$d/plan.json"
+    jq -r '.brief, "", (.criteria[] | "- **\(.id)** (\(.runtime)): \(.claim)\n  How: \(.how)")' "$d/plan.json"
+    printf '\nEach criterion names the runtime it needs, in the environment section'"'"'s terms. Start the one most of them need first, before you read further; its boot is the slow part. A criterion whose runtime the VM turns out not to have is blocked: say so with the evidence and go on to the rest.\n'
     printf '\n## This environment\n\n'
     if [ -s "$ctx/verify-env.md" ]; then
       cat "$ctx/verify-env.md"
@@ -325,7 +327,7 @@ EOF
 - Tests are evidence only when the output names what ran: run them so every test's name and result is printed (the runner's verbose flag) and save that; a bare PASSED for a filtered or sharded target shows nothing.
 - Record a video of each UI check, one file per criterion named after its id (c1.mp4, ...), with ffmpeg -f x11grab on the desktop's display or the browser tool's own recording. Take screenshots of the states that matter. Save everything, including the output of any command you run for a criterion, in /opt/cursor/artifacts/ (create it).
 - Do not change source files to make something pass, do not commit and do not push. Something broken is the finding: record it.
-- When a criterion cannot be checked here, say exactly what stopped you, and mark it blocked.
+- When a criterion cannot be checked here, say exactly what stopped you, and mark it blocked. Something that failed the same way twice will fail a third time: mark the criterion blocked with the error as its evidence and go on. Nobody answers a request for the environment to be changed during a run.
 
 ## Report
 
@@ -560,7 +562,7 @@ The tester's round $n is over; its run ended $status.
 Judge the evidence itself, not the report's account of it: look at the screenshots and frames, and read the output. A criterion is verified only when the evidence shows the claim true, failed when it shows it false, and unverified otherwise: blocked, skipped, or claimed without anything that shows it. Weigh how each was checked against how you said to.
 
 - criteria: each of yours, with result, the evidence (the file and what it shows, in a sentence) and artifacts: the files that show it, by name as they are under $d/artifacts (a frame under $ctx/frames as frames/<name>), the recording first when there is one, then the screenshots and output that matter; empty when nothing shows it. A criterion with no artifact that shows it is unverified, whatever the report says. Verified means you checked the evidence against itself: an identifier the claim turns on (a message id, a topic id, a test name, a value on screen) appears in two of its artifacts, or in one artifact and the change's own definition of it, and the evidence names which.
-- done: false when another round would settle something that matters: an unverified criterion the tester could check, evidence that does not show what the report says, or a case it skipped. Then followup is what the tester must do next, specifically. This is round $n of at most $rounds; on round $rounds, done is true.
+- done: false when another round would settle something that matters: an unverified criterion the tester could check, evidence that does not show what the report says, or a case it skipped. Then followup is what the tester must do next, specifically. A criterion blocked by the environment itself (no store in the VM, Secrets not injected, a service the VM cannot reach) stays blocked in every round; never send the tester back for one of those, and when nothing else is worth a round, done is true. This is round $n of at most $rounds; on round $rounds, done is true.
 - verdict, once done: fail when any criterion failed, pass only when every one is verified, inconclusive otherwise.
 - summary: one or two sentences for the author.
 - concerns: anything else the evidence shows that the author should know (errors in the logs or console, something off on screen), one line each; empty when none.

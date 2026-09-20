@@ -27,6 +27,7 @@
 #                (gpt-5.6-luna:reasoning=high): otis.cursorModel, else Cursor's default
 #   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
 #                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
+#   sideBySide   diffs side by side in every preview (git-delta): always, or auto, from 120 columns: otis.sideBySide
 #   worktrees    where otis puts its worktrees, under the main checkout: otis.worktrees
 #   install      the command that installs node_modules, run at the main checkout by otis-node-modules
 #                when the lockfile has moved past the last install ('bazel run nodejs_install'): otis.install;
@@ -56,7 +57,7 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand worktrees install editor lessons'
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand sideBySide worktrees install editor lessons'
 sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro'
 nl='
 '
@@ -144,7 +145,7 @@ cfg_bool() {
   esac
 }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommands worktrees editor lessons gitlab'
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommands sideBySide worktrees editor lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -206,6 +207,7 @@ one() {
     checkInModel) cfg checkInModel ;;
     verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
     claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
+    sideBySide) cfg sideBySide ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
     install) cfg install ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;
@@ -247,7 +249,7 @@ one() {
 # environment was made in share its git config and count as inside it; a .otis
 # that differs between branches checked out there is the one thing this would
 # miss, and nothing here reads a worktree's .otis.
-envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro worktrees lessons gitlab'
+envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro sideBySide worktrees lessons gitlab'
 boolkeys='verifyRetro lessons gitlab'
 cachename=otis-config-cache
 tab='	'
@@ -271,6 +273,8 @@ repo_facts() {
 cache_fresh() {
   c=$1 r=$2 d=$3
   [ -f "$c" ] || return 1
+  # And newer than this script: a key added here is not in an older cache.
+  [ "$c" -nt "$0" ] || return 1
   [ ! -e "$d/config" ] || [ "$c" -nt "$d/config" ] || return 1
   [ ! -e "$r/.otis" ] || [ "$c" -nt "$r/.otis" ] || return 1
   for g in "$GIT_CONFIG_GLOBAL" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "$HOME/.gitconfig"; do
@@ -390,13 +394,23 @@ case $1 in
   # repo there is nothing to say, and every command below carries on as it
   # would have.
   --env)
+    # Only what the file says: a value inherited from a picker above must not
+    # be repeated as this checkout's.
+    for key in $envkeys UNSET; do unset "OTIS_C_$key"; done
     load_cache || exit 0
-    awk -F'\t' -v root="$root" -v gitdir="$gitdir" '
-      BEGIN { q = sprintf("%c", 39)
-        printf "export OTIS_C_ROOT=%s%s%s\n", q, root, q
-        printf "export OTIS_C_GITDIR=%s%s%s\n", q, gitdir, q }
-      { v = substr($0, index($0, "\t") + 1); gsub(q, q "\\" q q, v)
-        printf "export OTIS_C_%s=%s%s%s\n", $1, q, v, q }' "$gitdir/$cachename"
+    # From the variables the load left, not the file again through awk: this
+    # is paid once per picker, and the awk was a fifth of it. A value with a
+    # quote in it is the one thing the plain form cannot carry, and none of
+    # these should have one; that case goes the long way rather than wrong.
+    printf "export OTIS_C_ROOT='%s'\nexport OTIS_C_GITDIR='%s'\n" "$root" "$gitdir"
+    for key in $envkeys UNSET; do
+      eval "held=\${OTIS_C_$key+1} v=\${OTIS_C_$key-}"
+      [ -n "$held" ] || continue
+      case $v in
+        *\'*) v=$(printf '%s' "$v" | sed "s/'/'\\\\''/g") ;;
+      esac
+      printf "export OTIS_C_%s='%s'\n" "$key" "$v"
+    done
     exit 0 ;;
   # Every key, its source and its value, a row a key with the key after a tab.
   --rows)

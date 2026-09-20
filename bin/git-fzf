@@ -20,8 +20,13 @@ prompt=$1 spec=$2; shift 2
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 # The settings (otis-config), the same way: worked out once here, and read
 # from the environment by the list, every preview and every binding, each of
-# which used to ask git for them again.
-[[ -n $OTIS_C_ROOT ]] || eval "$(otis-config --env)"
+# which used to ask git for them again. Only while this is still the checkout
+# they were worked out for: a picker opened in another repo from a shell that
+# carries one's settings must not draw with them (share/repo.sh's rule).
+[[ -n $OTIS_C_ROOT && $PWD == $OTIS_C_ROOT(|/*) ]] || eval "$(otis-config --env)"
+# The row library (share/rowfmt.awk), the same way: every list, preview and
+# footer under this picker pastes it into its awk, and each used to cat it.
+export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
 typeset -a keys hints
 for pair in ${(s:,:)spec}; do
   [[ -z $pair ]] && continue
@@ -124,7 +129,7 @@ if [[ -z $header && ${args[(I)--header*]} -eq 0 ]]; then
 fi
 
 if [[ -n $preview ]]; then
-  touch $st/has-preview
+  : > $st/has-preview
   # The preview runs on every move, so it also notes the focused item (a glide
   # stops when that changes) and, only for an item with a saved position, puts
   # that position back once it has printed. Nothing else runs per move. The
@@ -151,15 +156,27 @@ fi
 colors=()
 if [[ $OTIS_T_NAME != terminal* ]]; then
   # A theme's SGR truecolor (38;2;r;g;b, 48;2;r;g;b) as fzf's #rrggbb; a
-  # hex value (its rule) as it is.
+  # hex value (its rule) as it is. Into a variable, not printed: sixteen of
+  # these in $(...) were sixteen forks, and most of what this script cost
+  # before fzf appeared.
   hex() {
     local -a p=(${(s:;:)1})
-    if (( $#p == 5 )); then printf '#%02x%02x%02x' $p[3] $p[4] $p[5]; else print -n -- $1; fi
+    if (( $#p == 5 )); then printf -v REPLY '#%02x%02x%02x' $p[3] $p[4] $p[5]; else REPLY=$1; fi
   }
+  typeset text elsewhere main rule
+  hex $OTIS_T_TEXT; text=$REPLY
+  hex $OTIS_T_ELSEWHERE; elsewhere=$REPLY
+  hex $OTIS_T_MAIN; main=$REPLY
+  hex $OTIS_T_RULE; rule=$REPLY
+  typeset codebg attention context good
+  hex $OTIS_T_CODEBG; codebg=$REPLY
+  hex $OTIS_T_ATTENTION; attention=$REPLY
+  hex $OTIS_T_CONTEXT; context=$REPLY
+  hex $OTIS_T_GOOD; good=$REPLY
   # The gutter is a column of ▌ in the gutter color, which FZF_DEFAULT_OPTS
   # usually hides by matching its own background; on the terminal's ground
   # there is no color to match, so it is drawn with nothing at all.
-  colors=(--gutter=' ' --color="fg:$(hex $OTIS_T_TEXT),fg+:$(hex $OTIS_T_TEXT),query:$(hex $OTIS_T_TEXT),bg:-1,preview-bg:-1,gutter:-1,bg+:$(hex $OTIS_T_CODEBG),hl:$(hex $OTIS_T_ELSEWHERE),hl+:$(hex $OTIS_T_ELSEWHERE),prompt:$(hex $OTIS_T_ATTENTION),info:$(hex $OTIS_T_CONTEXT),pointer:$(hex $OTIS_T_MAIN),marker:$(hex $OTIS_T_GOOD),spinner:$(hex $OTIS_T_MAIN),header:$(hex $OTIS_T_ELSEWHERE),border:$(hex $OTIS_T_RULE),separator:$(hex $OTIS_T_RULE),scrollbar:$(hex $OTIS_T_RULE)")
+  colors=(--gutter=' ' --color="fg:$text,fg+:$text,query:$text,bg:-1,preview-bg:-1,gutter:-1,bg+:$codebg,hl:$elsewhere,hl+:$elsewhere,prompt:$attention,info:$context,pointer:$main,marker:$good,spinner:$main,header:$elsewhere,border:$rule,separator:$rule,scrollbar:$rule")
 fi
 
 # esc steps back one level: out of searching with the query kept, then clearing
@@ -177,15 +194,16 @@ esc="if [ \"\$FZF_PROMPT\" = 'search> ' ]; then echo 'rebind($unbindable)+change
 # never lands in scrollback and the terminal is restored cleanly on exit.
 # Bindings and previews run in zsh whatever your login shell is: fzf would
 # hand them to $SHELL, and fish cannot read them. -f skips your zsh startup
-# files, which they do not need.
+# files, which they do not need. The footer is sourced into that zsh rather
+# than started from it: it is builtins alone, and it is drawn on every load.
 fzf --prompt="$prompt" \
   --with-shell 'zsh -fc' \
   --reverse $listen \
   --preview-window='right,55%,border-left,wrap,<66(down,60%,border-top,wrap)' \
   --bind 'j:down,k:up,g:first,G:last,q:abort' \
-  --bind 'focus:unbind(focus)+transform-footer(git-fzf-footer)' \
-  --bind "start:unbind(focus)+transform-footer(git-fzf-footer)$search$start_actions" \
-  --bind "load,resize:transform-footer(git-fzf-footer)$header" \
+  --bind 'focus:unbind(focus)+transform-footer(. git-fzf-footer)' \
+  --bind "start:unbind(focus)+transform-footer(. git-fzf-footer)$search$start_actions" \
+  --bind "load,resize:transform-footer(. git-fzf-footer)$header" \
   --bind '?:transform(git-fzf-help toggle)' \
   --bind "ctrl-e:preview-down+execute-silent(git-fzf-scroll note $id 1 >/dev/null 2>&1 &)" \
   --bind "ctrl-y:preview-up+execute-silent(git-fzf-scroll note $id -1 >/dev/null 2>&1 &)" \

@@ -8,13 +8,16 @@ p=$1 b=$2 kind=$3 iid=$4 ahead=$5 behind=$6
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 
-printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "${p##*/}" "$(printf '%s' "$p" | sed "s#^$HOME#~#")"
+short=$p; case $p in "$HOME"/*) short="~${p#"$HOME"}" ;; esac
+printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "${p##*/}" "$short"
 if [ ! -d "$p" ]; then
   printf "${GK_BAD}the directory is gone${GK_R}; d clears git's record of it\n"
   exit 0
 fi
 
-g=$(git -C "$p" rev-parse --absolute-git-dir)
+# Its git dir, as git-worktree-list --status finds it: from its .git file,
+# or the directory itself.
+if [ -f "$p/.git" ]; then read -r _ g < "$p/.git"; else g=$p/.git; fi
 op=
 if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op="a rebase"
 elif [ -e "$g/MERGE_HEAD" ]; then op="a merge"
@@ -23,19 +26,27 @@ elif [ -e "$g/REVERT_HEAD" ]; then op="a revert"
 fi
 # --no-optional-locks, as in git-worktree-list: never hold up a write there.
 dirty=$(git -C "$p" --no-optional-locks status --porcelain)
-n=0
-[ -n "$dirty" ] && n=$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')
+# Counted, and the first dozen kept for below, in the shell: this draws again
+# on every move, and wc, head and sed were three processes for one number.
+n=0 shown=
+if [ -n "$dirty" ]; then
+  while IFS= read -r line; do
+    n=$((n + 1))
+    [ "$n" -le 12 ] && shown="$shown  $line
+"
+  done <<EOF
+$dirty
+EOF
+fi
 
-# This draws again on every move, so it asks as little as it can: the main
-# checkout first, which is one question and the row most often under the
-# cursor, and the two gmr keeps only when it is not that, both in one run.
-role=
-if [ "$p" = "$(git-worktree-path main)" ]; then
-  role="the main checkout; every other worktree lives under it"
-else
-  { read -r _; read -r wt_review; read -r wt_mine; } <<EOF
+# The three worktrees with a role, in one run (git-worktree-path).
+{ read -r wt_main; read -r wt_review; read -r wt_mine; } <<EOF
 $(git-worktree-path roots)
 EOF
+role=
+if [ "$p" = "$wt_main" ]; then
+  role="the main checkout; every other worktree lives under it"
+else
   case $p in
     "$wt_review") role="gmr moves this checkout to each MR you review; removing it means the next review checks out the repo again" ;;
     "$wt_mine")   role="gmr switches this checkout to your MRs that are not checked out anywhere else" ;;
@@ -64,8 +75,7 @@ else
 fi
 
 if [ "$n" -gt 0 ]; then
-  printf '\n'
-  printf '%s\n' "$dirty" | head -12 | sed 's/^/  /'
+  printf '\n%s' "$shown"
   [ "$n" -gt 12 ] && printf "  ${GK_CONTEXT}... %s more${GK_R}\n" "$((n - 12))"
 fi
 printf '\n'

@@ -59,7 +59,25 @@ fi
 age=15 merged_age=60 now=
 [ "$1" = --refresh ] && age=0 merged_age=0 now=--now
 reload="execute-silent(git-fzf-bg --then refresh-preview git-mr-list)"
-repo=$(otis-config project)
+# What Claude is doing and what is waiting on you, and where the branches are
+# checked out: none of it needs GitLab or a setting, so it all starts first
+# and runs while the caches are read, each writing a file of its own for the
+# one jq at the end. Worked out once here and saved for the previews
+# (git-mr-preview, git-ci-preview), which run on every cursor move and used to
+# ask the same four scripts each time.
+git-mr-watch --marks  > "$st/m.watch"  2>/dev/null &
+git-mr-claude --marks > "$st/m.claude" 2>/dev/null &
+git-mr-fix --marks    > "$st/m.fixes"  2>/dev/null &
+git-verify --marks    > "$st/m.verify" 2>/dev/null &
+git branch --show-current > "$st/current" 2>/dev/null &
+git worktree list --porcelain | awk '
+  /^worktree / { n = split(substr($0, 10), parts, "/"); name = seen++ ? parts[n] : "main checkout" }
+  /^branch /   { print substr($0, 19) "\t" name }' |
+  jq -Rc '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}' > "$st/elsewhere.json" 2>/dev/null &
+# Every setting this draw needs in one process rather than one each.
+{ read -r repo; read -r gates; read -r main; read -r url; } <<EOF
+$(otis-config project gateJobs main url)
+EOF
 
 # fetch <cache name> <stale seconds> <saved as> <query>: the JSON into the
 # picker's state, or an error row and a nonzero exit.
@@ -114,8 +132,12 @@ if [ "$scope" = sections ]; then
   merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
     cp "$merged" "$st/ci-merged.json"
   # The deploy strip on the merged heading, from gd's cache; fetched in the
-  # background when stale, and the reload draws it.
-  git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch >/dev/null 2>&1
+  # background when stale, and the reload draws it. The strip is drawn from
+  # the cache this call names, so gd's own list, which would start a fetch
+  # of its own while that one runs, is never asked.
+  strip=
+  deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
+    strip=$(git-deploy-list --from "$deploys" --strip 2>/dev/null)
 else
   fetch mrs-all $age mrs.json "$mr_all_query"
   total=$(jq '.data.project.mergeRequests.count // 0' "$st/mrs.json")
@@ -126,24 +148,24 @@ else
   fi
 fi
 
-# What Claude is doing and what is waiting on you, worked out once here and
-# saved for the previews (git-mr-preview, git-ci-preview), which run on every
-# cursor move and used to ask the same four scripts each time.
-gates=$(otis-config gateJobs) watch=$(git-mr-watch --marks) claude=$(git-mr-claude --marks) fixes=$(git-mr-fix --marks) verify=$(git-verify --marks)
-jq -nc --argjson gates "$gates" --argjson watch "$watch" --argjson claude "$claude" --argjson fixes "$fixes" --argjson verify "$verify" \
-  '{gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify}' > "$st/marks.json"
-
-current=$(git branch --show-current)
-elsewhere=$(git worktree list --porcelain | awk '
-  /^worktree / { n = split(substr($0, 10), parts, "/"); name = seen++ ? parts[n] : "main checkout" }
-  /^branch /   { print substr($0, 19) "\t" name }' | jq -R 'split("\t") | {(.[0]): .[1]}' | jq -sc 'add // {}')
+# The marks, as the previews expect them. A script that answered with
+# nothing (it broke, or was killed with the picker) counts as no marks.
+wait
+jq -nc --argjson gates "$gates" \
+  --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
+  --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
+  '{gates: $gates, watch: ($watch[0] // {}), claude: ($claude[0] // {}),
+    fixes: ($fixes[0] // {}), verify: ($verify[0] // {})}' > "$st/marks.json"
+current=
+read -r current < "$st/current" 2>/dev/null
 
 jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.json" --slurpfile merged "$st/ci-merged.json" \
-  --arg scope "$scope" --arg first "${GMR_FIRST:-review}" --arg current "$current" --arg main "$(otis-config main)" --arg url "$(otis-config url)" \
-  --arg strip "$(git-deploy-list --strip 2>/dev/null)" \
-  --argjson elsewhere "$elsewhere" --argjson gates "$gates" --argjson watch "$watch" \
-  --argjson claude "$claude" --argjson fixes "$fixes" --argjson verify "$verify" '
+  --arg scope "$scope" --arg first "${GMR_FIRST:-review}" --arg current "$current" --arg main "$main" --arg url "$url" \
+  --arg strip "$strip" \
+  --slurpfile elsewhere "$st/elsewhere.json" --slurpfile marks "$st/marks.json" '
   include "otis";
+  ($elsewhere[0] // {}) as $elsewhere |
+  $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
   def mark:
     if . == $current then elsewhere + "▶ " + r
     else "  " end;

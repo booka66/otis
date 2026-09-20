@@ -24,14 +24,19 @@
 # (a deploy that ran for no time was refused, behind production), ◐ running,
 # ○ queued, ↺ a rollback.
 share=$(cd "$(dirname "$0")/../share" && pwd)
-env=$(otis-config deployEnv) job=$(otis-config deployJob) rollback_job=$(otis-config rollbackJob)
 . "$share/repo.sh"
 dir="$OTIS_GITDIR/git-alias-cache"
-mkdir -p "$dir"
+[ -d "$dir" ] || mkdir -p "$dir"
 from=
 [ "$1" = --from ] && { from=$2; shift 2; }
 
 if [ "$1" = --fetch ]; then
+  # The environment and the jobs, only here: the rows and the strip come from
+  # the cache, and gmr draws the strip on every reload, which used to pay for
+  # three settings it never read.
+  { read -r env; read -r job; read -r rollback_job; } <<EOF
+$(otis-config deployEnv deployJob rollbackJob)
+EOF
   all=$(glab api "projects/:fullpath/deployments?environment=$env&order_by=created_at&sort=desc&per_page=100") || exit 1
   deploys=$(printf '%s' "$all" | jq -e --arg job "$job" --arg rb "$rollback_job" '
     [.[] | select((.deployable.name == $job and (.status | IN("blocked", "skipped") | not))
@@ -72,25 +77,16 @@ else
     cache=$(git-cached-json deploys 60 "$reload" -- git-deploy-list --fetch) || exit 1
   fi
 fi
-mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
-
 case $1 in
   --strip)
-    jq -r -L "$share" 'include "otis";
-      def glyph: if .kind == "rollback" then bad + "↺" elif .status == "success" then good + "✓"
-        elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)
-        elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
-        else attention + "○" end;
-      .deploys | reverse | .[-40:] | map(glyph) | join("") + r' "$cache" ;;
+    jq -r -L "$share" 'include "otis"; .deploys | reverse | .[-40:] | map(deploy_glyph) | join("") + r' "$cache" ;;
   --pos)
     i=$(jq -r --arg p "$2" '.deploys | map(.pipeline) | index($p) // empty' "$cache")
     [ -n "$i" ] && echo "pos($((i + 1)))" ;;
   *)
+    mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
     jq -r -L "$share" --argjson mine "$mine" 'include "otis";
-      def glyph: if .kind == "rollback" then bad + "↺" elif .status == "success" then good + "✓"
-        elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)
-        elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
-        else attention + "○" end;
+      def glyph: deploy_glyph;
       def took: if .duration == 0 then "      " else (.duration | "\(. / 60 | floor)m\(. % 60 | tostring | if length < 2 then "0" + . else . end)s" | padl(6)) end;
       # The MR cell: its plain text first, for the width, then colored, and
       # padded to one width so the column after it lines up.
@@ -109,11 +105,12 @@ case $1 in
       [ ours + glyph + r + " " + context + (.at | ago | padl(3)) + r + " " + context + took + r + " "
           + elsewhere + .sha[0:8] + r + "  " + what + "  " + context + "by " + .user + r,
         .id, .sha, .pipeline, .url, .status, .kind ] | @tsv' "$cache"
-    # The footer: the strip, and the count either side of it.
+    # The footer: the strip (as --strip draws it), and the count either side of it.
     if [ -n "$GIT_FZF_STATE" ]; then
-      jq -r -L "$share" --arg strip "$(git-deploy-list ${from:+--from "$from"} --strip)" 'include "otis";
+      jq -r -L "$share" 'include "otis";
         .deploys as $d | ([$d[] | select(.kind == "deploy")] | length) as $n |
         ([$d[] | select(.status == "success")] | length) as $ok | ([$d[] | select(.status == "failed")] | length) as $bad |
+        ($d | reverse | .[-40:] | map(deploy_glyph) | join("") + r) as $strip |
         context + "last \($n) deploys, oldest left  " + r + $strip + context + "  \($ok) live · \($bad) failed" + r' "$cache" > "$GIT_FZF_STATE/footer"
     fi ;;
 esac

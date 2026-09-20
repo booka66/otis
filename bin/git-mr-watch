@@ -31,8 +31,9 @@
 # likely causing trouble, and with the verdict when the watch is over.
 mode=
 case $1 in --check|--marks|--preview) mode=$1; shift ;; esac
-common=$(git rev-parse --path-format=absolute --git-common-dir)
 share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/repo.sh" || exit 1
+common=$OTIS_GITDIR
 top=$common/gmr-watch
 
 . "$share/claude-run.sh"
@@ -48,16 +49,23 @@ case $mode in
     ;;
   --marks)
     # Whether it is still going, and the latest check's verdict (none before
-    # the first check, or for a watch that stopped before one).
-    for dir in "$top"/*/; do
-      [ -d "$dir" ] || continue
-      dir=${dir%/} iid=${dir##*/}
-      case $iid in *[!0-9]*|"") continue ;; esac
-      watching=false
-      running "$dir" && watching=true
-      verdict=$(jq -r .verdict "$dir/verdict.json" 2>/dev/null)
-      printf '%s\t%s\t%s\n' "$iid" "$watching" "$verdict"
-    done | jq -Rn '[inputs | split("\t") | {(.[0]): {watching: (.[1] == "true"), verdict: .[2]}}] | add // {}'
+    # the first check, or for a watch that stopped before one). Usually there
+    # is no watch at all, and the dashboard asks on every draw, so that answer
+    # costs no jq. (A function: macOS's sh cannot parse a case inside $( ).)
+    rows() {
+      for dir in "$top"/*/; do
+        [ -d "$dir" ] || continue
+        dir=${dir%/} iid=${dir##*/}
+        case $iid in *[!0-9]*|"") continue ;; esac
+        watching=false
+        running "$dir" && watching=true
+        verdict=$(jq -r .verdict "$dir/verdict.json" 2>/dev/null)
+        printf '%s\t%s\t%s\n' "$iid" "$watching" "$verdict"
+      done
+    }
+    marks=$(rows)
+    [ -n "$marks" ] || { echo '{}'; exit 0; }
+    printf '%s\n' "$marks" | jq -Rn '[inputs | split("\t") | {(.[0]): {watching: (.[1] == "true"), verdict: .[2]}}] | add // {}'
     exit 0
     ;;
   --preview)

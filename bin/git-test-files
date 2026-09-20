@@ -73,15 +73,29 @@ classify='
     return 0
   }
 '
+# Where the repo starts: from the picker's environment (otis-config --env)
+# while this runs inside the checkout it was worked out for, as share/repo.sh
+# takes the git dir, else asked; a filter runs on every draw of ga's list.
+toplevel() {
+  top=
+  if [ -n "$OTIS_C_ROOT" ]; then
+    case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) top=$OTIS_C_ROOT ;; esac
+  fi
+  [ -n "$top" ] || top=$(git rev-parse --show-toplevel 2>/dev/null)
+}
+# declares: whether the repo root marks anything linguist-generated in
+# .gitattributes, the standard declaration and what GitHub and GitLab
+# collapse diffs by. Most repos do not, and that costs one file test.
+declares() {
+  toplevel
+  [ -n "$top" ] && [ -f "$top/.gitattributes" ] && grep -q linguist-generated "$top/.gitattributes" 2>/dev/null
+}
 # declared_generated FIELDS FILE: the paths in those tab fields of FILE that
-# .gitattributes marks linguist-generated, the standard declaration and what
-# GitHub and GitLab collapse diffs by. Only asked when the repo root says
-# something, so the usual case costs one file test.
+# .gitattributes marks linguist-generated, once declares says there are any.
 # A path's answer never changes while a picker is open, so a picker keeps
 # the answers it has had in its state and asks git only about new paths.
 declared_generated() {
-  top=$(git rev-parse --show-toplevel 2>/dev/null)
-  if [ -n "$top" ] && [ -f "$top/.gitattributes" ] && grep -q linguist-generated "$top/.gitattributes" 2>/dev/null; then
+  if declares; then
     known=${GIT_FZF_STATE:+$GIT_FZF_STATE/declared}
     [ -n "$known" ] && : >> "$known"
     awk -F'\t' -v fs="$1" '{ n = split(fs, f, ","); for (i = 1; i <= n; i++) if ($f[i] != "") print $f[i] }' "$2" | sort -u > "$2.paths"
@@ -109,8 +123,12 @@ case $1 in
       case $1 in --state) state=$2; shift 2 ;; --keep) keepf=$2 keepv=$3; shift 3 ;; *) shift ;; esac
     done
 
+    # The rows are held in a file only when the repo declares generated
+    # files, since the declared ones have to be known before the first row
+    # is placed; otherwise they stream through, and the two temp files, the
+    # copy and the cleanup that used to be on every draw of ga's list are not.
     rows= declared=
-    if [ -n "$section" ]; then
+    if [ -n "$section" ] && declares; then
       rows=$(mktemp) || exit 1
       declared=$(mktemp) || exit 1
       cat > "$rows"
@@ -121,7 +139,7 @@ case $1 in
     fi
 
     awk -F'\t' -v field="$field" -v keepf="$keepf" -v keepv="$keepv" -v show="$show" -v section="$section" -v declared="$declared" -v state="$state" \
-        -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" "$(cat "$share/rowfmt.awk")$classify"'
+        -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$classify"'
       function rule(text,   s) {
         s = "\342\224\200\342\224\200 " text " "
         while (length(s) < 62) s = s "\342\224\200"
@@ -196,7 +214,7 @@ case $1 in
         if (show) printf "%sshowing %d %s%s\n", GK_CONTEXT, tests, noun, GK_R > out
         else printf "%s%d %s hidden%s\n", GK_ATTENTION, tests, noun, GK_R > out
       }' "$@"
-    rm -f "$rows" "$declared"
+    [ -n "$rows" ] && rm -f "$rows" "$declared"
     ;;
   hidden)
     [ -e "$flag" ]

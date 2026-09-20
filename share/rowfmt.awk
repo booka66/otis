@@ -1,5 +1,8 @@
 # Row formatting shared by the pickers' list scripts, pasted into a caller's
-# awk program the way share/markdown.awk is (awk "$(cat share/rowfmt.awk)"'...').
+# awk program the way share/markdown.awk is: awk "${OTIS_ROWFMT:-$(cat
+# share/rowfmt.awk)}"'...'. git-fzf reads this file once and exports it as
+# OTIS_ROWFMT, so nothing under a picker starts a cat for it; the fallback is
+# for a script run from somewhere else.
 # awk runs every BEGIN block in the order it reads them, so the palette below is
 # set before the caller's own BEGIN.
 #
@@ -25,8 +28,14 @@ BEGIN {
   GK_FAINT     = gk_sgr("FAINT", "2")        # structure: rules, separators, empty slots
   GK_MAIN      = gk_sgr("MAIN", "34")        # main, and things that are not yours to move
   GK_R         = "\033[0m"
+  # The time, once, for the ages the rows show: a date process cost as much
+  # as the awk that used it.
+  GK_NOW = gk_now()
 }
 function gk_sgr(k, dflt) { return "\033[" (("OTIS_T_" k) in ENVIRON ? ENVIRON["OTIS_T_" k] : dflt) "m" }
+# Unix seconds without a process: srand() seeds with the time of day and
+# returns the seed before it, so the second call answers with the first's.
+function gk_now() { srand(); return srand() }
 
 function gk_rep(s, n,   out) { out = ""; while (n-- > 0) out = out s; return out }
 function gk_padl(s, n) { s = s ""; while (length(s) < n) s = " " s; return s }

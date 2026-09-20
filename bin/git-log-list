@@ -47,23 +47,34 @@ if [ "$remote" != "$main" ] && [ "$remote" != HEAD ]; then
     set -- "$@" "$arg"
   done
 fi
-mine=$(git log --format=%h "$remote"..HEAD 2>/dev/null | tr '\n' ' ')
-up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
-# With no upstream, or one that is the base already, this is the same question
-# twice, and the second asking used to cost another git log over the branch.
-if [ -n "$up" ] && [ "$up" != "$remote" ]; then
-  held=$(git log --format=%h "$up"..HEAD 2>/dev/null | tr '\n' ' ')
-else
-  held=$mine
-fi
 cap=
 [ $# -eq 0 ] && cap=500
 
-git log ${cap:+-n $((cap + 1))} --format='%h%x1f%ct%x1f%d%x1f%s%x1f%an' "$@" |
-awk -F'\037' -v mine=" $mine " -v held=" $held " -v now="$(date +%s)" -v cap="$cap" -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" \
-    "$(cat "$share/rowfmt.awk")"'
+# Yours and the ones still in your hands are two more logs, and neither
+# waits on the other or on the log itself, so all three run at once and the
+# list costs the slowest. Under a picker their files sit in its state, which
+# goes when it closes; anywhere else they are cleaned up here. Without an
+# upstream the held set is the yours set: that log fails, and says so in its
+# file rather than in a second one, which would outlive the branch it was
+# true of.
+if [ -n "$GIT_FZF_STATE" ]; then tmp=$GIT_FZF_STATE/log-list; else tmp=${TMPDIR:-/tmp}/git-log-list.$$/log-list; mkdir -p "${tmp%/*}"; fi
+git log --format=%h "$remote"..HEAD > "$tmp.mine" 2>/dev/null &
+git log --format=%h '@{upstream}..HEAD' > "$tmp.held" 2>/dev/null || echo none > "$tmp.held" &
+git log ${cap:+-n $((cap + 1))} --format='%h%x1f%ct%x1f%d%x1f%s%x1f%an' "$@" > "$tmp.rows"
+wait
+awk -F'\037' -v minef="$tmp.mine" -v heldf="$tmp.held" -v cap="$cap" -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" \
+    "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+  BEGIN {
+    while ((getline l < minef) > 0) mine[l] = 1
+    close(minef)
+    while ((getline l < heldf) > 0) {
+      if (l == "none") { for (l in mine) held[l] = 1; break }
+      held[l] = 1
+    }
+    close(heldf)
+  }
   function ago(t,   s) {
-    s = now - t
+    s = GK_NOW - t
     if (s < 3600) return int(s / 60) "m"
     if (s < 86400) return int(s / 3600) "h"
     if (s < 86400 * 14) return int(s / 86400) "d"
@@ -73,8 +84,8 @@ awk -F'\037' -v mine=" $mine " -v held=" $held " -v now="$(date +%s)" -v cap="$c
   cap != "" && NR > cap { more = 1; next }
   {
     sha = $1; refs = $3; subj = $4; who = $5
-    yours = index(mine, " " sha " ")
-    unpushed = index(held, " " sha " ")
+    yours = (sha in mine)
+    unpushed = (sha in held)
     sub(/^ *\(/, "", refs); sub(/\)$/, "", refs)
     print (unpushed ? GK_YOURS : yours ? GK_ATTENTION : GK_FAINT) sha GK_R " " \
       GK_CONTEXT gk_padl(ago($2), 4) GK_R "  " \
@@ -86,4 +97,5 @@ awk -F'\037' -v mine=" $mine " -v held=" $held " -v now="$(date +%s)" -v cap="$c
     if (out == "") exit
     if (more) print GK_CONTEXT "the newest " cap " commits \302\267 gl -n 2000, or gl <range>, for more" GK_R > out
     else printf "" > out
-  }'
+  }' "$tmp.rows"
+[ -n "$GIT_FZF_STATE" ] || rm -rf "${tmp%/log-list}"

@@ -75,7 +75,8 @@ iid=$1 range=$2
 api="projects/:fullpath/merge_requests/$iid"
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-top="$(git rev-parse --path-format=absolute --git-common-dir)/gmr-claude"
+. "$share/repo.sh" || exit 1
+top=$OTIS_GITDIR/gmr-claude
 d=$top/$iid
 # Draft ids outlive a run's own directory, since a second run starts afresh.
 ids=$top/$iid.drafts
@@ -117,14 +118,22 @@ case $mode in
     # (git-mr-file-preview prunes the ids once you have submitted or deleted
     # them all, so a finished review stops showing), and the head a finished
     # one found nothing to comment on.
-    for dir in "$top"/*/; do
-      [ -d "$dir" ] || continue
-      dir=${dir%/} mr=${dir##*/}
-      case $mr in *[!0-9]*|"") continue ;; esac
-      going=false
-      running "$dir" && going=true
-      printf '%s\t%s\t%s\t%s\n' "$mr" "$going" "$(grep -c . "$top/$mr.drafts" 2>/dev/null || echo 0)" "$(clean_head "$dir")"
-    done | jq -Rn '[inputs | split("\t") | {(.[0]): {reviewing: (.[1] == "true"), drafts: (.[2] | tonumber), clean: (if .[3] == "" then null else .[3] end)}}] | add // {}'
+    # Usually there has been no review, and the dashboard asks on every
+    # draw, so that answer costs no jq. (A function: macOS's sh cannot parse
+    # a case inside $( ).)
+    rows() {
+      for dir in "$top"/*/; do
+        [ -d "$dir" ] || continue
+        dir=${dir%/} mr=${dir##*/}
+        case $mr in *[!0-9]*|"") continue ;; esac
+        going=false
+        running "$dir" && going=true
+        printf '%s\t%s\t%s\t%s\n' "$mr" "$going" "$(grep -c . "$top/$mr.drafts" 2>/dev/null || echo 0)" "$(clean_head "$dir")"
+      done
+    }
+    marks=$(rows)
+    [ -n "$marks" ] || { echo '{}'; exit 0; }
+    printf '%s\n' "$marks" | jq -Rn '[inputs | split("\t") | {(.[0]): {reviewing: (.[1] == "true"), drafts: (.[2] | tonumber), clean: (if .[3] == "" then null else .[3] end)}}] | add // {}'
     exit 0
     ;;
   --prune)

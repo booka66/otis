@@ -21,7 +21,7 @@ case $1 in
       fold -s -w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 2 ))" "$st/last-error" | sed 's/^/  /'
       printf '\n'
     fi
-    awk -F'\t' "$(cat "$share/rowfmt.awk")"'
+    awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
       BEGIN { ylw = GK_ATTENTION; dim = GK_CONTEXT; r = GK_R }
       NR == 1 { print dim "this picker" r }
       $0 == "--" { print ""; print dim "every picker" r; next }

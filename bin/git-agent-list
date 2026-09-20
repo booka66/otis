@@ -83,12 +83,11 @@ scan() {
 [ "$1" = --data ] && { scan; exit 0; }
 
 resume_all
-now=$(date +%s)
 scan |
 awk -F'\t' '{ print (($1 == "running") ? 0 : 1) "\t" $0 }' | sort -t'	' -k1,1n -k3,3nr | cut -f2- |
-awk -F'\t' -v now="$now" "$(cat "$share/rowfmt.awk")"'
+awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   function ago(t,   s) {
-    s = now - t
+    s = GK_NOW - t
     if (s < 60) return "just now"
     if (s < 3600) return int(s / 60) "m ago"
     if (s < 86400) return int(s / 3600) "h ago"

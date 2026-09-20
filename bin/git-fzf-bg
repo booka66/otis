@@ -69,11 +69,11 @@ key=$st/bg.$(printf '%s' "$*" | cksum | cut -d' ' -f1)
     [ -n "$landing" ] && [ -s "$st/focus" ] && held=1
     if cmp -s "$key.rows.$$" "$st/bg.shown"; then
       rm -f "$key.rows.$$" "$st/bg.pending"
-      act="transform-footer(git-fzf-footer)"
+      act="transform-footer(. git-fzf-footer)"
       [ -n "$held" ] || act="$act$then"
     elif [ -n "$held" ]; then
       mv "$key.rows.$$" "$st/bg.pending"
-      act="transform-footer(git-fzf-footer)"
+      act="transform-footer(. git-fzf-footer)"
     else
       rm -f "$st/bg.pending"
       mv "$key.rows.$$" "$key.rows"

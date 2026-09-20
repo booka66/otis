@@ -38,10 +38,25 @@ fi
 
 if [ "$mode" = --files ] || [ "$mode" = --note ]; then
   json=$(git-mr-threads --json "$iid" "$range" "$reload" 2>/dev/null)
-  open=$(printf '%s' "$json" | jq -r '.[] | select(.resolvable and (.resolved | not) and .where.path) | .where.path' 2>/dev/null)
-  drafts=$(printf '%s' "$json" | jq '[.[].notes[] | select(.draft)] | length' 2>/dev/null)
-  drafted=$(printf '%s' "$json" | jq -r '.[] | select(.where.path) | .where.path as $p | .notes[] | select(.draft) | $p' 2>/dev/null)
-  claude=$(printf '%s' "$json" | jq '[.[].notes[] | select(.claude)] | length' 2>/dev/null)
+  # What the rows and the footer want from the threads, in one jq: the file
+  # of each unresolved thread (o), of each draft (d), then the counts of
+  # drafts and of Claude's (n). With no threads yet there are no lines, and
+  # the counts stay empty, as they did.
+  open= drafted= drafts= claude= total=0
+  nl='
+'
+  while IFS='	' read -r k v w; do
+    case $k in
+      o) open="$open$v$nl"; total=$((total + 1)) ;;
+      d) drafted="$drafted$v$nl" ;;
+      n) drafts=$v claude=$w ;;
+    esac
+  done <<EOF
+$(printf '%s' "$json" | jq -r '
+    (.[] | select(.resolvable and (.resolved | not) and .where.path) | "o\t" + .where.path),
+    (.[] | select(.where.path) | .where.path as $p | .notes[] | select(.draft) | "d\t" + $p),
+    "n\t\([.[].notes[] | select(.draft)] | length)\t\([.[].notes[] | select(.claude)] | length)"' 2>/dev/null)
+EOF
   # Once you have submitted or deleted the last of Claude's drafts, its ids go,
   # so gmr stops saying there are drafts waiting here (git-mr-claude --marks;
   # --prune itself makes sure the list is newer than the ids).
@@ -61,7 +76,7 @@ if [ "$mode" = --files ] || [ "$mode" = --note ]; then
   counts=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/counts.$$
   git-commit-open --files --deleted --all "$range" |
     OPEN=$open DRAFTED=$drafted VIEWED=$viewed SINCE=$since SINCE_ON=$([ -e "$GIT_FZF_STATE/since" ] && echo 1) \
-    awk -F'\t' -v counts="$counts" -v ns="$numstat" -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+    awk -F'\t' -v counts="$counts" -v ns="$numstat" -v cols="$cols" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     BEGIN {
       n = split(ENVIRON["OPEN"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") count[paths[i]]++
       n = split(ENVIRON["DRAFTED"], paths, "\n"); for (i = 1; i <= n; i++) if (paths[i] != "") drafts[paths[i]]++
@@ -99,7 +114,6 @@ if [ "$mode" = --files ] || [ "$mode" = --note ]; then
   read -r done files all < "$counts"
   rm -f "$counts"
   [ -n "$GIT_FZF_STATE" ] || exit 0
-  total=$(printf '%s' "$open" | grep -c .)
   note=$(printf "${GK_CONTEXT}%s of %s viewed${GK_R}" "$done" "$files")
   [ -e "$GIT_FZF_STATE/since" ] &&
     note=$(printf "${GK_ATTENTION}%s: %s of %s files · n shows all${GK_R} · %s" "$(cat "$GIT_FZF_STATE/since")" "$files" "$all" "$note")
@@ -112,7 +126,8 @@ if [ "$mode" = --files ] || [ "$mode" = --note ]; then
   working=$(git-mr-claude --footer "$iid" "$range"; git-mr-fix --footer "$iid")
   [ -n "$working" ] && note="$note · $working"
   [ "$mode" = --note ] && { printf '%s\n' "$note"; exit 0; }
-  footer=$(cat "$GIT_FZF_STATE/footer" 2>/dev/null)
+  footer=
+  read -r footer < "$GIT_FZF_STATE/footer" 2>/dev/null
   printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
   exit 0
 fi
@@ -137,7 +152,7 @@ git-mr-threads --json "$iid" "$range" "$reload" 2>/dev/null |
 
 # Comment bodies render as markdown (share/markdown.awk). --annotate takes the
 # rendered diff from stdin instead: the symbol view's cut of the file.
-if [ "$mode" = --annotate ]; then cat; else git-preview-commit --diff "$range" "$path"; fi | LC_ALL=C awk -F'\t' -v width="${FZF_PREVIEW_COLUMNS:-100}" "$(cat "$share/rowfmt.awk")
+if [ "$mode" = --annotate ]; then cat; else git-preview-commit --diff "$range" "$path"; fi | LC_ALL=C awk -F'\t' -v width="${FZF_PREVIEW_COLUMNS:-100}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}
 $(cat "$share/markdown.awk")"'
   BEGIN { pad = "           " }
   FILENAME != "-" {

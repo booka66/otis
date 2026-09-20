@@ -24,22 +24,30 @@
 # --no-optional-locks, and diff-index rather than diff: both otherwise take the
 # index lock to refresh it, and an agent's git add or commit running alongside
 # would fail on that lock.
+#
+# The saved status lives in the picker's state while there is one: every
+# --cached and -- <path> call is a keypress in ga, whose picker it is, and the
+# state goes when it closes. Only a run from outside a picker keeps it in the
+# git dir, at the cost of asking git where that is.
 
-cache_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 1
-cache="$cache_dir/ga-status-cache"
+if [ -n "$GIT_FZF_STATE" ]; then cache=$GIT_FZF_STATE/ga-status-cache
+else cache=$(git rev-parse --git-dir 2>/dev/null)/ga-status-cache || exit 1; fi
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
 # The status rows for <path>... (or everything), each with how many lines the
 # change adds and removes. Untracked and binary files have no counts, and say
 # so by leaving those fields empty.
+# The counts and the status are two git processes that know nothing of each
+# other, so they run at once and the list costs the slower of them. A repo
+# with no commits yet counts against the empty tree, found out by asking for
+# HEAD's diff and being refused, rather than by a git process a draw that
+# checks first.
 status() {
-  head=$(git rev-parse -q --verify HEAD || git hash-object -t tree /dev/null)
-  git --no-optional-locks -c core.quotePath=false diff-index --numstat -M "$head" -- "$@" 2>/dev/null > "$cache.numstat"
-  git --no-optional-locks status --porcelain -z "$@" | tr '\0' '\n' | awk '
-    { st = substr($0, 1, 2); p = substr($0, 4); from = "" }
-    st ~ /[RC]/ { getline from }
-    { printf "%s\t%s\t%s\n", st, p, from }' |
-  awk -F'\t' -v ns="$cache.numstat" "$(cat "$share/rowfmt.awk")"'
+  { git --no-optional-locks -c core.quotePath=false diff-index --numstat -M HEAD -- "$@" 2>/dev/null ||
+    git --no-optional-locks -c core.quotePath=false diff-index --numstat -M "$(git hash-object -t tree /dev/null)" -- "$@" 2>/dev/null; } > "$cache.numstat" &
+  git --no-optional-locks status --porcelain -z "$@" | tr '\0' '\n' > "$cache.status"
+  wait
+  awk -v ns="$cache.numstat" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     BEGIN {
       while ((getline line < ns) > 0) {
         if (split(line, f, "\t") < 3 || f[1] !~ /^[0-9]+$/) continue
@@ -47,8 +55,10 @@ status() {
       }
       close(ns)
     }
-    { print $0 "\t" (($2 in add) ? add[$2] : "") "\t" (($2 in del) ? del[$2] : "") }'
-  rm -f "$cache.numstat"
+    { st = substr($0, 1, 2); p = substr($0, 4); from = "" }
+    st ~ /[RC]/ { getline from }
+    { printf "%s\t%s\t%s\t%s\t%s\n", st, p, from, ((p in add) ? add[p] : ""), ((p in del) ? del[p] : "") }' "$cache.status"
+  [ -n "$GIT_FZF_STATE" ] || rm -f "$cache.numstat" "$cache.status"
 }
 
 mode=full
@@ -94,7 +104,7 @@ cols=${FZF_COLUMNS:-0}
 [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
 [ -n "$cols" ] || cols=100
 
-awk -F'\t' -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+awk -F'\t' -v cols="$cols" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   # Two passes: the +/- column is sized to the widest counts actually in the
   # list, so it is never ragged and never wider than it needs to be. The rows
   # are few (what you have changed), so holding them costs nothing.

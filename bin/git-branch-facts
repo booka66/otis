@@ -63,11 +63,31 @@ wait= refresh=
 [ "$1" = --refresh ] && { refresh=1; shift; }
 reload=$1
 
+# Everything git is asked here is independent, so it is all asked at once and
+# waited for: five processes of six or ten milliseconds each, and a draw
+# costs the slowest rather than the sum. Each answer lands in a file of its
+# own under the picker's state, named for this run, since a refresh behind
+# the picker (git-fzf-bg) and a tick can draw at the same time.
+f=$st/facts.$$
+if [ -n "$st" ] && [ -d "$st" ]; then trap 'rm -f "$f".*' EXIT
+else f=$(mktemp -d) || exit 1; trap 'rm -rf "$f"' EXIT; f=$f/facts
+fi
+git for-each-ref refs/heads --sort=-committerdate \
+  --format="REF%09%(refname:short)%09%(committerdate:unix)%09%(ahead-behind:$base)%09%(objectname)" > "$f.refs" &
+git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstrip=3)%09%(objectname)' > "$f.remotes" &
+git branch --show-current > "$f.current" &
+git worktree list --porcelain > "$f.wt" &
+git log --simplify-by-decoration --decorate-refs=refs/heads/ --parents --format='UP%x09%H%x09%P' \
+  --branches --not "$base" > "$f.up" 2>/dev/null &
+git remote get-url origin > "$f.origin" 2>/dev/null &
+wait
+read -r origin < "$f.origin" || origin=
+read -r current < "$f.current" || current=
+
 # Without an origin remote there is no GitLab to ask and no origin/main to
 # measure against: say so, compare with local main, and skip MR lookups.
 # An origin that is not on GitLab has no MRs to look up, which is not a failure.
-gitlab= origin=
-origin=$(git remote get-url origin 2>/dev/null) || origin=
+gitlab=
 case $origin in *gitlab*) gitlab=1 ;; esac
 if [ -z "$origin" ]; then
   printf "${GK_CONTEXT}no origin remote, so no MR info; drift is against local main${GK_R}\n" > "$st/footer"
@@ -93,13 +113,6 @@ elif [ -n "$refresh" ] || [ ! -e "$cache" ] || [ -z "$(find "$cache" "$cache.tri
 fi
 [ -n "$gitlab" ] && git-fzf-stale "$cache"
 
-# Every local branch and every origin copy of one, each in a single call: the
-# rows below are built from them, and so is the merged check under them, which
-# used to ask git for a branch's tip once per branch of its own.
-refs=$(git for-each-ref refs/heads --sort=-committerdate \
-  --format="REF%09%(refname:short)%09%(committerdate:unix)%09%(ahead-behind:$base)%09%(objectname)")
-remotes=$(git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstrip=3)%09%(objectname)')
-
 # A merged MR only counts as merged if the branch tip is the MR's last commit or
 # behind it; anything committed since is work the MR never had. A closed MR, or
 # someone else's open one, is safe to drop locally on the same terms, or when
@@ -113,18 +126,15 @@ remotes=$(git for-each-ref refs/remotes/origin --format='REMOTE%09%(refname:lstr
 # those are asked for one at a time as they always were.
 merged_ok=$(
   [ -s "$cache" ] || exit 0
-  {
-    printf '%s\n%s\n' "$refs" "$remotes"
-    awk -F'\t' -v OFS='\t' '$2 == "merged" || $2 == "closed" || ($2 == "opened" && $5 == "theirs") { print "MR", $1, $4 }' "$cache"
-  } | awk -F'\t' -v OFS='\t' '
-    $1 == "REF"    { tip[$2] = $5; next }
-    $1 == "REMOTE" { rtip[$2] = $3; next }
-    $1 == "MR" {
-      b = $2; sha = tip[b]
+  awk -F'\t' -v OFS='\t' '
+    FILENAME != ARGV[3] && $1 == "REF"    { tip[$2] = $5; next }
+    FILENAME != ARGV[3] && $1 == "REMOTE" { rtip[$2] = $3; next }
+    FILENAME == ARGV[3] && ($2 == "merged" || $2 == "closed" || ($2 == "opened" && $5 == "theirs")) {
+      b = $1; sha = tip[b]
       if (sha == "") next                      # no local branch by that name
-      if (sha == $3 || sha == rtip[b]) print "OK", b
-      else print "ASK", b, sha, $3
-    }' |
+      if (sha == $4 || sha == rtip[b]) print "OK", b
+      else print "ASK", b, sha, $4
+    }' "$f.refs" "$f.remotes" "$cache" |
   while IFS="$(printf '\t')" read -r verdict b sha mrsha; do
     [ "$verdict" = OK ] && { printf '%s\n' "$b"; continue; }
     { git merge-base --is-ancestor "$sha" "$mrsha" 2>/dev/null ||
@@ -132,19 +142,19 @@ merged_ok=$(
   done
 )
 
-{
-  printf 'CURRENT\t%s\n' "$(git branch --show-current)"
-  git worktree list --porcelain | awk '
-    /^worktree / { if (p != "") print "WT\t" p "\t" b; p = substr($0, 10); b = "" }
-    /^branch /   { b = substr($0, 19) }
-    END          { if (p != "") print "WT\t" p "\t" b }'
-  [ -s "$cache" ] && awk '{ print "MR\t" $0 }' "$cache"
-  printf '%s\n' "$merged_ok" | awk 'NF { print "OK\t" $0 }'
-  printf '%s\n' "$remotes"
-  git log --simplify-by-decoration --decorate-refs=refs/heads/ --parents --format='UP%x09%H%x09%P' \
-    --branches --not "$base" 2>/dev/null
-  printf '%s\n' "$refs"
-} | awk -F'\t' -v OFS='\t' -v main="$main" "$(cat "$share/rowfmt.awk")"'
+# One awk over the answers, in the order the lists that read this want them:
+# the worktrees before the branches, since a branch's row says where it is
+# checked out, and the MR states and merged verdicts before them too, since
+# each branch's kind is decided from those as its REF goes by. ORIGIN leads,
+# and only when there is one, so a reader can tell from the first line alone.
+# The merged verdicts come through the environment rather than -v, which on
+# macOS refuses a newline in its value; the MR cache is only named when it
+# exists, since awk stops at a file it cannot open.
+set -- "$f.wt"
+[ -s "$cache" ] && set -- "$@" "$cache"
+set -- "$@" "$f.remotes" "$f.up" "$f.refs"
+GK_OK="$merged_ok" awk -F'\t' -v OFS='\t' -v main="$main" -v current="$current" -v origin="$origin" \
+  -v cache="$cache" -v wt="$f.wt" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {
     # Eight columns each, so every list that leads with one lines up: gb and
     # gw. "detached" and "missing " in git-worktree-list are the same width.
@@ -152,9 +162,21 @@ merged_ok=$(
     label["open"] = GK_ATTENTION "open MR " GK_R; label["merged"] = GK_GOOD "merged  " GK_R; label["merged-diff"] = GK_BAD "merged+ " GK_R
     label["closed"] = GK_GOOD "closed  " GK_R; label["closed-diff"] = GK_BAD "closed+ " GK_R; label["theirs"] = GK_GOOD "their MR" GK_R
     label["pushed"] = GK_CONTEXT "no MR   " GK_R; label["local"] = GK_CONTEXT "unpushed" GK_R
+    if (origin != "") print "ORIGIN", origin
+    print "MAIN", main
+    print "CURRENT", current
+    n = split(ENVIRON["GK_OK"], oks, "\n")
+    for (i = 1; i <= n; i++) if (oks[i] != "") ok[oks[i]] = 1
   }
-  $1 == "MR"     { state[$2] = $3; iid[$2] = $4; target[$2] = $7; next }
-  $1 == "OK"     { ok[$2] = 1; next }
+  # git worktree list --porcelain: a worktree is its lines up to the next, so
+  # the last one is written out when the file after it begins.
+  FILENAME == wt {
+    if ($0 ~ /^worktree /) { if (p != "") print "WT", p, b; p = substr($0, 10); b = "" }
+    else if ($0 ~ /^branch /) b = substr($0, 19)
+    next
+  }
+  p != "" { print "WT", p, b; p = "" }
+  FILENAME == cache { state[$1] = $2; iid[$1] = $3; target[$1] = $6; next }
   $1 == "REMOTE" { remote[$2] = 1; next }
   $1 == "REF" {
     b = $2; split($4, ab, " ")
@@ -167,4 +189,5 @@ merged_ok=$(
     print "BRANCH", b, kind, label[kind], iid[b], target[b], $3, ab[1], ab[2], $5
     next
   }
-  { print }'
+  { print }
+  END { if (p != "") print "WT", p, b }' "$@"

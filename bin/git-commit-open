@@ -29,7 +29,12 @@ esac
 rev=$1
 [ -n "$rev" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
-cd "$(git rev-parse --show-toplevel)" || exit 1
+# The repo's top from the picker's environment (otis-config --env) while this
+# runs inside the checkout it was worked out for, as share/repo.sh takes the
+# git dir; asked otherwise.
+top=
+if [ -n "$OTIS_C_ROOT" ]; then case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) top=$OTIS_C_ROOT ;; esac; fi
+cd "${top:-$(git rev-parse --show-toplevel)}" || exit 1
 keep() { if [ -n "$allfiles" ]; then cat; else git-test-files filter 1; fi; }
 
 # One commit reads through git show, a range through git diff; the rest of the
@@ -118,11 +123,14 @@ if [ -n "$rows_only" ]; then
   cols=${FZF_COLUMNS:-0}
   [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
   [ -n "$cols" ] || cols=100
+  # The counts and the names are two git processes with nothing to say to
+  # each other, so they run at once.
   ns=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/numstat.$$
-  changes --numstat -M > "$ns" 2>/dev/null
-  changes --name-status --no-renames |
-    awk -F'\t' '{ print $2 (($1 == "D") ? "\tdeleted" : ($1 == "A") ? "\tadded" : "") }' |
-    awk -F'\t' -v ns="$ns" -v cols="$cols" "$(cat "$share/rowfmt.awk")"'
+  changes --numstat -M > "$ns" 2>/dev/null &
+  changes --name-status --no-renames > "$ns.names"
+  wait
+  awk -F'\t' '{ print $2 (($1 == "D") ? "\tdeleted" : ($1 == "A") ? "\tadded" : "") }' "$ns.names" |
+    awk -F'\t' -v ns="$ns" -v cols="$cols" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
       BEGIN {
         while ((getline line < ns) > 0) {
           if (split(line, f, "\t") < 3 || f[1] !~ /^[0-9]+$/) continue
@@ -144,7 +152,7 @@ if [ -n "$rows_only" ]; then
             gk_path(p, budget, state[i] == "deleted" ? GK_CONTEXT : GK_TEXT) "\t" p "\t" state[i] "\t" p
         }
       }' | git-test-files filter --section 2 --state 3
-  rm -f "$ns"
+  rm -f "$ns" "$ns.names"
   exit 0
 fi
 
@@ -203,5 +211,5 @@ git-fzf "open from $rev " 'enter=open in editor,s=by symbol,t=tests/config/gener
   --bind "t:execute-silent(git-test-files toggle)+reload(git-commit-open --rows $rev)" \
   --bind "enter:execute(git-commit-open $rev {2})" \
   --bind "s:$symbols" \
-  --preview "git-preview-commit $rev {2}" </dev/null >/dev/null
+  --preview "git-preview-commit --as {3} $rev {2}" </dev/null >/dev/null
 exit 0

@@ -1,15 +1,19 @@
 #!/bin/sh
-# git-ci-preview <iid>: one of your MRs in gmr, from the JSON git-mr-list saved. A merged one
+# git-ci-preview [--merged | --open] <iid>: one of your MRs in gmr, from the JSON git-mr-list saved. A merged one
 # shows whether it is live, or where it is on the way. An open one: approvals,
 # unresolved threads, reviewers and where each stands, labels, then the pipeline: what failed
 # (grouped by stage, allowed failures marked), what is still going, and what
-# passed.
+# passed. Which it is is looked up in the merged list unless the caller
+# already knows (git-mr-preview does, from the row), since this runs on
+# every cursor move.
+kind=
+case $1 in --merged | --open) kind=${1#--}; shift ;; esac
 iid=$1
 [ -n "$iid" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
 # A merged MR (git-ci-merged): where it is on the way to production.
-if jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; then
+if [ "$kind" = merged ] || { [ -z "$kind" ] && jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; }; then
   jq -r -L "$share" --arg iid "$iid" --arg url "$(otis-config url)" '
     include "otis";
     . as $all | .mrs[] | select(.iid == $iid) |
@@ -84,8 +88,14 @@ if jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-mer
   ' "$GIT_FZF_STATE/ci-merged.json"
   exec git-mr-watch --preview "$iid"
 fi
-current=$(git branch --show-current)
-wt=$(git worktree list --porcelain | awk -v me="$(git rev-parse --show-toplevel)" '
+# Where this checkout is and what it has out, in one git call: the branch's
+# full name, or HEAD when detached, which is no branch.
+{ read -r me; read -r current; } <<EOF
+$(git rev-parse --show-toplevel --symbolic-full-name HEAD 2>/dev/null)
+EOF
+current=${current#refs/heads/}
+[ "$current" = HEAD ] && current=
+wt=$(git worktree list --porcelain | awk -v me="$me" '
   /^worktree /{ p = substr($0, 10) } /^branch /{ sub("refs/heads/", "", $2); if (p != me) print $2 "\t" p }')
 # The gate jobs, as git-mr-list saved them for this draw.
 [ -s "$GIT_FZF_STATE/marks.json" ] || echo '{"gates": []}' > "$GIT_FZF_STATE/marks.json"

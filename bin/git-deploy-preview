@@ -7,7 +7,10 @@
 # dir, since a finished job's log never changes.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
+. "$share/repo.sh" || exit 0
+dir="$OTIS_GITDIR/git-alias-cache"
+nl='
+'
 
 # once <file> <what it is doing> <function that writes it>: the file, fetched
 # the first time it is wanted and kept for good, since a finished job's log
@@ -41,12 +44,12 @@ once() {
 }
 cache=$dir/deploys.json
 [ -s "$cache" ] || exit 0
-d=$(jq -c --arg id "$1" '.deploys[] | select((.id | tostring) == $id)' "$cache")
-[ -n "$d" ] || exit 0
-mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
-url=$(otis-config url) repo=$(otis-config project)
-
-printf '%s' "$d" | jq -r -L "$share" 'include "otis";
+# The deploy's header, and after it, on a line of its own, the fields the
+# rest of this needs, in one jq rather than one a field. | between them,
+# since read keeps an empty field between two of those and drops one
+# between two tabs.
+out=$(jq -r -L "$share" --arg id "$1" 'include "otis";
+  .deploys[] | select((.id | tostring) == $id) |
   def took: "\(.duration / 60 | floor)m\(.duration % 60 | tostring | if length < 2 then "0" + . else . end)s";
   (if .kind == "rollback" then bad + "↺ rollback" + r
    elif .status == "success" then good + "✓ deployed" + r
@@ -56,10 +59,13 @@ printf '%s' "$d" | jq -r -L "$share" 'include "otis";
    else attention + "○ waiting for the deploy lock" + r end)
   + context + " · " + (.at | when) + (if .duration > 0 then " · took " + took else "" end) + " · by " + .user + r,
   context + "pipeline " + .pipeline + " · " + .sha[0:8] + (if .prev != "" then " · since " + .prev[0:8] else "" end) + r,
-  context + .url + r'
-
-kind=$(printf '%s' "$d" | jq -r .kind); prev=$(printf '%s' "$d" | jq -r .prev); sha=$(printf '%s' "$d" | jq -r .sha)
-jobid=$(printf '%s' "$d" | jq -r .job); status=$(printf '%s' "$d" | jq -r .status)
+  context + .url + r,
+  ([.kind, .prev, .sha, .job, .status, .commits] | map(tostring) | join("|"))' "$cache")
+[ -n "$out" ] || exit 0
+printf '%s\n' "${out%"$nl"*}"
+IFS='|' read -r kind prev sha jobid status n <<EOF
+${out##*"$nl"}
+EOF
 
 rollback_inputs() {
   glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
@@ -67,6 +73,7 @@ rollback_inputs() {
     jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}'
 }
 if [ "$kind" = rollback ]; then
+  repo=$(otis-config project)
   f=$dir/rollback-$jobid.json
   if once "$f" "asking GitLab which build it restored" rollback_inputs; then
     v=$(jq -r .version "$f")
@@ -76,13 +83,12 @@ if [ "$kind" = rollback ]; then
 fi
 
 if [ -n "$prev" ]; then
-  n=$(printf '%s' "$d" | jq -r .commits)
   printf "\n${GK_TEXT}carried${GK_R} ${GK_CONTEXT}%s commits since the last deploy that went live${GK_R}\n" "$n"
   # Main's own commits: a merge commit per MR, whose body GitLab writes as
   # the MR's title, a blank line, then the "See merge request" trailer; or a
   # commit pushed straight to main. One line each.
   git log --first-parent --format='%h%x09%s%x09%b%x00' "$prev..$sha" 2>/dev/null | tr '\n\0' '\001\n' | head -60 |
-    awk -F'\t' -v mine="$(printf '%s' "$mine" | jq -r 'join(" ")')" -v Y="$GK_YOURS" -v T="$GK_TEXT" -v C="$GK_CONTEXT" -v R="$GK_R" '
+    awk -F'\t' -v mine="$(jq -r '[.mrs[]?.iid | tostring] | join(" ")' "$dir/ci-merged.json" 2>/dev/null)" -v Y="$GK_YOURS" -v T="$GK_TEXT" -v C="$GK_CONTEXT" -v R="$GK_R" '
       BEGIN { n = split(mine, m, " "); for (i = 1; i <= n; i++) own[m[i]] = 1 }
       { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
         title = $3; sub(/\001.*/, "", title); if (title == "") title = $2

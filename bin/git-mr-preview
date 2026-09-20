@@ -115,11 +115,11 @@ fi
 [ -n "$iid" ] || exit 0
 case $kind in
   merged)
-    exec git-ci-preview "$iid" ;;
+    exec git-ci-preview --merged "$iid" ;;
   mine)
     # Listed from every open MR (f), yours may not be in the pipelines JSON.
     if jq -e --arg iid "$iid" '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid)' "$st/ci.json" >/dev/null 2>&1; then
-      git-ci-preview "$iid"
+      git-ci-preview --open "$iid"
       exec git-mr-threads --overview "$iid"
     fi ;;
 esac

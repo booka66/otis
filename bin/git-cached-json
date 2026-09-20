@@ -26,7 +26,7 @@
 #
 # A failed fetch never replaces the cache, and is never silent: why it failed
 # stays beside the cache ($cache.err) until a fetch works, and every call in
-# the meantime tells the picker (git-fzf-stale), whose footer says the list is
+# the meantime tells the picker (as git-fzf-stale would), whose footer says the list is
 # from the last fetch that worked. The cache's mtime is that time; attempts are
 # timed by $cache.tried, so a failing fetch is retried no more often than a
 # working one, and the picker reloads once when a fetch starts or stops failing.
@@ -40,24 +40,44 @@ if [ -n "$refresh" ]; then stale=0; else stale=$1; shift; fi
 [ -n "$sync" ] || { reload=$1; shift; }
 [ "$1" = -- ] && shift
 
-dir="$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache"
-mkdir -p "$dir"
+# Every list and preview comes through here, some of them several times a
+# draw, so the warm path (a cache that is fresh) starts as little as it can:
+# the git dir from the picker's environment (share/repo.sh), a directory made
+# only when it is missing, the stale mark written without starting
+# git-fzf-stale for it, and the sweep left to the fetches.
+. "${0%/*}/../share/repo.sh" || exit 1
+dir="$OTIS_GITDIR/git-alias-cache"
+[ -d "$dir" ] || mkdir -p "$dir"
 cache="$dir/$name.json"
 
-# Leftovers, swept once an hour: the temp files of a fetch that was killed
-# mid-run (the picker closed under it), once ten minutes old, and the per-MR
-# and per-pipeline caches of things not looked at for two weeks.
-if [ -z "$(find "$dir/.swept" -mmin -60 2>/dev/null)" ]; then
-  touch "$dir/.swept"
-  find "$dir" \( -name '*.json.??????' -o -name '*.json.??????.stderr' -o -name '*.err.??????' \) -mmin +10 -delete 2>/dev/null
-  find "$dir" \( -name 'mr-*' -o -name 'jobs-*' \) -mtime +14 -delete 2>/dev/null
-fi
+# What git-fzf-stale does, without a process for it: tell the open picker
+# whether this cache's last fetch failed (<cache>.err, kept until a fetch
+# works), so git-fzf-footer says the list is from the last one that worked
+# and ? shows why. Outside a picker there is nobody to tell.
+mark_stale() {
+  [ -n "$GIT_FZF_STATE" ] && [ -d "$GIT_FZF_STATE" ] || return 0
+  if [ -s "$cache.err" ]; then
+    printf '%s\n' "$cache" > "$GIT_FZF_STATE/stale.${cache##*/}"
+    cp "$cache.err" "$GIT_FZF_STATE/last-error"
+  elif [ -e "$GIT_FZF_STATE/stale.${cache##*/}" ]; then
+    rm -f "$GIT_FZF_STATE/stale.${cache##*/}"
+  fi
+}
 
 # run <fetch command...>: succeed only with output and no GraphQL errors,
 # leaving it in $new; otherwise leave why in $cache.err. Every run has temp
 # files of its own, since a picker's background refresh and git-alerts can run
 # the same fetch at once, and shared ones had each delete the other's output.
 run() {
+  # Leftovers, swept once an hour, by whichever fetch finds the hour up: the
+  # temp files of a fetch that was killed mid-run (the picker closed under
+  # it), once ten minutes old, and the per-MR and per-pipeline caches of
+  # things not looked at for two weeks.
+  if [ -z "$(find "$dir/.swept" -mmin -60 2>/dev/null)" ]; then
+    touch "$dir/.swept"
+    find "$dir" \( -name '*.json.??????' -o -name '*.json.??????.stderr' -o -name '*.err.??????' \) -mmin +10 -delete 2>/dev/null
+    find "$dir" \( -name 'mr-*' -o -name 'jobs-*' \) -mtime +14 -delete 2>/dev/null
+  fi
   new=$(mktemp "$cache.XXXXXX") || return 1
   # Killed mid-fetch (the picker closed): leave nothing behind.
   trap 'rm -f "$new" "$new.stderr"; exit 1' HUP TERM INT
@@ -131,14 +151,14 @@ if [ -n "$now" ]; then
     rm -f "$cache.err"
   fi
   waited
-  git-fzf-stale "$cache"
+  mark_stale
   [ -s "$cache" ] || { head -1 "$cache.err" >&2; exit 1; }
   echo "$cache"
   exit 0
 fi
 
 if [ ! -s "$cache" ] && [ -n "$nowait" ] && [ -n "$FZF_PORT" ]; then
-  git-fzf-stale "$cache"
+  mark_stale
   # A burst of calls starts one fetch.
   [ -n "$(find "$cache.tried" -mmin -1 2>/dev/null)" ] && exit 1
   touch "$cache.tried"
@@ -160,19 +180,19 @@ if [ ! -s "$cache" ]; then
   if ! run "$@"; then
     waited
     head -1 "$cache.err" >&2
-    git-fzf-stale "$cache"
+    mark_stale
     exit 1
   fi
   waited
   mv "$new" "$cache"
   rm -f "$cache.err"
   echo "$cache"
-  git-fzf-stale "$cache"
+  mark_stale
   exit 0
 fi
 
 echo "$cache"
-git-fzf-stale "$cache"
+mark_stale
 last=$cache
 [ "$cache.tried" -nt "$cache" ] && last=$cache.tried
 # date -r reads a file's mtime on both macOS and Linux, where stat's flags differ.

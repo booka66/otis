@@ -11,7 +11,26 @@ b=$1 kind=$2 place=$3 wt=$4 iid=$5 ahead=$6 behind=$7 claude=$8
 [ -n "$b" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-base=$(otis-config base)
+. "$share/repo.sh"
+# The base from the picker's environment (otis-config --env, loaded by
+# git-fzf), as git-delta takes its setting: a process for it on every move
+# was a tenth of the preview. The lookup is for a run from anywhere else.
+if [ -n "$OTIS_C_ROOT" ] && [ -n "$OTIS_C_base" ]; then base=$OTIS_C_base; else base=$(otis-config base); fi
+tab='	'
+nl='
+'
+
+# One log for both the last commit's age and the commits themselves: the
+# tip of the branch is the first of them whenever there are any, so the
+# second git process is only for a branch with nothing past the base.
+n=${ahead:-$(git rev-list --count "$base..$b")}
+if [ "$n" -eq 0 ]; then
+  log=
+  last=$(git log -1 --format='%cr' "$b")
+else
+  log=$(git log --format='%h%x09%cr%x09%s' -40 "$base..$b")
+  last=${log%%"$nl"*}; last=${last#*"$tab"}; last=${last%%"$tab"*}
+fi
 
 case $kind in
   open)                mr="!$iid open" ;;
@@ -30,19 +49,31 @@ case $kind in
   merged-diff) printf "${GK_BAD}the MR merged, but this branch has commits since then${GK_R}\n" ;;
   closed-diff) printf "${GK_BAD}the MR closed, but this branch has commits GitLab never got${GK_R}\n" ;;
 esac
-printf "${GK_CONTEXT}last commit %s${GK_R}\n" "$(git log -1 --format='%cr' "$b")"
+printf "${GK_CONTEXT}last commit %s${GK_R}\n" "$last"
 case $claude in
   fixing) printf "${GK_ATTENTION}Claude is working on fixes here${GK_R}; C shows how far it has got\n" ;;
   ?*)     printf "${GK_YOURS}%s fix%s waiting${GK_R}; C shows them: space accepts, a applies to your checkout\n" "$claude" "$([ "$claude" -eq 1 ] || echo es)" ;;
 esac
-git-verify --preview "$iid" "$b"
+# Its verification, only where there is one to show: git-verify keeps a run
+# under the MR's iid, or under the branch with each / as %, and finding no
+# directory there is the whole answer for nearly every branch. Its own
+# shell, on every move, said the same for a third of the preview's time.
+if [ -n "$iid" ]; then vd=$OTIS_GITDIR/otis-verify/$iid
+else
+  k= r=$b
+  while :; do case $r in */*) k=$k${r%%/*}%; r=${r#*/} ;; *) k=$k$r; break ;; esac; done
+  vd=$OTIS_GITDIR/otis-verify/b-$k
+fi
+[ -d "$vd" ] && git-verify --preview "$iid" "$b"
 printf '\n'
-n=${ahead:-$(git rev-list --count "$base..$b")}
 if [ "$n" -eq 0 ]; then
   printf "${GK_CONTEXT}nothing here that %s does not have${GK_R}\n" "$base"
 else
   printf "${GK_CONTEXT}%s commits not on %s:${GK_R}\n" "$n" "$base"
-  git log --color=always --format='%C(yellow)%h%C(reset) %s %C(dim)%cr%C(reset)' -40 "$base..$b"
+  # In the palette, as gl shows them, rather than git's own yellow and dim.
+  printf '%s\n' "$log" | while IFS="$tab" read -r h when subject; do
+    printf "${GK_ATTENTION}%s${GK_R} %s ${GK_CONTEXT}%s${GK_R}\n" "$h" "$subject" "$when"
+  done
   # Three dots: the branch's own changes since it left the base, not the base's since.
   printf '\n'
   git-preview-commit --tests-toggle "$base...$b"

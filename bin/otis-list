@@ -61,9 +61,17 @@ git-mr-watch --marks  > "$st/m.watch"  2>/dev/null &
 git-mr-claude --marks > "$st/m.claude" 2>/dev/null &
 git-mr-fix --marks    > "$st/m.fixes"  2>/dev/null &
 git-verify --marks    > "$st/m.verify" 2>/dev/null &
-git-agent-list --data 2>/dev/null | jq -Rn '[inputs | split("\t") |
-  {state: .[0], started: ((.[1] | tonumber?) // 0), ended: ((.[2] | tonumber?) // 0),
-   kind: .[3], dir: .[4], last: (.[5] // "")}]' > "$st/runs.json" &
+# Usually there are none, and jq started to say [] was a process a draw.
+{
+  runs=$(git-agent-list --data 2>/dev/null)
+  if [ -n "$runs" ]; then
+    printf '%s\n' "$runs" | jq -Rn '[inputs | split("\t") |
+      {state: .[0], started: ((.[1] | tonumber?) // 0), ended: ((.[2] | tonumber?) // 0),
+       kind: .[3], dir: .[4], last: (.[5] // "")}]'
+  else
+    echo '[]'
+  fi
+} > "$st/runs.json" &
 # Worktrees otis moved to the trash and you have not emptied yet
 # (git-worktree-trash keeps the note; it prunes what is gone).
 git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
@@ -83,6 +91,34 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
   # of its own, the same shape.
   cat "$common/otis-dismissed" 2>/dev/null
 } > "$st/seen.tsv" 2>/dev/null &
+
+# Where you are. Git's own answers, not a cache: this is the one part of the
+# dashboard about the checkout under you, and it has to be right. Five git
+# processes, and this was the slowest thing a draw waited on when they ran one
+# after another; each that needs nothing from the others runs beside them, so
+# the row costs its status, the slow one, and no more. It asks for the base
+# itself, so it starts before the settings below are read rather than after.
+# A line of fields, for the render to read: a jq to write it as JSON was a
+# process of its own.
+(
+  git --no-optional-locks status --porcelain 2>/dev/null | grep -c . > "$st/here.dirty" &
+  git rev-parse --short HEAD > "$st/here.sha" 2>/dev/null &
+  { git rev-list --left-right --count "$(otis-config base)...HEAD" > "$st/here.counts"; } 2>/dev/null &
+  branch=$(git branch --show-current)
+  unpushed=
+  # No copy on origin, or none it could count against: as far past the base
+  # as it is, below.
+  [ -n "$branch" ] && unpushed=$(git rev-list --count "origin/$branch..HEAD" 2>/dev/null)
+  wait
+  ahead=0 behind=0
+  if [ -n "$branch" ]; then
+    read -r behind ahead < "$st/here.counts" || :
+    [ -n "$behind" ] || behind=0
+    [ -n "$ahead" ] || ahead=0
+    [ -n "$unpushed" ] || unpushed=$ahead
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$branch" "$(cat "$st/here.sha")" "$(cat "$st/here.dirty")" "$ahead" "$behind" "${unpushed:-0}"
+) > "$st/here.tsv" &
 
 # One process for every setting this draw needs, rather than one each.
 { read -r repo; read -r base; read -r url; read -r gates; } <<EOF
@@ -129,27 +165,6 @@ fetch() {
 # what you feel when otis opens. Each writes a file of its own, so there is
 # nothing for them to race over, and the caches are already safe to run beside
 # each other (git-cached-json).
-# Where you are. Git's own answers, not a cache: this is the one part of the
-# dashboard about the checkout under you, and it has to be right.
-(
-  branch=$(git branch --show-current)
-  dirty=$(git --no-optional-locks status --porcelain 2>/dev/null | grep -c . | tr -d ' ')
-  ahead=0 behind=0 unpushed=0
-  if [ -n "$branch" ]; then
-    counts=$(git rev-list --left-right --count "$base...HEAD" 2>/dev/null) || counts=
-    behind=${counts%%	*} ahead=${counts##*	}
-    [ -n "$behind" ] || behind=0
-    [ -n "$ahead" ] || ahead=0
-    if git rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
-      unpushed=$(git rev-list --count "origin/$branch..HEAD" 2>/dev/null) || unpushed=0
-    else
-      unpushed=$ahead
-    fi
-  fi
-  jq -nc --arg b "$branch" --arg sha "$(git rev-parse --short HEAD 2>/dev/null)" \
-    --argjson d "${dirty:-0}" --argjson a "${ahead:-0}" --argjson bh "${behind:-0}" --argjson u "${unpushed:-0}" \
-    '{branch: $b, sha: $sha, dirty: $d, ahead: $a, behind: $bh, unpushed: $u}'
-) > "$st/here.json" &
 
 # Whether there is a GitLab to ask runs here, in the time those take.
 note=
@@ -167,28 +182,31 @@ else
 fi
 wait
 
-# Saved as the previews expect it, exactly as gmr leaves it: git-mr-preview
-# and git-ci-preview read the marks from here on every cursor move.
-jq -nc --argjson gates "$gates" \
-  --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
-  --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
-  '{gates: $gates, watch: ($watch[0] // {}), claude: ($claude[0] // {}),
-    fixes: ($fixes[0] // {}), verify: ($verify[0] // {})}' > "$st/marks.json"
-
-rows=$(jq -nr -L "$share" \
+# One jq for all of it. Its first line is the marks, saved as the previews
+# expect them, exactly as gmr leaves them (git-mr-preview and git-ci-preview
+# read them from there on every cursor move); then the rows; and last the
+# counts the footer says. Each was a process of its own before, and the
+# marks one read the same four files this one does.
+out=$(jq -nr -L "$share" \
   --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.json" \
   --slurpfile merged "$st/ci-merged.json" --slurpfile deployed "$st/deploys.json" \
-  --slurpfile runsf "$st/runs.json" --slurpfile heref "$st/here.json" \
-  --slurpfile marks "$st/marks.json" --rawfile trash "$st/trash.tsv" \
-  --rawfile seen "$st/seen.tsv" \
-  --arg common "$common" --arg base "$base" --arg url "$url" \
-  --arg now "$(date +%s)" '
+  --slurpfile runsf "$st/runs.json" --rawfile heretsv "$st/here.tsv" \
+  --argjson gates "$gates" \
+  --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
+  --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
+  --rawfile trash "$st/trash.tsv" --rawfile seen "$st/seen.tsv" \
+  --arg common "$common" --arg base "$base" --arg url "$url" '
   include "otis";
-  ($now | tonumber) as $NOW |
+  (now | floor) as $NOW |
   ($runsf[0] // []) as $runs |
-  ($heref[0] // {branch: "", sha: "", dirty: 0, ahead: 0, behind: 0, unpushed: 0}) as $here |
+  ($heretsv | rtrimstr("\n") | split("\t") |
+    {branch: (.[0] // ""), sha: (.[1] // ""), dirty: ((.[2] // "") | tonumber? // 0),
+     ahead: ((.[3] // "") | tonumber? // 0), behind: ((.[4] // "") | tonumber? // 0),
+     unpushed: ((.[5] // "") | tonumber? // 0)}) as $here |
   $here.branch as $current |
-  $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
+  {gates: $gates, watch: ($watch[0] // {}), claude: ($claude[0] // {}),
+    fixes: ($fixes[0] // {}), verify: ($verify[0] // {})} as $marks |
+  $marks as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
 
   # otis.jq pads to ten columns; these columns are wider than that.
   def pad($n): tostring | . as $s |
@@ -455,16 +473,22 @@ rows=$(jq -nr -L "$share" \
   (([ ($runs[] | select(.state == "running") | run_row), pipe_rows ] | sort_by(.rank))
    + ([ shipping_rows, deploy_rows ] | sort_by(.rank))) as $going |
 
+  ($marks | tojson),
   (if ($waiting | length) > 0 then sep("waiting on you"; "sep-waiting"), ($waiting[] | render) else empty end),
   (if ($going | length) > 0 then sep("going"; "sep-going"), ($going[] | render) else empty end),
-  sep("here"; "sep-here"), (here_row | render), (trash_row | render)')
-
+  sep("here"; "sep-here"), (here_row | render), (trash_row | render),
+  "\($waiting | length)\t\($going | length)"')
+nl='
+'
+printf '%s\n' "${out%%"$nl"*}" > "$st/marks.json"
+rows=${out#*"$nl"}
+counts=${rows##*"$nl"}
+rows=${rows%"$nl"*}
 printf '%s\n' "$rows"
 
 # The footer is where the count lives, so an empty morning is an empty list
 # rather than a row saying there is nothing.
-w=$(printf '%s\n' "$rows" | awk -F'\t' '$11 ~ /^w-/ { n++ } END { print n + 0 }')
-g=$(printf '%s\n' "$rows" | awk -F'\t' '$11 ~ /^g-/ { n++ } END { print n + 0 }')
+w=${counts%%	*} g=${counts#*	}
 {
   if [ "$w" -eq 0 ]; then printf "${GK_GOOD}nothing waiting on you${GK_R}"
   elif [ "$w" -eq 1 ]; then printf "${GK_YOURS}1 thing waiting on you${GK_R}"

@@ -52,26 +52,35 @@ cols=${FZF_COLUMNS:-0}
 
 # What Claude is doing, the way gmr shows it. A run started from gb is filed
 # under the branch and one from gmr under the MR's iid, so a row asks about both.
+# The verifications in Cursor Cloud (git-verify) the same way: going, how it
+# ended, the verdict and the commit it verified. Both are asked behind
+# git-branch-facts rather than before it, along with the test-file footer,
+# since none of the three needs the others: a draw costs the facts alone. Each
+# answer lands in a file named for this run, because a refresh behind the
+# picker (git-fzf-bg) and a tick can draw at once.
+f=$st/list.$$
+trap 'rm -f "$f".*' EXIT
+git-mr-fix --marks > "$f.fixes" 2>/dev/null &
+git-verify --marks > "$f.verify" 2>/dev/null &
+git-test-files state > "$f.tests" 2>/dev/null &
+git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" > "$f.facts"
+wait
 # An empty answer ({} : nobody has a run here) is the usual one, and jq
 # started to turn it into no rows at all is a process a draw.
-marks=$(git-mr-fix --marks 2>/dev/null)
+read -r marks < "$f.fixes" || marks=
 case $marks in
   '' | '{}') marks= ;;
-  *) marks=$(printf '%s' "$marks" |
-    jq -r 'to_entries[] | [.key, (.value.fixing | tostring), (.value.fixes | tostring)] | @tsv' 2>/dev/null) ;;
+  *) marks=$(jq -r 'to_entries[] | [.key, (.value.fixing | tostring), (.value.fixes | tostring)] | @tsv' "$f.fixes" 2>/dev/null) ;;
 esac
-# Verifications in Cursor Cloud (git-verify), under the MR's iid or the branch
-# as fixes are: going, how it ended, the verdict and the commit it verified.
-verify=$(git-verify --marks 2>/dev/null)
+read -r verify < "$f.verify" || verify=
 case $verify in
   '' | '{}') verify= ;;
-  *) verify=$(printf '%s' "$verify" |
-    jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' 2>/dev/null) ;;
+  *) verify=$(jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' "$f.verify" 2>/dev/null) ;;
 esac
 
-git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
-  GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v now="$(date +%s)" -v cols="$cols" -v main="$(otis-config main)" \
-     "$(cat "$share/rowfmt.awk")"'
+# The rows go to the list's file, for M, and to the picker.
+GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
+     "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {
     # Thirty-one columns of fixed zone, then the name takes the rest.
     budget = gk_list_width(cols) - 31
@@ -118,11 +127,12 @@ git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
     if (vverdict[k] == "inconclusive") return GK_CONTEXT "\342\227\217 " GK_R
     return "  "
   }
+  $1 == "MAIN"    { main = $2; next }
   $1 == "CURRENT" { current = $2; next }
   $1 == "WT"      { if (mainpath == "") mainpath = $2; if ($3 != "") wt[$3] = $2; next }
   $1 == "UP"      { split($3, ps, " "); up[$2] = ps[1]; next }
   $1 == "BRANCH" {
-    b = $2; kind = $3; age = now - $7
+    b = $2; kind = $3; age = GK_NOW - $7
     place = (b == current) ? "here" : (b in wt) ? "worktree" : ""
 
     if (age < 3600) when = int(age / 60) "m"
@@ -170,10 +180,11 @@ git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
     if (depth < 30) { k = split(kids[i], ks, " "); for (; k >= 1; k--) emit(ks[k], depth + 1) }
     pad = ""
     if (depth > 0) { for (k = 1; k < depth; k++) pad = pad "  "; pad = GK_CONTEXT pad "\342\224\214 " GK_R }
+    print heads[i] pad tails[i] > out
     print heads[i] pad tails[i]
   }
   END {
-    if (pinned != "") print pinned
+    if (pinned != "") { print pinned > out; print pinned }
     for (i = 1; i <= n; i++) {
       p = 0
       if ((tipsha[i] in up) && (up[tipsha[i]] in tipat)) p = tipat[up[tipsha[i]]]
@@ -184,7 +195,7 @@ git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
       }
     }
     for (i = 1; i <= n; i++) if (!stacked[i]) emit(i, 0)
-  }' > "$st/branches"
+  }' "$f.facts"
 
 # What the row's columns mean, for the ? help view (git-fzf-help), as gmr does
 # it. A column may be a glyph wide only because this is a keypress away.
@@ -201,5 +212,10 @@ git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" |
   printf "  ${GK_CONTEXT}no MR${GK_R}     ${GK_CONTEXT}unpushed${GK_R}  origin has it, or it is only here\n"
 } > "$st/legend"
 
-git remote get-url origin >/dev/null 2>&1 && git-test-files state > "$st/footer"
-cat "$st/branches"
+# The test-file footer, where there is an origin: without one git-branch-facts
+# said so in the footer instead. It leads its facts with ORIGIN when there is
+# one, so the first line answers.
+read -r first < "$f.facts" || first=
+case $first in
+  ORIGIN*) read -r tests < "$f.tests" && printf '%s\n' "$tests" > "$st/footer" ;;
+esac

@@ -9,17 +9,21 @@
 # counts on to open it where the preview is scrolled), unless --diff (git-mr-file-preview, which prints comment threads under
 # delta's line numbers). --tests-toggle (gl, gb) leaves test files
 # out of the stat and patch while git-test-files has them hidden, with a note saying
-# how many.
+# how many. --as added|deleted|changed says what the sha did to the one path
+# given, for a caller whose rows already know (git-commit-open), so the preview
+# does not ask git on every cursor move; empty means changed.
 #
 # A merge commit shows what it brought in, its diff against its first parent:
 # git show's default for a merge is only the lines both sides touched, which is
 # usually nothing, and on origin/main nearly every commit is a GitLab merge.
 share=$(cd "$(dirname "$0")/../share" && pwd)
-filter=0 diff=0
+. "$share/delta.sh"
+filter=0 diff=0 as=
 while :; do
   case $1 in
     --tests-toggle) filter=1; shift ;;
     --diff) diff=1; shift ;;
+    --as) as=${2:-changed}; shift 2 ;;
     *) break ;;
   esac
 done
@@ -50,7 +54,8 @@ plain() {
     BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --line-range=:400 --wrap=never --file-name "$4" 2>/dev/null
 }
 if [ $# -eq 1 ] && [ $diff -eq 0 ]; then
-  case $(status "$1") in
+  case $as in added) as=A ;; deleted) as=D ;; changed) as=M ;; '') as=$(status "$1") ;; esac
+  case $as in
     D) plain "$GK_BAD" deleted "$(before):$1" "$1"; exit 0 ;;
     A) plain "$GK_GOOD" added "$(after):$1" "$1"; exit 0 ;;
   esac
@@ -65,7 +70,9 @@ else
     *..*) changes() { git diff --patch "$@"; } ; names() { git diff --name-only "$sha"; } ;;
     *)    changes() { git show --stat --patch --diff-merges=first-parent "$@"; } ; names() { git show --format= --name-only --diff-merges=first-parent "$sha"; } ;;
   esac
-  if [ $filter -eq 1 ] && git-test-files hidden; then
+  # The flag git-test-files keeps (its hidden and toggle), tested rather than
+  # asked: this runs on every cursor move, and asking is a shell of its own.
+  if [ $filter -eq 1 ] && [ -e "${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/hide-tests" ]; then
     n=$(names | git-test-files count)
     [ "$n" -eq 1 ] && printf '1 test file hidden · t shows it\n\n'
     [ "$n" -gt 1 ] && printf '%s test files hidden · t shows them\n\n' "$n"
@@ -76,4 +83,4 @@ else
     changes "$sha"
   fi
 fi 2>/dev/null |
-  git-delta
+  gk_delta

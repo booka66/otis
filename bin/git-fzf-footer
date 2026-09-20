@@ -1,56 +1,81 @@
-#!/bin/sh
+#!/usr/bin/env -S zsh -f
 # git-fzf-footer: a picker's footer. First a one-time note if there is one, else
 # the status line its list command left in $GIT_FZF_STATE/footer, if any; then the picker's keys and the shared ones,
 # as many as fit the width, ending in "? more keys" when some are left out or
 # "? help" when none are. Redrawn on load and on resize.
-share=$(cd "$(dirname "$0")/../share" && pwd)
-. "$share/palette.sh"
+#
+# zsh builtins throughout, and no process at all on the usual path: this runs
+# on every reload, and as sh with an awk it cost more than the rows did.
 st=$GIT_FZF_STATE
+# The palette (share/palette.sh), as the bytes this prints.
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+attention=$'\e['$OTIS_T_ATTENTION'm' context=$'\e['$OTIS_T_CONTEXT'm' bad=$'\e['$OTIS_T_BAD'm' r=$'\e[0m'
 # Data from GitLab that could not be refreshed (git-fzf-stale) says so first,
 # with the time of the oldest fetch that worked, since the list may be wrong.
 stale= oldest=
-for f in "$st"/stale.*; do
-  [ -e "$f" ] || continue
-  stale=1 c=$(cat "$f")
-  [ -e "$c" ] || { oldest=none; continue; }
-  [ "$oldest" = none ] && continue
-  { [ -z "$oldest" ] || [ "$c" -ot "$oldest" ]; } && oldest=$c
+for f in $st/stale.*(N); do
+  stale=1 c=$(<$f)
+  [[ -e $c ]] || { oldest=none; continue }
+  [[ $oldest == none ]] && continue
+  { [[ -z $oldest ]] || [[ $c -ot $oldest ]] } && oldest=$c
 done
-if [ -n "$stale" ]; then
-  if [ "$oldest" = none ]; then
+if [[ -n $stale ]]; then
+  if [[ $oldest == none ]]; then
     since="so some of this is missing"
-  elif [ "$(date -r "$oldest" +%F)" = "$(date +%F)" ]; then
-    since="showing what it said at $(date -r "$oldest" +%H:%M)"
   else
-    since="showing what it said $(date -r "$oldest" '+%b %e %H:%M')"
+    zmodload zsh/stat zsh/datetime
+    zstat -A m +mtime -- $oldest
+    strftime -s day %F $m[1]; strftime -s today %F $EPOCHSECONDS
+    if [[ $day == $today ]]; then
+      strftime -s at %H:%M $m[1]; since="showing what it said at $at"
+    else
+      strftime -s at '%b %e %H:%M' $m[1]; since="showing what it said $at"
+    fi
   fi
-  printf "${GK_BAD}could not refresh from GitLab, %s · ? shows why${GK_R}\n" "$since"
-fi
-# A note (a key that had nothing to act on, say) shows once, then clears.
-if [ -s "$st/note" ]; then
-  printf "${GK_ATTENTION}%s${GK_R}\n" "$(cat "$st/note")"
-  rm -f "$st/note"
-elif [ -s "$st/footer" ]; then
-  cat "$st/footer"
+  print -r -- "${bad}could not refresh from GitLab, $since · ? shows why$r"
 fi
 # The footer spans the list's column, which is the whole width unless the
 # preview sits to the right, where it starts at FZF_PREVIEW_LEFT.
 cols=${FZF_COLUMNS:-0}
-[ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
-[ -n "$cols" ] || cols=100
-[ "${FZF_PREVIEW_LEFT:-0}" -gt 0 ] && cols=$FZF_PREVIEW_LEFT
-awk -F'\t' -v width="$((cols - 4))" "$(cat "$share/rowfmt.awk")"'
-  NF == 2 { key[++n] = $1; label[n] = $2 }
-  END {
-    sep = " · "; seplen = 3
-    used = 0; out = ""; cut = 0
-    for (i = 1; i <= n; i++) {
-      tail = (i == n) ? 6 : 11
-      need = used + (used ? seplen : 0) + length(key[i]) + 1 + length(label[i])
-      if (need + seplen + tail > width) { cut = 1; break }
-      out = out (used ? GK_CONTEXT sep GK_R : "") GK_ATTENTION key[i] GK_R " " GK_CONTEXT label[i] GK_R
-      used = need
-    }
-    out = out (used ? GK_CONTEXT sep GK_R : "") GK_ATTENTION "?" GK_R " " GK_CONTEXT (cut ? "more keys" : "help") GK_R
-    print out
-  }' "$st/hints"
+(( cols > 0 )) || cols=${$(stty size </dev/tty 2>/dev/null)##* }
+[[ -n $cols ]] || cols=100
+(( ${FZF_PREVIEW_LEFT:-0} > 0 )) && cols=$FZF_PREVIEW_LEFT
+(( width = cols - 4 ))
+sep=" · " seplen=3
+# A line past the width fzf cuts off with ··, and the status line is a list
+# of things going on (tsgo finding callers, node_modules installing) joined
+# by " · ", so it is broken at those into as many lines as it needs, each
+# measured without its colors. A part longer than the width is left as it is.
+wrap() {
+  setopt localoptions extendedglob
+  local out= used=0 part plain
+  for part in ${(s: · :)1}; do
+    plain=${(S)part//$'\e'\[[0-9;]#m/}
+    (( used && used + seplen + $#plain > width )) && { print -r -- $out; out= used=0 }
+    out+="${${used:#0}:+$sep}$part"
+    (( used += (used ? seplen : 0) + $#plain ))
+  done
+  [[ -n $out ]] && print -r -- $out
+}
+# A note (a key that had nothing to act on, say) shows once, then clears.
+if [[ -s $st/note ]]; then
+  wrap "$attention$(<$st/note)$r"
+  rm -f $st/note
+elif [[ -s $st/footer ]]; then
+  wrap "$(<$st/footer)"
+fi
+typeset -a keys labels
+for line in ${(f)"$(<$st/hints)"}; do
+  [[ $line == *$'\t'* ]] || continue
+  keys+=("${line%%$'\t'*}") labels+=("${line#*$'\t'}")
+done
+n=$#keys used=0 out= cut=0
+for (( i = 1; i <= n; i++ )); do
+  (( tail = i == n ? 6 : 11 ))
+  (( need = used + (used ? seplen : 0) + $#keys[i] + 1 + $#labels[i] ))
+  (( need + seplen + tail > width )) && { cut=1; break }
+  out+="${${used:#0}:+$context$sep$r}$attention$keys[i]$r $context$labels[i]$r"
+  used=$need
+done
+out+="${${used:#0}:+$context$sep$r}$attention?$r $context${${cut:#0}:+more keys}${${cut:#1}:+help}$r"
+print -r -- $out

@@ -12,11 +12,12 @@
 # never wrapped.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/delta.sh"
 st=$1 p=$2 from=$3
 [ -n "$p" ] || exit 0
 w=${FZF_PREVIEW_COLUMNS:-100}
 
-delta_file() { git-delta --file-style=omit; }
+delta_file() { gk_delta --file-style=omit; }
 show() {
   BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --line-range=:400 "$@" 2>/dev/null || head -200
 }
@@ -42,11 +43,13 @@ case $st in
     show --wrap=never -- "$p" < "$p"
     ;;
   *)
-    # A repo with no commits yet diffs against the empty tree. diff-index, not
-    # diff: git diff rewrites the index when it can take the lock, even under
-    # --no-optional-locks, and this runs on every move, so an agent's git add or
-    # commit running alongside would fail on that lock.
-    head=$(git rev-parse -q --verify HEAD || git hash-object -t tree /dev/null)
-    git diff-index -p -M "$head" -- "$p" ${from:+"$from"} | delta_file
+    # A repo with no commits yet diffs against the empty tree, found out by
+    # asking for HEAD's diff and being refused, rather than by a git process
+    # a move that checks first. diff-index, not diff: git diff rewrites the
+    # index when it can take the lock, even under --no-optional-locks, and
+    # this runs on every move, so an agent's git add or commit running
+    # alongside would fail on that lock.
+    { git diff-index -p -M HEAD -- "$p" ${from:+"$from"} 2>/dev/null ||
+      git diff-index -p -M "$(git hash-object -t tree /dev/null)" -- "$p" ${from:+"$from"}; } | delta_file
     ;;
 esac

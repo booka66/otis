@@ -118,7 +118,7 @@ lines() {
 # paint <width>: color kind<tab>text[<tab>id] lines, each cut to <width> (0:
 # never), the id kept after a tab for fzf.
 paint() {
-  awk -F'\t' -v w="$1" "$(cat "$share/rowfmt.awk")"'
+  awk -F'\t' -v w="$1" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     BEGIN {
       c["head"] = GK_ATTENTION; c["keys"] = GK_CONTEXT; c["tool"] = GK_ELSEWHERE; c["text"] = GK_TEXT; c["otis"] = GK_YOURS
       c["think"] = GK_CONTEXT; c["out"] = GK_FAINT; c["bad"] = GK_BAD

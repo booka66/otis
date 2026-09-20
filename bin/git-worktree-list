@@ -39,13 +39,15 @@ if [ "$1" = --status ]; then
       (
         op= n=0 date=
         if [ -d "$p" ]; then
-          g=$(git -C "$p" rev-parse --absolute-git-dir)
+          # Its git dir: the .git file says (gitdir: <path>), or it is the
+          # directory itself in the main checkout; git would say the same.
+          if [ -f "$p/.git" ]; then read -r _ g < "$p/.git"; else g=$p/.git; fi
           if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op=rebasing
           elif [ -e "$g/MERGE_HEAD" ]; then op=merging
           elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op=cherry-picking
           elif [ -e "$g/REVERT_HEAD" ]; then op=reverting
           fi
-          n=$(git -C "$p" --no-optional-locks status --porcelain | wc -l | tr -d ' ')
+          n=$(git -C "$p" --no-optional-locks status --porcelain | awk 'END { print NR }')
           date=$(git -C "$p" log -1 --format=%ct)
         else
           op=missing
@@ -70,25 +72,34 @@ if [ "$1" = --safe ]; then
   exit 0
 fi
 
+: > "$st/footer"
+refresh=$1
+# The status cache, the branch prefix and the branch facts know nothing of
+# each other, so they run at once and the draw costs the slowest of them
+# (the facts), where it used to cost their sum. Each lands in a file of its
+# own under the picker's state, which awk then reads: nothing waits on a
+# pipe, and no cat carries a file across.
+if [ -n "$refresh" ]; then set -- --refresh wt-status "execute-silent(git-fzf-bg git-worktree-list)"; else set -- wt-status 30 "execute-silent(git-fzf-bg git-worktree-list)"; fi
+{
+  status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || status=/dev/null
+  jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' "$status" 2>/dev/null
+} > "$st/wt.state" &
+git config --get otis.branchPrefix > "$st/wt.prefix" 2>/dev/null &
+git-branch-facts $refresh "execute-silent(git-fzf-bg git-worktree-list)" > "$st/wt.facts"
+wait
 { read -r main; read -r review; read -r mine; } <<EOF
 $(git-worktree-path roots)
 EOF
-: > "$st/footer"
-refresh=$1
-if [ -n "$refresh" ]; then set -- --refresh wt-status "execute-silent(git-fzf-bg git-worktree-list)"; else set -- wt-status 30 "execute-silent(git-fzf-bg git-worktree-list)"; fi
-status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || status=/dev/null
-{
-  git-branch-facts $refresh "execute-silent(git-fzf-bg git-worktree-list)"
-  jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' "$status" 2>/dev/null
-} | awk -F'\t' -v now="$(date +%s)" -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}" \
+read -r prefix < "$st/wt.prefix" || prefix=
+awk -F'\t' -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}" \
   -v review="$review" -v mine="$mine" \
-  -v prefix="$(git config --get otis.branchPrefix)" -v footer="$st/footer.new" "$(cat "$share/rowfmt.awk")"'
+  -v prefix="$prefix" -v footer="$st/footer.new" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   $1 == "WT"     { n++; path[n] = $2; branch[n] = $3; next }
   $1 == "BRANCH" { kind[$2] = $3; label[$2] = $4; iid[$2] = $5; ahead[$2] = $8; behind[$2] = $9; next }
   $1 == "STATE"  { changes[$2] = $3; op[$2] = $4; date[$2] = $5; next }
   function ago(t,    s) {
     if (t == "") return ""
-    s = now - t
+    s = GK_NOW - t
     if (s < 3600) return int(s / 60) "m"
     if (s < 86400) return int(s / 3600) "h"
     if (s < 86400 * 14) return int(s / 86400) "d"
@@ -145,7 +156,7 @@ status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || stat
       printf "%s%s  %s%-" width "s%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", mark, lbl, GK_TEXT, shown, GK_R, extra, p, b, k, safe, iid[b], ahead[b], behind[b]
     }
     if (nsafe) printf "%s%d safe to remove · M marks them%s\n", GK_CONTEXT, nsafe, GK_R > footer
-  }' > "$st/worktrees"
+  }' "$st/wt.facts" "$st/wt.state" > "$st/worktrees"
 # The footer is the safe count, unless git-branch-facts had something to say.
 [ -s "$st/footer" ] || [ ! -e "$st/footer.new" ] || mv "$st/footer.new" "$st/footer"
 rm -f "$st/footer.new"
