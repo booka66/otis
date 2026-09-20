@@ -1,0 +1,103 @@
+#!/bin/sh
+# otis-help <command>   one command: what it does, how it is called, and, for a
+#                       picker, every key it has
+#
+# Every otis command answers --help and -h through here (bin/otis-run passes
+# them straight to it), so the answer to "what does this do" is the command
+# itself rather than somewhere else.
+#
+# Nothing here is written twice. What the command does comes from
+# share/commands.tsv, the one table gg renders too. The keys come from the
+# picker's own "key=label" list, read out of the source of the command that
+# opens it -- the same list that already drives the footer and the ? help, so a
+# key added there shows up here without being told.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+table=$share/commands.tsv
+
+cmd=$1
+[ -n "$cmd" ] || { echo "usage: otis-help <command> | otis-help --all" >&2; exit 2; }
+
+# --all is the cheat sheet gg prints: every row, grouped as the table groups
+# them, the first command of a group padded to a column and the rest running on
+# after it.
+if [ "$cmd" = --all ]; then
+  c=$(printf "${GK_ATTENTION}") d=$(printf "${GK_ELSEWHERE}") m=$(printf "${GK_CONTEXT}") r=$(printf "${GK_R}")
+  printf "%sin every picker%s\n" "$c" "$r"
+  printf "  %sj k%s  move   %sg G%s  top, bottom   %s/%s  search   %sesc%s  stop searching, then clear, then quit   %sq%s  quit\n" \
+    "$d" "$r" "$d" "$r" "$d" "$r" "$d" "$r" "$d" "$r"
+  printf "  %sctrl-d ctrl-u%s  scroll the preview   %sctrl-e ctrl-y%s  by a line   %s?%s  every key this picker has\n" \
+    "$d" "$r" "$d" "$r" "$d" "$r"
+  printf "  %sany command%s --help   what it does and every key it has\n" "$d" "$r"
+  awk -F'\t' -v c="$c" -v d="$d" -v m="$m" -v r="$r" '
+    /^#/ { next }
+    # A group is one line, however many commands share it, so the line stays
+    # open until the next group or section closes it.
+    {
+      if ($1 != section) {
+        if (open) printf "\n"
+        open = 0; section = $1; group = ""
+        printf "\n%s%s%s\n", c, section, r
+      }
+      cell = $3 ($4 != "" ? " " $4 : "") ($5 != "" ? " " $5 : "")
+      if ($2 != group) {
+        if (open) printf "\n"
+        group = $2; open = 1
+        pad = 15 - length(cell); if (pad < 1) pad = 1
+        printf "  %s%s%s%*s%s", d, cell, r, pad, "", $6
+      } else printf "   %s%s%s  %s", d, cell, r, $6
+      if ($7 != "") printf "   %s%s%s", m, $7, r
+    }
+    END { if (open) printf "\n" }' "$table"
+  exit 0
+fi
+
+# The row for this command, by its own name or as the one it shares a line with
+# (gwip carries gunwip).
+row=$(awk -F'\t' -v c="$cmd" '
+  /^#/ { next }
+  $3 == c || $4 == c { print; exit }' "$table")
+if [ -z "$row" ]; then
+  printf "${GK_BAD}otis-help: no command called %s${GK_R}\n" "$cmd" >&2
+  printf "${GK_CONTEXT}gg lists every command there is${GK_R}\n" >&2
+  exit 2
+fi
+
+name=$(printf '%s' "$row" | cut -f3)
+also=$(printf '%s' "$row" | cut -f4)
+args=$(printf '%s' "$row" | cut -f5)
+summary=$(printf '%s' "$row" | cut -f6)
+extra=$(printf '%s' "$row" | cut -f7)
+
+# A color is printf's escape form, so it belongs in the format and never in an
+# argument, where it would print as its own backslashes (share/palette.sh).
+printf "${GK_ATTENTION}%s${GK_R}" "$name"
+[ -n "$also" ] && printf " ${GK_ATTENTION}%s${GK_R}" "$also"
+[ -n "$args" ] && printf " ${GK_CONTEXT}%s${GK_R}" "$args"
+printf "\n  %s\n" "$summary"
+[ -n "$extra" ] && printf "  ${GK_CONTEXT}%s${GK_R}\n" "$extra"
+
+# The picker's keys, from the source of whichever command opens it: a shell
+# function in share/otis.zsh, or a script of its own in bin/. One line each,
+# the key and what it does, widest key first so the labels line up.
+src=
+if grep -q "^$name()" "$share/otis.zsh" 2>/dev/null; then
+  src=$(awk -v n="$name" '$0 ~ "^" n "\\(\\)" { on = 1 } on { print } on && /^}/ { exit }' "$share/otis.zsh")
+elif [ -f "$(dirname "$0")/$name" ]; then
+  src=$(cat "$(dirname "$0")/$name")
+fi
+spec=$(printf '%s\n' "$src" | sed -n "s/.*git-fzf '[^']*' '\\([^']*\\)'.*/\\1/p" | head -1)
+if [ -n "$spec" ]; then
+  # The colors as their bytes, since awk writes these lines rather than printf.
+  key=$(printf "${GK_ELSEWHERE}") dim=$(printf "${GK_CONTEXT}") off=$(printf "${GK_R}")
+  printf "\n${GK_CONTEXT}keys${GK_R}\n"
+  printf '%s' "$spec" | tr ',' '\n' |
+    awk -F'=' -v key="$key" -v dim="$dim" -v off="$off" '
+      $2 != "" { k[++n] = $1; v[n] = substr($0, index($0, "=") + 1); if (length($1) > w) w = length($1) }
+      END {
+        for (i = 1; i <= n; i++) printf "  %s%-*s%s  %s\n", key, w, k[i], off, v[i]
+        printf "  %s%-*s%s  %severy key, in the picker itself%s\n", key, w, "?", off, dim, off
+      }'
+fi
+
+printf "\n${GK_CONTEXT}gg${GK_R} lists every command\n"

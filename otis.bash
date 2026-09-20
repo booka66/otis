@@ -42,3 +42,22 @@ gwn()  { _otis_cd gwn "$@"; }
 gmr()  { _otis_cd gmr "$@"; }
 gci()  { _otis_cd gci "$@"; }
 otis() { _otis_cd otis "$@"; }
+
+# Completion: every otis command offers --help, and the ones that take a ref, a
+# path or a setting offer those too (bin/otis-complete, the same list zsh and
+# fish are given).
+_otis_complete() {
+  local cur=${COMP_WORDS[COMP_CWORD]} cands
+  cands=$(otis-complete "${COMP_WORDS[0]}" 2>/dev/null)
+  COMPREPLY=()
+  case $cands in
+    "@files"*) COMPREPLY=($(compgen -f -- "$cur")) ;;
+  esac
+  COMPREPLY+=($(compgen -W "$(printf '%s\n' "$cands" | grep -vx '@files')" -- "$cur"))
+}
+for _otis_c in "$OTIS_HOME"/bin/*; do
+  [ -L "$_otis_c" ] || continue
+  complete -F _otis_complete "${_otis_c##*/}"
+done
+unset _otis_c
+complete -F _otis_complete otis-config otis-theme otis-setup otis-help

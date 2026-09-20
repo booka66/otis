@@ -1,0 +1,45 @@
+# Every otis command, a row each, and the one place their names and what
+# they do are written down: gg renders this as the cheat sheet, --help on
+# any command prints its own row with the picker's keys under it
+# (bin/otis-help), and the shell completions offer what each one takes
+# (bin/otis-complete). A new command is a row here and nothing else.
+#
+# section	group	name	also	args	summary	extra
+# Commands in one group share a line in gg, the first one's name padded to
+# a column and the rest run on after it; group is the first one's name.
+look	otis	otis			the dashboard: what wants you, what is running, where you are	m b a d w open the full lists, c otis's settings
+look	gs	gs			status	
+look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r rewords	gl origin/main..
+look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
+look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens its MR, d deletes (M marks the safe ones)	
+look	gmr	gmr			every MR: to review, yours with pipelines, merged and whether live; enter reviews or opens comments	
+look	gci	gci			gmr with your MRs first	in a review: v viewed, o other threads, s the shape of it, S submit drafts, n since last review, C Claude drafts comments (on yours, proposes fixes)
+look	gd	gd			production deploys, newest first, with what each carried and whether it went live	gd <pipeline id>
+look	gag	gag			everything Claude is doing here in the background: reviews, fixes, production watches, verifications	
+change	ga	ga			stage panel; space stages, p hunks, c commits, enter opens your editor	ga <path>, gu <path>
+change	gah	gah			stage single hunks of a file, untracked ones too	
+change	gcm	gcm			commit in your editor with the diff below	gcm "subject" for a one-liner
+change	gam	gam			fold staged changes into the last commit, restacking branches above	gam "subject", gam -e to rewrite it
+change	gfx	gfx			fold staged changes into an earlier commit	
+change	gwip	gwip	gunwip		set work aside as a commit, and bring it back	
+branch and push	gbn	gbn		<name>	new branch <prefix>/<name> here	
+branch and push	gbn	gwn		<name>	same, in a new worktree	
+branch and push	gup	gup			rebase onto a fresh origin/main	prints how to undo it
+branch and push	grb	grb		[range]	interactive rebase from a commit you pick	
+branch and push	gp	gp			push, refusing to overwrite commits you have not seen; a first push offers to create its MR (y/N)	
+branch and push	gcp	gcp		"subject"	stage everything, commit, push	
+branch and push	gcp	stack-push			push this branch and the stack below it	
+branch and push	gstack	gstack		[name]	this branch's commits as a glab stack, one branch and MR a commit, pushed bottom first and synced	
+clean up and undo	gundo	gundo			put HEAD back where it was, from the reflog	
+clean up and undo	gdd	gdd			discard changes (asks first)	
+clean up and undo	gdd	gpark			stash them instead	
+clean up and undo	gdd	gst			apply or drop a stash	
+clean up and undo	gdd	gu		[path]	unstage, the other way round from ga	
+clean up and undo	gw	gw			worktrees and what each holds; enter goes there, d removes (and merged branches), M marks the safe ones	
+other	gg	gg			every command there is, on one screen	
+other	otis-config	otis-config			otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default	
+other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
+other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
+other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, Claude, V, deploys, history	
+other	gi	gi		<tags>	fetch a .gitignore	gi node macos >> .gitignore; gi lists the tags
+other	gi	fixterm			reset a garbled terminal	

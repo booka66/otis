@@ -17,4 +17,8 @@ if [[ $cmd == otis-run ]] || (( ! $+functions[$cmd] )); then
   print -u2 "otis-run: run it as one of its links in bin/ (gb, ga, otis...)"
   exit 2
 fi
+# Every command answers --help the same way, from the one table that gg renders
+# too (bin/otis-help), so none of them has to carry its own copy. No otis
+# command takes a -h of its own, so it is free to mean this everywhere.
+case $1 in -h | --help) exec otis-help "$cmd" ;; esac
 $cmd "$@"

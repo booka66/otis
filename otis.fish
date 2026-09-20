@@ -36,3 +36,19 @@ for c in gb gw gwn gmr gci otis
         _otis_cd $c $argv
     end
 end
+
+# Completion: every otis command offers --help, and the ones that take a ref, a
+# path or a setting offer those too (bin/otis-complete, the same list zsh and
+# bash are given). fish completes filenames itself, so @files is dropped here.
+function _otis_complete
+    set -l parts (commandline -opc)
+    test (count $parts) -gt 0; or return
+    for c in (command otis-complete $parts[1] 2>/dev/null)
+        # fish offers filenames of its own accord, so @files is nothing to say.
+        test "$c" = '@files'; and continue
+        echo $c
+    end
+end
+for f in $otis_home/bin/* otis-config otis-theme otis-setup otis-help
+    complete -c (string replace -r '.*/' '' -- $f) -a '(_otis_complete)'
+end

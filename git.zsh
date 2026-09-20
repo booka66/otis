@@ -158,7 +158,28 @@ _git_sweep() {
     done
   } &!
 }
+# Completion: every otis command offers --help, and the ones that take a ref, a
+# path or a setting offer those too. What a command takes is bin/otis-complete's
+# to say, so all three shells offer the same thing and none of them keeps a list.
+_otis_complete() {
+  local -a cands
+  cands=(${(f)"$(otis-complete $words[1] 2>/dev/null)"})
+  if (( $cands[(I)@files] )); then
+    cands=(${cands:#@files})
+    _files
+  fi
+  (( $#cands )) && compadd -a cands
+}
+# At the first prompt rather than here: a .zshrc usually runs compinit after
+# sourcing this, and a compdef before compinit is lost.
+_otis_compdef() {
+  add-zsh-hook -d precmd _otis_compdef
+  (( $+functions[compdef] )) || return
+  compdef _otis_complete $OTIS_HOME/bin/*(@N:t) otis-config otis-theme otis-setup otis-help
+}
+
 autoload -Uz add-zsh-hook
+add-zsh-hook precmd _otis_compdef
 add-zsh-hook precmd _git_track
 add-zsh-hook precmd _git_autofetch
 add-zsh-hook precmd _git_sweep

@@ -1,0 +1,38 @@
+#!/bin/sh
+# otis-complete <command>   what can follow that command, a candidate a line
+#
+# One list of candidates, for all three shells: share/completions/otis.zsh,
+# otis.bash and otis.fish each ask here and hand what comes back to their own
+# completion. What a command takes is written once, below, and nowhere else.
+#
+# A first line of @files means the shell should offer filenames as well; it
+# never prints a path itself, since each shell knows how to complete one and
+# how to quote it. Nothing here touches the network or GitLab: completion runs
+# on a keypress, and a candidate that has to be fetched is not worth the wait.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+cmd=$1
+[ -n "$cmd" ] || { echo "usage: otis-complete <command>" >&2; exit 2; }
+
+# The branches worth naming: local ones newest first, since the one you want is
+# usually one you were just on, then origin's. Tags are left out, as nothing
+# here takes one.
+refs() {
+  git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads 2>/dev/null
+  # origin/HEAD shortens to a bare "origin", which names no branch to read.
+  git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | grep -vx origin
+}
+
+case $cmd in
+  # A range or a ref to start from.
+  gl | grb | gdm | gstack) refs ;;
+  # Paths, and the branch names that gb's own switch takes.
+  ga | gu | gah | gdd | gpark) echo '@files' ;;
+  otis-config) sed -n 's/^keys=.//p' "$(dirname "$0")/otis-config" | tr -d "'" | tr ' ' '\n' ;;
+  otis-theme) otis-theme --list | cut -f1 ;;
+  # The gitignore tags, from the list gi fetched last time it was asked for
+  # one; never fetched here.
+  gi) cat "${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/gitignore-tags" 2>/dev/null ;;
+esac
+
+# Every command answers --help (bin/otis-help), so every command offers it.
+awk -F'\t' -v c="$cmd" '/^#/ { next } $3 == c || $4 == c { print "--help"; exit }' "$share/commands.tsv"

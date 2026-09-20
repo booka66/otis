@@ -31,8 +31,20 @@ gcp() {
   git add -A && gcm "$*" && gp
 }
 
+# Bare gi lists the tags there are; gi <tags> fetches those rules. The list is
+# kept as it goes by, so completing a tag never has to fetch anything
+# (bin/otis-complete).
 gi() {
-  (( $# )) || { curl -fsSL "https://www.toptal.com/developers/gitignore/api/list" | tr , ' ' | fold -s -w ${COLUMNS:-80}; print; return }
+  local cache=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/gitignore-tags
+  if (( ! $# )); then
+    local tags
+    tags=$(curl -fsSL "https://www.toptal.com/developers/gitignore/api/list") || return 1
+    mkdir -p ${cache:h} && print -r -- ${tags//,/$'\n'} > $cache
+    # COLUMNS is 0 rather than unset where there is no terminal, which fold refuses.
+    print -r -- ${tags//,/ } | fold -s -w $(( COLUMNS > 20 ? COLUMNS : 80 ))
+    print
+    return
+  fi
   curl -fsSL "https://www.toptal.com/developers/gitignore/api/${(j:,:)@}"
 }
 
@@ -514,47 +526,7 @@ gpark() {
 # The command list. Each picker's own keys live in its footer and its ? help,
 # which come from the same list the bindings do, so they cannot go stale here.
 gg() {
-  local c=$'\e['$OTIS_T_ATTENTION'm' d=$'\e['$OTIS_T_ELSEWHERE'm' m=$'\e['$OTIS_T_CONTEXT'm' r=$'\e[0m'
-  print -r -- "${c}in every picker${r}
-  ${d}j k${r}  move   ${d}g G${r}  top, bottom   ${d}/${r}  search   ${d}esc${r}  stop searching, then clear, then quit   ${d}q${r}  quit
-  ${d}ctrl-d ctrl-u${r}  scroll the preview   ${d}ctrl-e ctrl-y${r}  by a line   ${d}?${r}  every key this picker has
-
-${c}look${r}
-  ${d}otis${r}           the dashboard: what wants you, what is running, where you are   ${m}m b a d w open the full lists, c otis's settings${r}
-  ${d}gs${r}             status
-  ${d}gl [range]${r}     log; enter opens a file, f folds staged changes in, r rewords   ${m}gl origin/main..${r}
-  ${d}gdm [base]${r}     this branch's changes as one diff, file by file   ${m}enter opens your editor${r}
-  ${d}gb${r}             branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens its MR, d deletes (M marks the safe ones)
-  ${d}gmr${r}            every MR: to review, yours with pipelines, merged and whether live; enter reviews or opens comments
-  ${d}gci${r}            gmr with your MRs first   ${m}in a review: v viewed, o other threads, s the shape of it, S submit drafts, n since last review, C Claude drafts comments (on yours, proposes fixes)${r}
-  ${d}gd${r}             production deploys, newest first, with what each carried and whether it went live   ${m}gd <pipeline id>${r}
-  ${d}gag${r}            everything Claude is doing here in the background: reviews, fixes, production watches, verifications
-
-${c}change${r}
-  ${d}ga${r}             stage panel; space stages, p hunks, c commits, enter opens your editor   ${m}ga <path>, gu <path>${r}
-  ${d}gah${r}            stage single hunks of a file, untracked ones too
-  ${d}gcm${r}            commit in your editor with the diff below   ${m}gcm \"subject\" for a one-liner${r}
-  ${d}gam${r}            fold staged changes into the last commit, restacking branches above   ${m}gam \"subject\", gam -e to rewrite it${r}
-  ${d}gfx${r}            fold staged changes into an earlier commit
-  ${d}gwip${r} ${d}gunwip${r}    set work aside as a commit, and bring it back
-
-${c}branch and push${r}
-  ${d}gbn <name>${r}     new branch <prefix>/<name> here   ${d}gwn <name>${r}  same, in a new worktree
-  ${d}gup${r}            rebase onto a fresh origin/main   ${m}prints how to undo it${r}
-  ${d}grb [range]${r}    interactive rebase from a commit you pick
-  ${d}gp${r}             push, refusing to overwrite commits you have not seen; a first push offers to create its MR (y/N)
-  ${d}gcp \"subject\"${r}  stage everything, commit, push   ${d}stack-push${r}  push this branch and the stack below it
-  ${d}gstack [name]${r}  this branch's commits as a glab stack, one branch and MR a commit, pushed bottom first and synced
-
-${c}clean up and undo${r}
-  ${d}gundo${r}          put HEAD back where it was, from the reflog
-  ${d}gdd${r}            discard changes (asks first)   ${d}gpark${r}  stash them instead   ${d}gst${r}  apply or drop a stash
-  ${d}gw${r}             worktrees and what each holds; enter goes there, d removes (and merged branches), M marks the safe ones
-
-${c}other${r}
-  ${d}otis-config${r}    otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default
-  ${d}otis-tour${r}      guided tours of what otis does, from a menu: reviewing by symbol, Claude, V, deploys, history
-  ${d}gi <tags>${r}      fetch a .gitignore   ${m}gi node macos >> .gitignore; gi lists the tags${r}   ${d}fixterm${r}  reset a garbled terminal"
+  otis-help --all
 }
 
 _g_staged_or_die() {

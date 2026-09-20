@@ -24,7 +24,7 @@ You need zsh installed, though your own shell can be zsh, bash or fish. You also
 
 Run `otis-tour`. It's a menu of short guided tours, most of them hands-on with a made-up repo: reviewing by symbol, the review loop in `gmr`, Claude's reviews and fixes, verifying a change, shipping to production, committing, branches and worktrees, settings, and a cheat sheet.
 
-After that, run `otis` in a repo and go from there. `gg` lists every command. In any picker, `j`/`k` moves, `/` searches, `q` quits, and `?` shows every key and explains the columns.
+After that, run `otis` in a repo and go from there. `gg` lists every command, and any command answers `--help` with what it does and every key it has. Tab completion knows what each one takes: a branch for `gl`, a path for `ga`, a setting for `otis-config`. In any picker, `j`/`k` moves, `/` searches, `q` quits, and `?` shows every key and explains the columns.
 
 ## Settings
 
@@ -40,4 +40,4 @@ Remove the line `otis-setup` added to your shell config. Caches are in `~/.cache
 
 ## Hacking on it
 
-`bin/otis-test` runs the tests in a throwaway repo, no GitLab needed, including the pickers driven headless through fzf's port. Every picker is a call to `git-fzf`, whose `key=label` list drives the footer, the `?` help, and which keys get unbound while you search. Adding a key takes one entry in that list and one `--bind`. `otis-config` is the only place that reads settings. Colors come from one palette, in `share/rowfmt.awk`, `share/otis.jq` and `share/palette.sh`.
+`bin/otis-test` runs the tests in a throwaway repo, no GitLab needed, including the pickers driven headless through fzf's port. Every picker is a call to `git-fzf`, whose `key=label` list drives the footer, the `?` help, `--help` and which keys get unbound while you search. Adding a key takes one entry in that list and one `--bind`. A command's name and what it does are written once, in `share/commands.tsv`: `gg` renders it, `otis-help` prints one row of it, and the completions offer the names from it, so a new command is a row there and nothing else. `otis-config` is the only place that reads settings. Colors come from one palette, in `share/rowfmt.awk`, `share/otis.jq` and `share/palette.sh`; your shell loads the theme once when it starts, and every command inherits it.
