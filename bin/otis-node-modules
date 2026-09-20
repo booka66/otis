@@ -1,78 +1,164 @@
 #!/bin/sh
-# otis-node-modules [<root>]: a worktree's node_modules, mirrored from the
-# main worktree's, so the tools that resolve imports through it (tsgo, for
-# nvim and for git-callers) work in a worktree that never ran an install.
+# otis-node-modules [<root>]: the node_modules the tools that resolve imports
+# through it (tsgo, for nvim and for git-callers) need, kept without your
+# thinking about it: a worktree's mirrored from the main checkout's, the
+# repo's own packages linked into either as the checkout adds them, and,
+# with otis.install set, the install itself run again when the lockfile has
+# moved past it.
+#
+# otis-node-modules --state [<root>]  installing, failed: <why>, behind, or nothing
+# otis-node-modules --wait [<root>]   the same as without, then waits for an install it started or found running
 #
 # The main checkout's node_modules is how the workspace resolves: a package
 # of the repo is a relative link into it (@acme/x -> ../../packages/x), and a
 # third-party one a relative link into .content, where the install put the
-# files. The mirror keeps every link as it is, so a package of the repo
-# resolves to this worktree's own source and a third-party one, through a
-# .content that links to main's, to the one install; the scope directories
+# files. A worktree's mirror keeps every link as it is, so a package of the
+# repo resolves to this worktree's own source and a third-party one, through
+# a .content that links to main's, to the one install; the scope directories
 # and .bin are walked one level for the same, and a file is linked. A few
 # hundred links, made once and kept while main's node_modules is not newer;
 # .otis-mirror in the mirror says it is one, so an install of your own is
-# never touched. Nothing happens in the main worktree, or where main has no
-# node_modules to mirror.
+# never mirrored over. Where main has no node_modules there is nothing to do.
+#
+# The install only links the repo's packages that were there when it ran, so
+# one added since (on main after that install, or on a branch) resolved to
+# nothing, and tsgo read everything imported from it as unknown. Each
+# package.json of the checkout whose name node_modules has no link for gets
+# one, relative like the install's, in main and in a mirror alike; a name it
+# has is left as it is. Kept by the package.json files' hashes, so a checkout
+# that adds or moves one links again.
+#
+# A third-party package added or bumped since the install is the install's
+# to fix, and git config otis.install names the command that does it, run at
+# the main checkout ('bazel run nodejs_install', 'yarn install'). It runs in
+# the background when the lockfile (yarn.lock, pnpm-lock.yaml or
+# package-lock.json) is newer than what the install last wrote, at most once
+# a day, and not while the same tool is busy with a build or a test of yours,
+# since bazel takes one command at a time. Its output goes to the cache
+# ($OTIS_CACHE_ROOT/node-modules/install.log); a failure is kept there and
+# said by --state until the next attempt. Without otis.install, --state says
+# behind, and the pickers show it, so a check against a stale tree is not
+# read as the truth.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+mode=
+case $1 in --state|--wait) mode=$1; shift ;; esac
 root=${1:-$(git rev-parse --show-toplevel 2>/dev/null)}
 [ -n "$root" ] || exit 0
+# As git names it, links resolved (/var is /private/var on macOS), so it
+# compares with what worktree list says.
+root=$(cd "$root" 2>/dev/null && pwd -P) || exit 0
 main=$(git -C "$root" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')
-[ -n "$main" ] && [ "$main" != "$root" ] && [ -d "$main/node_modules" ] || exit 0
+[ -n "$main" ] && [ -d "$main/node_modules" ] || exit 0
 src=$main/node_modules dst=$root/node_modules
+cache=${OTIS_CACHE_ROOT:-$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/node-modules
+pidfile=$cache/install.pid log=$cache/install.log failed=$cache/install.failed at=$cache/install.at
+installing() { [ -s "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; }
 
-# The repo's own packages, as this worktree has them: main's install only
-# links those that were there when it ran, so a package added since (on main
-# after that install, or on this branch) resolved to nothing, and tsgo read
-# everything imported from it as unknown. Each package.json of the worktree
-# whose name the mirror has no link for gets one, relative like the install's
-# (@acme/x -> ../../packages/x); a name it has is left as it is. Kept by the
-# package.json files' hashes, so a checkout that adds or moves one links again.
+# The lockfile at main, and the install's own mark of when it last ran:
+# what yarn, npm or pnpm writes into node_modules on every install, the
+# newest of them, or the directory itself where none of them did (which
+# the links made here move too, so only then).
+lockfile=
+for f in yarn.lock pnpm-lock.yaml package-lock.json; do [ -f "$main/$f" ] && { lockfile=$main/$f; break; }; done
+mark=
+for f in .yarn-state.yml .yarn-integrity .package-lock.json .modules.yaml; do [ -e "$src/$f" ] && { [ -z "$mark" ] || [ "$src/$f" -nt "$mark" ]; } && mark=$src/$f; done
+[ -n "$mark" ] || mark=$src
+behind() { [ -n "$lockfile" ] && [ "$lockfile" -nt "$mark" ]; }
+
+if [ "$mode" = --state ]; then
+  if installing; then echo installing
+  elif [ -e "$failed" ]; then echo "failed: $(grep -m1 -iE 'error|fail' "$log" 2>/dev/null | cut -c1-120 || echo "see $log")"
+  elif behind; then echo behind; fi
+  exit 0
+fi
+
+# The repo's own packages, as this checkout has them, linked where the
+# install left none. One jq a file: one that is not JSON (a template's)
+# would end a jq given them all, and every package after it would go unlinked.
 workspace() {
   stamp=$(git -C "$root" ls-files -s -- 'package.json' '*/package.json' 2>/dev/null | git hash-object --stdin)
   [ "$(cat "$dst/.otis-workspace" 2>/dev/null)" = "$stamp" ] && return
-  # One jq a file: one that is not JSON (a template's) would end a jq given
-  # them all, and every package after it would go unlinked.
   (cd "$root" && git ls-files -z -- '*/package.json' | xargs -0 -n1 jq -r '[(input_filename | sub("/package.json$"; "")), (.name // "")] | @tsv' 2>/dev/null) |
     while IFS="$(printf '\t')" read -r d name; do
       [ -n "$name" ] || continue
       case $d in */node_modules/*) continue ;; esac
       [ -e "$dst/$name" ] || [ -L "$dst/$name" ] && continue
       case $name in
-        @*/*) mkdir -p "$dst/${name%%/*}" && ln -s "../../$d" "$dst/$name" ;;
+        @*/*) mkdir -p "$dst/${name%%/*}" && ln -s "../../$d" "$dst/$name" && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
         */*) ;;
-        *) ln -s "../$d" "$dst/$name" ;;
+        *) ln -s "../$d" "$dst/$name" && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
       esac
     done
   printf '%s\n' "$stamp" > "$dst/.otis-workspace"
 }
+# The links made here in main's node_modules, taken back before the install
+# runs: an installer that links the same packages itself may refuse to link
+# over one (EEXIST), and it makes them all again. They are listed in
+# .otis-links, so an install of your own is never touched.
+unlink_ours() {
+  [ -s "$src/.otis-links" ] || return 0
+  while read -r l; do [ -L "$src/$l" ] && rm -f "$src/$l"; done < "$src/.otis-links"
+  rm -f "$src/.otis-links" "$src/.otis-workspace"
+}
 
-if [ -e "$dst" ]; then
-  [ -f "$dst/.otis-mirror" ] || exit 0
-  if [ ! "$src" -nt "$dst/.otis-mirror" ]; then workspace; exit 0; fi
-  rm -rf "$dst"
+# The install, at main, in the background, once it is due: the lockfile
+# moved past the last one, none since yesterday, and its tool not in the
+# middle of a build or a test of yours. The pid is the subshell's, which
+# outlives the command to say how it ended. 0 when one was started.
+install() {
+  cmd=$(cd "$root" && otis-config install 2>/dev/null) || return 1
+  [ -n "$cmd" ] || return 1
+  installing && return 1
+  behind || return 1
+  [ -n "$(find "$at" -mmin -1440 2>/dev/null)" ] && return 1
+  tool=${cmd%% *}
+  pgrep -f "(^|/)${tool##*/} (build|test|run|query|coverage|fetch|sync|mod|install)( |$)" >/dev/null 2>&1 && return 1
+  mkdir -p "$cache" || return 1
+  : > "$at"
+  unlink_ours
+  (cd "$main" && nohup sh -c "$cmd" </dev/null > "$log" 2>&1; if [ $? -eq 0 ]; then rm -f "$failed"; else : > "$failed"; fi; rm -f "$pidfile") &
+  echo $! > "$pidfile"
+}
+
+# In main, the links made here go before the install and it makes them
+# again, so none are made while one runs; a mirror keeps its own.
+if [ "$main" = "$root" ]; then
+  install || installing || workspace
+else
+  if [ -e "$dst" ]; then
+    [ -f "$dst/.otis-mirror" ] || exit 0
+    [ "$src" -nt "$dst/.otis-mirror" ] && rm -rf "$dst"
+  fi
+  if [ ! -e "$dst" ]; then
+    mkdir -p "$dst" || exit 1
+    # One cp for the links: -P keeps a link as it is, relative target and all.
+    # The scope directories and .bin are walked one level the same way, so one
+    # that holds real packages (npm's layout) is linked, not copied. Any other
+    # directory and every file is a link to main's, .content among them.
+    set --
+    for e in "$src"/* "$src"/.[!.]*; do
+      [ -e "$e" ] || [ -L "$e" ] || continue
+      n=${e##*/}
+      if [ -L "$e" ]; then set -- "$@" "$n"
+      elif [ -d "$e" ]; then
+        case $n in
+          @*|.bin)
+            mkdir -p "$dst/$n"
+            for s in "$e"/* "$e"/.[!.]*; do
+              [ -e "$s" ] || [ -L "$s" ] || continue
+              if [ -L "$s" ]; then cp -P "$s" "$dst/$n/"; else ln -s "$s" "$dst/$n/"; fi
+            done ;;
+          *) ln -s "$e" "$dst/$n" ;;
+        esac
+      else ln -s "$e" "$dst/$n"; fi
+    done
+    [ $# -gt 0 ] && (cd "$src" && cp -RP "$@" "$dst/")
+    : > "$dst/.otis-mirror"
+  fi
+  workspace
+  install
 fi
-mkdir -p "$dst" || exit 1
-# One cp for the links: -P keeps a link as it is, relative target and all.
-# The scope directories and .bin are walked one level the same way, so one
-# that holds real packages (npm's layout) is linked, not copied. Any other
-# directory and every file is a link to main's, .content among them.
-set --
-for e in "$src"/* "$src"/.[!.]*; do
-  [ -e "$e" ] || [ -L "$e" ] || continue
-  n=${e##*/}
-  if [ -L "$e" ]; then set -- "$@" "$n"
-  elif [ -d "$e" ]; then
-    case $n in
-      @*|.bin)
-        mkdir -p "$dst/$n"
-        for s in "$e"/* "$e"/.[!.]*; do
-          [ -e "$s" ] || [ -L "$s" ] || continue
-          if [ -L "$s" ]; then cp -P "$s" "$dst/$n/"; else ln -s "$s" "$dst/$n/"; fi
-        done ;;
-      *) ln -s "$e" "$dst/$n" ;;
-    esac
-  else ln -s "$e" "$dst/$n"; fi
-done
-[ $# -gt 0 ] && (cd "$src" && cp -RP "$@" "$dst/")
-: > "$dst/.otis-mirror"
-workspace
+if [ "$mode" = --wait ]; then
+  while installing; do sleep 2; done
+fi
+exit 0

@@ -337,6 +337,12 @@ if [ -n "$remote" ]; then
 else
   note "remote checks" "Claude's reviews and fixes run the repo's checks only with a workspace to run them in, set per repo: git config otis.remote <ssh host> and otis.remotePath <its checkout> (a Coder workspace after coder config-ssh)"
 fi
+install=$(git config --get otis.install 2>/dev/null)
+if [ -n "$install" ]; then
+  pass "node_modules" "installed again by '$install' when the lockfile moves past it (otis.install)"
+else
+  note "node_modules" "the repo's own packages are linked in as they appear; a third-party one added since your last install stays missing to tsgo until git config otis.install names the install command ('bazel run nodejs_install')"
+fi
 if [ -n "$CURSOR_API_KEY" ]; then
   pass "Cursor Cloud" "CURSOR_API_KEY is set, so V can verify a change"
 else

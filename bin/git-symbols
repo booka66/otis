@@ -903,8 +903,9 @@ if [ "$mode" = --rows ]; then
     # OTIS_SYMBOLS_FOLD set: the table it has is the table.
     build
   fi
-  # A worktree without node_modules gets main's mirrored, once, so tsgo
-  # works here for the callers and for nvim alike (otis-node-modules).
+  # node_modules kept for tsgo, here for the callers and for nvim alike
+  # (otis-node-modules): a worktree's mirrored from main's, the repo's new
+  # packages linked, the install started when the lockfile moved.
   otis-node-modules >/dev/null 2>&1
   # The change's key for the caches, and where they are, once for the gloss
   # and the callers both, rather than a few git calls in each.
@@ -1290,6 +1291,14 @@ if [ "$mode" = --rows ]; then
     if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
     elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
+    # node_modules against its lockfile (otis-node-modules --state): being
+    # installed, or behind it, which is what a callers check is reading.
+    nm=$(otis-node-modules --state 2>/dev/null)
+    case $nm in
+      installing) note="$note · $(printf "${GK_ATTENTION}installing node_modules${GK_R}")" ;;
+      behind) note="$note · $(printf "${GK_ATTENTION}node_modules is behind the lockfile${GK_R}")" ;;
+      failed:*) note="$note · $(printf "${GK_BAD}node_modules install %s${GK_R}" "$nm")" ;;
+    esac
     # Imported by too many packages to type-check (git-callers): the callers
     # are there, what they break is not.
     [ -z "$finding" ] && read -r npkg 2>/dev/null < "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.unchecked" &&

@@ -28,6 +28,9 @@
 #   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
 #                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
 #   worktrees    where otis puts its worktrees, under the main checkout: otis.worktrees
+#   install      the command that installs node_modules, run at the main checkout by otis-node-modules
+#                when the lockfile has moved past the last install ('bazel run nodejs_install'): otis.install;
+#                none means the repo's own packages are linked and a third-party one added since is missed
 #   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim
 #   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the
 #                principle behind it, for you alone (git config --global otis.lessons true); off by default
@@ -53,7 +56,7 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand worktrees editor lessons'
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand worktrees install editor lessons'
 sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro'
 nl='
 '
@@ -204,6 +207,7 @@ one() {
     verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
     claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
+    install) cfg install ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
     gitlab)

@@ -37,8 +37,9 @@
 # by its shas for good, the worktree by its symbols. git config otis.callers
 # off turns it off; without tsgo or node nothing runs. tsgo resolves the
 # workspace's packages through node_modules, which a worktree gets mirrored
-# from the main checkout's first (otis-node-modules), so it works here and
-# in nvim alike. It reads an open file over the disk, so every file the
+# from the main checkout's first, and which is brought up to the lockfile
+# before tsgo reads it where otis.install says how (otis-node-modules --wait),
+# so it works here and in nvim alike. It reads an open file over the disk, so every file the
 # change touches is opened as the change leaves it, and the callers are type
 # checked twice, with the changed files first as the base has them, then as
 # the change leaves them: an error the second check has and the first did
@@ -161,7 +162,7 @@ if [ "$mode" = --recheck ] || [ "$mode" = --recheck-run ]; then
   trap 'rm -rf "$tmp" "$rrun"' EXIT
   tsgo_turn
   trap 'rm -rf "$tmp" "$rrun" "$dir/tsgo.turn"' EXIT
-  otis-node-modules "$(pwd)"
+  otis-node-modules --wait "$(pwd)"
   # The change's files as the disk has them, each also at the base for the
   # first pass, and the broken callers' files, checked in both.
   i=0
@@ -226,7 +227,7 @@ tsgo_turn
 trap 'rm -rf "$running" "$lock" "$tmp" "$dir/$key.table" "$dir/tsgo.turn"' EXIT
 root=$(git rev-parse --show-toplevel)
 cd "$root" || exit 1
-otis-node-modules "$root"
+otis-node-modules --wait "$root"
 at=$(git rev-parse HEAD 2>/dev/null)
 # The change's two ends: its base is what the check's first pass reads the
 # changed files at, and what an error must be absent from to count.
