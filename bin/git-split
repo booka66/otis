@@ -1,8 +1,18 @@
 #!/bin/sh
-# git-split <rev> [<check>]   split this branch into a stack, and keep the branch
+# git-split [--wait] <rev> [<check>] [<branch>]
+#                             split this branch into a stack, and keep the branch
 #
-#   git-split main...                     split, unchecked
-#   git-split main... git-seam-check      split, and typecheck every commit
+#   git-split main...                     split, checking with .seam/check
+#   git-split main... git-seam-check      split, checking with that
+#   git-split main... ""                  split, checking nothing
+#
+# With no check named, the repo's is used: a command a line in .seam/check,
+# then this user's, the way seam finds its own files. That is what lets the
+# key in the picker mean the same thing in a repo that has a typechecker and
+# one that has nothing to say.
+#
+# --wait holds the screen at the end, for a caller that is about to take the
+# terminal back (fzf does, the moment the command returns).
 #
 # seam --split --branch writes the slices as commits on a new branch from the
 # base. Nothing is checked out and the worktree is not touched, so the branch
@@ -15,12 +25,20 @@
 # slice lights up as its commit lands.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+wait=; [ "$1" = --wait ] && { wait=1; shift; }
 rev=$1 check=$2
+if [ $# -lt 2 ]; then
+  for d in ./.seam "${XDG_CONFIG_HOME:-$HOME/.config}/seam"; do
+    [ -f "$d/check" ] || continue
+    check=$(sed 's/#.*//' "$d/check" | grep -v '^[[:space:]]*$' | head -1)
+    break
+  done
+fi
 [ -n "$rev" ] || { echo "git-split <rev> [<check command>]" >&2; exit 2; }
 command -v seam >/dev/null 2>&1 || { echo "git-split: seam is not on your PATH" >&2; exit 2; }
 here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 2
 [ "$here" != HEAD ] || { echo "git-split: you are not on a branch" >&2; exit 2; }
-branch=$3
+branch=$4
 [ -n "$branch" ] || branch=$here-split
 git show-ref --verify -q "refs/heads/$branch" && { printf 'git-split: %s is already a branch. Delete it or name another.\n' "$branch" >&2; exit 2; }
 
@@ -106,6 +124,7 @@ if [ "$rc" -eq 0 ]; then
   printf '    %bread it%b   gl %s..%s\n' "$GK_FAINT" "$GK_R" "$from" "$branch"
   printf '    %btake it%b   git checkout %s\n' "$GK_FAINT" "$GK_R" "$branch"
   printf '    %bdrop it%b   git branch -D %s\n\n' "$GK_FAINT" "$GK_R" "$branch"
+  [ -z "$wait" ] || { printf '  %bpress enter%b' "$GK_FAINT" "$GK_R"; read -r _; }
 else
   foot="nothing written"
   draw
@@ -113,5 +132,6 @@ else
   printf '\n'
   sed 's/^/  /' "$tmp/err" >&2
   printf '\n  %bYou are still on %s, exactly as you left it.%b\n\n' "$GK_TEXT" "$here" "$GK_R"
+  [ -z "$wait" ] || { printf '  %bpress enter%b' "$GK_FAINT" "$GK_R"; read -r _; }
 fi
 exit "$rc"

@@ -76,10 +76,15 @@
 share=$(cd "$(dirname "$0")/../share" && pwd)
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$share/palette.sh"
+# delta with otis's arguments (share/delta.sh), sourced: the preview runs on
+# every cursor move, and git-delta as a command was a shell started for it.
+. "$share/delta.sh"
 # Each file's mtime to the nanosecond, one a line: stat says it differently
-# on Linux (-c %.9Y) and macOS (-f %Fm). Whole seconds would key a cache on
-# a file that changed within the second it was read (F, then its preview).
-if stat -c %Y / >/dev/null 2>&1; then mtimes() { stat -c %.9Y "$@"; }; else mtimes() { stat -f %Fm "$@"; }; fi
+# on macOS (-f %Fm) and Linux (-c %.9Y), which refuses the first form, so it is
+# tried and the other taken; a probe of its own cost a process on every run,
+# previews included. Whole seconds would key a cache on a file that changed
+# within the second it was read (F, then its preview).
+mtimes() { stat -f %Fm "$@" 2>/dev/null || stat -c %.9Y "$@" 2>/dev/null; }
 mode=
 case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--split|--peeks|--uses|--stage|--edit|--at|--viewed) mode=$1; shift ;; esac
 
@@ -156,9 +161,9 @@ esac
 # lines went (del), where a deletion sits in new numbering (delat) and an
 # insertion in old numbering (addat), and for each old line that went, the new
 # line where the change now sits (at). Keyed by `which` too, for a program
-# reading two diffs. The preview and staging need it; the table it comes with
-# already has it applied.
-hunk_awk=$(seam --awk hunks)
+# reading two diffs. Staging needs it; the table it comes with already has it
+# applied. Asked for there, since seam starting is a fifth of a preview.
+seam_hunks() { seam --awk hunks; }
 
 # cut_awk: the lines of one hunk that fall inside [s, e] on `side`, with a
 # header for what is left, so delta numbers them as the file does and git
@@ -367,7 +372,7 @@ mark_awk='
       if (t != "") print t
     }
   }'
-mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="$([ -e "$st/nopeeks" ] && echo 0 || echo 1)" "$(cat "$share/rowfmt.awk")$mark_awk" "$1" -; }
+mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="${peeks:-1}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$mark_awk" "$1" -; }
 
 rev=$1
 [ -n "$rev" ] || exit 2
@@ -376,7 +381,18 @@ rev=$1
 # how the worktree is said, so without this it would read one as the other. The
 # worktree has no head commit: its files are read where they are, from the repo
 # root, where ga's paths start.
+# A picker's table was built from two shas (--rows writes them beside it),
+# and every other mode under that picker wants those two: a range's ends are
+# resolved once there rather than in every preview, and a preview and the
+# rows it sits under can never disagree about what the change is. The state
+# is the picker's own, so the shas can only be this change's. The worktree
+# writes none, and no picker means whatever TMPDIR holds is not to be trusted.
 empty() { git hash-object -t tree /dev/null; }
+base= head=
+if [ "$mode" != --rows ] && [ "$rev" != worktree ] && [ -n "$GIT_FZF_STATE" ]; then
+  read -r base head 2>/dev/null < "$st/symbols.tsv.rev" || base= head=
+fi
+[ -n "$base" ] && [ -n "$head" ] ||
 case $rev in
   worktree) base=$(git rev-parse -q --verify HEAD || empty); head=; cd "$(git rev-parse --show-toplevel)" || exit 1 ;;
   *...*)    l=${rev%%...*} r=${rev##*...}
@@ -414,12 +430,22 @@ if [ "$mode" = --preview ]; then
   # once per picker and kept, keyed by the row, the width and the gloss and
   # callers caches it drew from: a fold flips the row's text, and fzf then
   # draws the preview again. The worktree's changes under you; it is not kept.
+  # The flags and files the render reads, once, as tests and reads rather
+  # than a process each: the cached preview is the common case, and every
+  # process before the cat that answers it is felt on every move.
+  up= peeks=1 nopeeks= usesfor= key= croot= ckey=
+  [ -e "$st/up" ] && up=up
+  [ -e "$st/nopeeks" ] && peeks=0 nopeeks=nopeeks
+  read -r usesfor 2>/dev/null < "$st/uses-for"
+  usesview=; [ -n "$rid" ] && [ "$usesfor" = "$rid" ] && usesview=uses
+  { read -r key < "$st/key" && read -r croot < "$st/cache-root"; } 2>/dev/null || key= croot=
+  read -r ckey 2>/dev/null < "$st/callers-key"
   pv=
-  if [ -n "$head" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$GIT_FZF_STATE" ] && [ -s "$st/key" ] && [ -s "$st/cache-root" ]; then
-    read -r key < "$st/key"; read -r croot < "$st/cache-root"
-    read -r ckey < "$st/callers-key" 2>/dev/null
-    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" 2>/dev/null | tr '\n' ',')
-    pv=$st/pv.$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$([ -e "$st/up" ] && echo up)|$([ -e "$st/nopeeks" ] && echo nopeeks)|$([ "$(cat "$st/uses-for" 2>/dev/null)" = "$rid" ] && echo uses)|$FZF_PREVIEW_COLUMNS" | cksum | cut -d' ' -f1)
+  if [ -n "$head" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$key" ] && [ -n "$croot" ]; then
+    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed")
+    # cksum says the sum and then the size; the sum alone names the file.
+    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$nopeeks|$usesview|$FZF_PREVIEW_COLUMNS" | cksum)
+    pv=$st/pv.${pv%% *}
     [ -s "$pv" ] && exec cat "$pv"
     # The render goes to the file, and the file to the terminal at exit.
     exec 3>&1
@@ -437,33 +463,61 @@ if [ "$mode" = --preview ]; then
   # has not reached yet holds its place (a line where what it does goes)
   # rather than pushing the diff down when it lands.
   gloss_coming() {
-    { read -r gkey < "$st/key" && read -r groot < "$st/cache-root"; } 2>/dev/null &&
-      kill -0 "$(cat "$groot/symbols-gloss/$gkey.running" 2>/dev/null)" 2>/dev/null
+    [ -n "$key" ] && [ -n "$croot" ] && read -r gpid 2>/dev/null < "$croot/symbols-gloss/$key.running" && kill -0 "$gpid" 2>/dev/null
   }
+  # The gloss's cache is where git-symbols-gloss would say it is, for the key
+  # --rows left in the state: asked of the script, it resolved the change
+  # again, two git processes for a file test. Without a state (no picker,
+  # or none of --rows yet), the script says.
   gf=
-  [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && gf=$(git-symbols-gloss --file "$rev" "$st/symbols.tsv")
+  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ]; then
+    if [ -n "$key" ] && [ -n "$croot" ]; then gf=$croot/symbols-gloss/$key.json; [ -s "$gf" ] || gf=
+    else gf=$(git-symbols-gloss --file "$rev" "$st/symbols.tsv"); fi
+  fi
   [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ -z "$gf" ] && [ "$side" != file ] && gloss_coming &&
     printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
+  # The row'"'"'s symbol goes by two ids: the gloss files a member as
+  # Class.member, and the table has it under its class'"'"'s row, which is
+  # where what it uses is.
+  sid=${rid##*>}; p=${sid%%#*}; n=${sid#"$p"}
+  gsid=$p$n; case $n in *+*) gsid=$p${n%%+*}.${n#*+} ;; esac
+  dsid=$p${n%%+*}
+  # What the symbol uses, from the table, in the order it mentions them, for
+  # the notes under its diff and i'"'"'s view (deps, below). Read here, ahead
+  # of the gloss, so one jq answers for the symbol and for these at once.
+  uses=
+  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ "$side" != file ] && [ -n "$s" ] && [ -s "$st/symbols.tsv" ]; then
+    uses=$(awk -F'\t' -v id="$dsid" '$2 != "file" && $4 == "" && $1 "#" $3 == id { n = split($18, u, "|"); for (i = 1; i <= n; i++) if (u[i] != "" && !seen[u[i]]++) print u[i] }' "$st/symbols.tsv")
+  fi
+  deps=$st/deps.$$
+  : > "$deps"
+  : > "$deps.gl"
   if [ -n "$gf" ]; then
-    sid=${rid##*>}; p=${sid%%#*}; n=${sid#"$p"}; sid=$p$(printf '%s' "$n" | sed 's/+/./')
-    # One jq: the gloss, what it does, and why, a line each.
-    { IFS= read -r note; IFS= read -r does; IFS= read -r why; } <<EOF
-$(jq -r --arg id "$sid" --arg name "${sid##*[#.]}" '
-      (first(.symbols[] | select(.id == $id)) // first(.symbols[] | select(.id == $name or (.id | endswith("#" + $name)) or (.id | endswith("." + $name)))) // {}) as $g
-      | ($g.gloss // ""), ($g.does // ""), (first(.order[] | select(.id == $id) | .why) // "")' "$gf" 2>/dev/null)
-EOF
-    [ -n "$does" ] && printf "${GK_TEXT}%s${GK_R}\n\n" "$does"
-    [ -z "$does" ] && [ "$side" != file ] && gloss_coming && printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
-    [ -n "$why" ] && printf "${GK_CONTEXT}%s${GK_R}\n\n" "$why"
     # Under another symbol by a new call, what that call does, from Claude:
     # the row says only "new call", since the gloss seldom fits beside a
     # signature. The parent is the id before the last > in the row'"'"'s.
     pid=${rid%>*}; [ "$pid" = "$rid" ] && pid=; pid=${pid##*>}
+    from= to= what=
     if [ -n "$pid" ]; then
-      if [ -e "$st/up" ]; then from=$sid to=$pid what="new caller of ${pid##*#}"; else from=$pid to=$sid what="new call from ${pid##*#}"; fi
-      eg=$(jq -r --arg f "$from" --arg t "$to" 'first(.edges[]? | select(.from == $f and .to == $t) | .gloss) // ""' "$gf" 2>/dev/null)
-      [ -n "$eg" ] && printf "${GK_CONTEXT}%s: %s${GK_R}\n\n" "$what" "$eg"
+      if [ -e "$st/up" ]; then from=$gsid to=$pid what="new caller of ${pid##*#}"; else from=$pid to=$gsid what="new call from ${pid##*#}"; fi
     fi
+    # One jq: the gloss, what it does, why to read it first and what the
+    # call does, a line each, then each symbol it uses with its gloss and
+    # what it does, for deps. A gloss the model filed under a bare name,
+    # without its path or class, still finds its symbol.
+    { IFS= read -r note; IFS= read -r does; IFS= read -r why; IFS= read -r eg; cat > "$deps.gl"; } <<EOF
+$(jq -r --arg id "$gsid" --arg name "${gsid##*[#.]}" --arg f "$from" --arg t "$to" --arg ids "$uses" '
+      (first(.symbols[] | select(.id == $id)) // first(.symbols[] | select(.id == $name or (.id | endswith("#" + $name)) or (.id | endswith("." + $name)))) // {}) as $g
+      | ($g.gloss // ""), ($g.does // ""), (first(.order[] | select(.id == $id) | .why) // ""),
+        (first(.edges[]? | select(.from == $f and .to == $t) | .gloss) // ""),
+        (. as $all | $ids | split("\n")[] | select(. != "") | . as $uid | (sub(".*#"; "") | sub("^type "; "")) as $uname |
+          (first($all.symbols[] | select(.id == $uid)) // first($all.symbols[] | select(.id == $uname or (.id | endswith("#" + $uname)))) // {}) as $u |
+          [$uid, ($u.gloss // ""), ($u.does // "")] | @tsv)' "$gf" 2>/dev/null)
+EOF
+    [ -n "$does" ] && printf "${GK_TEXT}%s${GK_R}\n\n" "$does"
+    [ -z "$does" ] && [ "$side" != file ] && gloss_coming && printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
+    [ -n "$why" ] && printf "${GK_CONTEXT}%s${GK_R}\n\n" "$why"
+    [ -n "$pid" ] && [ -n "$eg" ] && printf "${GK_CONTEXT}%s: %s${GK_R}\n\n" "$what" "$eg"
   fi
   if [ "$side" = file ]; then
     # A caller elsewhere: its lines as git-callers read the file, which is
@@ -502,7 +556,7 @@ EOF
       elif [ -f "$path" ]; then cat "$path"; else git show "$head:$path" 2>/dev/null; fi; } |
       { BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --paging=never --wrap=never -l ts --line-range="$s:$e" --file-name "$path" 2>/dev/null || awk -v s="$s" -v e="$e" 'NR >= s && NR <= e { printf "%5d  %s\n", NR, $0 }'; } |
       mark "$names" |
-      LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v at="$st/off.$k" -v have="$([ -s "$st/off.$k" ] && echo 1)" -v looking="$looking" "$(cat "$share/rowfmt.awk")"'
+      LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v at="$st/off.$k" -v have="$([ -s "$st/off.$k" ] && echo 1)" -v looking="$looking" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
         function dw(s) { gsub(/[\200-\277]/, "", s); return length(s) }
         # A barred block at the code'"'"'s indent: the bar in bc, lead on its
         # first line, the text beside it wrapped to the pane, each quoted type
@@ -578,7 +632,7 @@ EOF
       claimed=$st/claimed.$$
       awk -F'\t' -v p="$path" 'BEGIN { OFS = "\t" } $1 == p && $2 != "file" { print $7, $8, $9; if ($7 == "new" && $14 != "") print "old", $14, $15 }' "$st/symbols.tsv" > "$claimed"
       if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
-        awk -F'\t' "$unclaimed_awk" "$claimed" - | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else git-delta; fi
+        awk -F'\t' "$unclaimed_awk" "$claimed" - | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else gk_delta; fi
       rm -f "$claimed"
       exit 0
     fi
@@ -593,16 +647,9 @@ EOF
   # since read drops an empty field, and the model gives both or neither. A type seam named "type X", for the
   # const X it is typeof, is shown as the const, which is where what it is
   # lives: seam reads the pair as one symbol and points uses at the type.
-  deps=$st/deps.$$
-  : > "$deps"
-  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ -s "$st/symbols.tsv" ]; then
-    sid=${rid##*>}; p=${sid%%#*}; n=${sid#"$p"}; sid=$p${n%%+*}
-    uses=$(awk -F'\t' -v id="$sid" '$2 != "file" && $4 == "" && $1 "#" $3 == id { n = split($18, u, "|"); for (i = 1; i <= n; i++) if (u[i] != "" && !seen[u[i]]++) print u[i] }' "$st/symbols.tsv")
-    if [ -n "$uses" ]; then
-      { [ -n "$gf" ] && jq -r --arg ids "$uses" '. as $g | $ids | split("\n")[] | select(. != "") | . as $id | (sub(".*#"; "") | sub("^type "; "")) as $name |
-          (first($g.symbols[] | select(.id == $id)) // first($g.symbols[] | select(.id == $name or (.id | endswith("#" + $name)))) // {}) as $s |
-          [$id, ($s.gloss // ""), ($s.does // "")] | @tsv' "$gf" 2>/dev/null; } |
-        USES=$uses awk -F'\t' 'FILENAME == "-" { gl[$1] = $2; dz[$1] = $3; next }
+  if [ -n "$uses" ]; then
+    {
+      USES=$uses awk -F'\t' 'FILENAME == ARGV[1] { gl[$1] = $2; dz[$1] = $3; next }
           $2 != "file" && $4 == "" { id = $1 "#" $3; ch[id] = $6; sd[id] = $7; s[id] = $8; e[id] = $9; hd[id] = $13 }
           END {
             n = split(ENVIRON["USES"], want, "\n")
@@ -615,14 +662,14 @@ EOF
               g = gl[id] != "" ? id : v
               print nm "\t" hd[a] "\t" what "\t" id "\t" sd[a] "\t" s[a] "\t" e[a] "\t" gl[g] "\t" dz[g]
             }
-          }' - "$st/symbols.tsv" > "$deps"
-    fi
+          }' "$deps.gl" "$st/symbols.tsv" > "$deps"
+    }
   fi
   # i on the row: what it uses, in place of its own diff. Each name as the
   # diff marks it, where it is and what the change did to it, what Claude
   # says it does and its gloss, and its own diff.
-  if [ -s "$deps" ] && [ "$(cat "$st/uses-for" 2>/dev/null)" = "$rid" ]; then
-    printf "${GK_CONTEXT}what %s uses, in the order it mentions them · i for its diff${GK_R}\n" "${sid##*#}"
+  if [ -s "$deps" ] && [ -n "$usesview" ]; then
+    printf "${GK_CONTEXT}what %s uses, in the order it mentions them · i for its diff${GK_R}\n" "${dsid##*#}"
     while IFS='	' read -r uname _ what uid uside us ue ugloss udoes; do
       upath=${uid%%#*}
       printf "\n\033[1;4m${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s:%s · %s${GK_R}\n" "$uname" "${upath##*/}" "$us" "$what"
@@ -632,9 +679,9 @@ EOF
       # definition as the change leaves it (or as it was, for a removed one),
       # its changed lines marked, the path already said above.
       if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$upath"; else wt_diff -U999999 "$upath"; fi 2>/dev/null |
-        awk -v side="$uside" -v s="$us" -v e="$ue" -v note="" "$cut_awk" | git-delta --file-style=omit
+        awk -v side="$uside" -v s="$us" -v e="$ue" -v note="" "$cut_awk" | gk_delta --file-style=omit
     done < "$deps"
-    rm -f "$deps"
+    rm -f "$deps" "$deps.gl"
     exit 0
   fi
   # A file seam read no definitions from has no range to cut to, and cut_awk
@@ -642,8 +689,8 @@ EOF
   # pane. The row is the whole file, so that is what it shows.
   [ -n "$s" ] || { s=1 e=999999999; }
   if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
-    awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" "$cut_awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else git-delta | mark "$deps"; fi
-  rm -f "$deps"
+    awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" "$cut_awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else gk_delta | mark "$deps"; fi
+  rm -f "$deps" "$deps.gl"
   exit 0
 fi
 
@@ -690,6 +737,7 @@ if [ "$mode" = --stage ]; then
   fi
   tmp=$(mktemp) || exit 1
   trap 'rm -f "$tmp"' EXIT
+  hunk_awk=$(seam_hunks)
   if [ "$unstaged" = 1 ]; then
     # Stage it: the worktree's diff against the index, cut to the symbol. An
     # untracked file is put in the index empty first, so it has a diff.
@@ -881,20 +929,23 @@ build() {
 # Colored once: a signature seen in an earlier render is in $st/hl, and
 # bat runs only for the ones that are not, which after the first render is
 # usually none. Two-thirds of a reload was bat.
+# The usual render, every signature colored already, is two awks and nothing
+# else: the first keeps the rows as it reads them and writes each new
+# signature to a file of its own beside them, flat in the state, so nothing
+# is made, listed or removed for the render that has none.
 highlight() {
   if ! command -v bat >/dev/null 2>&1; then tr -d '\036'; return; fi
   rows=$st/rows.$$ heads=$st/heads.$$ hl=$st/hl
-  cat > "$rows"
   : >> "$hl"
-  mkdir -p "$heads"
-  awk -F'\036' -v d="$heads" 'FILENAME == ARGV[1] { have[$1] = 1; next } NF >= 3 && !($2 in have) && !($2 in seen) { seen[$2] = 1; f = d "/" sprintf("%06d", ++n); print $2 > f; close(f) }' "$hl" "$rows"
-  if [ -n "$(ls "$heads")" ]; then
-    cat "$heads"/* > "$heads.txt"
-    BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=plain --paging=never --wrap=never -l ts "$heads"/* > "$heads.col" 2>/dev/null
+  new=$(awk -F'\036' -v d="$heads" -v rows="$rows" 'FILENAME == ARGV[1] { have[$1] = 1; next } { print > rows } NF >= 3 && !($2 in have) && !($2 in seen) { seen[$2] = 1; f = d "." sprintf("%06d", ++n); print $2 > f; close(f) } END { print n + 0 }' "$hl" -)
+  if [ "$new" -gt 0 ]; then
+    cat "$heads".* > "$heads.txt"
+    BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=plain --paging=never --wrap=never -l ts "$heads".* > "$heads.col" 2>/dev/null
     paste -d "$(printf '\036')" "$heads.txt" "$heads.col" >> "$hl"
+    rm -f "$heads".* "$heads.txt" "$heads.col"
   fi
   awk -F'\036' 'FILENAME == ARGV[1] { col[$1] = $2; next } NF >= 3 { print $1 col[$2] $3; next } { print }' "$hl" "$rows"
-  rm -rf "$rows" "$heads" "$heads.txt" "$heads.col"
+  rm -f "$rows"
 }
 
 if [ "$mode" = --rows ]; then
@@ -909,7 +960,8 @@ if [ "$mode" = --rows ]; then
       4040) now="$base $head" ;;
       *) now="$(git rev-parse "$base") $(git rev-parse "$head")" ;;
     esac
-    if [ ! -s "$table" ] || [ "$(cat "$table.rev" 2>/dev/null)" != "$now" ]; then
+    was=; read -r was 2>/dev/null < "$table.rev"
+    if [ ! -s "$table" ] || [ "$was" != "$now" ]; then
       build
       printf '%s\n' "$now" > "$table.rev"
     fi
@@ -921,8 +973,13 @@ if [ "$mode" = --rows ]; then
   fi
   # node_modules kept for tsgo, here for the callers and for nvim alike
   # (otis-node-modules): a worktree's mirrored from main's, the repo's new
-  # packages linked, the install started when the lockfile moved.
-  otis-node-modules >/dev/null 2>&1
+  # packages linked, the install started when the lockfile moved. Once per
+  # picker: the checkout under it does not change, and the script finding
+  # nothing to do was three processes on every reload.
+  if [ -z "$GIT_FZF_STATE" ] || [ ! -e "$st/node-modules" ]; then
+    otis-node-modules >/dev/null 2>&1
+    [ -n "$GIT_FZF_STATE" ] && : > "$st/node-modules"
+  fi
   # The change's key for the caches, and where they are, once for the gloss
   # and the callers both, rather than a few git calls in each.
   case $rev in
@@ -960,9 +1017,12 @@ if [ "$mode" = --rows ]; then
   # here; the script is asked only when there is none, to start it. A cache
   # an older git-callers wrote is not read: the version it writes is read
   # off its own version= line, so the two cannot drift apart.
-  callers=/dev/null finding=
-  if [ -e "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv" ] &&
-    [ "$(cat "$OTIS_CACHE_ROOT/callers/version" 2>/dev/null)" = "$(sed -n 's/^version=//p' "$root/bin/git-callers")" ]; then
+  # The version this git-callers writes, read off it once per picker.
+  callers=/dev/null finding= cver= wver=
+  [ -n "$GIT_FZF_STATE" ] && read -r wver 2>/dev/null < "$st/callers-version"
+  [ -n "$wver" ] || { wver=$(sed -n 's/^version=//p' "$root/bin/git-callers"); [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$wver" > "$st/callers-version"; }
+  read -r cver 2>/dev/null < "$OTIS_CACHE_ROOT/callers/version"
+  if [ -e "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv" ] && [ "$cver" = "$wver" ]; then
     [ -s "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv" ] && callers=$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.tsv
   else
     found=$(git-callers "$rev" "$table")
@@ -991,7 +1051,7 @@ if [ "$mode" = --rows ]; then
   if [ -n "$GIT_FZF_STATE" ]; then
     layout=$st/layout.$OTIS_SYMBOLS_KEY
     [ -s "$layout" ] || { [ -n "$gf" ] && echo glossed || echo plain; } > "$layout"
-    layout=$(cat "$layout")
+    read -r layout < "$layout"
   fi
   if [ -n "$gf" ] && [ "$layout" != plain ]; then
     # One jq: the spine, then the order, a line each.
@@ -1035,7 +1095,7 @@ if [ "$mode" = --rows ]; then
   # rows: the cursor never lands on it, and enter has nothing to open.
   header=
   [ -n "$GIT_FZF_STATE" ] && header=$st/header && : > "$header"
-  OPEN=$(cat "$st/open" 2>/dev/null) FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" "$(cat "$share/rowfmt.awk")"'
+  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
@@ -1098,7 +1158,10 @@ if [ "$mode" = --rows ]; then
     }
     function base(p,   k, a) { k = split(p, a, "/"); return a[k] }
     BEGIN {
-      n = split(ENVIRON["OPEN"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") open[ids[i]] = 1
+      # The open rows straight from their file: a getline on one that is not
+      # there is nothing, where a cat for it was a process.
+      while ((getline id < openfile) > 0) if (id != "") open[id] = 1
+      close(openfile)
       n = split(ENVIRON["FIXED"], ids, "\n"); for (i = 1; i <= n; i++) if (ids[i] != "") fixedp[ids[i]] = 1
     }
     {
@@ -1303,7 +1366,9 @@ if [ "$mode" = --rows ]; then
   rm -f "$counts" "$order" "$vw"
   [ -n "$GIT_FZF_STATE" ] || exit 0
   if [ "${syms:-0}" -gt 0 ]; then
-    note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, %s to start from%s${GK_R}" "$syms" "$nfiles" "$([ "$nfiles" -eq 1 ] || echo s)" "$roots" "$([ -e "$st/up" ] && echo ', bottom up')")
+    fs=s; [ "$nfiles" -eq 1 ] && fs=
+    bu=; [ -e "$st/up" ] && bu=', bottom up'
+    note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, %s to start from%s${GK_R}" "$syms" "$nfiles" "$fs" "$roots" "$bu")
     if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
     elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
@@ -1333,7 +1398,7 @@ if [ "$mode" = --rows ]; then
   else
     note=$(printf "${GK_CONTEXT}nothing here is TypeScript, so there are only files${GK_R}")
   fi
-  footer=$(cat "$GIT_FZF_STATE/footer" 2>/dev/null)
+  footer=; IFS= read -r footer 2>/dev/null < "$GIT_FZF_STATE/footer"
   printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
   exit 0
 fi
@@ -1352,7 +1417,7 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,P=step through it,C=cut it into a stack,p=peeks on/off,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
@@ -1363,11 +1428,11 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,q=back to files'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,C=cut it into a stack,p=peeks on/off,t=tests/config/generated,q=back to files'
   set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($fold)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,C=cut it into a stack,p=peeks on/off,t=tests/config/generated,u=refresh'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
@@ -1388,6 +1453,7 @@ git-fzf "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
   --bind "S:execute-silent(git-symbols --split)+refresh-preview" \
   --bind "P:execute(git-split-try $rev)" \
+  --bind "C:execute(git-split --wait $rev)" \
   --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
   --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)+down" \
   "$@" \
