@@ -21,6 +21,18 @@
   echo "git-seam-check: run me from seam --check" >&2; exit 2; }
 command -v tsgo >/dev/null 2>&1 || { echo "git-seam-check: no tsgo on PATH" >&2; exit 2; }
 root=$SEAM_ROOT
+# Only the files the change touches are handed over as text; every other file
+# in the repo the server reads off disk. That is right when the disk is the
+# head being split — the rest of the tree is then exactly the context those
+# commits land in — and wrong when you are standing somewhere else, where the
+# same commit gets a different answer and nothing says so. It happened, and
+# cost an afternoon of doubting the checker.
+on=$(git -C "$root" rev-parse HEAD 2>/dev/null)
+want=$(git -C "$root" rev-parse "${SEAM_HEAD:-$SEAM_COMMIT}" 2>/dev/null)
+[ "$on" = "$want" ] || {
+  printf 'git-seam-check: %s is checked out at %s, and the change ends at %s.\n' "$root" "${on:-nothing}" "${want:-nothing}" >&2
+  printf 'git-seam-check: everything the change does not touch is read from there, so the answer would be about that tree and not this commit. Check out the branch you are splitting.\n' >&2
+  exit 2; }
 share=$(cd "$(dirname "$0")/../share" && pwd)
 tmp=$(mktemp -d) || exit 2
 trap 'rm -rf "$tmp"' EXIT

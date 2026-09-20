@@ -87,6 +87,7 @@ jq -r '.slices[] | [(.n|tostring),
 # still above it.
 draw() {
   [ -z "$drawn" ] || printf '\033[%dA' "$rows"
+  was=$rows
   rows=0
   line() { printf '\033[2K%b\n' "$1"; rows=$((rows + 1)); }
   line ""
@@ -107,24 +108,31 @@ draw() {
     elif [ -n "$failed" ]; then
       line "$(printf '%b ✗ %b%s%b %bdid not stand up%b' "$GK_BAD" "$GK_R" "$((n2 + 1))" "$GK_R" "$GK_BAD" "$GK_R")"
     fi
-    line ""
-    line "  ${GK_FAINT}${foot}${GK_R}"
-    drawn=1
-    return
+  else
+    while IFS='	' read -r k name nf nl; do
+      mark="   " ; tail=""
+      if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
+      elif [ "$k" -eq "$at" ] && [ -n "$running" ]; then
+        mark="${GK_ATTENTION} $spin ${GK_R}"; tail="  ${GK_CONTEXT}${checking}${GK_R}"
+      elif [ "$k" -eq "$at" ] && [ -n "$failed" ]; then
+        mark="${GK_BAD} ✗ ${GK_R}"; tail="  ${GK_BAD}did not stand up${GK_R}"
+      fi
+      line "$(printf "%b%s%b %-${namew}.${namew}s %b%14s · %11s%b%b" \
+        "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
+    done < "$tmp/slices"
   fi
-  while IFS='	' read -r k name nf nl; do
-    mark="   " ; tail=""
-    if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
-    elif [ "$k" -eq "$at" ] && [ -n "$running" ]; then
-      mark="${GK_ATTENTION} $spin ${GK_R}"; tail="  ${GK_CONTEXT}${checking}${GK_R}"
-    elif [ "$k" -eq "$at" ] && [ -n "$failed" ]; then
-      mark="${GK_BAD} ✗ ${GK_R}"; tail="  ${GK_BAD}did not stand up${GK_R}"
-    fi
-    line "$(printf "%b%s%b %-${namew}.${namew}s %b%14s · %11s%b%b" \
-      "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
-  done < "$tmp/slices"
   line ""
   line "  ${GK_FAINT}${foot}${GK_R}"
+  # A frame with fewer rows than the last leaves the difference behind: every
+  # line clears itself before it is written, so nothing clears the rows that
+  # are no longer written at all. A fuse makes exactly that frame — nine
+  # slices become three — and the old five sat there under the new ones with
+  # a second footer beneath them.
+  if [ "$was" -gt "$rows" ]; then
+    spare=$((was - rows))
+    while [ "$spare" -gt 0 ]; do printf '\033[2K\n'; spare=$((spare - 1)); done
+    printf '\033[%dA' "$((was - rows))"
+  fi
   drawn=1
 }
 
