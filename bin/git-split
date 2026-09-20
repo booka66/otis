@@ -7,7 +7,8 @@
 #   git-split main... ""                  split, checking nothing
 #
 # With no check named, the repo's is used: a command a line in .seam/check,
-# then this user's, the way seam finds its own files. That is what lets the
+# with .seam/check.local before it and this user's after, the way seam reads
+# its own files. That is what lets the
 # key in the picker mean the same thing in a repo that has a typechecker and
 # one that has nothing to say.
 #
@@ -28,9 +29,13 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 wait=; [ "$1" = --wait ] && { wait=1; shift; }
 rev=$1 check=$2
 if [ $# -lt 2 ]; then
-  for d in ./.seam "${XDG_CONFIG_HOME:-$HOME/.config}/seam"; do
-    [ -f "$d/check" ] || continue
-    check=$(sed 's/#.*//' "$d/check" | grep -v '^[[:space:]]*$' | head -1)
+  # check.local before check, this repo before this user, the way seam reads
+  # its own: a repo that comes to ship one should not take over yours, and a
+  # .local is the one of these git is not meant to see.
+  for d in ./.seam/check.local ./.seam/check \
+           "${XDG_CONFIG_HOME:-$HOME/.config}/seam/check.local" "${XDG_CONFIG_HOME:-$HOME/.config}/seam/check"; do
+    [ -f "$d" ] || continue
+    check=$(sed 's/#.*//' "$d" | grep -v '^[[:space:]]*$' | head -1)
     break
   done
 fi
