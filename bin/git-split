@@ -171,9 +171,16 @@ tally() {
   # A commit seam reported, and only one that stood up: a line ending "... no"
   # is the slice that failed, and ticking it is the lie this screen exists not
   # to tell. Without a check there is no "..." at all and the line is done.
-  awk '/fused, and building it again/ { n = 0; next }
+  # A commit seam reported, and only one it finished reporting. With a check
+  # it writes "  k  sha  subject ... " and only later "ok", so the file ends
+  # in a line with no newline on it — and awk hands that partial line over as
+  # a record like any other. Ticking it says a commit passed while its check
+  # is still running, which is the same lie this screen keeps finding new ways
+  # to tell. With a check, a row is a line that ends in "ok" and nothing else.
+  awk -v checked="${check:+1}" '
+       /fused, and building it again/ { n = 0; next }
        /^  [0-9]/ {
-         if ($0 ~ / \.\.\. no$/) next
+         if (checked != "" && $0 !~ / \.\.\. ok$/) next
          sub(/^  [0-9]+  /, ""); sub(/ \.\.\. ok$/, "")
          rows[++n] = $0
        }
