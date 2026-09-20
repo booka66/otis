@@ -81,7 +81,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # a file that changed within the second it was read (F, then its preview).
 if stat -c %Y / >/dev/null 2>&1; then mtimes() { stat -c %.9Y "$@"; }; else mtimes() { stat -f %Fm "$@"; }; fi
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--peeks|--uses|--stage|--edit|--at|--viewed) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--split|--peeks|--uses|--stage|--edit|--at|--viewed) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -90,7 +90,10 @@ case $mode in
   # S: the shape of the change in the preview, where ? puts the help. A flag
   # rather than a pager, so it sits beside the rows it is about and the next
   # keypress takes it away again.
-  --shape) if [ -e "$st/shape" ]; then rm -f "$st/shape"; else : > "$st/shape"; fi; exit 0 ;;
+  --shape) if [ -e "$st/shape" ]; then rm -f "$st/shape"; else rm -f "$st/split"; : > "$st/shape"; fi; exit 0 ;;
+  # S: how seam would split the change, the same way. The two are one pane
+  # between them, so turning either on turns the other off.
+  --split) if [ -e "$st/split" ]; then rm -f "$st/split"; else rm -f "$st/shape"; : > "$st/split"; fi; exit 0 ;;
   # p: the peeks, the notes under each changed name the preview uses, off
   # and on again. The names stay marked.
   --peeks) if [ -e "$st/nopeeks" ]; then rm -f "$st/nopeeks"; else : > "$st/nopeeks"; fi; exit 0 ;;
@@ -397,6 +400,15 @@ if [ "$mode" = --preview ]; then
     COLUMNS=${FZF_PREVIEW_COLUMNS:-92} SEAM_COLOR=1 seam --score --table "$st/symbols.tsv" "$rev" 2>/dev/null
     exit 0
   fi
+  # S is on: the split instead, which slice each definition and each file
+  # goes in. The same table again, so it is a jq pass and not a second
+  # reading of the trees. What it says on the way out is kept rather than
+  # dropped: a seam too old to have --split, or a change with one slice in
+  # it, has something to say, and a blank pane says it badly.
+  if [ -e "$st/split" ] && [ -s "$st/symbols.tsv" ] && command -v seam >/dev/null 2>&1; then
+    COLUMNS=${FZF_PREVIEW_COLUMNS:-92} SEAM_COLOR=1 seam --split --table "$st/symbols.tsv" "$rev" 2>&1
+    exit 0
+  fi
   [ -n "$path" ] || exit 0
   # A commit or range never changes, so its preview of a row is rendered
   # once per picker and kept, keyed by the row, the width and the gloss and
@@ -625,6 +637,10 @@ EOF
     rm -f "$deps"
     exit 0
   fi
+  # A file seam read no definitions from has no range to cut to, and cut_awk
+  # reads an empty one as zero and keeps nothing, so the row drew a blank
+  # pane. The row is the whole file, so that is what it shows.
+  [ -n "$s" ] || { s=1 e=999999999; }
   if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
     awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" "$cut_awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else git-delta | mark "$deps"; fi
   rm -f "$deps"
@@ -1336,7 +1352,7 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
@@ -1347,11 +1363,11 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,p=peeks on/off,t=tests/config/generated,q=back to files'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,q=back to files'
   set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($fold)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,p=peeks on/off,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,p=peeks on/off,t=tests/config/generated,u=refresh'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
@@ -1370,6 +1386,8 @@ git-fzf "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
   --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
+  --bind "S:execute-silent(git-symbols --split)+refresh-preview" \
+  --bind "P:execute(git-split-try $rev)" \
   --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
   --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)+down" \
   "$@" \

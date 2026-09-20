@@ -1,0 +1,38 @@
+#!/bin/sh
+# git-split-try <rev>   the split as commits you can step through, and then throw away
+#
+# seam --split says which definition and which file goes in which slice, and
+# --branch writes those slices as commits without checking anything out. This
+# writes them to a branch named for the moment, opens the log over it so each
+# commit can be read by symbol the way any other commit is (gl, and enter on a
+# row), and deletes the branch when you leave. Nothing is checked out, the
+# worktree is not touched, and what it leaves behind is nothing.
+#
+# The point is to see whether a split is one you would actually push before you
+# cut a real branch from it: seam's edges are the names it found inside changed
+# definitions, so an order it has checked is not an order it has proved.
+rev=$1
+[ -n "$rev" ] || { echo "git-split-try <rev>" >&2; exit 2; }
+command -v seam >/dev/null 2>&1 || { echo "git-split-try: seam is not on your PATH" >&2; exit 2; }
+
+base=$(seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
+[ -n "$base" ] || { seam "$rev" --split >/dev/null; echo "git-split-try: no split for $rev" >&2; exit 1; }
+
+# Named for the moment and for the change, so two of these never collide and
+# one left behind by a kill -9 says what it was.
+branch=seam/try-$(printf '%s' "$rev" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-$$
+trap 'git update-ref -d "refs/heads/$branch" 2>/dev/null; exit' EXIT INT TERM
+
+if ! seam "$rev" --split --branch "$branch" > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
+  # seam refuses an order that does not stand up, and that refusal is the most
+  # useful thing it can say: it is shown and waited on rather than flashed
+  # past on the way back to the picker.
+  cat "${TMPDIR:-/tmp}/git-split-try.$$" >&2
+  rm -f "${TMPDIR:-/tmp}/git-split-try.$$"
+  printf '\npress enter' >&2; read -r _
+  exit 1
+fi
+cat "${TMPDIR:-/tmp}/git-split-try.$$"
+rm -f "${TMPDIR:-/tmp}/git-split-try.$$"
+
+gl "$base..$branch"
