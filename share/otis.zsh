@@ -857,6 +857,9 @@ gd() {
 # c is CI jobs and logs, R retries failed jobs, m merges once GitLab says it
 # is ready, r has GitLab rebase it onto its target (git-mr-rebase), A approves, l and a manage labels and reviewers, s switches to the
 # branch (bringing it here from a worktree), W opens it in a worktree of its own, w and y open
+# m and r are the two keys whose answer comes from GitLab, and the only two
+# that ever made you wait: they run behind the picker (git-fzf-later), which
+# keeps it live and puts what they are doing in the footer until they answer.
 # and copy the MR, p opens its pipeline and v is glab's stage graph. C has
 # Claude draft comments on an MR to review, or propose fixes on one of yours,
 # as C in the file picker does (git-mr-do claude); D, on a merged one, has
@@ -876,8 +879,8 @@ _gmr() {
     --bind 'c:transform(git-ci-do jobs {9} {2})' \
     --bind 'R:transform(git-ci-do retry {9} {2})' \
     --bind 'N:transform(git-ci-do new {9} {2})' \
-    --bind 'm:transform(git-ci-merge --check {2})' \
-    --bind 'r:transform(git-mr-rebase --check {6} {2})' \
+    --bind 'm:transform(git-fzf-later "asking GitLab whether !{2} can merge" git-ci-merge --check {2})' \
+    --bind 'r:transform(git-fzf-later "asking GitLab what !{2} would rebase onto" git-mr-rebase --check {6} {2})' \
     --bind 'A:transform(git-mr-do approve {6} {2} {7} {8})' \
     --bind 'd:transform(git-mr-do draft {6} {2})' \
     --bind 'l:transform[git-mr-do labels {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \

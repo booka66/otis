@@ -1,0 +1,73 @@
+#!/bin/sh
+# git-fzf-later <what it is doing> <command...>
+#
+# A transform binding that has to ask GitLab, without the picker freezing while
+# it does.
+#
+# fzf runs a transform to the very end before it draws anything at all: not a
+# keystroke, not its own spinner, and not an action sent to its port. So a key
+# whose answer comes from the network left the picker looking hung, with
+# nothing able to say otherwise -- gmr's m worst of all, since GitLab computes
+# whether an MR can merge only when asked, and the check polls for it for up to
+# four seconds.
+#
+# So the command runs behind the picker instead. This prints the actions that
+# put a line in the footer and returns at once; the command's own actions are
+# sent to the picker over its port when it is done, which is what the transform
+# would have done with them. fzf takes any action that way while it is idle,
+# execute included, so a check that ends in a confirm still opens one.
+#
+# The command does not change. It still prints fzf actions on stdout and knows
+# nothing of this, so what a key does and how long it is allowed to take stay
+# separate questions.
+#
+# While it goes the footer counts, so a wait that is taking a while looks like
+# one rather than like nothing. A second press while it is still going says so
+# instead of asking GitLab twice.
+#
+# Outside a picker (otis-test, a script) it just runs the command, as the
+# binding did before.
+st=$GIT_FZF_STATE
+doing=$1
+shift
+[ -n "$doing" ] && [ $# -gt 0 ] || { echo "usage: git-fzf-later <doing> <command...>" >&2; exit 2; }
+[ -n "$st" ] && [ -d "$st" ] && [ -n "$FZF_PORT" ] || exec "$@"
+
+post() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$1" >/dev/null 2>&1; }
+
+# One run per command at a time: a held key would otherwise ask GitLab once a
+# repeat and open a confirm for each answer. The directory is the lock, since
+# mkdir either makes it or does not.
+lock=$st/later.$(printf '%s' "$*" | cksum | cut -d' ' -f1)
+if ! mkdir "$lock" 2>/dev/null; then
+  printf '%s\342\200\246 (already asking)\n' "$doing" > "$st/note"
+  echo "rebind(focus)+transform-footer:git-fzf-footer"
+  exit 0
+fi
+
+printf '%s\342\200\246\n' "$doing" > "$st/note"
+(
+  # The count, a second at a time, so the footer shows it is still going. The
+  # note is cleared by the footer that draws it, so each tick writes it again.
+  (
+    i=0
+    while [ -d "$lock" ] && [ "$i" -lt 120 ]; do
+      sleep 1
+      i=$((i + 1))
+      [ -d "$lock" ] || break
+      printf '%s\342\200\246 %ss\n' "$doing" "$i" > "$st/note"
+      post "transform-footer(git-fzf-footer)"
+    done
+  ) &
+  ticker=$!
+  out=$("$@" 2>/dev/null)
+  kill "$ticker" 2>/dev/null
+  rmdir "$lock" 2>/dev/null
+  # Only our own line is taken back down: the command may have left one of its
+  # own to explain itself (git-fzf-note).
+  case "$(cat "$st/note" 2>/dev/null)" in
+    "$doing"*) rm -f "$st/note" ;;
+  esac
+  if [ -n "$out" ]; then post "$out"; else post "transform-footer(git-fzf-footer)"; fi
+) >/dev/null 2>&1 &
+echo "rebind(focus)+transform-footer:git-fzf-footer"

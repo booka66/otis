@@ -1014,6 +1014,47 @@ for _ in 1 2 3 4 5; do
 done
 expect resume/progress-clears-the-count "$(cat "$lives/status" 2>/dev/null)" ""
 
+# --- git-fzf-later: a key whose answer comes from GitLab runs behind the
+# picker instead of freezing it, and says so while it goes
+expect later/no-picker-runs-it "$(GIT_FZF_STATE= FZF_PORT= git-fzf-later doing echo 'execute(x)')" "execute(x)"
+expect later/usage "$(git-fzf-later 2>/dev/null; echo $?)" "2"
+# The line it leaves in the footer while it waits, and the lock that keeps a
+# held key from asking twice. The port is unreachable here, which only means
+# nothing is told; what it writes is the same.
+lst=$tmp/later-state && mkdir -p "$lst"
+out=$(GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"')
+expect later/returns-at-once "$out" "rebind(focus)+transform-footer:git-fzf-footer"
+expect later/says-what-it-is-doing "$(cat "$lst/note")" "asking GitLab…"
+GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"' >/dev/null
+expect later/one-at-a-time "$(cat "$lst/note")" "asking GitLab… (already asking)"
+sleep 3
+expect later/lock-released "$([ -d "$lst"/later.* ] 2>/dev/null && echo held || echo free)" "free"
+expect later/takes-its-line-back-down "$([ -e "$lst/note" ] && echo left || echo gone)" "gone"
+
+# In a live picker: the keys pressed while it waits are taken rather than
+# dropped, and the command's own action still lands when it answers.
+slow=$tmp/slowcheck
+cat > "$slow" <<'SLOW'
+#!/bin/sh
+sleep 3
+echo 'reload(printf "%s\n" a b c d e)'
+SLOW
+chmod +x "$slow"
+if picker_open "git-fzf 'later ' 'm=merge' --bind 'start:reload(printf %s\\\\n one two three)' --bind 'm:transform(git-fzf-later \"asking GitLab\" $slow)'"; then
+  expect later/rows "$(picker_rows)" "3"
+  picker_key m
+  sleep 1
+  # The old binding ran the command inside the transform, where fzf draws
+  # nothing and drops every key until it returns.
+  picker_key j; sleep 1
+  expect later/picker-stays-live "$(picker_state | jq .position)" "1"
+  sleep 4
+  expect later/answer-arrives "$(picker_state | jq .matchCount)" "5"
+  picker_close
+else
+  expect later/picker-opens "no" "yes"
+fi
+
 # --- the command table: the one place a command's name and what it does are
 # written down, so gg, --help and the completions cannot drift from each other
 # or from what is actually in bin/
