@@ -63,7 +63,7 @@ tkind=(
 )
 tparts=(
   symbols    "why gitlab side files reading radius more seam staging log recap"
-  shapes     "score sweep tangle chain carry knot heavy gallery"
+  shapes     "score sweep tangle split chain carry knot heavy gallery"
   mr         "mr"
   claude     "claude_review claude_fix"
   verify     "verify_how verify_run verify_setup"
@@ -76,7 +76,7 @@ tparts=(
 )
 tabout=(
   symbols    "Why otis reads a change by symbol rather than by file, shown rather than told: one made-up change as GitLab shows it, as files, and by symbol. Then every key the symbol view has, the callers elsewhere that a change breaks without touching, Claude's fix for them, seam's graph page, and staging one function at a time. Start here."
-  shapes     "Six made-up changes that each go wrong a different way: a sweep, a branch of unrelated stories, a parameter threaded nine layers deep, a type change that breaks code it never touched, a cycle, and a 300-line function. Each as files first, so you can guess what is wrong, then as seam's score and the symbol tree, and what to ask the author for. Take Reviewing by symbol first."
+  shapes     "Six made-up changes that each go wrong a different way: a sweep, a branch of unrelated stories, a parameter threaded nine layers deep, a type change that breaks code it never touched, a cycle, and a 300-line function. Each as files first, so you can guess what is wrong, then as seam's score and the symbol tree, and what to ask the author for. One of them gets cut into eight commits that each build, to show what asking for it looks like when seam does it. Take Reviewing by symbol first."
   mr         "The review loop in gmr: an MR opens by symbol with its threads beside each symbol, nvim for comments inline, drafts until you submit, viewed marks, what changed since your last review, catching up when the author pushes."
   claude     "C has Claude Code review an MR in the background, reading it by symbol with tsgo's callers elsewhere, as you do, and leave drafts on the symbols they are about. You edit them before anything posts, and each says where its symbol sits in the tree, why Claude wrote it and how sure it is. On your own MR it proposes fixes for the threads instead, and folds the ones you accept into the right commits."
   verify     "V finds out whether a change actually works: Claude writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and Claude judges the evidence, claim by claim. With what you need set up to run one."
@@ -94,7 +94,8 @@ ptitle=(
   radius "The symbol view: what it breaks"  more "The symbol view: other ways in"
   seam "seam's page"  staging "Staging by symbol"  log "The log"
   score "Reading the score"  sweep "The sweep: big by file, safe by symbol"
-  tangle "The tangle: eight stories in one branch"  chain "The chain: nine layers for one line"
+  tangle "The tangle: eight stories in one branch"  split "Splitting it: one branch, eight commits"
+  chain "The chain: nine layers for one line"
   carry "The carry: one file that breaks three"  knot "The knot: a circle, and a bug"
   heavy "The heavy one: 300 lines in one function"  gallery "Side by side"
   mr "The review loop"
@@ -755,6 +756,20 @@ part_tangle() {
   look 1 "Each top-level row is an MR that could ship on its own. Reviewed together, each gets an eighth of your attention and you pay eight context switches for it."
   look 2 "By file you would find that out a file at a time. By symbol it is the first screen: count the top-level rows."
   look 3 "What to ask for: split the branch at the top-level rows. Or review it as a list of eight small things, knowing that is what you are doing."
+  launch gdm
+}
+
+part_split() {
+  heading $1
+  demo_on tangle
+  say "The same Friday fixes branch. ${k}stories${r} said eight, and what to ask for was to split it — so ask seam to. ${k}S${r} in the symbol view is the plan: which definition and which file goes in which commit, and in what order."
+  guess $1 split "If you cut this into eight, what has to be true of each piece?" || return
+  say "Each has to build on its own. A slice is closed under what it mentions: everything it names is either in it or in a slice before it, so nothing in the middle of the stack is missing a name. Here that is easy — the eight stories touch nothing in common. It is the branches where they do that seam has something to say."
+  look 1 "${k}S${r}: eight slices, one a story, each named after the definition it is about, each one file and five lines. This branch comes apart cleanly because nothing in it is shared; the count matches ${k}stories${r} because they are the same count."
+  look 2 "${k}P${r} writes them as commits on a branch named for the moment, opens the log over it, and deletes the branch when you leave. ${k}enter${r} on a commit reads it by symbol like any other. Nothing is checked out and nothing is left behind."
+  look 3 "${k}C${r} keeps one, on a branch beside the one you are on. Your branch is not touched — every commit is built from the base tree in an index of its own — so going back is standing still, and throwing it away is deleting one ref."
+  say "Your own branches will not be this tidy. A file the change has no definitions in — a lockfile, a migration, a schema — has nothing to place it by and falls to the last slice, which is the wrong end when the code waits on it: ${k}.seam/first${r} names the paths that lead. Files whose changed lines are all the same edit are one slice, since a rename read once is read everywhere."
+  say "With a command in ${k}.seam/check${r}, seam runs it on every commit as it makes it and writes nothing unless all of them pass. When one fails it fuses that slice with the slices it was waiting for and builds the whole thing again: the check is the only thing that knows whether a stack stands up, so it is the thing allowed to correct the plan. A branch that ends up one commit was one commit, and that is an answer, and a proved one."
   launch gdm
 }
 
