@@ -1,0 +1,117 @@
+#!/bin/sh
+# git-split <rev> [<check>]   split this branch into a stack, and keep the branch
+#
+#   git-split main...                     split, unchecked
+#   git-split main... git-seam-check      split, and typecheck every commit
+#
+# seam --split --branch writes the slices as commits on a new branch from the
+# base. Nothing is checked out and the worktree is not touched, so the branch
+# you are on is exactly where you left it: going back is standing still, and
+# throwing the split away is deleting one ref.
+#
+# The check runs on every commit as it is made and the branch is written only
+# if all of them pass, which takes long enough that a bare cursor is the wrong
+# thing to look at. The plan is drawn first — it costs a jq pass — and each
+# slice lights up as its commit lands.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+rev=$1 check=$2
+[ -n "$rev" ] || { echo "git-split <rev> [<check command>]" >&2; exit 2; }
+command -v seam >/dev/null 2>&1 || { echo "git-split: seam is not on your PATH" >&2; exit 2; }
+here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 2
+[ "$here" != HEAD ] || { echo "git-split: you are not on a branch" >&2; exit 2; }
+branch=$3
+[ -n "$branch" ] || branch=$here-split
+git show-ref --verify -q "refs/heads/$branch" && { printf 'git-split: %s is already a branch. Delete it or name another.\n' "$branch" >&2; exit 2; }
+
+tmp=$(mktemp -d) || exit 2
+trap 'printf "\033[?25h"; rm -rf "$tmp"' EXIT INT TERM
+
+seam "$rev" --split --json > "$tmp/plan" 2>"$tmp/err" || {
+  sed 's/^/  /' "$tmp/err" >&2; exit 1; }
+n=$(jq '.slices | length' "$tmp/plan")
+[ "$n" -gt 1 ] || { echo "git-split: one slice, which is the change as it is; nothing to split" >&2; exit 1; }
+base=$(jq -r '.base' "$tmp/plan")
+# The name you typed reads better than the sha it resolved to: main..<branch>
+# is the same three commits and is a thing you would type again.
+from=${rev%%.*}; [ -n "$from" ] || from=$(git rev-parse --short "$base" 2>/dev/null || echo "$base")
+jq -r '.slices[] | [(.n|tostring),
+     (.name + (if (.roots|length) > 1 then " +" + ((.roots|length) - 1 | tostring) + " more" else "" end)),
+     ((.files|length)|tostring) + " file" + (if (.files|length) == 1 then "" else "s" end),
+     ((.lines|tostring)) + " line" + (if .lines == 1 then "" else "s" end)] | @tsv' "$tmp/plan" > "$tmp/slices"
+
+# The screen, redrawn in place: one row a slice, its mark in the first column.
+# Nothing is cleared but the rows, so whatever was in the terminal before is
+# still above it.
+draw() {
+  [ -z "$drawn" ] || printf '\033[%dA' "$rows"
+  rows=0
+  line() { printf '\033[2K%b\n' "$1"; rows=$((rows + 1)); }
+  line ""
+  line "  ${GK_MAIN}seam${GK_R}  ${GK_FAINT}$rev${GK_R}  ${GK_FAINT}→${GK_R}  ${GK_YOURS}$branch${GK_R}"
+  line ""
+  while IFS='	' read -r k name nf nl; do
+    mark="   " ; tail=""
+    if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
+    elif [ "$k" -eq "$at" ] && [ -n "$running" ]; then
+      mark="${GK_ATTENTION} $spin ${GK_R}"; tail="  ${GK_CONTEXT}${checking}${GK_R}"
+    fi
+    line "$(printf "%b%s%b %-${namew}.${namew}s %b%14s · %11s%b%b" \
+      "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
+  done < "$tmp/slices"
+  line ""
+  line "  ${GK_FAINT}${foot}${GK_R}"
+  drawn=1
+}
+
+# The name column takes what the window has left, so a long one is not cut
+# to make room for a gap.
+cols=$({ stty size < /dev/tty; } 2>/dev/null | cut -d' ' -f2)
+[ "${cols:-0}" -ge 60 ] 2>/dev/null || cols=100
+[ "$cols" -le 140 ] || cols=140
+namew=$((cols - 46))
+[ "$namew" -ge 20 ] || namew=20
+at=1 spin='|' drawn= rows=0 running=1
+checking=${check:+checking with $check}
+foot=${check:+nothing is written unless every commit passes}
+[ -n "$check" ] || foot="writing the commits"
+printf '\033[?25l'
+draw
+
+# seam prints a line as each commit lands, so a line arriving means that slice
+# is done and the next one is under way. Its own output is kept for the end.
+( seam "$rev" --split --branch "$branch" ${check:+--check "$check"} > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
+pid=$!
+frames='|/-\'
+i=0
+while kill -0 "$pid" 2>/dev/null; do
+  # grep -c prints its count and still exits 1 when that count is zero, so
+  # an `|| echo 0` after it prints the number twice.
+  done_n=$(grep -c '^  [0-9]' "$tmp/out" 2>/dev/null) || :
+  at=$(( ${done_n:-0} + 1 ))
+  i=$(( (i + 1) % 4 ))
+  spin=$(printf '%s' "$frames" | cut -c$((i + 1)))
+  draw
+  sleep 0.12
+done
+wait "$pid" 2>/dev/null
+rc=$(cat "$tmp/rc" 2>/dev/null || echo 1)
+running= at=$((n + 1))
+
+if [ "$rc" -eq 0 ]; then
+  foot="all $n stood up"
+  draw
+  printf '\033[?25h'
+  printf '\n  %bYou are still on %s. The split is %s.%b\n\n' "$GK_TEXT" "$here" "$branch" "$GK_R"
+  printf '    %bread it%b   gl %s..%s\n' "$GK_FAINT" "$GK_R" "$from" "$branch"
+  printf '    %btake it%b   git checkout %s\n' "$GK_FAINT" "$GK_R" "$branch"
+  printf '    %bdrop it%b   git branch -D %s\n\n' "$GK_FAINT" "$GK_R" "$branch"
+else
+  foot="nothing written"
+  draw
+  printf '\033[?25h'
+  printf '\n'
+  sed 's/^/  /' "$tmp/err" >&2
+  printf '\n  %bYou are still on %s, exactly as you left it.%b\n\n' "$GK_TEXT" "$here" "$GK_R"
+fi
+exit "$rc"

@@ -1,6 +1,9 @@
 #!/bin/sh
 # git-split-try <rev> [<check>]   the split as commits you can step through, and then throw away
 #
+# To keep one, git-split: the same stack on a branch that stays, with the
+# branch you are on left exactly where it is.
+#
 # seam --split says which definition and which file goes in which slice, and
 # --branch writes those slices as commits without checking anything out. This
 # writes them to a branch named for the moment, opens the log over it so each
