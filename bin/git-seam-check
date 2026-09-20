@@ -1,0 +1,66 @@
+#!/bin/sh
+# git-seam-check: a seam --check that asks tsgo what a commit would say,
+# instead of building it.
+#
+#   seam <rev> --split --branch cut --check git-seam-check
+#
+# seam checks each commit it makes in a worktree of that commit. For a
+# monorepo that is ten seconds and a gigabyte before an install has even
+# started, and after the install the workspace links point back at the tree
+# they were made in, so what gets typechecked is not the commit.
+#
+# So this does not stand in the worktree. It runs where seam was run from
+# (SEAM_ROOT), where node_modules already is, and hands the language server
+# the text of every changed file as that commit has it — the same trick
+# git-callers uses to ask what a change breaks without writing it anywhere.
+# Errors the base did not have are the ones that count: a monorepo always has
+# some, and a commit is only bad if it added one.
+#
+# Out: nothing and 0 when the commit is clean, the errors and 1 when it is not.
+[ -n "$SEAM_COMMIT" ] && [ -n "$SEAM_BASE" ] && [ -n "$SEAM_ROOT" ] || {
+  echo "git-seam-check: run me from seam --check" >&2; exit 2; }
+command -v tsgo >/dev/null 2>&1 || { echo "git-seam-check: no tsgo on PATH" >&2; exit 2; }
+root=$SEAM_ROOT
+share=$(cd "$(dirname "$0")/../share" && pwd)
+tmp=$(mktemp -d) || exit 2
+trap 'rm -rf "$tmp"' EXIT
+cd "$root" || exit 2
+
+# Every file the whole change touches, not only the ones this commit has
+# reached: the server reads the rest off disk, which is the head, and would
+# typecheck a tree that exists nowhere. Each is handed its text at this
+# commit — for one the commit has not reached yet, that is the base's.
+git diff --name-only "$SEAM_BASE" "${SEAM_HEAD:-$SEAM_COMMIT}" -- 2>/dev/null |
+  grep -E '\.(ts|tsx|mts|cts)$' > "$tmp/paths"
+[ -s "$tmp/paths" ] || exit 0
+
+mkdir -p "$tmp/at" "$tmp/base"
+i=0
+: > "$tmp/open"; : > "$tmp/base.list"; : > "$tmp/importers"
+while IFS= read -r p; do
+  i=$((i + 1))
+  # A file a side does not have is empty there, which is what a deleted or a
+  # new file looks like to a typechecker reading the other side.
+  git show "$SEAM_COMMIT:$p" > "$tmp/at/$i" 2>/dev/null || : > "$tmp/at/$i"
+  git show "$SEAM_BASE:$p"   > "$tmp/base/$i" 2>/dev/null || : > "$tmp/base/$i"
+  printf '%s\t%s\n' "$p" "$tmp/at/$i"   >> "$tmp/open"
+  printf '%s\t%s\n' "$p" "$tmp/base/$i" >> "$tmp/base.list"
+  printf '%s\n' "$p" >> "$tmp/importers"
+done < "$tmp/paths"
+
+jq -Rn --arg root "$root" --rawfile o "$tmp/open" --rawfile b "$tmp/base.list" --rawfile i "$tmp/importers" '
+  { root: $root, check: true, queries: [],
+    importers: [$i | split("\n")[] | select(. != "") | { path: ., of: [] }],
+    open:      [$o | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }],
+    base:      [$b | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }] }' > "$tmp/job"
+
+node "$share/lsp-references.mjs" < "$tmp/job" > "$tmp/out" 2>"$tmp/err" || {
+  # The server not answering is not the commit's fault, and saying a slice is
+  # bad because a tool fell over is the one thing a check must never do.
+  echo "git-seam-check: tsgo did not answer:" >&2; head -5 "$tmp/err" >&2; exit 2; }
+
+awk -F'\t' '$1 == "D" { print $2 ":" $3 "  " $4 }' "$tmp/out" > "$tmp/diags"
+[ -s "$tmp/diags" ] || exit 0
+echo "errors this commit brings that the base did not have:"
+cat "$tmp/diags"
+exit 1
