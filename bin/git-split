@@ -77,10 +77,15 @@ base=$(jq -r '.base' "$tmp/plan")
 # The name you typed reads better than the sha it resolved to: main..<branch>
 # is the same three commits and is a thing you would type again.
 from=${rev%%.*}; [ -n "$from" ] || from=$(git rev-parse --short "$base" 2>/dev/null || echo "$base")
-jq -r '.slices[] | [(.n|tostring),
+slices_from() {
+  jq -r '.slices[] | [(.n|tostring),
      (.name + (if (.roots|length) > 1 then " +" + ((.roots|length) - 1 | tostring) + " more" else "" end)),
      ((.files|length)|tostring) + " file" + (if (.files|length) == 1 then "" else "s" end),
-     ((.lines|tostring)) + " line" + (if .lines == 1 then "" else "s" end)] | @tsv' "$tmp/plan" > "$tmp/slices"
+     ((.lines|tostring)) + " line" + (if .lines == 1 then "" else "s" end)] | @tsv' "$1" > "$tmp/slices"
+  n=$(grep -c . "$tmp/slices") || :
+  n=${n:-0}
+}
+slices_from "$tmp/plan"
 
 # The screen, redrawn in place: one row a slice, its mark in the first column.
 # Nothing is cleared but the rows, so whatever was in the terminal before is
@@ -97,19 +102,7 @@ draw() {
   # fuse changes it — slices merge and everything after renumbers — so from
   # then on the rows are what seam has actually reported this pass, and no
   # total is shown, because seam has not said what the new one is.
-  if [ "$fused" -gt 0 ]; then
-    n2=0
-    while IFS= read -r l; do
-      n2=$((n2 + 1))
-      line "$(printf '%b ✓ %b%s%b %s' "$GK_GOOD" "$GK_R" "$n2" "$GK_R" "$l")"
-    done < "$tmp/rows"
-    if [ -n "$running" ]; then
-      line "$(printf '%b %s %b%s%b %b%s%b' "$GK_ATTENTION" "$spin" "$GK_R" "$((n2 + 1))" "$GK_R" "$GK_CONTEXT" "$checking" "$GK_R")"
-    elif [ -n "$failed" ]; then
-      line "$(printf '%b ✗ %b%s%b %bdid not stand up%b' "$GK_BAD" "$GK_R" "$((n2 + 1))" "$GK_R" "$GK_BAD" "$GK_R")"
-    fi
-  else
-    while IFS='	' read -r k name nf nl; do
+  while IFS='	' read -r k name nf nl; do
       mark="   " ; tail=""
       if [ "$k" -lt "$at" ]; then mark="${GK_GOOD} ✓ ${GK_R}"
       elif [ "$k" -eq "$at" ] && [ -n "$running" ]; then
@@ -118,9 +111,8 @@ draw() {
         mark="${GK_BAD} ✗ ${GK_R}"; tail="  ${GK_BAD}did not stand up${GK_R}"
       fi
       line "$(printf "%b%s%b %-${namew}.${namew}s %b%14s · %11s%b%b" \
-        "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
-    done < "$tmp/slices"
-  fi
+      "$mark" "$k" "$GK_R" "$name" "$GK_FAINT" "$nf" "$nl" "$GK_R" "$tail")"
+  done < "$tmp/slices"
   line ""
   line "  ${GK_FAINT}${foot}${GK_R}"
   # A frame with fewer rows than the last leaves the difference behind: every
@@ -153,7 +145,7 @@ draw
 # seam prints a line as each commit lands, so a line arriving means that slice
 # is done and the next one is under way. Its own output is kept for the end.
 set -m 2>/dev/null
-( seam "$rev" --split --branch "$branch" ${check:+--check "$check"} > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
+( seam "$rev" --split --branch "$branch" --plan-out "$tmp/live" ${check:+--check "$check"} > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
 pid=$!
 set +m 2>/dev/null
 frames='|/-\'
@@ -168,6 +160,9 @@ tally() {
   pass=$((fused + 1))
   passnote=""
   [ "$fused" -eq 0 ] || passnote="  ${GK_FAINT}· pass $pass, $fused fused${GK_R}"
+  # seam rewrites the plan when a check sends it back to one, so the rows on
+  # screen are its plan and not the one it started from.
+  if [ -s "$tmp/live" ] && [ "$tmp/live" -nt "$tmp/slices" ]; then slices_from "$tmp/live"; fi
   # A commit seam reported, and only one that stood up: a line ending "... no"
   # is the slice that failed, and ticking it is the lie this screen exists not
   # to tell. Without a check there is no "..." at all and the line is done.
