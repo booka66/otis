@@ -16,11 +16,17 @@
 // tsgo answers nothing until its own requests to the client (registering
 // capabilities) are answered, so every server request gets a null reply.
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve, relative } from "node:path";
 
 const job = JSON.parse(readFileSync(0, "utf8"));
 const root = job.root;
+// What the base tree had wrong already, kept between runs by whoever is
+// asking. Reading one is optional and failing to read one is not an error:
+// without it the base is simply asked for again.
+let baselineIn = null;
+if (job.baselineIn) { try { baselineIn = JSON.parse(readFileSync(job.baselineIn, "utf8")); } catch { baselineIn = null; } }
+const baselineOut = job.baselineOut ? {} : null;
 const lsp = spawn("tsgo", ["--lsp", "--stdio"], { stdio: ["pipe", "pipe", "ignore"] });
 let buf = Buffer.alloc(0);
 let nextId = 1;
@@ -186,9 +192,21 @@ for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
     const files = [...new Set([...importers, ...refFiles])].filter((p) => !checked.has(p));
     for (const p of files) { checked.add(p); load(p); }
     // The base: the changed files as they were, and what the callers had wrong then.
-    for (const [p, text] of base) swap(p, text);
-    const before = await errors(files);
-    for (const [p] of base) swap(p, texts.get(p));
+    // It is the same tree every time it is asked, and asking costs as much as
+    // the check itself, so a caller running this once a commit can hand back
+    // what it learned the first time (baselineIn) and be given it to keep
+    // (baselineOut). A file the cache has nothing for is not guessed at:
+    // the whole batch is asked again, or errors it already had would read as
+    // errors the change brought.
+    let before;
+    if (baselineIn && files.every((p) => Object.prototype.hasOwnProperty.call(baselineIn, p))) {
+      before = new Map(files.map((p) => [p, baselineIn[p]]));
+    } else {
+      for (const [p, text] of base) swap(p, text);
+      before = await errors(files);
+      for (const [p] of base) swap(p, texts.get(p));
+    }
+    if (baselineOut) for (const [p, items] of before) baselineOut[p] = items;
     const after = await errors(files);
     // A caller's file is the same text in both passes, so an error is the same
     // error by its line; its message may name the types, which the change
@@ -211,5 +229,8 @@ for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
 }
 if (left > 0) out.push(["U", left].join("\t"));
 clearTimeout(die);
+if (job.baselineOut && baselineOut) {
+  try { writeFileSync(job.baselineOut, JSON.stringify(baselineOut)); } catch {}
+}
 process.stdout.write(out.join("\n") + (out.length ? "\n" : ""));
 lsp.kill();

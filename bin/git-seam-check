@@ -16,8 +16,7 @@
 # Errors the base did not have are the ones that count: a monorepo always has
 # some, and a commit is only bad if it added one.
 #
-# Out: nothing and 0 when the commit is clean, what is wrong and 1 when it is
-# not. Two passes: a name check that costs nothing, then the server.
+# Out: nothing and 0 when the commit is clean, the errors and 1 when it is not.
 [ -n "$SEAM_COMMIT" ] && [ -n "$SEAM_BASE" ] && [ -n "$SEAM_ROOT" ] || {
   echo "git-seam-check: run me from seam --check" >&2; exit 2; }
 command -v tsgo >/dev/null 2>&1 || { echo "git-seam-check: no tsgo on PATH" >&2; exit 2; }
@@ -47,48 +46,15 @@ git diff --name-only "$SEAM_BASE" "${SEAM_HEAD:-$SEAM_COMMIT}" -- 2>/dev/null |
   grep -E '\.(ts|tsx|mts|cts)$' > "$tmp/paths"
 [ -s "$tmp/paths" ] || exit 0
 
-# Cheap first. Starting the language server costs four seconds before it has
-# looked at anything, and twenty-five on a change this size; a commit that
-# takes a definition away while something else in the change still names it
-# is broken in a way that git grep can see for nothing. This is the same
-# class seam's own hazard check infers from the diff, asked of the tree that
-# actually exists.
-#
-# Only names, and only within the change. What it says is always true; what
-# it stays quiet about is the typechecker's business.
-: > "$tmp/gone"; : > "$tmp/homes"
-if [ -n "$SEAM_TABLE" ] && [ -r "$SEAM_TABLE" ]; then
-  # Every definition in the change by the bare name a user writes, and where
-  # it lives. A name that moved file is two rows: gone from one, added in the
-  # other — so asking only where it used to be would call the finished change
-  # broken.
-  awk -F'\t' '$2 != "file" && $3 != "" {
-      nm = $3; sub(/^type /, "", nm)
-      if (nm !~ /^[A-Za-z_$][A-Za-z0-9_$]*$/) next
-      print nm "\t" $1 > HOMES
-      if ($6 == "removed") print nm
-    }' HOMES="$tmp/homes" "$SEAM_TABLE" | sort -u > "$tmp/gone"
-fi
-if [ -s "$tmp/gone" ]; then
-  sort -u "$tmp/homes" -o "$tmp/homes"
-  while IFS= read -r nm; do
-    # Is it declared anywhere the change touches, at this commit? If the file
-    # it moved to has landed, nothing is missing.
-    there=
-    while IFS='	' read -r n2 home; do
-      [ "$n2" = "$nm" ] || continue
-      git show "$SEAM_COMMIT:$home" 2>/dev/null | grep -qw -e "$nm" && { there=1; break; }
-    done < "$tmp/homes"
-    [ -z "$there" ] || continue
-    hit=$(tr '\n' '\0' < "$tmp/paths" | xargs -0 git grep -l -w -e "$nm" "$SEAM_COMMIT" -- 2>/dev/null |
-          sed "s|^$SEAM_COMMIT:||" | head -3)
-    [ -n "$hit" ] || continue
-    echo "$nm is declared nowhere at this commit, and these still name it:"
-    printf '%s\n' "$hit" | sed 's/^/  /'
-    exit 1
-  done < "$tmp/gone"
-fi
-
+# There was a cheap check here, asking whether a definition the change removes
+# is declared anywhere at this commit while something still names it — the
+# idea being to fail in no time rather than in four seconds. It is removed.
+# A name that moves package moves to a file the change does not touch, so
+# "declared nowhere the change touches" is true of a finished, correct commit,
+# and it failed one. Whether a name is *declared* somewhere rather than merely
+# mentioned is not a question grep can answer, and a check that calls a good
+# commit bad drives a fuse that makes the split worse. Better to pay the four
+# seconds.
 mkdir -p "$tmp/at" "$tmp/base"
 i=0
 : > "$tmp/open"; : > "$tmp/base.list"; : > "$tmp/importers"
@@ -103,8 +69,18 @@ while IFS= read -r p; do
   printf '%s\n' "$p" >> "$tmp/importers"
 done < "$tmp/paths"
 
-jq -Rn --arg root "$root" --rawfile o "$tmp/open" --rawfile b "$tmp/base.list" --rawfile i "$tmp/importers" '
+# What the base tree already had wrong is the same answer every commit of a
+# run gets, and asking for it is nearly half of what a check costs. It is kept
+# under the repo, keyed by the base and by the files asked about — a different
+# file list is a different baseline, and one from another base is nothing to
+# do with this one.
+cache=$(git -C "$root" rev-parse --git-dir 2>/dev/null)/seam-baseline
+mkdir -p "$cache" 2>/dev/null
+key=$(printf '%s\n' "$SEAM_BASE" | cat - "$tmp/paths" | cksum | cut -d' ' -f1)
+line=$cache/$key.json
+jq -Rn --arg root "$root" --arg bl "$line" --rawfile o "$tmp/open" --rawfile b "$tmp/base.list" --rawfile i "$tmp/importers" '
   { root: $root, check: true, queries: [],
+    baselineIn: $bl, baselineOut: $bl,
     importers: [$i | split("\n")[] | select(. != "") | { path: ., of: [] }],
     open:      [$o | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }],
     base:      [$b | split("\n")[] | select(. != "") | split("\t") | { path: .[0], from: .[1] }] }' > "$tmp/job"
