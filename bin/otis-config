@@ -78,15 +78,21 @@ shared() {
 # a name without regard to case and hands it back lowercased, so awk is given
 # the spellings used here and answers in them; a name that is not one of them
 # is dropped rather than turned into a variable, and .otis, which a repo you
-# cloned wrote, is only ever read for the names shared() allows.
+# cloned wrote, is only ever read for the names shared() allows. A third
+# argument, given for .otis, keeps only values made of what a host, a path, a
+# branch, a job or a label is made of, none starting with a dash: those values
+# end up in fzf bindings, shell strings and git's arguments all over otis, and
+# this is the one place that can promise none of them holds a quote, a $, a
+# backtick or an option.
 assign() {
-  awk -v pfx="$1" -v names="$2" '
+  awk -v pfx="$1" -v names="$2" -v strict="$3" '
     BEGIN { n = split(names, N, " "); for (i = 1; i <= n; i++) canon[tolower(N[i])] = N[i]; q = sprintf("%c", 39) }
     {
       i = index($0, " ")
       k = (i ? substr($0, 1, i - 1) : $0); v = (i ? substr($0, i + 1) : "")
       sub(/^otis\./, "", k); k = tolower(k)
       if (!(k in canon)) next
+      if (strict && (v !~ /^[A-Za-z0-9._\/:@+ -]*$/ || v ~ /^-/)) next
       val[canon[k]] = (canon[k] in val ? val[canon[k]] "\n" : "") v
     }
     END {
@@ -111,7 +117,7 @@ load_repo() {
   [ -z "$repofile" ] && repofile=$(git rev-parse --show-toplevel 2>/dev/null)/.otis
   [ -f "$repofile" ] || return 0
   repo_exists=1
-  eval "$(git config --file "$repofile" --get-regexp '^otis\.' 2>/dev/null | assign repo_ "$sharednames")"
+  eval "$(git config --file "$repofile" --get-regexp '^otis\.' 2>/dev/null | assign repo_ "$sharednames" strict)"
   return 0
 }
 # Whether the repo has a .otis that may speak for this name at all, which is
@@ -227,10 +233,10 @@ one() {
 # two, and a list script spent more of its time deciding what the default
 # branch is called than it spent drawing rows.
 #
-# So every answer is worked out once and kept in the git dir, a value a line,
-# and a lookup reads that file instead of asking git. A picker goes one
-# further: git-fzf loads the file with --env before it opens, the way it
-# already loads the theme, and every command under it answers from the
+# So every answer is worked out once and kept in the checkout's git dir, a
+# value a line, and a lookup reads that file instead of asking git. A picker
+# goes one further: git-fzf loads the file with --env before it opens, the way
+# it already loads the theme, and every command under it answers from the
 # environment, reading nothing at all.
 #
 # The file stands while it is newer than everything a setting can come from:
@@ -248,21 +254,24 @@ one() {
 # kept in a file that only watches git config. Worktrees under the checkout the
 # environment was made in share its git config and count as inside it; a .otis
 # that differs between branches checked out there is the one thing this would
-# miss, and nothing here reads a worktree's .otis.
+# miss. A worktree asked on its own, with no environment from above, reads its
+# own .otis into its own cache (repo_facts).
 envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro sideBySide worktrees lessons gitlab'
 boolkeys='verifyRetro lessons gitlab'
 cachename=otis-config-cache
 tab='	'
 
-# Where this checkout starts and where its git dir is, in one git call, since
-# the cache is keyed by both. The git dir is the common one, so every worktree
-# shares the cache, as they share the config it is built from.
+# Where this checkout starts, its common git dir, and its own, in one git
+# call. The cache is kept in the checkout's own git dir, not the common one:
+# it is built from this checkout's .otis, and a worktree holding an MR's head
+# holds that MR's .otis, which must not become the answers every other
+# worktree reads.
 repo_facts() {
   [ -n "$facts_done" ] && return $facts_rc
   facts_done=1 facts_rc=1
-  p=$(git rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null) || return 1
-  root=${p%%"$nl"*} gitdir=${p#*"$nl"}
-  [ -n "$root" ] && [ -n "$gitdir" ] && [ "$root" != "$gitdir" ] && facts_rc=0
+  p=$(git rev-parse --path-format=absolute --show-toplevel --git-common-dir --git-dir 2>/dev/null) || return 1
+  root=${p%%"$nl"*} p=${p#*"$nl"} gitdir=${p%%"$nl"*} owndir=${p#*"$nl"}
+  [ -n "$root" ] && [ -n "$gitdir" ] && [ -n "$owndir" ] && [ "$root" != "$gitdir" ] && facts_rc=0
   return $facts_rc
 }
 
@@ -319,7 +328,7 @@ load_cache() {
   [ -n "$cache_tried" ] && return $cache_rc
   cache_tried=1 cache_rc=1
   repo_facts || return 1
-  c=$gitdir/$cachename
+  c=$owndir/$cachename
   if ! cache_fresh "$c" "$root" "$gitdir"; then
     repofile=$root/.otis
     t=$c.$$
@@ -332,7 +341,7 @@ load_cache() {
     if [ "$k" = UNSET ]; then OTIS_C_UNSET=$v; continue; fi
     case " $envkeys " in *" $k "*) eval "OTIS_C_$k=\$v" ;; esac
   done < "$c"
-  OTIS_C_ROOT=$root OTIS_C_GITDIR=$gitdir cache_rc=0
+  OTIS_C_ROOT=$root OTIS_C_GITDIR=$gitdir OTIS_C_CACHE=$c cache_rc=0
   return 0
 }
 
@@ -340,9 +349,9 @@ load_cache() {
 # still current: the same file, held to the same test, without asking git
 # where anything is.
 env_ok() {
-  [ -n "$OTIS_C_ROOT" ] && [ -n "$OTIS_C_GITDIR" ] || return 1
+  [ -n "$OTIS_C_ROOT" ] && [ -n "$OTIS_C_GITDIR" ] && [ -n "$OTIS_C_CACHE" ] || return 1
   case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) ;; *) return 1 ;; esac
-  cache_fresh "$OTIS_C_GITDIR/$cachename" "$OTIS_C_ROOT" "$OTIS_C_GITDIR"
+  cache_fresh "$OTIS_C_CACHE" "$OTIS_C_ROOT" "$OTIS_C_GITDIR"
 }
 
 # One key from what is loaded: its value and its status, or status 2 for a key
@@ -402,7 +411,7 @@ case $1 in
     # is paid once per picker, and the awk was a fifth of it. A value with a
     # quote in it is the one thing the plain form cannot carry, and none of
     # these should have one; that case goes the long way rather than wrong.
-    printf "export OTIS_C_ROOT='%s'\nexport OTIS_C_GITDIR='%s'\n" "$root" "$gitdir"
+    printf "export OTIS_C_ROOT='%s'\nexport OTIS_C_GITDIR='%s'\nexport OTIS_C_CACHE='%s'\n" "$root" "$gitdir" "$c"
     for key in $envkeys UNSET; do
       eval "held=\${OTIS_C_$key+1} v=\${OTIS_C_$key-}"
       [ -n "$held" ] || continue

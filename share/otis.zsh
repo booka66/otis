@@ -839,7 +839,7 @@ gd() {
     --bind 'u:execute-silent(git-fzf-bg git-deploy-list --refresh)' \
     --bind 'enter:execute(git-ci-jobs {4} "")' \
     --bind 'w:execute-silent(otis-open {5})' \
-    --bind "p:execute-silent(otis-open \"$(otis-config url)/$(otis-config project)/-/pipelines/\"{4})" \
+    --bind 'p:execute-silent(otis-open "$(otis-config url)/$(otis-config project)/-/pipelines/"{4})' \
     --bind 'y:execute-silent(printf %s {3} | otis-copy)+transform(git-fzf-note copied {3})' \
     "${at[@]}" \
     --preview 'git-deploy-preview {2}' </dev/null >/dev/null
