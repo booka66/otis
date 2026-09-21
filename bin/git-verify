@@ -316,7 +316,7 @@ unpushed() {
 
 start() {
   if [ -n "$b" ] && unpushed; then
-    git-confirm "$ask" || return 1
+    note=$(git-confirm --note "$ask") || return 1
     $push || pause "the push failed, so nothing was started"
     # The run reads an MR's head from GitLab, which takes a moment to see
     # a push.
@@ -329,13 +329,14 @@ start() {
       done
     fi
   else
-    git-confirm "A Cursor Cloud agent tests $what while Claude judges (about 15-30 minutes, billed by Cursor)?" || return 1
+    note=$(git-confirm --note "A Cursor Cloud agent tests $what while Claude judges (about 15-30 minutes, billed by Cursor)?") || return 1
   fi
   # The last run's tester, whose VM may still be up with everything set up:
   # git-verify-run sends it the new commit instead of booting another.
   prev=$(cat "$d/agent" 2>/dev/null)
   rm -rf "$d"
   mkdir -p "$d/context" || return 1
+  [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
   [ -n "$prev" ] && printf '%s\n' "$prev" > "$d/agent-prev"
   date +%s > "$d/started"
   printf 'Verifying %s\n' "$what" > "$d/title"

@@ -1,7 +1,12 @@
 #!/bin/sh
 # git-confirm <question>: ask [y/N] and take one keypress, no enter. Exit 0 only
 # for y.
-printf '%s [y/N] ' "$1"
+# git-confirm --note <question>: the same, but a is yes with a note: a line
+# of your own for the agent being started, printed to stdout, so the question
+# goes to the terminal instead.
+note=
+[ "$1" = --note ] && { note=1; shift; }
+if [ -n "$note" ]; then printf '%s [y/N, a=add a note] ' "$1" >/dev/tty; else printf '%s [y/N] ' "$1"; fi
 # Switch off line mode and echo for one key, then switch them back on. Under
 # fzf, macOS stty can warn that "stdout appears redirected" while still
 # applying the change, so its stderr is dropped.
@@ -10,5 +15,14 @@ tty_mode() { stty -f /dev/tty "$@" </dev/null 2>/dev/null || stty -F /dev/tty "$
 tty_mode -icanon -echo min 1
 answer=$(dd bs=1 count=1 </dev/tty 2>/dev/null)
 tty_mode icanon echo
+if [ -n "$note" ]; then
+  printf '%s\n' "$answer" >/dev/tty
+  [ "$answer" = a ] || { [ "$answer" = y ]; exit; }
+  # One line, as the terminal edits it; an empty one is a plain yes.
+  printf 'note: ' >/dev/tty
+  IFS= read -r line </dev/tty || exit 1
+  printf '%s' "$line"
+  exit 0
+fi
 printf '%s\n' "$answer"
 [ "$answer" = y ]

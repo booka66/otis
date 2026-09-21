@@ -1041,6 +1041,20 @@ expect gam/declined "$(git show HEAD:s.ts) $(git diff --cached --name-only)" "s 
 answer y gam
 expect gam/stages-and-amends "$(git show HEAD:s.ts) $(git rev-list --count main..HEAD) $(git status --porcelain)" "s2 1 "
 git switch -q main && git branch -qD solo
+# The confirm that starts Claude or Cursor: a is yes with a line of your own
+# for them, y yes without one.
+noted() {
+  zsh -fc 'zmodload zsh/zpty; zpty -b q "n=\$(git-confirm --note go); echo \"\$?:\$n\" > $3"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+      zpty -r q out "*a=add a note\] " && break; sleep 0.2
+    done
+    zpty -wn q "$1"; [ -n "$2" ] && { sleep 0.2; zpty -w q "$2"; }
+    while zpty -t q; do zpty -r q out >/dev/null 2>&1 || sleep 0.1; done' - "$1" "$2" "$tmp/noted" >/dev/null 2>&1
+  cat "$tmp/noted"
+}
+expect confirm/note "$(noted a 'check the empty state')" "0:check the empty state"
+expect confirm/note-yes "$(noted y)" "0:"
+expect confirm/note-no "$(noted n)" "1:"
 
 # --- git-claude-worktree, share/claude-run.sh: the pool of worktrees Claude's
 # runs take one from, and a run whose process keeps dying. A live pid is this
