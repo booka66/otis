@@ -1,0 +1,37 @@
+#!/bin/sh
+#seam: lazy
+# callers: seam's callers provider over tsgo, which is git-callers read the way
+# seam asks. otis puts this directory on SEAM_PATH, so seam finds it without
+# anything written into your config.
+#
+# seam runs a lazy provider only when asked (seam --callers, or the page in
+# the background), with the table on stdin and the two trees in SEAM_BASE and
+# SEAM_HEAD. git-callers does the finding, cached by the same two commits, and
+# its own lock means a picker already finding them is waited on, not raced.
+# Each caller comes back as seam's row: the caller, the changed definition it
+# names (- for an error in no caller), body (tsgo says where, not in what
+# part), the change's first error in it or how many calls it makes, the line
+# of its first call, and 1 when the change brings it an error.
+#
+# Nothing from git-callers (it is off, or no tsgo or node) is a failure, so
+# seam asks again next time instead of keeping "no callers".
+otis=$(cd "$(dirname "$0")/../../.." && pwd)
+PATH=$otis/bin:$PATH
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/table"
+if [ -n "$SEAM_HEAD" ]; then rev=$SEAM_BASE..$SEAM_HEAD; else rev=worktree; fi
+f=$(git-callers "$rev" "$tmp/table")
+# A run of its own or someone else's: wait for it, as long as a big monorepo
+# takes, since seam asked in the background and nothing is waiting on this.
+waited=0
+while [ "$f" = running ] && [ "$waited" -lt 1800 ]; do
+  sleep 2; waited=$((waited + 2))
+  [ "$(git-callers --state "$rev" "$tmp/table")" = running ] || f=$(git-callers --file "$rev" "$tmp/table")
+done
+case $f in /*) ;; *) echo "callers: git-callers found nothing to say (off, or no tsgo)" >&2; exit 1 ;; esac
+awk -F'\t' 'BEGIN { OFS = "\t" } {
+    first = $10; sub(/^[0-9]+: /, "", first)
+    note = $9 > 0 ? first : ($1 == "-" ? "" : $8 " call" ($8 == 1 ? "" : "s"))
+    print $4, $1, "body", note, $3, ($9 > 0 ? 1 : "")
+  }' "$f"

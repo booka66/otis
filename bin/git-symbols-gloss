@@ -4,7 +4,6 @@
 #                                            nothing when it is off or claude is not here
 # git-symbols-gloss --file <rev> <table>     the cache file for this change, if it has been glossed
 # git-symbols-gloss --state <rev> <table>    running, done, or none
-# git-symbols-gloss --prompt <rev> <table> [roots | rest]   the prompt, for the eye and the tests
 # git-symbols-gloss --run <rev> <table>      the calls themselves
 #
 # What the symbol tree cannot work out, a fast model adds while you read: what
@@ -13,22 +12,21 @@
 # header; the two under each ↳ note), which entry point to read first and
 # why (the roots reorder when it lands; the why heads the preview), what each
 # new call (⇢ in the list) does with what it calls, above the preview, and
-# the spine: one sentence on what the change introduces, at the top. Haiku 4.5
-# (git config otis.symbolsModel; off turns it off), through claude -p the way
-# C and V run, with no tools at all: it reads what is on stdin, which is the
-# symbol table and each symbol's own diff cut to forty lines, and answers JSON
-# against a schema. Nothing is posted anywhere.
+# the spine: one sentence on what the change introduces, at the top. The
+# asking is seam's (seam --gloss: the prompt, the schema, Haiku with no tools
+# reading the table and each definition's diff, nothing posted); this is when
+# to ask, where otis keeps the answer, and its shape for the picker. Haiku 4.5
+# unless git config otis.symbolsModel names another; off turns it off.
 #
 # Lazy: the picker never waits for it. git-symbols starts this on every
 # list: a commit, a branch or an MR never changes, so their gloss is cached
 # by their shas for good; the worktree's is keyed by its symbols, so an edit
-# glosses again and staging does not (g asks again by hand). The roots go in
-# one call and the rest in another, the two at once, and each landing goes
-# into the picker as it comes (git-fzf-bg --landing).
+# glosses again and staging does not (g asks again by hand). It goes into the
+# picker when it lands (git-fzf-bg --landing).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 mode=
-case $1 in --file|--state|--prompt|--run) mode=$1; shift ;; esac
+case $1 in --file|--state|--run) mode=$1; shift ;; esac
 rev=$1 table=$2
 [ -n "$rev" ] && [ -s "$table" ] || exit 0
 
@@ -57,52 +55,14 @@ case $mode in
     exit 0 ;;
 esac
 
-# Every symbol's id, path#name, in the table's order, once each: the model
-# names the nth as sn, which costs it a few tokens where a path costs twenty
-# and it cannot get wrong, and the landing maps them back.
-ids() { awk -F'\t' '$2 != "file" { id = $1 "#" ($4 != "" ? $4 "." : "") $3; if (!seen[id]++) print id }' "$table"; }
-
-# The prompt: the change's own words, then each symbol with its diff. <which>
-# is roots or rest; the rows come from the table, whose last field says root.
-prompt() {
-  which=$1
-  cat <<'EOF'
-You are glossing a code change for a reviewer, who reads it as a list of the symbols it touched. For each symbol below, say two things. First, does: in at most ten words, what the symbol itself does, as the change leaves it (as it was, for a removed one), as if the change did not matter: its job in the code, never a restatement of its name or signature ("resolves a return's refund amount from its items", "options for one fetch of the orders table"). Second, gloss: in at most eight words, what THIS CHANGE does to it: the intent, not what it does. Lead with a verb where one fits ("retries on timeout instead of failing", "widens options with a batch size"). A symbol only touched by wiring gets a plain gloss ("passes the new proxy through"); a new one says what the change adds it for ("added so exchanges can refund partially"), not what does already said. Where a symbol says "newly uses", gloss each of those edges too, in at most eight words and lower case: what the symbol now does with the one it uses ("passes the facts into the send result"), as from and to. Then put the entry points (the symbols marked root) in the order a reader should take them, with one short sentence each on why that one comes first. Then the spine: one sentence, for a reviewer who has read nothing yet, on what the change introduces and why; leave it empty when no symbol here is a root. Name each symbol by its id, the s and number after ##, never by its name.
-
-EOF
-  case $rev in
-    worktree) printf 'The change is uncommitted work in the working tree.\n\n' ;;
-    *..*|*...*) printf 'The commits, newest first:\n'; git log --format='  %s' "$rev" 2>/dev/null | head -30; echo ;;
-    *) printf 'The commit:\n'; git log -1 --format='  %s%n%n%b' "$rev" 2>/dev/null | sed 's/^/  /' | head -40; echo ;;
-  esac
-  printf 'Symbols (%s):\n\n' "$which"
-  ids | awk -F'\t' -v which="$which" '
-    FILENAME == "-" { sid[$0] = "s" NR; next }
-    $2 == "file" { next }
-    { root = ($19 == 1 && $4 == "") }
-    which == "roots" && !root { next }
-    which == "rest" && root { next }
-    { id = $1 "#" ($4 != "" ? $4 "." : "") $3
-      nu = ""; n = split($20, u, "|"); for (i = 1; i <= n; i++) if (u[i] in sid) nu = nu (nu != "" ? ", " : "") sid[u[i]] " " u[i]
-      print id "\t" sid[id] "\t" $6 "\t" $11 "\t" $12 "\t" $13 "\t" $7 "\t" $8 "\t" $9 "\t" (root ? "root" : "") "\t" nu }
-  ' - "$table" | while IFS="$(printf '\t')" read -r id sid change add del head side s e root newuses; do
-    printf '## %s %s\n%s, +%s -%s%s\n%s\n' "$sid" "$id" "$change" "${add:-0}" "${del:-0}" "${root:+, root}" "$head"
-    [ -n "$newuses" ] && printf 'newly uses: %s\n' "$newuses"
-    [ -n "$s" ] && GIT_SYMBOLS_PLAIN=1 git-symbols --preview "$rev" "${id%%#*}" "$side" "$s" "$e" 2>/dev/null |
-      awk '/^@@/ { on = 1; next } on { print "    " $0 } NR > 300 { exit }' | head -40
-    echo
-  done
-}
-
-[ "$mode" = --prompt ] && { prompt "${3:-roots}"; exit 0; }
-
 if [ "$mode" != --run ]; then
   # Cached, and by a version that wrote what each symbol does: an older
   # cache is glossed again, since its shas will never change.
   [ -s "$file" ] && grep -q '"does"' "$file" 2>/dev/null && { printf '%s\n' "$file"; exit 0; }
   alive && { echo running; exit 0; }
   # Start it, once: not when off, not without claude.
-  [ "$(git config --get otis.symbolsModel || echo claude-haiku-4-5)" != off ] && command -v claude >/dev/null 2>&1 || exit 0
+  [ "$(git config --get otis.symbolsModel || echo claude-haiku-4-5)" != off ] && command -v "${SEAM_CLAUDE:-claude}" >/dev/null 2>&1 &&
+    command -v seam >/dev/null 2>&1 || exit 0
   mkdir -p "$dir" || exit 0
   cp "$table" "$dir/$key.table"
   nohup git-symbols-gloss --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
@@ -112,8 +72,8 @@ if [ "$mode" != --run ]; then
 fi
 model=$(git config --get otis.symbolsModel || echo claude-haiku-4-5)
 
-# --run: the roots and the rest at once, each merged into the cache as it lands. One
-# run at a time per change: the lock is a directory, made or not in one step.
+# --run: one run at a time per change. The lock is a directory, made or not in
+# one step.
 lock=$dir/$key.lock
 # The holder's pid is in the lock, not $running: the asker writes this run's
 # own pid there, so a lock a killed run left would look held for good.
@@ -123,69 +83,19 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 echo $$ > "$lock/pid"
 echo $$ > "$running"
-trap 'rm -rf "$running" "$lock"' EXIT
-# A run replaces the cache: what is there is an older version's, and the
-# merge below keeps the first gloss for an id, which would be that one.
-rm -f "$file"
-# The schema, with every id an enum of the sn ones: told to copy paths,
-# Haiku dropped them from a third of its answers, which the order and the
-# edges then never matched.
-ids > "$dir/$key.ids"
-# schema <ids of this call's symbols>
-schema() {
-  awk '{ print "s" NR }' "$dir/$key.ids" |
-    jq -Rsc --arg mine "$1" '(split("\n") | map(select(. != ""))) as $all
-      | ($mine | split("\n") | map(select(. != ""))) as $mine
-      | {type: "object", additionalProperties: false, required: ["symbols", "edges", "order", "spine"], properties: {
-        symbols: {type: "array", items: {type: "object", additionalProperties: false, required: ["id", "does", "gloss"],
-          properties: {id: {enum: $mine}, does: {type: "string"}, gloss: {type: "string"}}}},
-        edges: {type: "array", items: {type: "object", additionalProperties: false, required: ["from", "to", "gloss"],
-          properties: {from: {enum: $all}, to: {enum: $all}, gloss: {type: "string"}}}},
-        order: {type: "array", items: {type: "object", additionalProperties: false, required: ["id", "why"],
-          properties: {id: {enum: $all}, why: {type: "string"}}}},
-        spine: {type: "string"}}}'
-}
-empty=$(mktemp -d)
-# One call, and its landing: merged into the cache under a lock, since the
-# other call may be landing too, the order and the spine taken from the
-# roots' call whichever lands first.
-land() {
-  which=$1
-  p=$(mktemp)
-  prompt "$which" > "$p"
-  grep -q '^## ' "$p" || { rm -f "$p"; return; }
-  # An empty directory as cwd, and no tools: the prompt is all it can read.
-  # No thinking: the CLI turns it on for Haiku too, and a gloss thought
-  # about took 25 seconds and 3,000 tokens where the same gloss unthought
-  # takes six and 600.
-  result=$(cd "$empty" && MAX_THINKING_TOKENS=0 claude -p --model "$model" --restricted --tools "" --strict-mcp-config --disable-slash-commands \
-    --no-session-persistence --permission-prompts none --output-format json --json-schema "$(schema "$(sed -n 's/^## \(s[0-9]*\) .*/\1/p' "$p")")" < "$p" 2>>"$dir/$key.err")
-  rm -f "$p"
-  printf '%s' "$result" | jq -e '(.is_error | not) and .structured_output != null' >/dev/null 2>&1 || return
-  until mkdir "$file.merging" 2>/dev/null; do sleep 0.1; done
-  # Merge: each sn back to its id, then glosses by id, one each, edges by
-  # their ends, the order and the spine only from the roots call.
-  have=$file; [ -s "$file" ] || have=/dev/null
-  printf '%s' "$result" | jq --arg which "$which" --slurpfile have "$have" --rawfile ids "$dir/$key.ids" '
-    ($ids | split("\n")) as $m | def full: $m[.[1:] | tonumber - 1];
-    (.structured_output | .symbols[].id |= full | .edges[].from |= full | .edges[].to |= full | .order[].id |= full) as $new
-    | (if ($have | length) > 0 then $have[0] else {symbols: [], edges: [], order: [], spine: ""} end)
-    | .symbols = ((.symbols + $new.symbols) | unique_by(.id))
-    | .edges = (((.edges // []) + ($new.edges // [])) | unique_by(.from + ">" + .to))
-    | .order = (if $which == "roots" then $new.order else (.order // []) end)
-    | .spine = (if $which == "roots" then ($new.spine // "") else (.spine // "") end)' > "$file.new" 2>/dev/null &&
-    mv "$file.new" "$file"
-  rmdir "$file.merging"
-  # Into the open picker without moving what you are on (git-fzf-bg
-  # --landing): a review reloads its own list, with the threads on each
-  # symbol.
-  if [ -n "$GMR_IID" ]; then git-fzf-bg --landing git-mr-files --list "$GMR_IID" "$rev"
-  else git-fzf-bg --landing git-symbols --rows "$rev"; fi
-}
-# The roots and the rest at once, each shown as it lands.
-land roots &
-land rest &
-wait
-rm -rf "$empty" "$dir/$key.table" "$dir/$key.ids"
-[ -s "$file" ] || rm -f "$dir/$key.err"
+trap 'rm -rf "$running" "$lock" "$file.new"' EXIT
+# seam answers by definition id (defs and edges keyed, the order a list);
+# the picker reads symbols, edges and order as lists, the way this wrote them
+# before seam did the asking.
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=seam.glossModel GIT_CONFIG_VALUE_0=$model \
+  seam --table "$table" "$rev" --gloss 2>>"$dir/$key.err" |
+  jq -e '{symbols: (.defs | to_entries | map({id: .key, does: .value.does, gloss: .value.gloss})),
+          edges: (.edges | to_entries | map((.key | split(">")) as $k | {from: $k[0], to: $k[1], gloss: .value})),
+          order: .order, spine: .spine}' > "$file.new" 2>>"$dir/$key.err" && mv "$file.new" "$file"
+rm -rf "$dir/$key.table"
+[ -s "$file" ] && rm -f "$dir/$key.err"
+# Into the open picker without moving what you are on (git-fzf-bg
+# --landing): a review reloads its own list, with the threads on each symbol.
+if [ -n "$GMR_IID" ]; then git-fzf-bg --landing git-mr-files --list "$GMR_IID" "$rev"
+else git-fzf-bg --landing git-symbols --rows "$rev"; fi
 exit 0

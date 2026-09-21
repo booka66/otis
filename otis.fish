@@ -5,6 +5,10 @@
 # worktree sweep) are zsh's alone for now.
 set -l otis_home (dirname (realpath (status filename)))
 contains -- $otis_home/bin $PATH; or set -gx PATH $otis_home/bin $PATH
+# What otis brings to seam (share/seam: the tsgo callers, what a file is),
+# found by seam after your repo's and your own. Fish joins a *PATH list with
+# colons when it exports it, which is what seam reads.
+contains -- $otis_home/share/seam $SEAM_PATH; or set -gx SEAM_PATH $otis_home/share/seam $SEAM_PATH
 
 alias gs 'git status'
 

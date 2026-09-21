@@ -237,45 +237,17 @@ if [ "$mode" = --run ]; then
   fi
   if [ -s "$table" ]; then
     cut -f1 "$table" | sort -u | git-test-files kinds > "$d/kinds.tsv"
-    # Haiku's gloss, as the reviewer sees it, once it has landed
-    # (git-symbols-gloss): its line on the change, the reading order it
-    # suggests, and a few words a symbol. Not waited for.
+    # The reading order Haiku suggests, for the drafts, once it has landed
+    # (git-symbols-gloss). Not waited for.
     gf=$(git-symbols-gloss --file "$range" "$table")
-    if [ -n "$gf" ]; then
-      jq -r '.symbols[] | [.id, .gloss, (.does // "")] | @tsv' "$gf" > "$d/gloss.tsv"
-      jq -r '.order[].id' "$gf" > "$d/order.txt"
-      jq -r '"The gloss the reviewer sees, a fast model'"'"'s from the diff alone:\n",
-        (select(.spine != "") | "- on the change: \(.spine)"),
-        (select((.order | length) > 0) | "- read first: " + ([.order[] | "\(.id) (\(.why))"] | join("; "))), ""' "$gf" > "$d/gloss.md"
-    else
-      : > "$d/gloss.tsv"; : > "$d/gloss.md"; : > "$d/order.txt"
-    fi
-    awk -F'\t' '
-      FILENAME == ARGV[1] { kind[$1] = $2 == "tests" ? " · test" : $2 == "gen" ? " · generated" : $2 == "cfg" ? " · config" : ""; next }
-      FILENAME == ARGV[2] { gloss[$1] = $2; does[$1] = $3; next }
-      FILENAME == ARGV[3] { head = head $0 "\n"; next }
-      FILENAME == ARGV[4] { n++; for (i = 1; i <= NF; i++) T[n, i] = $i; next }
-      { c[$1]++; if ($9 > 0) b[$1]++ }
-      END {
-        print "# The change by symbol\n"
-        print "seam'"'"'s table: every definition the change touches, in the order the reviewer'"'"'s tree reads them. ~ is a changed signature: what calls it may break. Body only: nothing outside it can. An entry point is one nothing else changed mentions, where the reader starts; each opens to the changed symbols it uses, and a newly used one (⇢) is a mention this change adds: rewiring, as against behavior. The tree keeps tests, generated code and config in sections of their own below the source, so a test is never an entry point there.\n"
-        printf "%s", head
-        for (r = 1; r <= n; r++) {
-          if (T[r, 2] == "file") { if (!(T[r, 1] in seen)) { seen[T[r, 1]] = 1; other = other "\n- " T[r, 1] } ; continue }
-          id = T[r, 1] "#" (T[r, 4] != "" ? T[r, 4] "." : "") T[r, 3]
-          ch = T[r, 6] == "signature" ? "~ signature changed" : T[r, 6] == "body" ? "body only" : T[r, 6]
-          printf "## %s\n%s%s%s%s · +%d -%d · %s lines %s-%s, the signature on line %s\n    %s\n", id, ch, kind[T[r, 1]],
-            (T[r, 5] == 1 ? " · exported" : ""), (T[r, 19] == 1 && T[r, 4] == "" && kind[T[r, 1]] == "" ? " · entry point" : ""),
-            T[r, 11], T[r, 12], (T[r, 7] == "old" ? "base" : "head"), T[r, 8], T[r, 9], T[r, 10], T[r, 13]
-          if (does[id] != "") print "does: " does[id]
-          if (id in gloss) print "gloss: " gloss[id]
-          if (T[r, 18] != "") { u = T[r, 18]; gsub(/\|/, ", ", u); print "uses: " u }
-          if (T[r, 20] != "") { u = T[r, 20]; gsub(/\|/, ", ", u); print "newly uses ⇢: " u }
-          if (id in c) printf "callers elsewhere: %d, %d broken (callers.md)\n", c[id], b[id]
-          print ""
-        }
-        if (other != "") print "## Changed outside any definition (imports, top-level statements) or in files seam does not parse" other
-      }' "$d/kinds.tsv" "$d/gloss.tsv" "$d/gloss.md" "$table" "$callers" > "$ctx/symbols.md"
+    if [ -n "$gf" ]; then jq -r '.order[].id' "$gf" > "$d/order.txt"; else : > "$d/order.txt"; fi
+    # The change by symbol is seam's own markdown (seam --md): every
+    # definition with what happened to it, what it uses and newly uses, and
+    # the gloss and callers seam has kept. With tsgo done, asking seam for the
+    # callers is reading git-callers' cache (share/seam/references/callers).
+    [ "$callers" != /dev/null ] && seam --table "$table" "$range" --callers >/dev/null 2>&1
+    SEAM_KINDS="git-test-files kinds" seam --table "$table" "$range" --md > "$ctx/symbols.md" 2>/dev/null ||
+      printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"
   else
     printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"
   fi

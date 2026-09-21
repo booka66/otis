@@ -612,12 +612,28 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/up-new-caller "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'const fresh' | grep -c '⇢')" "1"
   GIT_FZF_STATE=$tmp/symst git-symbols --flip
   expect symbols/down-again "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 != "" && $11 != "file" { print $12 }' | head -1)" "lib.ts#run"
-  # Claude's glosses, from a cache written by hand: the prompt's shape, the
-  # gloss after the signature, its order for the roots, and the preview's head.
-  expect gloss/prompt "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" roots | grep -c '^## s[0-9]* lib.ts#\|, root$')" "14"
-  expect gloss/prompt-rest "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" rest | grep '^## ' | tr '\n' ' ')" "## s4 lib.ts#Box.grow ## s11 lib.ts#Opts ## s12 pair.ts#Pair ## s13 pair.ts#type Pair ## s14 pair.ts#usePair "
+  # Claude's glosses. The asking is seam's (seam --gloss): --run hands it the
+  # table and keeps the answer in the picker's shape. A stand-in for Claude
+  # answers the schema from the ids seam's prompt gave it.
   gdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-gloss
-  mkdir -p "$gdir"
+  mkdir -p "$gdir" "$tmp/stub"
+  cat > "$tmp/stub/claude" <<'EOF'
+#!/bin/sh
+p=$(cat)
+n=$(printf '%s\n' "$p" | grep -c '^## s')
+jq -n --argjson n "$n" '{is_error: false, structured_output: {spine: "the spine of it",
+  symbols: [range(1; $n + 1) | {id: "s\(.)", does: "does \(.)", gloss: "gloss \(.)"}],
+  edges: [{from: "s1", to: "s2", gloss: "an edge"}], order: [{id: "s1", why: "first"}]}}'
+EOF
+  chmod +x "$tmp/stub/claude"
+  SEAM_CLAUDE=$tmp/stub/claude git-symbols-gloss --run "$base..$head" "$tmp/symst/symbols.tsv"
+  firstdef=$(awk -F'\t' '$2 != "file" { print $1 "#" ($4 != "" ? $4 "." : "") $3; exit }' "$tmp/symst/symbols.tsv")
+  expect gloss/run-through-seam "$(jq -r '.spine' "$gdir/$base-$head.json")" "the spine of it"
+  expect gloss/run-every-symbol "$(jq -r '.symbols | length' "$gdir/$base-$head.json")" "$(awk -F'\t' '$2 != "file"' "$tmp/symst/symbols.tsv" | wc -l | tr -d ' ')"
+  expect gloss/run-shape "$(jq -r --arg id "$firstdef" '(.symbols[] | select(.id == $id) | .does), (.order[0].id == $id), (.edges[0].from == $id)' "$gdir/$base-$head.json" | tr '\n' ' ')" "does 1 true true "
+  rm -f "$gdir/$base-$head.json"
+  # From here, a cache written by hand: the gloss after the signature, its
+  # order for the roots, and the preview's head.
   printf '{"symbols":[{"id":"lib.ts#run","does":"runs the options once","gloss":"takes a twice flag"},{"id":"lib.ts#Box.grow","does":"enlarges the box","gloss":"grows by two"},{"id":"lib.ts#Opts","does":"options for one run","gloss":"gains a b flag"}],"edges":[{"from":"lib.ts#fresh","to":"lib.ts#Opts","gloss":"reads b off the options"}],"order":[{"id":"lib.ts#fresh","why":"the new entry point"},{"id":"lib.ts#run","why":"then the changed one"}],"spine":"Adds a b option and a fresh reader of it."}' > "$gdir/$base-$head.json"
   expect gloss/state "$(git-symbols-gloss --state "$base..$head" "$tmp/symst/symbols.tsv")" "done"
   # A gloss landing while the picker is open moves nothing: the layout it
@@ -629,7 +645,6 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # The spine heads the picker, where the cursor never lands; no row is it.
   expect gloss/spine-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'gk-spine'):$(strip < "$tmp/symst/header")" "0:Adds a b option and a fresh reader of it."
   expect symbols/legend "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" >/dev/null; strip < "$tmp/symst/legend" | grep -c '⇢ a call new')" "1"
-  expect gloss/prompt-edges "$(git-symbols-gloss --prompt "$base..$head" "$tmp/symst/symbols.tsv" roots | grep -c '^newly uses: s[0-9]* lib.ts#Opts$')" "2"
   expect gloss/preview-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#fresh>lib.ts#Opts' | strip | sed -n 3p)" "new call from fresh: reads b off the options"
   expect gloss/preview-no-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#run>lib.ts#Opts' | strip | grep -c 'new call')" "0"
   expect gloss/preview-why "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 3p)" "then the changed one"

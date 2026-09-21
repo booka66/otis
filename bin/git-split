@@ -149,7 +149,7 @@ draw
 # seam prints a line as each commit lands, so a line arriving means that slice
 # is done and the next one is under way. Its own output is kept for the end.
 set -m 2>/dev/null
-( seam "$rev" --split --branch "$branch" --plan-out "$tmp/live" ${check:+--check "$check"} > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
+( seam "$rev" --split --branch "$branch" --plan-out "$tmp/live" --check "$check" > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
 pid=$!
 set +m 2>/dev/null
 frames='|/-\'

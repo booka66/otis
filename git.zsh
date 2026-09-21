@@ -4,6 +4,9 @@
 # prompt hooks, the gs alias, and following a picker that moves you.
 typeset -g OTIS_HOME=${${(%):-%x}:A:h}
 [[ ":$PATH:" == *":$OTIS_HOME/bin:"* ]] || path=("$OTIS_HOME/bin" $path)
+# What otis brings to seam (share/seam: the tsgo callers, what a file is),
+# found by seam after your repo's and your own.
+[[ ":${SEAM_PATH:-}:" == *":$OTIS_HOME/share/seam:"* ]] || export SEAM_PATH=$OTIS_HOME/share/seam${SEAM_PATH:+:$SEAM_PATH}
 
 # oh-my-zsh's git plugin and others alias many of these names (gb, ga, gp, gst),
 # and an alias or a function wins over a program on PATH. So any alias or

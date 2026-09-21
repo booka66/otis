@@ -1,0 +1,4 @@
+#!/bin/sh
+# kinds: what a file is, for seam, the way the pickers sort them: tests,
+# generated (what .gitattributes declares, then the fallbacks), config.
+exec "$(cd "$(dirname "$0")/../.." && pwd)/bin/git-test-files" kinds

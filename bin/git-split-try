@@ -29,7 +29,7 @@ base=$(seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
 branch=seam/try-$(printf '%s' "$rev" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-$$
 trap 'git update-ref -d "refs/heads/$branch" 2>/dev/null; exit' EXIT INT TERM
 
-if ! seam "$rev" --split --branch "$branch" ${check:+--check "$check"} > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
+if ! seam "$rev" --split --branch "$branch" --check "$check" > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
   # seam refuses an order that does not stand up, and that refusal is the most
   # useful thing it can say: it is shown and waited on rather than flashed
   # past on the way back to the picker.

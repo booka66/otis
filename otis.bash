@@ -5,6 +5,9 @@
 # are zsh's alone for now.
 OTIS_HOME=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 case ":$PATH:" in *":$OTIS_HOME/bin:"*) ;; *) PATH=$OTIS_HOME/bin:$PATH ;; esac
+# What otis brings to seam (share/seam: the tsgo callers, what a file is),
+# found by seam after your repo's and your own.
+case ":${SEAM_PATH:-}:" in *":$OTIS_HOME/share/seam:"*) ;; *) export SEAM_PATH=$OTIS_HOME/share/seam${SEAM_PATH:+:$SEAM_PATH} ;; esac
 
 # An alias or a function named like an otis command would win over it.
 for _otis_c in "$OTIS_HOME"/bin/*; do
