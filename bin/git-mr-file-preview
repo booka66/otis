@@ -118,7 +118,9 @@ EOF
   read -r done files all < "$counts"
   rm -f "$counts"
   [ -n "$GIT_FZF_STATE" ] || exit 0
-  note=$(printf "${GK_CONTEXT}%s of %s viewed${GK_R}" "$done" "$files")
+  # Every file viewed says what is left to do: submit, and approve.
+  if [ "$files" -gt 0 ] && [ "$done" -eq "$files" ]; then note=$(printf "${GK_GOOD}all %s viewed${GK_R}" "$files")
+  else note=$(printf "${GK_CONTEXT}%s of %s viewed${GK_R}" "$done" "$files"); fi
   [ -e "$GIT_FZF_STATE/since" ] &&
     note=$(printf "${GK_ATTENTION}%s: %s of %s files · n shows all${GK_R} · %s" "$(cat "$GIT_FZF_STATE/since")" "$files" "$all" "$note")
   [ "$total" -gt 0 ] && note="$note · $(printf "${GK_ELSEWHERE}%s unresolved thread%s${GK_R}" "$total" "$([ "$total" -eq 1 ] || echo s)")"
@@ -127,6 +129,7 @@ EOF
     [ "${claude:-0}" -gt 0 ] && mark="$mark ($claude Claude's)"
     note="$note · $(printf "${GK_YOURS}%s, S submits${GK_R}" "$mark")"
   fi
+  [ "$files" -gt 0 ] && [ "$done" -eq "$files" ] && [ "$GMR_KIND" = review ] && note="$note · $(printf "${GK_ATTENTION}A approves${GK_R}")"
   working=$(git-mr-claude --footer "$iid" "$range"; git-mr-fix --footer "$iid")
   [ -n "$working" ] && note="$note · $working"
   [ "$mode" = --note ] && { printf '%s\n' "$note"; exit 0; }

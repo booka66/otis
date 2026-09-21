@@ -1,0 +1,158 @@
+#!/bin/sh
+# git-mr-say --new <iid> <range> <path> <side> <first> <last>   a new thread on lines first..last
+# git-mr-say --reply <iid> <range> <thread id>                   a reply in a thread
+# git-mr-say --edit <iid> <range> <thread id>                    your latest comment in a thread, rewritten
+# git-mr-say --delete <iid> <range> <thread id>                  your latest comment in a thread, gone (asks)
+#
+# Comment on an MR from a picker, without an editor: one line typed at a
+# prompt, with the lines or the thread above it. ctrl-e takes what you have
+# typed into your git editor (git var GIT_EDITOR, the one that writes your
+# commit messages), for anything longer than a line. Reviewing, it is a draft
+# until S submits them all, as in nvim (share/mr-comments.lua); on your own MR
+# ($GMR_KIND mine) it posts at once.
+#
+# The line numbers are this range's, so the MR must still be at its head, and
+# for a removed line at the base GitLab diffs against; either way, when it is
+# not, nothing is posted and u catches the review up. Where the comment goes
+# is git-mr-position's, the same as nvim's. What you wrote
+# is never lost: when posting fails it is printed back to you.
+#
+# Yours, to edit or delete, is a draft or a comment by your GitLab user, as
+# in nvim; a comment of more than one line is edited in your editor.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+mode=$1 iid=$2 range=$3
+shift 3
+api="projects/:fullpath/merge_requests/$iid"
+drafting=1
+[ "$GMR_KIND" = mine ] && drafting=
+
+fail() {
+  printf '%s\n' "$1"
+  [ -n "$text" ] && printf "\n${GK_CONTEXT}what you wrote:${GK_R}\n%s\n" "$text"
+  printf '\npress enter\n'
+  read -r _
+  exit 1
+}
+cols=$( (stty size </dev/tty) 2>/dev/null | cut -d' ' -f2)
+cols=${cols:-100}
+clip() { awk -v w="$((cols - 4))" '{ gsub(/\t/, "    "); gsub(/[\001-\037\177]/, ""); print (length($0) > w ? substr($0, 1, w - 1) "…" : $0) }'; }
+
+# What is being answered, above the prompt.
+case $mode in
+  --new)
+    path=$1 side=$2 first=$3 last=$4
+    rev=${range#*..}; [ "$side" = old ] && rev=${range%%..*}
+    where=$first; [ "$first" != "$last" ] && where="$first-$last"
+    context=$(printf "${GK_ELSEWHERE}%s:%s${GK_R}\n" "$path" "$where"
+      git show "$rev:$path" 2>/dev/null | sed -n "${first},${last}p" | head -6 | clip |
+        sed "s/^/$(printf "${GK_CONTEXT}│${GK_R}") /")
+    ;;
+  --reply)
+    id=$1
+    case $id in draft-*) fail "that is a draft of yours, not yet a thread to reply to; enter edits it" ;; esac
+    context=$(jq -r -L "$share" --arg id "$id" 'include "otis";
+      .[] | select(.id == $id) | .notes[-4:][]
+      | attention + .author.username + r + "  " + (.body | gsub("[\t\n]+"; " "))' "$GIT_FZF_STATE/threads.json" 2>/dev/null | clip)
+    ;;
+  --edit|--delete)
+    id=$1
+    # The thread's latest note of yours: a draft is, and so is one by you.
+    me=$(glab api user 2>/dev/null | jq -r '.username // empty')
+    note=$(jq -c --arg id "$id" --arg me "$me" '.[] | select(.id == $id) | [.notes[] | select(.draft or .author.username == $me)] | last // empty' \
+      "$GIT_FZF_STATE/threads.json" 2>/dev/null)
+    [ -n "$note" ] || fail "none of the comments in that thread are yours"
+    nid=$(printf '%s' "$note" | jq -r .id)
+    was=$(printf '%s' "$note" | jq -r .body)
+    if [ "$(printf '%s' "$note" | jq -r '.draft // false')" = true ]; then url=$api/draft_notes/$nid field=note
+    else url=$api/discussions/$id/notes/$nid field=body; fi
+    context=$(printf "${GK_CONTEXT}your comment${GK_R}\n"; printf '%s\n' "$was" | head -6 | clip | sed "s/^/$(printf "${GK_CONTEXT}│${GK_R}") /")
+    if [ "$mode" = --delete ]; then
+      printf '%s\n\n' "$context"
+      git-confirm "delete it?" || exit 0
+      echo
+      out=$(glab api -X DELETE "$url" 2>&1) || fail "GitLab said no: $(printf '%s' "$out" | head -1)"
+      git-mr-threads --refresh "$iid" refresh-preview
+      exit 0
+    fi
+    ;;
+  *) exit 2 ;;
+esac
+
+if [ "$mode" = --edit ]; then
+  verb="saves it"; prompt="edit> "
+elif [ -n "$drafting" ]; then
+  verb="saves a draft, S submits them all"; prompt="draft> "
+else
+  verb="sends it now"; prompt="comment> "
+fi
+# The prompt is fzf with no list: its query is the comment. enter and ctrl-e
+# say which they were on the first line, since an empty query is a choice too.
+# otis-test types into it through its port, as into git-fzf's pickers.
+# An edit starts from what the comment says, and one of several lines goes
+# straight to the editor, since the prompt holds one.
+set --
+[ -n "$OTIS_FZF_LISTEN" ] && { export FZF_API_KEY=$OTIS_FZF_API_KEY; set -- --listen="$OTIS_FZF_LISTEN"; }
+case $was in
+  *"
+"*) out=$(printf 'edit\n%s' "$was") ;;
+  *) out=$(fzf "$@" --disabled --no-info --reverse --height=~12 --prompt="$prompt" --ansi --query="$was" \
+    --with-shell 'sh -c' \
+    --header="$context" --header-first \
+    --footer="enter $verb · ctrl-e your editor · esc cancels" \
+    --bind "enter:become(printf 'send\n%s' {q})" \
+    --bind "ctrl-e:become(printf 'edit\n%s' {q})" </dev/null) || exit 0 ;;
+esac
+how=$(printf '%s\n' "$out" | head -1)
+text=$(printf '%s\n' "$out" | sed 1d)
+if [ "$how" = edit ]; then
+  f=$(mktemp "${TMPDIR:-/tmp}/otis-comment.XXXXXX") || exit 1
+  trap 'rm -f "$f"' EXIT
+  printf '%s\n' "$text" > "$f"
+  eval "$(git var GIT_EDITOR) \"\$f\"" </dev/tty >/dev/tty || exit 0
+  text=$(cat "$f")
+fi
+# Nothing written is nothing sent.
+[ -n "$(printf '%s' "$text" | tr -d ' \n\t')" ] || exit 0
+
+printf "${GK_CONTEXT}sending ...${GK_R}\n"
+if [ "$mode" = --edit ]; then
+  [ "$text" = "$was" ] && exit 0
+  out=$(jq -n --arg f "$field" --arg t "$text" '{($f): $t}' | glab api -X PUT "$url" -H "Content-Type: application/json" --input - 2>&1) ||
+    fail "GitLab said no: $(printf '%s' "$out" | head -1)"
+  git-mr-threads --refresh "$iid" refresh-preview
+  exit 0
+fi
+mr=$(glab api "$api" 2>&1) || fail "could not ask GitLab for the MR: $(printf '%s' "$mr" | head -1)"
+refs=$(printf '%s' "$mr" | jq -r '.diff_refs | "\(.base_sha) \(.start_sha // "") \(.head_sha)"')
+read -r base start head <<EOF
+$refs
+EOF
+
+case $mode in
+  --new)
+    [ "$(git rev-parse "${range#*..}")" = "$head" ] ||
+      fail "the MR has moved on since this review opened, so these line numbers are not its own; u catches up"
+    [ "$side" = new ] || [ "$(git rev-parse "${range%%..*}")" = "$base" ] ||
+      fail "this review diffs against another base than GitLab's ($(printf %.8s "$base")), so a removed line cannot be placed; comment on it in the browser (w)"
+    pos=$(git-mr-position "$base" "$start" "$head" "$path" "$side" "$first" "$last" 2>&1) ||
+      fail "could not place the comment: $pos"
+    if [ -n "$drafting" ]; then
+      body=$(jq -n --arg t "$text" --argjson p "$pos" '{note: $t, position: $p}') url=$api/draft_notes
+    else
+      body=$(jq -n --arg t "$text" --argjson p "$pos" '{body: $t, position: $p}') url=$api/discussions
+    fi
+    ;;
+  --reply)
+    if [ -n "$drafting" ]; then
+      body=$(jq -n --arg t "$text" --arg id "$id" '{note: $t, in_reply_to_discussion_id: $id}') url=$api/draft_notes
+    else
+      body=$(jq -n --arg t "$text" '{body: $t}') url=$api/discussions/$id/notes
+    fi
+    ;;
+esac
+out=$(printf '%s' "$body" | glab api -X POST "$url" -H "Content-Type: application/json" --input - 2>&1) ||
+  fail "GitLab said no: $(printf '%s' "$out" | head -1)"
+# Fetched now, so the picker's reload after this shows it.
+git-mr-threads --refresh "$iid" refresh-preview
+exit 0

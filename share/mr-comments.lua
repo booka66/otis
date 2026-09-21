@@ -321,11 +321,16 @@ local function threads_at(buf, lnum)
   end, threads)
 end
 
--- Where comments go in the diff (locate, position).
-local diff_position = dofile(share .. "/mr-position.lua")
+-- Where a comment goes in the MR's diff (git-mr-position, shared with the
+-- pickers' comments and Claude's drafts).
+local function position(refs, path, side, first, last)
+  local out = vim.system({ "git-mr-position", refs.base_sha, refs.start_sha or "", refs.head_sha, path, side,
+    tostring(first), tostring(last) }, { cwd = root, text = true }):wait()
+  return vim.json.decode(out.stdout)
+end
 
 -- A new comment's position comes from this buffer's line numbers, worked out
--- against the committed diff at the MR's head (share/mr-position.lua). So the
+-- against the committed diff at the MR's head (git-mr-position). So the
 -- buffer has to be that very file: no unsaved edits, nothing uncommitted (your
 -- own checkout), and this checkout at the head GitLab has now, asked for again
 -- right before sending, since a push or a commit can land while you type.
@@ -588,7 +593,7 @@ local function comment(first, last, new)
       notify(problem .. ". Your text is still in the window.", vim.log.levels.WARN)
       return false
     end
-    local pos = diff_position.position(root, refs, path, side, first, last)
+    local pos = position(refs, path, side, first, last)
     if drafting then
       glab("POST", mr .. "/draft_notes", { note = text, position = pos }, done("draft saved; <leader>ms submits your drafts"))
     else

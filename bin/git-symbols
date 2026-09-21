@@ -99,9 +99,9 @@ case $mode in
   # S: how seam would split the change, the same way. The two are one pane
   # between them, so turning either on turns the other off.
   --split) if [ -e "$st/split" ]; then rm -f "$st/split"; else rm -f "$st/shape"; : > "$st/split"; fi; exit 0 ;;
-  # p: the peeks, the notes under each changed name the preview uses, off
-  # and on again. The names stay marked.
-  --peeks) if [ -e "$st/nopeeks" ]; then rm -f "$st/nopeeks"; else : > "$st/nopeeks"; fi; exit 0 ;;
+  # p: the peeks, the notes under each changed name the preview uses, on
+  # and off again. Off to start with: the names are marked either way.
+  --peeks) if [ -e "$st/peeks" ]; then rm -f "$st/peeks"; else : > "$st/peeks"; fi; exit 0 ;;
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
@@ -250,7 +250,9 @@ unclaimed_awk='
 # NOTES is a name a line, then, tab separated, its signature, what the change
 # did to it, and Claude'"'"'s gloss in the eighth field and what it says the
 # symbol does in the ninth. A name with a signature gets a row under
-# the line that first mentions it, at the line's indent, saying what it is:
+# the first changed line that mentions it (delta gives a changed line a
+# background, and nothing else one), else under the first line that does,
+# at the line's indent, saying what it is:
 # the signature with the name lit and the change, then what it does and,
 # in italics, the gloss, each on a line of its own, wrapped to the pane (w) on the code background over as many rows
 # as that takes. The rows
@@ -358,21 +360,33 @@ mark_awk='
       nm = substr(raw, hs[x], he[x] - hs[x] + 1); gsub(/\033\[[0-9;]*m/, "", nm)
       raw = substr(raw, 1, hs[x] - 1) "\033[1;4;" (ENVIRON["OTIS_T_ATTENTION"] != "" ? ENVIRON["OTIS_T_ATTENTION"] : "33") "m" nm "\033[22;24m" sgr(substr(orig, 1, he[x])) substr(raw, he[x] + 1)
     }
-    print raw
+    out[++no] = raw
     # Not in delta'"'"'s hunk header, "97: ...", whose box a note would break,
     # nor under a comment: the name has its note under the next line of code
-    # that mentions it.
+    # that mentions it. The rows wait for the end, where each note goes under
+    # its changed line if one mentioned it, else its first.
     if (!peeks || vis ~ /^[0-9]+: /) next
     t = vis; sub(/^.*\342\224\202/, "", t); sub(/^ *[0-9]+  /, "", t)
     if (t ~ /^[ \t]*(\/\/|\/\*|\*([ \/]|$))/) next
+    changed = orig ~ /\033\[48;/
     for (x = nh; x >= 1; x--) {
       k = hk[x]
-      if (head[k] == "" || (k in noted)) continue
-      noted[k] = 1; t = noterow(substr(vis, 1, hv[x] - 1), k)
-      if (t != "") print t
+      if (head[k] == "" || (k in onchanged)) continue
+      if (changed) { onchanged[k] = 1; lineof[k] = no; preof[k] = substr(vis, 1, hv[x] - 1) }
+      else if (!(k in lineof)) { lineof[k] = no; preof[k] = substr(vis, 1, hv[x] - 1) }
+    }
+  }
+  END {
+    # Under one line, the notes in the order their names come in it.
+    for (k = 1; k <= nn; k++) if (k in lineof) { l = lineof[k]; under[l] = under[l] " " k }
+    for (i = 1; i <= no; i++) {
+      print out[i]
+      m = split(under[i], ks, " ")
+      for (x = 2; x <= m; x++) for (y = x; y > 1 && length(preof[ks[y]]) < length(preof[ks[y - 1]]); y--) { t = ks[y]; ks[y] = ks[y - 1]; ks[y - 1] = t }
+      for (x = 1; x <= m; x++) { t = noterow(preof[ks[x]], ks[x]); if (t != "") print t }
     }
   }'
-mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="${peeks:-1}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$mark_awk" "$1" -; }
+mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="${peeks:-0}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$mark_awk" "$1" -; }
 
 rev=$1
 [ -n "$rev" ] || exit 2
@@ -433,9 +447,9 @@ if [ "$mode" = --preview ]; then
   # The flags and files the render reads, once, as tests and reads rather
   # than a process each: the cached preview is the common case, and every
   # process before the cat that answers it is felt on every move.
-  up= peeks=1 nopeeks= usesfor= key= croot= ckey=
+  up= peeks=0 usesfor= key= croot= ckey=
   [ -e "$st/up" ] && up=up
-  [ -e "$st/nopeeks" ] && peeks=0 nopeeks=nopeeks
+  [ -e "$st/peeks" ] && peeks=1
   read -r usesfor 2>/dev/null < "$st/uses-for"
   usesview=; [ -n "$rid" ] && [ "$usesfor" = "$rid" ] && usesview=uses
   { read -r key < "$st/key" && read -r croot < "$st/cache-root"; } 2>/dev/null || key= croot=
@@ -461,7 +475,7 @@ if [ "$mode" = --preview ]; then
     ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" \
       ${mr:+"$croot/mr-$mr-threads.json" "$croot/mr-$mr-drafts.json" "${croot%/*}/gmr-claude/$mr.drafts" "${croot%/*}/gmr-claude/$mr.why.jsonl"})
     # cksum says the sum and then the size; the sum alone names the file.
-    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$nopeeks|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
+    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$peeks|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
     pv=$st/pv.${pv%% *}
     if [ -s "$pv" ]; then
       # Kept, so nothing read the threads' caches: ask them whether they are

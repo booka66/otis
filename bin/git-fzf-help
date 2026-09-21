@@ -25,7 +25,7 @@ case $1 in
       BEGIN { ylw = GK_ATTENTION; dim = GK_CONTEXT; r = GK_R }
       NR == 1 { print dim "this picker" r }
       $0 == "--" { print ""; print dim "every picker" r; next }
-      NF == 2 { printf "  %s%-9s%s %s\n", ylw, $1, r, $2 }
+      NF >= 2 { printf "  %s%-9s%s %s\n", ylw, $1, r, $2 }
     ' "$st/hints"
     [ -s "$st/legend" ] && { printf '\n'; cat "$st/legend"; }
     ;;

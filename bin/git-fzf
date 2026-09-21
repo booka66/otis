@@ -10,7 +10,9 @@
 # drives the footer's key hints, the ? help view and the unbind set, so they
 # cannot drift apart. An empty label ("o=") keeps a key out of the hints but
 # still unbinds it. enter and tab are never unbound, since fzf needs them to
-# accept and to mark while searching.
+# accept and to mark while searching. Keys after a lone "|" in the list are
+# left out of the footer, which then ends in "? more keys": a picker shows
+# the few keys you need first there, and ? shows them all.
 #
 # --search opens a picker already searching. A script, not a function, so bin/
 # scripts launched from fzf bindings can open a picker with the same keys.
@@ -28,14 +30,16 @@ prompt=$1 spec=$2; shift 2
 # footer under this picker pastes it into its awk, and each used to cat it.
 export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
 typeset -a keys hints
+more=
 for pair in ${(s:,:)spec}; do
   [[ -z $pair ]] && continue
+  [[ $pair == '|' ]] && { more=$'\tmore'; continue }
   k=${pair%%=*}
-  [[ -n ${pair#*=} ]] && hints+=("$k"$'\t'"${pair#*=}")
+  [[ -n ${pair#*=} ]] && hints+=("$k"$'\t'"${pair#*=}$more")
   [[ $k == (enter|tab) ]] || keys+=($k)
 done
 
-unbindable="j,k,g,G,q,/,?"
+unbindable="j,k,g,G,q,/,?,],["
 (( $#keys )) && unbindable="$unbindable,${(j:,:)keys}"
 
 # ctrl-d/ctrl-u glide through git-fzf-scroll, which drives this picker over
@@ -128,8 +132,14 @@ if [[ -z $header && ${args[(I)--header*]} -eq 0 ]]; then
   header='+change-header()'
 fi
 
+# The preview's rows, counted for the scroll's last line, and where each run
+# of changed rows starts and ends, for ] and [ (git-fzf-scroll hunk): delta
+# gives a changed row a background, a wrapped one too, and no other row has
+# one but git-symbols' peeks, which are on the code background.
+hunk_awk='BEGIN { printf "" > h; cb = "\033[" ENVIRON["OTIS_T_CODEBG"] "m" } { print; c = index($0, "\033[48;") && !(cb != "\033[m" && index($0, cb)) } c && !p { s = NR } !c && p { print s, NR - 1 > h } { p = c } END { if (p) print s, NR > h; print NR > f }'
 if [[ -n $preview ]]; then
   : > $st/has-preview
+  print -r -- $']/[\tnext, previous change' >> $st/hints
   # The preview runs on every move, so it also notes the focused item (a glide
   # stops when that changes) and, only for an item with a saved position, puts
   # that position back once it has printed. Nothing else runs per move. The
@@ -142,7 +152,7 @@ if [[ -n $preview ]]; then
   # (git-fzf-bg --tick) go in on the move off it.
   args+=(--preview "k=$id i=; while :; do case \$k in */*) i=\$i\${k%%/*}%; k=\${k#*/} ;; *) i=\$i\$k; break ;; esac; done; while [ \${#i} -gt 200 ]; do i=\${i#?}; done
 printf '%s\\n' \"\$i\" > '$st/focus'; if [ -e '$st/bg.pending' ]; then git-fzf-bg --pending >/dev/null 2>&1 & fi; printf '%s' \"\$FZF_PREVIEW_COLUMNS\" > '$st/cols'; printf '%s' \"\$FZF_PREVIEW_LINES\" > '$st/plines'; if [ -e '$st/help-on' ]; then git-fzf-help show; else { $preview
-} | awk -v f=\"$st/lines.\$i\" '{ print } END { print NR > f }'; [ -s \"$st/off.\$i\" ] && git-fzf-scroll loaded \"\$i\" >/dev/null 2>&1 & fi")
+} | awk -v f=\"$st/lines.\$i\" -v h=\"$st/hunks.\$i\" '$hunk_awk'; [ -s \"$st/off.\$i\" ] && git-fzf-scroll loaded \"\$i\" >/dev/null 2>&1 & fi")
 else
   # hidden twice: the narrow-terminal layout replaces the options, so it needs its own.
   args+=(--preview "git-fzf-help show" --preview-window 'hidden,<66(down,60%,border-top,wrap,hidden)')
@@ -209,6 +219,8 @@ fzf --prompt="$prompt" \
   --bind "ctrl-y:preview-up+execute-silent(git-fzf-scroll note $id -1 >/dev/null 2>&1 &)" \
   --bind "preview-scroll-down:preview-down+execute-silent(git-fzf-scroll note $id 1 >/dev/null 2>&1 &)" \
   --bind "preview-scroll-up:preview-up+execute-silent(git-fzf-scroll note $id -1 >/dev/null 2>&1 &)" \
+  --bind "]:execute-silent(git-fzf-scroll hunk $id >/dev/null 2>&1 &)" \
+  --bind "[:execute-silent(git-fzf-scroll -hunk $id >/dev/null 2>&1 &)" \
   --bind "ctrl-d:preview-down+preview-down+preview-down+execute-silent(git-fzf-scroll half $id 3 >/dev/null 2>&1 &)" \
   --bind "ctrl-u:preview-up+preview-up+preview-up+execute-silent(git-fzf-scroll -half $id -3 >/dev/null 2>&1 &)" \
   --bind "/:unbind($unbindable)+change-prompt(search> )" \

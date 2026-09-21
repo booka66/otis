@@ -77,7 +77,7 @@ tparts=(
 tabout=(
   symbols    "Why otis reads a change by symbol rather than by file, shown rather than told: one made-up change as GitLab shows it, as files, and by symbol. Then every key the symbol view has, the callers elsewhere that a change breaks without touching, Claude's fix for them, seam's graph page, and staging one function at a time. Start here."
   shapes     "Six made-up changes that each go wrong a different way: a sweep, a branch of unrelated stories, a parameter threaded nine layers deep, a type change that breaks code it never touched, a cycle, and a 300-line function. Each as files first, so you can guess what is wrong, then as seam's score and the symbol tree, and what to ask the author for. One of them gets cut into eight commits that each build, to show what asking for it looks like when seam does it. Take Reviewing by symbol first."
-  mr         "The review loop in gmr: an MR opens by symbol with its threads beside each symbol, nvim for comments inline, drafts until you submit, viewed marks, what changed since your last review, catching up when the author pushes."
+  mr         "The review loop in gmr: an MR opens by symbol with its threads beside each symbol, comments from the picker or inline in nvim, drafts until you submit, viewed marks, what changed since your last review, catching up when the author pushes."
   claude     "C has Claude Code review an MR in the background, reading it by symbol with tsgo's callers elsewhere, as you do, and leave drafts on the symbols they are about. You edit them before anything posts, and each says where its symbol sits in the tree, why Claude wrote it and how sure it is. On your own MR it proposes fixes for the threads instead, and folds the ones you accept into the right commits."
   verify     "V finds out whether a change actually works: Claude writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and Claude judges the evidence, claim by claim. With what you need set up to run one."
   ship       "From an open MR to production without the browser: CI jobs and logs, merge when the pipeline passes, rebase, whether your merged MR is live yet, gd's deploys, and D, where Claude watches Datadog after your deploy and tells you whether a problem is yours."
@@ -574,8 +574,8 @@ part_reading() {
   look 2 "${a}~${r} at the start of a row: its signature changed, so whatever calls it is worth reading again. No mark: only its body did, and nothing outside it can break. Then the lines it added and removed (+5 alone is new), and ${k}▸ 3${r}: three changed symbols under it."
   look 3 "${k}l${r} opens a row to the changed symbols it uses, in the order it uses them: refundAmount, receiptLine, and restockingFee, which it now calls itself. Keep going, down to daysSince. ${k}h${r} closes, from the row or anything under it; ${k}L${r} and ${k}H${r} open and close everything."
   look 4 "${k}⇢${r} before a row: the mention is new in this change. That is rewiring, as against behavior, and worth knowing apart."
-  look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow with a dim ↳ line saying what each is. ${k}i${r} shows all of those whole instead."
-  look 6 "${k}enter${r} opens nvim on the symbol in a diff against the base, on the hunk in view. ${k}:q${r} comes back."
+  look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow; ${k}p${r} adds a dim ↳ line under the changed line that first uses each, saying what it is. ${k}i${r} shows all of those whole instead. ${k}]${r} and ${k}[${r} jump the preview from change to change."
+  look 6 "${k}enter${r} opens your editor on the symbol, on the hunk in view; nvim opens it in a diff against the base. Quitting comes back."
   if (( $+commands[claude] )); then
     look 7 "Meanwhile Claude Haiku glosses it: a few words on what each symbol does, the change aside, heading its preview, and a few on what the change does to it, on the diff's header. Nothing moves under you, so the rest shows the next time it opens: the entry points in the order to read them, with why, and one line at the top on what the change introduces. It sees only the symbol table and each symbol's diff, has no tools, and posts nothing."
   else
@@ -852,7 +852,8 @@ part_mr() {
   key gmr "every MR: to review, yours, merged this week; ? names every glyph"
   key enter "review one, by symbol, each symbol with its open threads and drafts beside it and the threads under their lines in the preview. It opens in a shared review worktree, never your checkout"
   key f "by file and back: each file with its viewed mark, unresolved threads and waiting drafts"
-  key "then enter" "nvim, side by side against the MR's base, comments inline"
+  key c "comment without nvim: the file's diff as lines with the threads under them. c on a line comments (J marks several), c on a thread replies, r resolves; ctrl-e at the prompt takes it to your editor"
+  key "then enter" "your editor at the line; nvim opens side by side against the MR's base, comments inline"
   print
   print -r -- "  ${m}in nvim${r}"
   key "<leader>mc" "comment on the line, or reply to its thread; a visual selection starts a new one"
@@ -864,13 +865,14 @@ part_mr() {
   key "<leader>ms" "submit your drafts"
   print
   print -r -- "  ${m}back in the picker${r}"
+  key "] [" "the next or previous change in the preview, centered; in c's lines, the next or previous hunk"
   key v "mark a file viewed"
   key o "threads on no line, to reply or resolve"
   key n "only what changed since your last review"
   key u "catch up when the author pushes"
   key S "submit your drafts, optionally approving"
   key A "approve the commit you are looking at"
-  key c "the commits view"
+  key m "the commits view"
   print
   say "Comments are drafts until you submit them, as with GitLab's Start a review; on your own MR they go at once (${k}<leader>mt${r} switches). Enter on one of your own MRs in gmr opens its comments to address, where its branch is checked out."
   offer "Open gmr" gmr
@@ -1102,6 +1104,7 @@ part_cheatsheet() {
   print
   print -r -- "  ${m}gmr${r}"
   key "enter" "review, or address comments on yours"
+  key "c" "in a review: comment on lines, reply, resolve, no nvim"
   key "v o n u" "viewed, threads on no line, since last review, catch up"
   key "S A" "submit drafts, approve"
   key "C" "Claude drafts comments, or proposes fixes on yours"
@@ -1171,7 +1174,7 @@ case $1 in
 esac
 
 missing=()
-for c in git fzf delta nvim ast-grep seam; do (( $+commands[$c] )) || missing+=($c); done
+for c in git fzf delta ast-grep seam; do (( $+commands[$c] )) || missing+=($c); done
 if (( $#missing )); then
   print -u2 "otis-tour needs ${(j:, :)missing}. otis-setup offers to install them; seam is brew install booka66/seam/seam."
   exit 1

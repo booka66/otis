@@ -13,7 +13,7 @@ look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r reword
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
 look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens its MR, d deletes (M marks the safe ones)	
 look	gmr	gmr			every MR: to review, yours with pipelines, merged and whether live; enter reviews or opens comments	
-look	gci	gci			gmr with your MRs first	in a review: v viewed, o other threads, s the shape of it, S submit drafts, n since last review, C Claude drafts comments (on yours, proposes fixes)
+look	gci	gci			gmr with your MRs first	in a review: c comments on lines, v viewed, S submit drafts, A approve, C Claude drafts comments, ? the rest (on yours, proposes fixes)
 look	gd	gd			production deploys, newest first, with what each carried and whether it went live	gd <pipeline id>
 look	gag	gag			everything Claude is doing here in the background: reviews, fixes, production watches, verifications	
 change	ga	ga			stage panel; space stages, p hunks, c commits, enter opens your editor	ga <path>, gu <path>

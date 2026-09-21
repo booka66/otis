@@ -1,8 +1,9 @@
 #!/usr/bin/env -S zsh -f
 # git-fzf-footer: a picker's footer. First a one-time note if there is one, else
 # the status line its list command left in $GIT_FZF_STATE/footer, if any; then the picker's keys and the shared ones,
-# as many as fit the width, ending in "? more keys" when some are left out or
-# "? help" when none are. Redrawn on load and on resize.
+# as many as fit the width, ending in "? more keys" when some are left out (for
+# want of room, or marked for ? alone) or "? help" when none are. Redrawn on
+# load and on resize.
 #
 # zsh builtins throughout, and no process at all on the usual path: this runs
 # on every reload, and as sh with an awk it cost more than the rows did.
@@ -65,13 +66,16 @@ elif [[ -s $st/footer ]]; then
   wrap "$(<$st/footer)"
 fi
 typeset -a keys labels
+# A key marked more (after "|" in the picker's list) is for ? alone.
+cut=0
 for line in ${(f)"$(<$st/hints)"}; do
   [[ $line == *$'\t'* ]] || continue
+  [[ $line == *$'\t'more ]] && { cut=1; continue }
   keys+=("${line%%$'\t'*}") labels+=("${line#*$'\t'}")
 done
-n=$#keys used=0 out= cut=0
+n=$#keys used=0 out=
 for (( i = 1; i <= n; i++ )); do
-  (( tail = i == n ? 6 : 11 ))
+  (( tail = i == n && !cut ? 6 : 11 ))
   (( need = used + (used ? seplen : 0) + $#keys[i] + 1 + $#labels[i] ))
   (( need + seplen + tail > width )) && { cut=1; break }
   out+="${${used:#0}:+$context$sep$r}$attention$keys[i]$r $context$labels[i]$r"

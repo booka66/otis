@@ -1,5 +1,6 @@
 #!/usr/bin/env -S zsh -f
 # git-fzf-scroll <loaded | half | -half> <item> [lines already moved]
+# git-fzf-scroll <hunk | -hunk> <item>
 # git-fzf-scroll note <item> <lines>
 # git-fzf-scroll reset
 # Preview scrolling for git-fzf, remembered per item in $GIT_FZF_STATE. The item
@@ -23,6 +24,12 @@
 # frame costs more than a frame. A newer glide, or moving to another item,
 # stops an older one, and a glide started mid-glide carries on from where the
 # preview is toward the new goal.
+# hunk/-hunk (] and [) glide the same way to the next or the previous change,
+# centered in the pane: the runs of changed rows git-fzf's preview noted in
+# hunks.<item>. A run taller than the pane starts two rows from its top
+# instead, so its first line is in view. The next change is the first whose
+# place is below where the preview is (or is gliding to), so a change already
+# centered is passed over.
 # Each / in the item becomes %, as git-fzf's preview does, to name its files,
 # and a long one is its last 200 characters, as there too.
 mode=$1 n=${2//\//%}
@@ -124,8 +131,10 @@ if (( lead )); then
   print -r -- $cur > $st/off.$n
 fi
 
-(( step = FZF_PREVIEW_LINES / 2 ))
-[[ $mode == -half ]] && (( step = -step ))
+if [[ $mode == (-|)half ]]; then
+  (( step = FZF_PREVIEW_LINES / 2 ))
+  [[ $mode == -half ]] && (( step = -step ))
+fi
 
 # A glide still running on this item is heading for goal.<item>; steps build on
 # that, not on where the preview happens to be mid-glide.
@@ -135,7 +144,21 @@ running_glide() {
     [[ $(<$st/glidefor) == "$n" ]] && kill -0 $(<$st/glide) 2>/dev/null
 }
 running_glide && base=$(<$st/goal.$n)
-(( goal = base + step, goal < 1 ? (goal = 1) : 0 ))
+if [[ $mode == (-|)hunk ]]; then
+  [[ -s $st/hunks.$n ]] || exit 0
+  integer rows=${FZF_PREVIEW_LINES:-20} to=0 at hs he
+  for hs he in $(<$st/hunks.$n); do
+    if (( he - hs + 1 > rows - 4 )); then (( at = hs - 2 )); else (( at = (hs + he) / 2 - rows / 2 )); fi
+    (( at < 1 ? (at = 1) : 0 ))
+    if [[ $mode == hunk ]]; then (( at > base )) && { to=at; break }
+    else (( at < base )) && to=at; fi
+  done
+  (( to )) || exit 0
+  goal=to
+else
+  (( goal = base + step ))
+fi
+(( goal < 1 ? (goal = 1) : 0 ))
 (( total > 0 && goal > total )) && goal=total
 
 # A glide already running on this item picks the new goal up on its next frame.

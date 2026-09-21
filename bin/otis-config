@@ -32,7 +32,8 @@
 #   install      the command that installs node_modules, run at the main checkout by otis-node-modules
 #                when the lockfile has moved past the last install ('bazel run nodejs_install'): otis.install;
 #                none means the repo's own packages are linked and a third-party one added since is missed
-#   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim
+#   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim where it is
+#                installed, else $VISUAL, $EDITOR, vi
 #   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the
 #                principle behind it, for you alone (git config --global otis.lessons true); off by default
 #   gitlab       exit 0 when origin is on GitLab: its host is <host>, or has gitlab in its name (ends the run, so ask it alone)
@@ -216,7 +217,8 @@ one() {
     sideBySide) cfg sideBySide ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
     install) cfg install ;;
-    editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor || echo nvim ;;
+    editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor ||
+      { command -v nvim >/dev/null 2>&1 && echo nvim; } || echo "${VISUAL:-${EDITOR:-vi}}" ;;
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
     gitlab)
       origin_parts || exit 1

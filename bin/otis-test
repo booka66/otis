@@ -453,7 +453,8 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # to run, which stays an entry point.
   printf 'export const G = run({ a: 1 }, true);\n' > gen.generated.ts
   git add pair.ts gen.generated.ts && git commit -qam "Head" && head=$(git rev-parse HEAD)
-  mkdir -p "$tmp/symst"
+  # Peeks on, as p turns them on: the notes under the names are tested here.
+  mkdir -p "$tmp/symst" && : > "$tmp/symst/peeks"
   rows=$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head")
   table=$tmp/symst/symbols.tsv
   # Roots first (nothing changed mentions them), then what they use: Opts is
@@ -511,14 +512,14 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
     printf '[{"path":"app.ts","side":"new","first_line":5,"last_line":5,"symbol":"lib.ts#run","body":"b1","why":"w1"},{"path":"lib.ts","side":"new","first_line":%s,"last_line":%s,"symbol":"","body":"b2","why":"w2"}]' \
       "$(awk -F'\t' '$3 == "Opts" { print $10 }' "$table")" "$(awk -F'\t' '$3 == "Opts" { print $10 }' "$table")" > "$tmp/findings.json"
     cut -f1 "$table" | sort -u | git-test-files kinds > "$tmp/kinds.tsv"
-    drafts=$(nvim --clean -l "$share/mr-claude-drafts.lua" "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv")
+    drafts=$(git-mr-claude-drafts "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv")
     expect claude-drafts/order "$(printf '%s\n' "$drafts" | jq -r '.symbol + " " + .note' | tr '\n' ' ')" "run b1 Opts b2 "
     expect claude-drafts/moved "$(printf '%s\n' "$drafts" | jq -r 'select(.note == "b1") | "\(.where) \(.position.new_path)"')" "lib.ts:$(awk -F'\t' '$3 == "run" { print $10 }' "$table") lib.ts"
     expect claude-drafts/why "$(printf '%s\n' "$drafts" | jq -r '.why | split("\n")[0]' | tr '\n' '|')" "**\`run\`** · ~ signature changed · an entry point · 3 callers elsewhere, ✗ main, r, again · about app.ts:5|**\`Opts\`** · ~ signature changed · reached from \`run\` › \`Opts\` · 1 caller elsewhere|"
     # With a gloss, the tree lists its reading order first, so Opts is met
     # under fresh before run.
     printf 'lib.ts#fresh\n' > "$tmp/order.txt"
-    expect claude-drafts/gloss-order "$(nvim --clean -l "$share/mr-claude-drafts.lua" "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv" "$tmp/order.txt" | jq -r 'select(.note == "b2") | .why | split("\n")[0]')" "**\`Opts\`** · ~ signature changed · reached from \`fresh\` › \`Opts\` · 1 caller elsewhere"
+    expect claude-drafts/gloss-order "$(git-mr-claude-drafts "$PWD" "$tmp/refs.json" "$tmp/findings.json" "$table" "$cf" "$tmp/kinds.tsv" "$tmp/order.txt" | jq -r 'select(.note == "b2") | .why | split("\n")[0]')" "**\`Opts\`** · ~ signature changed · reached from \`fresh\` › \`Opts\` · 1 caller elsewhere"
     # The break the change reaches through a type: a row of its own, last.
     expect callers/broken-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 == "->callers" { print $1 }' | sed 's/^ *//')" "▸   1 broken elsewhere without calling anything changed, in 1 package"
     GIT_FZF_STATE=$tmp/symst git-symbols --open '->callers'
@@ -682,10 +683,17 @@ EOF
   expect symbols/preview-uses "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c $'\e\[1;4;38;2;250;189;47mOpts\e\[22;24m')" "1"
   expect symbols/preview-uses-note "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳ type Opts = { a: number; b: string };  signature.changed')" "1"
   # p hides the notes, and the names stay marked; p again brings them back.
+  # A picker starts with them off.
+  mkdir -p "$tmp/symst-fresh" && cp "$tmp/symst"/*.tsv "$tmp/symst"/key "$tmp/symst"/cache-root "$tmp/symst-fresh/" 2>/dev/null
+  expect symbols/peeks-off-to-start "$(GIT_FZF_STATE=$tmp/symst-fresh git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "0"
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks
   expect symbols/peeks-off "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "0"
+  expect symbols/peeks-off-names-marked "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c $'\e\[1;4;38;2;250;189;47mOpts')" "1"
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks
   expect symbols/peeks-on "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "1"
+  # The note goes under the changed line that mentions the name, not under
+  # an unchanged one above it.
+  expect symbols/peek-on-a-changed-line "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -B1 '↳' | head -1 | grep -c $'\e\[48;')" "1"
   # The review reads a change by symbol through the same preview, so every key
   # that changes what that preview shows has to be there too. p was missing:
   # peeks could be turned off everywhere but in a review, which is where you
@@ -693,7 +701,7 @@ EOF
   for k in l h L H b i s p; do
     for f in git-symbols git-mr-files; do
       grep -q "bind \"$k:.*git-symbols" "$root/bin/$f" || expect "symbols/$f-binds-$k" "unbound" "bound"
-      grep -q "keys=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
+      grep -qE "(keys|first|rest)=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
     done
   done
   # In a narrow pane the signature keeps to its one row, on the code
@@ -721,7 +729,7 @@ EOF
   # then unstage it, then stage the untracked file's.
   sed -i.bak 's/return o.a;/return o.a + 1;/; s/this.size--;/this.size -= 2;/' lib.ts && rm lib.ts.bak
   printf 'export function extra(): number {\n  return 2;\n}\n' > u.ts
-  rm -rf "$tmp/symst"; mkdir "$tmp/symst"
+  rm -rf "$tmp/symst"; mkdir "$tmp/symst"; : > "$tmp/symst/peeks"
   wt() { GIT_FZF_STATE=$tmp/symst git-symbols --rows worktree >/dev/null; awk -F'\t' '$2 != "file" { print $3 ":" $16 $17 }' "$tmp/symst/symbols.tsv" | tr '\n' ' '; }
   expect symbols/wt "$(wt)" "run:01 Box:01 shrink:01 extra:01 "
   git-symbols --stage worktree lib.ts new 2 4 2 4 0 1
@@ -743,7 +751,7 @@ EOF
   expect symbols/unstage-middle "$(git diff --cached | wc -l | tr -d ' ')" "0"
   git reset -q --hard HEAD^
   # A range naming HEAD follows a commit made while the picker is open.
-  rm -rf "$tmp/symst"; mkdir "$tmp/symst"
+  rm -rf "$tmp/symst"; mkdir "$tmp/symst"; : > "$tmp/symst/peeks"
   GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..HEAD" > /dev/null
   printf 'export const late = 1;\n' >> lib.ts && git commit -qam "Late"
   expect symbols/moving-head "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..HEAD" | strip | grep -c 'const late')" "1"
@@ -773,6 +781,14 @@ expect nm/marked "$([ -f "$tmp/nm-wt/node_modules/.otis-mirror" ] && echo mirror
 rm -rf "$tmp/nm-wt/node_modules" && mkdir "$tmp/nm-wt/node_modules" && printf 'mine\n' > "$tmp/nm-wt/node_modules/real"
 otis-node-modules "$tmp/nm-wt"
 expect nm/real-install-kept "$(ls "$tmp/nm-wt/node_modules")" "real"
+# A run killed partway leaves nothing behind, so the next one mirrors afresh
+# instead of taking half a mirror for an install of your own.
+mkdir -p "$tmp/nmkill" && printf '#!/bin/sh\nkill -TERM $PPID; sleep 1\n' > "$tmp/nmkill/cp" && chmod +x "$tmp/nmkill/cp"
+rm -rf "$tmp/nm-wt/node_modules"
+PATH=$tmp/nmkill:$PATH OTIS_CACHE_ROOT=$tmp/nmk-cache otis-node-modules "$tmp/nm-wt"
+expect nm/killed-leaves-none "$(ls -d "$tmp/nm-wt/node_modules" "$tmp/nmk-cache/node-modules/mirror."* 2>/dev/null)" ""
+OTIS_CACHE_ROOT=$tmp/nmk-cache otis-node-modules "$tmp/nm-wt"
+expect nm/after-kill "$(readlink "$tmp/nm-wt/node_modules/@scope/one"):$(ls "$tmp/nmk-cache/node-modules")" "../../pkg/one:"
 # Main's own install: a package of the repo it never saw gets its link, and
 # nothing else is touched.
 ( cd "$tmp/nm" && mkdir -p pkg/two && printf '{ "name": "@scope/two" }\n' > pkg/two/package.json && git add -A && git commit -qm two )
@@ -821,6 +837,26 @@ expect scroll/reset-by-id "$(ls "$tmp/scroll" | grep -c '^off\.')" "1"
 rm "$tmp/scroll/by-id"
 GIT_FZF_STATE=$tmp/scroll git-fzf-scroll reset
 expect scroll/reset-by-index "$(ls "$tmp/scroll" | grep -c '^off\.')" "0"
+
+# ] and [: the next change centered in a 20-row pane, a long one from just
+# above its top, none past the last; and back. The glide itself needs a
+# picker's port, which is not here, so the goal it set is what is checked.
+hs=$tmp/hunkscroll && mkdir -p "$hs" && : > "$hs/lock"
+printf '20 24\n60 61\n150 200\n' > "$hs/hunks.x"; echo 300 > "$hs/lines.x"; echo 1 > "$hs/off.x"
+goals=
+for _ in 1 2 3 4; do
+  GIT_FZF_STATE=$hs FZF_PREVIEW_LINES=20 FZF_PORT=9 git-fzf-scroll hunk x
+  goals="$goals$(cat "$hs/goal.x") "; cp "$hs/goal.x" "$hs/off.x"
+done
+expect scroll/next-change "$goals" "12 50 148 148 "
+GIT_FZF_STATE=$hs FZF_PREVIEW_LINES=20 FZF_PORT=9 git-fzf-scroll -hunk x
+expect scroll/previous-change "$(cat "$hs/goal.x")" "50"
+# The runs of changed rows, as git-fzf's preview notes them: a row with a
+# background is changed, a wrapped one too, but not a peek on the code one.
+hunk_awk=$(sed -n "s/^hunk_awk='\(.*\)'$/\1/p" "$root/bin/git-fzf")
+printf 'ctx\n\342\224\202\033[48;2;1;2;3mminus\n  \033[48;2;1;2;3mwrapped\n\033[%smpeek\nctx\n\342\224\202\033[48;2;4;5;6mplus\n' "$OTIS_T_CODEBG" |
+  awk -v f="$hs/l" -v h="$hs/h" "$hunk_awk" >/dev/null
+expect scroll/change-runs "$(tr '\n' ' ' < "$hs/h")" "2 3 6 6 "
 
 # --- the pickers themselves, headless: fzf runs on a pty (zsh's zpty) and
 # the test drives it through fzf's port (git-fzf takes OTIS_FZF_LISTEN and
@@ -977,6 +1013,8 @@ function"
 mkdir -p "$tmp/eds"
 for e in cursor nvim zed hx; do printf '#!/bin/sh\necho "$@"\n' > "$tmp/eds/$e"; chmod +x "$tmp/eds/$e"; done
 expect edit/default "$(otis-edit --name)" "nvim"
+# Without nvim, the editor you already have.
+expect edit/default-without-nvim "$(EDITOR=nano VISUAL= PATH=$root/bin:/usr/bin:/bin otis-config editor)" "nano"
 expect edit/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-edit -R +3 -- a.ts)" "-R +3 -- a.ts"
 expect edit/cursor "$(OTIS_EDITOR=$tmp/eds/cursor otis-edit -R +12 -- a.ts)" "--goto a.ts:12"
 expect edit/zed "$(OTIS_EDITOR=$tmp/eds/zed otis-edit +7 -- -odd.ts)" "./-odd.ts:7"
@@ -1194,6 +1232,107 @@ mkdir -p "$tmp/foot" && printf 'j/k\tmove\n' > "$tmp/foot/hints" &&
 expect footer/wrapped "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed 's/ · /---/g' | awk '{ print length($0) }' | tr '\n' ' ')" "38 59 56 17 "
 expect footer/wrapped-text "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed -n 2p)" "tsgo is finding callers elsewhere · installing node_modules"
 expect footer/one-line-when-it-fits "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=200 git-fzf-footer | strip | wc -l | tr -d ' ')" "2"
+
+# A key after "|" in a picker's list is for ? alone: the footer leaves it
+# out and says there are more.
+printf 'enter\topen\nc\tcomment\nw\tweb\tmore\n--\nj/k\tmove\n' > "$tmp/foot/hints" && : > "$tmp/foot/footer"
+expect footer/more-keys-left-out "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=200 git-fzf-footer | strip)" "enter open · c comment · j/k move · ? more keys"
+expect footer/more-keys-in-help "$(GIT_FZF_STATE=$tmp/foot git-fzf-help show | strip | grep -c '^  w  *web$')" "1"
+
+# --- git-mr-lines, git-mr-say: comment on an MR from a picker, without nvim.
+# GitLab is a stub answering from fixtures and keeping what it was sent.
+here=$PWD mr=$tmp/mr-lines
+git init -q "$mr" && cd "$mr" && git config user.email t@t && git config user.name t
+printf 'a\nb\nc\nd\ne\nf\ng\nh\n' > f.ts && git add f.ts && git commit -qm base
+printf 'a\nB\nc\nd\ne\nf\ng\nh\nnew\n' > f.ts && git commit -qam change
+b=$(git rev-parse HEAD~1) h=$(git rev-parse HEAD)
+mkdir -p "$tmp/glabstub"
+cat > "$tmp/glabstub/glab" <<STUB
+#!/bin/sh
+case "\$*" in
+  *discussions\?per_page*) cat <<'J'
+[{"id":"abc","resolvable":true,"resolved":false,"notes":[{"id":1,"body":"why capital?","author":{"username":"sam"},"created_at":"2026-09-01",
+   "position":{"new_path":"f.ts","old_path":"f.ts","new_line":2,"head_sha":"$h","base_sha":"$b"}}]},
+ {"id":"def","resolvable":true,"resolved":true,"notes":[{"id":2,"body":"was fine","author":{"username":"kim"},"created_at":"2026-09-01",
+   "position":{"new_path":"f.ts","old_path":"f.ts","old_line":2,"head_sha":"$h","base_sha":"$b"}}]}]
+J
+    ;;
+  *draft_notes\?per_page*) echo '[]' ;;
+  "api projects/:fullpath/merge_requests/7") echo '{"diff_refs":{"base_sha":"$b","start_sha":"$b","head_sha":"$h"}}' ;;
+  "api user") echo '{"username":"sam"}' ;;
+  *"-X POST"*|*"-X PUT"*) { echo "\$*"; cat; echo; } >> "$tmp/glab.posted"; echo '{}' ;;
+  *) echo '{}' ;;
+esac
+STUB
+chmod +x "$tmp/glabstub/glab"
+PATH=$tmp/glabstub:$PATH
+lst=$tmp/lines-state && mkdir -p "$lst"
+GIT_FZF_STATE=$lst GMR_LINES_PATH=f.ts git-mr-lines --list 7 "$b..$h" >/dev/null
+# Each thread under the line it is on, the removed line's under the removed line.
+expect mr-lines/rows "$(cut -f8 "$lst/lines.rows" | tr '\n' ' ')" "h1 n1 o2 tdef n2 tabc n3 n4 n5 n6 n7 n8 n9 "
+expect mr-lines/thread-row "$(sed -n 6p "$lst/lines.rows" | cut -f1 | strip | grep -c '┆ .*open  *sam  *why capital?$')" "1"
+expect mr-lines/footer "$(strip < "$lst/footer")" "1 unresolved"
+expect mr-lines/start "$(GIT_FZF_STATE=$lst FZF_TOTAL_COUNT=13 git-mr-lines --start 5)" "unbind(result)+pos(9)"
+# ] from the top lands on the hunk's first line, the row under its rule;
+# there is no hunk after it, and [ from below goes back to it.
+expect mr-lines/next-hunk "$(GIT_FZF_STATE=$lst git-mr-lines --hunk 1 0)" "pos(2)"
+expect mr-lines/no-next-hunk "$(GIT_FZF_STATE=$lst git-mr-lines --hunk 1 5)" ""
+expect mr-lines/previous-hunk "$(GIT_FZF_STATE=$lst git-mr-lines --hunk -1 8)" "pos(2)"
+expect mr-lines/start-waits-for-rows "$(GIT_FZF_STATE=$lst FZF_TOTAL_COUNT=0 git-mr-lines --start 5)" ""
+expect mr-lines/c-on-a-line "$(GIT_FZF_STATE=$lst git-mr-lines --comment 7 r line '' n2)" \
+  'execute(git-mr-say --new 7 r "$GMR_LINES_PATH" new 2 2)+clear-selection+reload(git-mr-lines --list 7 r)'
+expect mr-lines/c-on-marked-lines "$(GIT_FZF_STATE=$lst git-mr-lines --comment 7 r line '' n9 n2 tabc n3)" \
+  'execute(git-mr-say --new 7 r "$GMR_LINES_PATH" new 2 9)+clear-selection+reload(git-mr-lines --list 7 r)'
+GIT_FZF_STATE=$lst git-mr-lines --comment 7 r line '' o2 n2 >/dev/null
+expect mr-lines/c-one-side "$(cat "$lst/note")" "one comment spans one side: removed lines, or the rest, not both"
+expect mr-lines/c-on-a-thread "$(GIT_FZF_STATE=$lst git-mr-lines --comment 7 r thread abc tabc)" \
+  "execute(git-mr-say --reply 7 r abc)+reload(git-mr-lines --list 7 r)"
+# J marks lines as it moves, and c comments across them.
+if picker_open "GMR_KIND=review git-mr-lines 7 $b..$h f.ts 2"; then
+  picker_rows >/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    at=$(picker_state | jq -r '.current.text' | cut -f8); [ "$at" = n2 ] && break; sleep 0.25
+  done
+  expect mr-lines/starts-at-the-line "$at" "n2"
+  picker_key J; picker_key J; picker_key J
+  expect mr-lines/J-marks "$(picker_state | jq -c '[.selected[].text | split("\t")[7]]')" '["n2","tabc","n3"]'
+  picker_close
+else
+  expect mr-lines/picker-opens "no" "yes"
+fi
+# Where a comment goes (git-mr-position): a removed line, a kept one after
+# the change, and a range across both kinds, anchored on its last line.
+expect mr-position/removed "$(git-mr-position "$b" "" "$h" f.ts old 2 2 | jq -c '[.old_line, .new_line, .line_range.end.type, .line_range.end.new_line]')" '[2,null,"old",0]'
+expect mr-position/kept "$(git-mr-position "$b" "" "$h" f.ts new 5 5 | jq -c '[.old_line, .new_line, .line_range.end.type, has("start_sha")]')" '[5,5,"",false]'
+expect mr-position/range "$(git-mr-position "$b" "$b" "$h" f.ts new 2 4 | jq -c '[.line_range.start.type, .line_range.start.old_line, .new_line, .start_sha == "'"$b"'"]')" '["new",0,4,true]'
+# Typed at the prompt, enter: a draft on the added line, placed as nvim would.
+rm -f "$tmp/glab.posted"
+if picker_open "GMR_KIND=review git-mr-say --new 7 $b..$h f.ts new 2 2"; then
+  picker_key "why capital"
+  picker_key "$(printf '\r')"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$tmp/glab.posted" ] && break; sleep 0.25; done
+  exec 7>&-; wait "$driver" 2>/dev/null
+  expect mr-say/posts-a-draft "$(head -1 "$tmp/glab.posted" | grep -c 'merge_requests/7/draft_notes')" "1"
+  expect mr-say/body "$(sed 1d "$tmp/glab.posted" | jq -c '[.note, .position.new_line, .position.old_line, .position.line_range.start.type, .position.head_sha == "'"$h"'"]')" \
+    '["why capital",2,null,"new",true]'
+else
+  expect mr-say/prompt-opens "no" "yes"
+fi
+# e, without nvim: your comment in the thread, at the prompt with what it
+# says, and saved in place.
+rm -f "$tmp/glab.posted"
+if picker_open "GIT_FZF_STATE=$lst git-mr-say --edit 7 $b..$h abc"; then
+  picker_key " really"
+  picker_key "$(printf '\r')"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -s "$tmp/glab.posted" ] && break; sleep 0.25; done
+  exec 7>&-; wait "$driver" 2>/dev/null
+  expect mr-say/edits-yours "$(head -1 "$tmp/glab.posted" | grep -c -- '-X PUT projects/:fullpath/merge_requests/7/discussions/abc/notes/1')" "1"
+  expect mr-say/edit-body "$(sed 1d "$tmp/glab.posted" | jq -r .body)" "why capital? really"
+else
+  expect mr-say/edit-prompt-opens "no" "yes"
+fi
+PATH=${PATH#"$tmp/glabstub:"}
+cd "$here"
 
 # --- completion: one list of candidates for all three shells
 expect complete/refs "$(otis-complete gl | grep -cx main)" "1"

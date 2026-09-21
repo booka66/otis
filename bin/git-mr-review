@@ -10,19 +10,19 @@
 # MR's head and base as GitLab reports them, and prefetches the commits
 # (git-mr-prefetch), so usually nothing is fetched here at all. The file list
 # and previews read commits, not the worktree, so the worktree moves in the
-# background while the picker is already up; git-mr-wait holds nvim (and
-# gitlab.nvim) for the moment it takes, if you are quicker. Edits left in the
-# worktree are asked about first, since that cannot wait.
+# background while the picker is already up; git-mr-wait holds nvim for the
+# moment it takes, if you are quicker. Edits left in the worktree are asked
+# about first, since that cannot wait.
 #
 # Then the MR's file picker (git-mr-files) in the review worktree, so nvim
-# opens the MR's version of each file. Its r opens gitlab.nvim there
-# (git-mr-comment), which finds the MR by the checked-out branch.
+# opens the MR's version of each file. The worktree is always detached at the
+# MR's head: nothing of yours is ever checked out or moved.
 #
 # --claude (gmr's C) has Claude review it instead (git-mr-claude), straight
 # from the list: the same commits, no worktree, since Claude takes its own.
 claude=
 [ "$1" = --claude ] && { claude=1; shift; }
-iid=$1 target=${2:-$(otis-config main)} url=$3 source=$4 head=$5 base=$6 start=$7
+iid=$1 target=${2:-$(otis-config main)} url=$3 head=$5 base=$6 start=$7
 [ -n "$iid" ] || exit 0
 
 pause() { printf '%s. press enter\n' "$1"; read -r _; }
@@ -31,8 +31,8 @@ have() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
 dir=$(git-worktree-path named review)
 mr="refs/mr/$iid"
 common=$(git rev-parse --git-common-dir)
-# The branch gmr last created for a review, and the commit it left it on. Only a
-# branch recorded here, and still on that commit, is ever moved or deleted.
+# The branch an older gmr created for a review, and the commit it left it on:
+# deleted below if it is still there, untouched.
 record="$common/gmr-review-branch"
 moving="$common/gmr-review-moving"
 
@@ -73,42 +73,15 @@ fi
 # $moving.err its error if it failed; git-mr-wait reads both.
 rm -f "$moving.err"
 (
-  checked_out() { git worktree list --porcelain | grep -qxF "branch refs/heads/$1"; }
-  prev='' prevsha=''
-  [ -r "$record" ] && read -r prev prevsha < "$record"
-  # How to put the worktree on this MR:
-  #   create    no local branch by that name, so make one (gitlab.nvim can review)
-  #   reuse     gmr made it last time and nothing has moved it since
-  #   detached  a branch of yours by that name exists; never touch it
-  mode=detached
-  if [ -n "$source" ]; then
-    if ! git show-ref --verify --quiet "refs/heads/$source"; then
-      mode=create
-    elif [ "$source" = "$prev" ] && [ "$(git rev-parse "refs/heads/$source")" = "$prevsha" ]; then
-      mode=reuse
-    fi
-  fi
-  # One checkout: straight onto the branch when gmr may own it, else detached.
-  if { [ "$mode" = create ] || [ "$mode" = reuse ]; } && git -C "$dir" switch --quiet -C "$source" "$mr" 2>/dev/null; then
-    printf '%s %s\n' "$source" "$head" > "$record.new"
-  else
-    git -C "$dir" switch --quiet --detach "$mr" 2> "$moving.err" || { rm -f "$moving"; exit 1; }
-    : > "$record.new"
-  fi
-  # The previous review's branch is free to go once nothing has it checked out.
-  if [ -n "$prev" ] && [ "$prev" != "$source" ] &&
-    [ "$(git rev-parse -q --verify "refs/heads/$prev")" = "$prevsha" ] && ! checked_out "$prev"; then
+  git -C "$dir" switch --quiet --detach "$mr" 2> "$moving.err" || { rm -f "$moving"; exit 1; }
+  # Reviews used to check out a branch named for the MR, for gitlab.nvim.
+  # One still here and where gmr left it goes, once nothing has it checked out.
+  if [ -r "$record" ] && read -r prev prevsha < "$record" && [ -n "$prev" ] &&
+    [ "$(git rev-parse -q --verify "refs/heads/$prev")" = "$prevsha" ] &&
+    ! git worktree list --porcelain | grep -qxF "branch refs/heads/$prev"; then
     git branch -q -D "$prev"
   fi
-  mv "$record.new" "$record"
-  [ -s "$record" ] || rm -f "$record"
-  rm -f "$moving" "$moving.err"
-  # Same-project MRs also have the branch on origin, which gitlab.nvim compares
-  # against; a fork's does not, and that is fine. Nothing waits on this.
-  # The branch is named: by now the next review may have the worktree on its own.
-  if [ -s "$record" ] && git fetch --quiet --no-tags origin "+refs/heads/$source:refs/remotes/origin/$source" 2>/dev/null; then
-    git branch --quiet --set-upstream-to="origin/$source" "$source" 2>/dev/null
-  fi
+  rm -f "$record" "$moving" "$moving.err"
 ) </dev/null >/dev/null 2>&1 &
 echo $! > "$moving"
 

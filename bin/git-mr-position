@@ -1,0 +1,54 @@
+#!/bin/sh
+# git-mr-position <base> <start> <head> <path> <side> <first> <last>
+# Where a comment on lines first..last of <path> goes in an MR's diff, as the
+# JSON position GitLab's API wants, from the MR's diff_refs (start may be
+# empty). side is new, or old for removed lines. Run in any checkout of the
+# repo: only commits are read. The one place this is worked out, for a
+# comment typed at a prompt (git-mr-say), in nvim (share/mr-comments.lua) and
+# for Claude's drafts (git-mr-claude-drafts).
+#
+# Each end is placed the way GitLab numbers a line: old and new numbers and a
+# type, "new" for a line the MR added, "old" for one it removed, "" for one
+# it kept. An added line has no old number, so old is where the old side
+# stood when it came up (the next old line), and likewise for removed lines.
+# The MR's hunks, with no context, are walked up to the line, keeping how far
+# the other side has shifted; a line inside a hunk's own range is one the MR
+# changed. The position anchors on the last line, and a range's ends name
+# their lines by a code of the path's sha1 and both numbers, the side the
+# line lacks zeroed.
+base=$1 start=$2 head=$3 path=$4 side=$5 first=$6 last=$7
+[ -n "$last" ] || { echo "usage: git-mr-position <base> <start> <head> <path> <side> <first> <last>" >&2; exit 2; }
+# shasum on macOS, sha1sum on most Linux.
+if command -v shasum >/dev/null 2>&1; then sha=$(printf '%s' "$path" | shasum | cut -c1-40)
+else sha=$(printf '%s' "$path" | sha1sum | cut -c1-40); fi
+ends=$(git diff -U0 --no-color --no-ext-diff "$base" "$head" -- "$path" | awk -v side="$side" -v first="$first" -v last="$last" '
+  /^@@ / {
+    split($2, o, ","); split($3, n, ",")
+    k++; os[k] = substr(o[1], 2) + 0; oc[k] = (2 in o) ? o[2] + 0 : 1
+    ns[k] = substr(n[1], 2) + 0; nc[k] = (2 in n) ? n[2] + 0 : 1
+  }
+  # locate: type, old and new of line l, space separated ("-" for no type).
+  function locate(l,   i, s, c, shift) {
+    shift = 0
+    for (i = 1; i <= k; i++) {
+      s = side == "new" ? ns[i] : os[i]; c = side == "new" ? nc[i] : oc[i]
+      # A range of zero lines names the line before it.
+      if (c > 0 && l >= s && l < s + c) {
+        if (side == "new") return "new " (oc[i] > 0 ? os[i] + oc[i] : os[i] + 1) " " l
+        return "old " l " " (nc[i] > 0 ? ns[i] : ns[i] + 1)
+      }
+      if ((c > 0 && s + c - 1 < l) || (c == 0 && s < l)) shift += nc[i] - oc[i]
+      else break
+    }
+    return side == "new" ? "- " (l - shift) " " l : "- " l " " (l + shift)
+  }
+  END { print locate(first); print locate(last) }')
+printf '%s\n' "$ends" | jq -Rn --arg sha "$sha" --arg path "$path" --arg base "$base" --arg start "$start" --arg head "$head" '
+  [inputs | split(" ") | {type: (if .[0] == "-" then "" else .[0] end), old: (.[1] | tonumber), new: (.[2] | tonumber)}] as [$s, $e]
+  | def endpoint: {type, line_code: "\($sha)_\(.old)_\(.new)",
+      old_line: (if .type == "new" then 0 else .old end), new_line: (if .type == "old" then 0 else .new end)};
+  {position_type: "text", base_sha: $base, head_sha: $head, old_path: $path, new_path: $path,
+   line_range: {start: ($s | endpoint), end: ($e | endpoint)}}
+  + (if $start != "" then {start_sha: $start} else {} end)
+  + (if $e.type != "new" then {old_line: $e.old} else {} end)
+  + (if $e.type != "old" then {new_line: $e.new} else {} end)'

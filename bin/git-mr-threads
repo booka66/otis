@@ -29,7 +29,8 @@
 # this machine and are never part of the draft.
 #
 # The picker lists every thread but those on a line: the MR's overview, whole
-# files, and outdated ones. They come from per-MR caches (git-cached-json)
+# files, and outdated ones. c replies at a prompt (git-mr-say), e and d edit
+# and delete your own there, r resolves, and enter opens the thread in nvim. They come from per-MR caches (git-cached-json)
 # shared with the file picker, refetched when over 15 seconds old.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
@@ -194,7 +195,9 @@ case $mode in
     ;;
   --open)
     # nvim for its compose window: replying there is a draft or not the same as
-    # on a line, and your own comments can be edited and deleted.
+    # on a line, and your own comments can be edited and deleted. Without
+    # nvim, your latest comment in it, at a prompt (git-mr-say).
+    command -v nvim >/dev/null 2>&1 || exec git-mr-say --edit "$GMR_IID" "$GMR_RANGE" "$1"
     env -u NVIM_DIFF_BASE GMR_THREAD="$1" nvim -c "luafile $share/mr-comments.lua"
     ;;
   --resolve)
@@ -210,10 +213,13 @@ case $mode in
     ;;
   *)
     list="git-mr-threads --list $iid $range"
-    git-fzf "!$iid threads " 'enter=reply / edit in nvim,r=resolve or unresolve,w=web,u=refresh' \
+    git-fzf "!$iid threads " 'c=reply,e=edit yours,d=delete yours,r=resolve or unresolve,|,enter=open in nvim,w=web,u=refresh' \
       --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
       --bind "start:reload($list)" \
       --bind "enter:execute(git-mr-threads --open {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --bind "c:execute(git-mr-say --reply $iid $range {2})+reload($list)" \
+      --bind "e:execute(git-mr-say --edit $iid $range {2})+reload($list)" \
+      --bind "d:execute(git-mr-say --delete $iid $range {2})+reload($list)" \
       --bind "r:transform(git-mr-threads --resolve $iid $range {2} {3} {4})" \
       --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\"#note_{5})" \
       --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \

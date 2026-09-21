@@ -16,7 +16,7 @@
 #     no shell but git-remote-run, for the repo's checks, where otis.remote
 #     names a workspace to run them in (otis-claude-gate lets nothing else
 #     through). What it proposes comes back as JSON, and that is all it can do.
-#   - This script makes the drafts (share/mr-claude-drafts.lua works out their
+#   - This script makes the drafts (git-mr-claude-drafts works out their
 #     lines), and its one write to GitLab, draft() below, is POST draft_notes: a
 #     draft only you can see. Publishing is git-mr-submit alone, when you press
 #     S, or GitLab's own submit review, which publishes Claude's drafts with
@@ -39,10 +39,9 @@
 # to each and Sonnet's proposed fix under them (git-callers-fix). So it adds
 # to the view rather than repeat it: a ✗ is on screen already, the callers
 # with none are not. It is asked to review the way the tree reads and to
-# name each comment's symbol, and
-# share/mr-claude-drafts.lua puts the drafts in the tree's order, a comment
-# on a caller the MR does not touch on the signature of the symbol that
-# breaks it, and opens each why with where its symbol sits in the tree. The
+# name each comment's symbol, and git-mr-claude-drafts puts the drafts in
+# the tree's order, a comment on a caller the MR does not touch on the
+# signature of the symbol that breaks it, and opens each why with where its symbol sits in the tree. The
 # callers take tsgo a minute; when they are not in yet, C asks whether to
 # wait for them (wait-callers), else Claude is told to look for callers
 # itself.
@@ -393,7 +392,7 @@ EOF
   n=$(jq length "$d/comments.json")
   [ "$n" -gt 0 ] || finish done "no comments from Claude"
 
-  out=$(nvim --clean -l "$share/mr-claude-drafts.lua" "$wt" "$d/refs.json" "$d/comments.json" "$table" "$callers" "$d/kinds.tsv" "$d/order.txt" 2>&1 > "$d/drafts.jsonl") ||
+  out=$(git-mr-claude-drafts "$wt" "$d/refs.json" "$d/comments.json" "$table" "$callers" "$d/kinds.tsv" "$d/order.txt" 2>&1 > "$d/drafts.jsonl") ||
     finish failed "could not work out where the comments go: $(oneline "$out")"
   mr=$(glab api "$api" 2>&1) || finish failed "could not ask GitLab whether the MR moved: $(oneline "$mr")"
   now=$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)

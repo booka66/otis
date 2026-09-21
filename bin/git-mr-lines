@@ -1,0 +1,208 @@
+#!/bin/sh
+# git-mr-lines <iid> <range> <path> [line]   one file of an MR as a list of its diff's lines,
+#                                            the cursor at <line> (the new side's)
+# git-mr-lines --list <iid> <range> <path>   its rows
+# git-mr-lines --preview <iid> <range> <kind> <side> <line> <other> <thread id> <row id>
+# git-mr-lines --comment <iid> <range> <kind> <thread id> <row ids...>   c, as fzf actions
+# git-mr-lines --resolve <iid> <range> <thread id> <resolvable> <resolved>   r, as fzf actions
+# git-mr-lines --own <edit | delete> <iid> <range> <kind> <thread id>      e and d, as fzf actions
+# git-mr-lines --start <line>                the cursor onto <line> once the rows land, as fzf actions
+# git-mr-lines --hunk <1 | -1> <index>       ] and [: the cursor onto the next or previous hunk's
+#                                            first line, as fzf actions
+#
+# The review picker's c (git-mr-files): comment without opening an editor.
+# Each line of the file's diff is a row, and each thread on a line is a row
+# under it, so the threads read where they sit. c on a line starts a thread
+# there, or across the lines marked (J or shift-down marks the line and moves
+# down, K or shift-up up, tab one at a time); c on a thread replies
+# to it; both write at a prompt (git-mr-say), and e and d edit and delete
+# your own comment in a thread there. r resolves a thread or opens it again,
+# as in the threads picker (git-mr-threads). enter opens your editor at the
+# line, the way enter in the review picker does, and on a thread opens it in
+# nvim, or without nvim edits your comment in it.
+#
+# Threads on lines the diff does not show come last, under their own rule. The
+# threads come from the same per-MR caches as the review picker's
+# (git-mr-threads --json), kept in the picker's state as threads.json, which
+# git-mr-threads --show and git-mr-say read too.
+#
+# The rows: the line as shown, its kind (line, thread or hunk), its side (new,
+# or old for a removed line), its number on that side, the thread's id,
+# resolvable and resolved, the row's own id (n12, o5, t<thread>, h3), and
+# the line's number on the other side: old for a kept line, the new line it
+# sits before for a removed one, which enter opens at.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+st=$GIT_FZF_STATE
+mode=
+case $1 in --list|--preview|--comment|--resolve|--start|--hunk|--own) mode=$1; shift ;; esac
+iid=$1 range=$2
+api="projects/:fullpath/merge_requests/$iid"
+list="git-mr-lines --list $iid $range"
+
+case $mode in
+  --own)
+    # e and d: your comment in the thread under the cursor (git-mr-say).
+    how=$1 iid=$2 range=$3
+    [ "$4" = thread ] || exec git-fzf-note "$( [ "$how" = edit ] && echo e edits || echo d deletes) your comment in a thread; move onto one"
+    echo "execute(git-mr-say --$how $iid $range $5)+reload(git-mr-lines --list $iid $range)"
+    exit 0
+    ;;
+  --hunk)
+    # {n} counts from 0, pos from 1. A hunk row is the rule; its first line is
+    # the row after it.
+    n=$(awk -F'\t' -v dir="$1" -v at="$(( $2 + 1 ))" '$2 == "hunk" && $8 ~ /^h[1-9]/ { h[++k] = NR + 1 }
+      END { if (dir > 0) { for (i = 1; i <= k; i++) if (h[i] > at) { print h[i]; exit } }
+            else for (i = k; i >= 1; i--) if (h[i] < at) { print h[i]; exit } }' "$st/lines.rows")
+    [ -n "$n" ] && echo "pos($n)"
+    exit 0
+    ;;
+  --start)
+    [ "${FZF_TOTAL_COUNT:-0}" -gt 0 ] && [ -s "$st/lines.rows" ] || exit 0
+    n=$(awk -F'\t' -v l="$1" '$2 == "line" && $3 == "new" && $4 + 0 >= l + 0 { print NR; exit }' "$st/lines.rows")
+    echo "unbind(result)${n:++pos($n)}"
+    exit 0
+    ;;
+  --list)
+    path=${3:-$GMR_LINES_PATH}
+    git-mr-threads --json "$iid" "$range" "reload($list)+refresh-preview" > "$st/threads.json" 2>/dev/null ||
+      printf '[]' > "$st/threads.json"
+    jq -r --arg p "$path" '.[] | select(.where.state == "line" and .where.path == $p)
+      | [.where.side, .where.line, .id, .resolvable, .resolved, (.draft // false), .notes[0].author.username,
+         (.notes[0].body | gsub("[\t\n\r]+"; " ")), (.notes | length), ([.notes[] | select(.draft)] | length)] | @tsv' \
+      "$st/threads.json" > "$st/lines.threads"
+    # The rows go to the state too, for --start and --hunk to count.
+    git --no-optional-locks -c core.quotePath=false diff -U3 --no-color --no-ext-diff "$range" -- "$path" |
+      awk -F'\t' -v threads="$st/lines.threads" -v counts="$st/lines.counts" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+      BEGIN {
+        while ((getline t < threads) > 0) {
+          n++; split(t, f, "\t")
+          side[n] = f[1]; at[n] = f[2]; id[n] = f[3]; able[n] = f[4]; done[n] = f[5]
+          draft[n] = f[6]; who[n] = f[7]; body[n] = f[8]; notes[n] = f[9]; drafts[n] = f[10]
+          on[f[1] SUBSEP f[2]] = on[f[1] SUBSEP f[2]] " " n
+          if (able[n] == "true" && done[n] != "true") open++
+          ndraft += drafts[n]
+        }
+        OFS = "\t"
+      }
+      function clean(s) { gsub(/\t/, "    ", s); gsub(/[\001-\037\177]/, "", s); return s }
+      function thread(i,    g, more) {
+        if (i in shown) return
+        shown[i] = 1
+        if (draft[i] == "true") g = GK_YOURS "✎ draft " GK_R
+        else if (able[i] != "true") g = "        "
+        else if (done[i] == "true") g = GK_CONTEXT "✓ done  " GK_R
+        else g = GK_ELSEWHERE " open  " GK_R
+        more = notes[i] > 1 ? GK_CONTEXT "  +" (notes[i] - 1) GK_R : ""
+        if (drafts[i] > 0 && draft[i] != "true") more = more "  " GK_YOURS "✎" drafts[i] GK_R
+        print "        " GK_FAINT "┆" GK_R " " g " " GK_ATTENTION who[i] GK_R "  " GK_TEXT clean(body[i]) GK_R more,
+          "thread", side[i], at[i], id[i], able[i], done[i], "t" id[i], ""
+      }
+      function threads_on(s, l,    k, m, i) {
+        m = split(on[s SUBSEP l], k, " ")
+        for (i = 1; i <= m; i++) thread(k[i])
+      }
+      /^@@/ {
+        split($0, h, " "); o = h[2]; w = h[3]; sub(/^-/, "", o); sub(/,.*/, "", o); sub(/^\+/, "", w); sub(/,.*/, "", w)
+        ctx = $0; sub(/^@@[^@]*@@ ?/, "", ctx)
+        hunks++
+        print GK_FAINT "   ─── " GK_R GK_CONTEXT clean(ctx) GK_R, "hunk", "", "", "", "", "", "h" hunks, ""
+        body_on = 1; next
+      }
+      !body_on { next }
+      /^\\/ { next }
+      /^-/ { print sprintf("%s%5d%s %s-%s%s", GK_CONTEXT, o, GK_R, GK_BAD, clean(substr($0, 2)), GK_R), "line", "old", o, "", "", "", "o" o, w
+             threads_on("old", o); o++; next }
+      /^\+/ { print sprintf("%s%5d%s %s+%s%s", GK_CONTEXT, w, GK_R, GK_GOOD, clean(substr($0, 2)), GK_R), "line", "new", w, "", "", "", "n" w, o
+              threads_on("new", w); w++; next }
+      { print sprintf("%s%5d%s  %s%s%s", GK_CONTEXT, w, GK_R, GK_TEXT, clean(substr($0, 2)), GK_R), "line", "new", w, "", "", "", "n" w, o
+        threads_on("new", w); threads_on("old", o); o++; w++ }
+      END {
+        for (i = 1; i <= n; i++) if (!(i in shown)) {
+          if (!rule++) print GK_FAINT "   ─── " GK_R GK_CONTEXT "on lines the diff does not show" GK_R, "hunk", "", "", "", "", "", "h0", ""
+          print sprintf("%s%5d%s %s", GK_CONTEXT, at[i], GK_R, side[i] == "old" ? GK_BAD "-" GK_R : " "), "hunk", "", "", "", "", "", "a" i, ""
+          thread(i)
+        }
+        print open + 0, ndraft + 0 > counts
+      }' | tee "$st/lines.rows"
+    read -r open drafts < "$st/lines.counts"
+    note=
+    [ "$open" -gt 0 ] && note="${GK_ELSEWHERE}$open unresolved${GK_R}"
+    [ "$drafts" -gt 0 ] && note="${note:+$note · }${GK_YOURS}$drafts draft$([ "$drafts" -eq 1 ] || echo s), S submits${GK_R}"
+    printf "$note" > "$st/footer"
+    exit 0
+    ;;
+  --preview)
+    kind=$3 side=$4 line=$5 other=$6 id=$7 rid=$8
+    case $kind in
+      thread) exec git-mr-threads --show "$id" ;;
+      hunk) exit 0 ;;
+    esac
+    # The whole line, which the list cuts at its width, then the threads on it.
+    rev=${range#*..}; [ "$side" = old ] && rev=${range%%..*}
+    git show "$rev:$GMR_LINES_PATH" 2>/dev/null | sed -n "${line}p" | fold -w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 2 ))"
+    printf "\n${GK_CONTEXT}c comments here · J marks lines for one comment across them${GK_R}\n"
+    jq -r --arg p "$GMR_LINES_PATH" --arg s "$side" --argjson l "$line" --argjson o "${other:-0}" '.[]
+      | select(.where.state == "line" and .where.path == $p
+        and ((.where.side == $s and .where.line == $l) or ($s == "new" and .where.side == "old" and .where.line == $o)))
+      | .id' "$st/threads.json" 2>/dev/null |
+      while read -r t; do echo; git-mr-threads --show "$t"; done
+    exit 0
+    ;;
+  --comment)
+    kind=$3 id=$4
+    shift 4
+    if [ "$kind" = thread ]; then
+      echo "execute(git-mr-say --reply $iid $range $id)+reload($list)"
+      exit 0
+    fi
+    # The marked lines, else the one under the cursor ({+8} is that alone
+    # when nothing is marked): one side, first to last.
+    lines=$(printf '%s\n' "$@" | grep -E '^[on][0-9]+$')
+    [ -n "$lines" ] || exec git-fzf-note "c comments on a line of code; move onto one"
+    sides=$(printf '%s\n' "$lines" | cut -c1 | sort -u)
+    [ "$(printf '%s\n' "$sides" | wc -l)" -eq 1 ] ||
+      exec git-fzf-note "one comment spans one side: removed lines, or the rest, not both"
+    side=new; [ "$sides" = o ] && side=old
+    first=$(printf '%s\n' "$lines" | cut -c2- | sort -n | head -1)
+    last=$(printf '%s\n' "$lines" | cut -c2- | sort -n | tail -1)
+    echo "execute(git-mr-say --new $iid $range \"\$GMR_LINES_PATH\" $side $first $last)+clear-selection+reload($list)"
+    exit 0
+    ;;
+  --resolve)
+    id=$3 resolvable=$4 resolved=$5
+    [ -n "$id" ] || exec git-fzf-note "r resolves a thread; move onto one"
+    [ "$resolvable" = true ] || exec git-fzf-note "only a thread can be resolved, and this is a single comment or a draft"
+    if [ "$resolved" = true ]; then to=false; else to=true; fi
+    if response=$(glab api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
+      git-mr-threads --refresh "$iid" "reload($list)"
+    else
+      git-fzf-error "resolve the thread" "$response"
+    fi
+    echo "reload($list)"
+    exit 0
+    ;;
+esac
+
+path=$3 line=$4
+[ -n "$path" ] || exit 0
+export GMR_LINES_PATH=$path
+# The cursor starts on the first row at or past <line> on the new side, once
+# the rows have landed: result fires on every load, the first one empty.
+set --
+[ -n "$line" ] && set -- --bind "result:transform(git-mr-lines --start $line)"
+git-fzf "!$iid $path " 'enter=open in your editor,c=comment or reply,J=mark lines,r=resolve,S=submit drafts,|,e=edit yours,d=delete yours,K=mark lines upward,tab=mark or unmark one,w=web,u=refresh' \
+  --ansi --delimiter='\t' --with-nth=1 --multi --track --id-nth=8 --no-sort \
+  --bind "start:reload($list)" "$@" \
+  --bind "]:transform(git-mr-lines --hunk 1 {n})" --bind "[:transform(git-mr-lines --hunk -1 {n})" \
+  --bind "enter:execute(if [ {2} = thread ]; then git-mr-threads --open {5}; else git-commit-open $range \"\$GMR_LINES_PATH\" \$([ {3} = old ] && echo {9} || echo {4}); fi)+reload($list)" \
+  --bind "J:select+down,shift-down:select+down,K:select+up,shift-up:select+up" \
+  --bind "c:transform(git-mr-lines --comment $iid $range {2} {5} {+8})" \
+  --bind "e:transform(git-mr-lines --own edit $iid $range {2} {5})" \
+  --bind "d:transform(git-mr-lines --own delete $iid $range {2} {5})" \
+  --bind "r:transform(git-mr-lines --resolve $iid $range {5} {6} {7})" \
+  --bind "S:execute(git-mr-submit $iid $range ${GMR_KIND:-review})+reload($list)" \
+  --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\")" \
+  --bind "u:execute-silent(git-mr-threads --refresh $iid refresh-preview)+reload($list)" \
+  --preview "git-mr-lines --preview $iid $range {2} {3} {4} {9} {5} {8}" </dev/null >/dev/null
+exit 0

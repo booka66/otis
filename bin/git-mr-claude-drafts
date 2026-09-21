@@ -1,0 +1,112 @@
+#!/bin/sh
+# git-mr-claude-drafts <root> <diff_refs.json> <findings.json> [symbols.tsv callers.tsv kinds.tsv order]
+# Claude's review comments (git-mr-claude) as draft note bodies, one JSON
+# object a line, in the order the symbol view reads the symbols they sit on:
+# { where, symbol, note, position, fallback, why }, why being Claude's
+# reasons and its lesson, for the reviewer alone. Posting them is
+# git-mr-claude's, never this script's. A comment goes on its lines when they
+# are lines of a file in the MR on that side; anything else, and any comment
+# GitLab refuses a position for (fallback), goes on the MR itself, naming the
+# place it meant.
+#
+# The reviewer reads the change by symbol (git-symbols), so with seam's table
+# a comment is placed on its symbol too: the one whose lines hold it, else
+# the one Claude named. One about code the MR does not touch (a caller
+# elsewhere it breaks) goes on the signature of the symbol it names, so it
+# sits on that symbol's row beside its callers rather than on the MR. And
+# its why opens with where that symbol sits in the tree: what happened to
+# it, the way down to it from an entry point, and its callers elsewhere
+# (git-callers), so the reviewer can find what Claude means in the view.
+#
+# Where on the lines is git-mr-position's; the rest is one jq program over
+# the table, the callers and the findings, with what it needs from git (the
+# MR's files, and how long each file a finding names is) worked out first.
+root=$1 refs=$2 findings=$3 table=$4 callers=$5 kinds=$6 order=$7
+cd "$root" || exit 1
+base=$(jq -r .base_sha "$refs") head=$(jq -r .head_sha "$refs") start=$(jq -r '.start_sha // ""' "$refs")
+# An optional file not given reads as empty.
+file() { if [ -n "$1" ] && [ -r "$1" ]; then printf '%s' "$1"; else printf /dev/null; fi; }
+
+in_mr=$(git diff --name-only --no-renames "$base" "$head" | jq -Rn '[inputs]')
+# How many lines each file a finding names has on its side: a finding past
+# the end is not on the lines of the MR.
+lengths=$(jq -r '.[] | "\(.side)\t\(.path)"' "$findings" | sort -u | while IFS="$(printf '\t')" read -r side path; do
+  sha=$head; [ "$side" = old ] && sha=$base
+  printf '%s:%s\t%s\n' "$side" "$path" "$(git show "$sha:$path" 2>/dev/null | awk 'END { print NR }')"
+done | jq -Rn '[inputs | split("\t") | {(.[0]): (.[1] | tonumber)}] | add // {}')
+
+jq -c --argjson in_mr "$in_mr" --argjson lengths "$lengths" \
+  --rawfile table "$(file "$table")" --rawfile callers "$(file "$callers")" \
+  --rawfile kinds "$(file "$kinds")" --rawfile order "$(file "$order")" '
+  def rows: split("\n") | map(select(. != "") | split("\t"));
+  # The symbols, from seam'"'"'s table (its README names the columns), by id.
+  ($table | rows | map(select(.[1] != "file" and (.[7] // "") != "")
+    | ((if .[3] != "" then .[3] + "." + .[2] else .[2] end)) as $name
+    | {id: (.[0] + "#" + $name), name: $name, path: .[0], class: .[3], change: .[5], side: .[6],
+       start: (.[7] | tonumber), stop: (.[8] | tonumber), open: (try (.[9] | tonumber) catch null),
+       root: (.[18] == "1" and .[3] == ""), uses: ((.[17] // "") | if . != "" then split("|") else [] end)})) as $symbols
+  | (reduce $symbols[] as $s ({}; .[$s.id] //= $s)) as $by_id
+  # What a row opens to in the tree: the changed symbols it uses, and a
+  # class its members.
+  | def under($s): $s.uses + [$symbols[] | select(.class != "" and .path == $s.path and .class == $s.name) | .id];
+  # The entry points as the tree lists them (git-symbols): those in the
+  # gloss'"'"'s reading order first, then the rest of the source, then tests,
+  # generated code and config (git-test-files kinds).
+  (reduce ($kinds | rows[]) as $r ({}; .[$r[0]] = ($r[1] // ""))) as $kind
+  | ([$order | rows[] | .[0] | $by_id[.] // empty | select(.root)] | reduce .[] as $s ([]; if any(.[]; .id == $s.id) then . else . + [$s] end)) as $ordered
+  | ($ordered + [$symbols[] | select(.root and ($kind[.path] // "") == "" and (.id as $i | any($ordered[]; .id == $i) | not))]
+     + [$symbols[] | select(.root and ($kind[.path] // "") != "")]) as $roots
+  # The order the tree reads them, opened all the way (L): each entry point,
+  # then what it opens to, depth first. The way down to a symbol is where the
+  # reviewer first meets it reading top down.
+  | def walk($id; $path):
+      if .order[$id] then .
+      else .n += 1 | .order[$id] = .n | .via[$id] = ($path + [$by_id[$id].name])
+        | .via[$id] as $here | reduce under($by_id[$id])[] as $u (.; if $by_id[$u] then walk($u; $here) else . end) end;
+    (reduce ($roots[], $symbols[]) as $s ({n: 0, order: {}, via: {}}; walk($s.id; []))) as $tree
+  # Callers elsewhere, and how many of them the change breaks.
+  | (reduce ($callers | rows[] | select(.[0] != "-")) as $r ({};
+      .[$r[0]].n += 1
+      | .[$r[0]].broken += (if ($r[8] | tonumber) > 0 then [$r[3] | (capture("#(?<n>.*)$").n // .)] else [] end))) as $callers
+  # The innermost symbol holding a line on a side.
+  | def holding($path; $side; $line):
+      reduce ($symbols[] | select(.path == $path and .side == $side and .start <= $line and $line <= .stop)) as $s
+        (null; if . == null or ($s.stop - $s.start) < (.stop - .start) then $s else . end);
+  # The why'"'"'s first line: the symbol as the tree has it.
+  def locator($s; $meant):
+    ["**`\($s.name)`**",
+     ({added: "new", removed: "removed", signature: "~ signature changed", body: "body only"}[$s.change] // $s.change)]
+    + (if $s.root then ["an entry point"]
+       elif ($tree.via[$s.id] | length) > 1 then ["reached from " + ($tree.via[$s.id] | map("`\(.)`") | join(" › "))]
+       else [] end)
+    + ($callers[$s.id] | if . then ["\(.n) caller\(if .n == 1 then "" else "s" end) elsewhere\(if (.broken // []) | length > 0 then ", ✗ " + (.broken | join(", ")) else "" end)"] else [] end)
+    + (if $meant then ["about " + $meant] else [] end)
+    | join(" · ");
+  def where_of: (if .first == .last then "\(.path):\(.first)" else "\(.path):\(.first)-\(.last)" end) + (if .side == "old" then " (removed)" else "" end);
+  [ to_entries[] | .key as $i | .value as $f
+    | {path: $f.path, side: $f.side, first: $f.first_line, last: $f.last_line}
+    | .on = (any($in_mr[]; . == $f.path) and .first >= 1 and .first <= .last and .last <= ($lengths["\(.side):\(.path)"] // 0))
+    | .s = (if .on then holding(.path; .side; .first) else null end)
+    | if .s == null and $by_id[$f.symbol // ""] then
+        .s = $by_id[$f.symbol]
+        # Not a place in the MR: on the named symbol'"'"'s signature instead.
+        | if .on | not then .meant = where_of | .path = .s.path | .side = .s.side | .first = (.s.open // .s.start) | .last = .first | .on = true else . end
+      else . end
+    | .where = where_of
+    | ((if $f.concept != null and $f.concept != false then "\($f.why)\n\n## \($f.concept)\n\n\($f.lesson)" else $f.why end)) as $why
+    | {where, symbol: .s.name, fallback: "`\(.where)`\n\n\($f.body)",
+       why: (if .s then locator(.s; .meant) + "\n\n" + $why else $why end),
+       note: (if .on then $f.body else "`\(.where)`\n\n\($f.body)" end),
+       at: {path, side, first, last, on},
+       order: (if .s then $tree.order[.s.id] else infinite end), i: $i} ]
+  # In the tree'"'"'s order, so the drafts read top to bottom as the view does.
+  | sort_by(.order, .i)[] | del(.order, .i) | if .symbol == null then del(.symbol) else . end' "$findings" |
+while IFS= read -r o; do
+  if [ "$(printf '%s' "$o" | jq -r .at.on)" = true ]; then
+    set -- $(printf '%s' "$o" | jq -r '.at | "\(.side) \(.first) \(.last)"')
+    pos=$(git-mr-position "$base" "$start" "$head" "$(printf '%s' "$o" | jq -r .at.path)" "$1" "$2" "$3") || exit 1
+    printf '%s' "$o" | jq -c --argjson p "$pos" 'del(.at) + {position: $p}'
+  else
+    printf '%s' "$o" | jq -c 'del(.at)'
+  fi
+done

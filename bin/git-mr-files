@@ -21,14 +21,16 @@
 # n's since flag, in the picker's state). --toggle: f. --preview: the preview
 # for either kind of row.
 #
-# Reviewing, new comments are drafts until S submits them all at once
-# (git-mr-submit); on your own MR they post at once. nvim's <leader>mt switches
-# either way. C has Claude review the MR in the background and draft comments
+# c comments without nvim: the file (or the symbol's file) as a list of its
+# diff's lines with the threads under them, to comment on, reply and resolve
+# (git-mr-lines). Reviewing, new comments are drafts until S submits them all
+# at once (git-mr-submit); on your own MR they post at once. nvim's <leader>mt
+# switches either way. C has Claude review the MR in the background and draft comments
 # for you to read, showing its progress (git-mr-claude); on your own MR, C
 # has Claude propose fixes for its threads instead, for you to accept, fold
 # into your commits and push (git-mr-fix). Reviewing also adds
 # approve (at the head the picker shows), n for what changed since your last
-# review (git-mr-since), gitlab.nvim where it is installed, and u catching up
+# review (git-mr-since), and u catching up
 # with a push: when the MR's head has moved, the picker closes and the review
 # reopens there.
 #
@@ -105,28 +107,25 @@ export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind
 list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
 refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
 
-keys='enter=open in nvim,f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,v=viewed,o=threads on no line,s=the shape of it,p=peeks on/off,S=submit drafts,t=tests/config/generated,c=commits view,w=web,u=refresh'
+# The first keys are the review itself, and the footer shows those; the
+# rest are behind ?.
+opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
+first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts"
+rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,s=the shape of it,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
 claude="git-mr-claude $iid $range"
-if [ "$kind" = review ]; then
-  keys="$keys,C=Claude drafts comments"
-else
-  keys="$keys,C=Claude proposes fixes"
-  claude="git-mr-fix $iid $range"
-fi
 set --
 if [ "$kind" = review ]; then
-  keys="$keys,A=approve,n=since your last review"
+  first="$first,A=approve,C=Claude drafts comments"
+  rest="$rest,n=since your last review"
   set -- --bind "A:execute(git-mr-approve $iid ${range#*..} ${range%%..*})" \
     --bind "n:transform(git-mr-since toggle $iid $range)" \
     --bind "u:transform(git-mr-files --moved $iid $range)"
-  # r opens gitlab.nvim, for those who have it installed through lazy.nvim.
-  if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy/gitlab.nvim" ]; then
-    keys="$keys,r=gitlab.nvim"
-    set -- "$@" --bind "r:transform(git-mr-comment --check $iid $range {2})"
-  fi
 else
+  first="$first,C=Claude proposes fixes"
+  claude="git-mr-fix $iid $range"
   set -- --bind "u:$refresh+refresh-preview"
 fi
+keys="$first,|,$rest"
 out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
@@ -146,7 +145,8 @@ out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "C:execute($claude)+$refresh+refresh-preview" \
-  --bind "c:execute(gl $range)" \
+  --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
+  --bind "m:execute(gl $range)" \
   --bind "w:execute-silent(otis-open '$url')" \
   "$@" \
   --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12}" </dev/null)

@@ -1,14 +1,17 @@
 # otis
 
-Git and GitLab from the terminal. `otis` is a dashboard of everything that wants you: MRs to review, failed pipelines, threads on yours, deploys. Under it are fzf pickers for branches, staging, the log, worktrees and merge requests. You review in nvim with comments inline, and read a change by symbol instead of file by file. Claude Code can review an MR, propose fixes, watch production after a deploy, or check that a change actually works. It runs on macOS and Linux.
+Git and GitLab from the terminal. `otis` is a dashboard of everything that wants you: MRs to review, failed pipelines, threads on yours, deploys. Under it are fzf pickers for branches, staging, the log, worktrees and merge requests. You review and comment on lines right in the picker (or in nvim, with the comments inline), and read a change by symbol instead of file by file. Claude Code can review an MR, propose fixes, watch production after a deploy, or check that a change actually works. It runs on macOS and Linux.
 
 ## Install
 
 ```sh
 brew tap booka66/otis https://github.com/booka66/otis
+brew trust --formula booka66/otis/otis booka66/seam/seam
 brew install booka66/otis/otis
 otis-setup
 ```
+
+Homebrew 7 won't load a formula from someone else's tap until you trust it, and seam comes in as a dependency from its own tap, so trust both first. Older Homebrew has no `brew trust`; skip that line.
 
 Or clone it and run setup from the clone:
 
@@ -18,7 +21,7 @@ git clone https://github.com/booka66/otis.git ~/otis && ~/otis/bin/otis-setup
 
 `otis-setup` checks what's missing and offers to install it, asks a few questions (branch prefix, editor, theme), and adds one line to your shell config. It won't change anything without asking, and you can rerun it whenever you like. Open a new terminal when it's done.
 
-You need zsh installed, though your own shell can be zsh, bash or fish. You also need git 2.41+, fzf, jq 1.7+, nvim 0.10+, glab logged in to your GitLab, delta, and a Nerd Font. Setup checks all of these. ast-grep, glow and Claude Code are optional, and each turns on more features.
+You need zsh installed, though your own shell can be zsh, bash or fish. You also need git 2.41+, fzf, jq 1.7+, glab logged in to your GitLab, delta, and a Nerd Font. Setup checks all of these. nvim 0.10+, seam, ast-grep, glow and Claude Code are optional, and each turns on more features: with nvim, a review opens with its comments inline beside the diff; without it, files open in your editor and you comment from the review itself.
 
 ## Getting started
 

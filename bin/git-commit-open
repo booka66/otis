@@ -159,7 +159,10 @@ fi
 if [ -n "$2" ]; then
   # From a review: the worktree may still be moving onto the MR.
   git-mr-wait || exit 0
-  if [ ! -e "$2" ] && [ -n "$GMR_IID" ] && [ -n "$NVIM_DIFF_BASE" ] && git cat-file -e "$NVIM_DIFF_BASE:$2" 2>/dev/null; then
+  # A review's comments inline are nvim's: without it, a review opens files
+  # in your editor like anywhere else, and c in the picker comments.
+  command -v nvim >/dev/null 2>&1 && nvim=1 || nvim=
+  if [ -n "$nvim" ] && [ ! -e "$2" ] && [ -n "$GMR_IID" ] && [ -n "$NVIM_DIFF_BASE" ] && git cat-file -e "$NVIM_DIFF_BASE:$2" 2>/dev/null; then
     # An empty placeholder only so nvim starts on a file, not a dashboard; the
     # panes replace it.
     placeholder=$(mktemp)
@@ -185,7 +188,7 @@ if [ -n "$2" ]; then
   if [ -n "$at" ]; then line=$at; elif [ "$st" = A ] && [ -z "$GMR_IID" ]; then line=$(plain_line "$2"); else line=$(preview_line "$2"); fi
   [ -n "$line" ] || line=$(first_line)
   # From gmr's review picker: the MR's comments inline, and keys to add more.
-  [ -n "$GMR_IID" ] && exec nvim "+${line:-1}" -c "luafile $share/mr-comments.lua" -- "$2"
+  [ -n "$GMR_IID" ] && [ -n "$nvim" ] && exec nvim "+${line:-1}" -c "luafile $share/mr-comments.lua" -- "$2"
   exec otis-edit "+${line:-1}" -- "$2"
 fi
 

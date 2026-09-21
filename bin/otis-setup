@@ -77,12 +77,6 @@ else
   fail jq "$(install_hint jq 'apt install jq')"; need jq
 fi
 
-if have nvim; then
-  v=$(nvim --version | head -1 | sed -E 's/^NVIM v([0-9.]+).*/\1/')
-  if at_least "$v" 0.10; then pass nvim "$v"; else fail nvim "$v is too old; reviews in nvim need 0.10. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; need neovim; fi
-else
-  fail nvim "reviews and file opening use nvim. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; need neovim
-fi
 
 # The GitLab host is otis.host where set (a self-hosted GitLab), else gitlab.com.
 host=$("$root/bin/otis-config" host 2>/dev/null || echo gitlab.com)
@@ -122,6 +116,14 @@ else
 fi
 
 printf '\noptional\n'
+# nvim shows a review's comments inline, beside the diff; without it enter
+# opens your editor, and c in the review picker comments.
+if have nvim; then
+  v=$(nvim --version | head -1 | sed -E 's/^NVIM v([0-9.]+).*/\1/')
+  if at_least "$v" 0.10; then pass nvim "$v; enter in a review shows its comments inline"; else note nvim "$v is too old for comments inline in a review, which needs 0.10. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; nice neovim; fi
+else
+  note nvim "enter in a review opens your editor; with nvim it shows the comments inline beside the diff. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; nice neovim
+fi
 if have ast-grep; then pass ast-grep "s in a review reads the MR by symbol"; else note ast-grep "reading a change by symbol needs it; without it only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')"; nice ast-grep; fi
 if have seam; then pass seam "s reads the change seam works out, by symbol"; else note seam "the symbol view is a renderer of seam's table; without it only files are listed. $(install_hint booka66/seam/seam 'git clone https://github.com/booka66/seam and put its bin on your PATH')"; nice booka66/seam/seam; fi
 if have claude; then pass claude "C, D and V have Claude review, fix, watch production and judge"; else note claude "C, D and V need Claude Code: curl -fsSL https://claude.ai/install.sh | bash, then claude to log in"; fi
@@ -148,6 +150,15 @@ esac
 
 # Install what is missing, through brew. Re-run afterwards so the checks
 # above see the result; OTIS_SETUP_INSTALLED stops a second offer.
+# Homebrew 7 loads a formula from a tap outside its own only once you trust
+# it (brew trust). Naming one in full to brew install trusts it, but not one
+# it brings in as a dependency, so each tap's formula is trusted first.
+brew_install() {
+  if brew trust --help >/dev/null 2>&1; then
+    for f in "$@"; do case $f in */*/*) brew trust --formula "$f" >/dev/null ;; esac; done
+  fi
+  brew install "$@"
+}
 if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_opt$want_cask" ]; then
   printf '\n'
   if have brew; then
@@ -155,10 +166,10 @@ if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_op
     what=${want# }
     [ -n "$want_cask" ] && what="${what:+$what and }a Nerd Font"
     if [ -n "$what" ] && ask "  install what is needed with brew ($what)?"; then
-      { [ -z "$want" ] || brew install $want; } && { [ -z "$want_cask" ] || brew install --cask $want_cask; } && installed=1
+      { [ -z "$want" ] || brew_install $want; } && { [ -z "$want_cask" ] || brew install --cask $want_cask; } && installed=1
     fi
     if [ -n "$want_opt" ] && ask "  and the optional ones (${want_opt# })?"; then
-      brew install $want_opt && installed=1
+      brew_install $want_opt && installed=1
     fi
     if [ -n "$installed" ]; then
       printf '\n'
@@ -205,20 +216,20 @@ if [ -n "$OTIS_EDITOR" ]; then
 elif [ -n "$editor" ]; then
   pass editor "$editor opens files (git config --global otis.editor)"
 elif [ -n "$check_only" ]; then
-  note editor "unset, so nvim opens files: git config --global otis.editor cursor (or code, zed, vim...) to change it"
+  note editor "unset, so $("$root/bin/otis-config" editor) opens files: git config --global otis.editor cursor (or code, zed, vim...) to change it"
 else
   guess=$(git var GIT_EDITOR 2>/dev/null); guess=${guess%% *}; guess=${guess##*/}
   case $guess in ''|vi|vim) guess= ;; esac
   for e in cursor code; do [ -z "$guess" ] && have $e && guess=$e; done
-  guess=${guess:-nvim}
+  guess=${guess:-$("$root/bin/otis-config" editor)}
   printf '  Files you open from the pickers open in your editor: cursor, code, zed, nvim, vim...
-  (a review with its comments inline is always nvim). Yours [%s]: ' "$guess"
+  (with nvim installed, a review opens in it with its comments inline). Yours [%s]: ' "$guess"
   read -r editor </dev/tty
   editor=${editor:-$guess}
   git config --global otis.editor "$editor"
   pass editor "$editor (git config --global otis.editor changes it)"
 fi
-editor=${OTIS_EDITOR:-${editor:-nvim}}
+editor=${OTIS_EDITOR:-${editor:-$("$root/bin/otis-config" editor)}}
 if ! have "${editor%% *}"; then
   case ${editor%% *} in
     cursor|code) fail editor "$editor is not on your PATH: in it, cmd-shift-P, then \"Shell Command: Install '${editor%% *}' command in PATH\"" ;;
