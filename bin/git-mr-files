@@ -111,7 +111,7 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
 first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts"
-rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,s=the shape of it,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
+rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=the shape of it,G=seam'"'"'s page in the browser,p=peek at what is on screen,t=tests/config/generated,m=commits view,w=web,u=refresh'
 claude="git-mr-claude $iid $range"
 set --
 if [ "$kind" = review ]; then
@@ -130,8 +130,9 @@ out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
+  --bind "y:transform(git-symbols --copy {12})" \
   --bind "enter:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-commit-open $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
-  --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($list)+down" \
+  --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($list)" \
   --bind "f:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
   --bind "l:execute-silent(git-symbols --open {12})+reload($light)" \
   --bind "h:transform(git-symbols --close {12} $light)" \
@@ -142,7 +143,8 @@ out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
   --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
-  --bind "p:execute-silent(git-symbols --peeks)+refresh-preview" \
+  --bind "G:transform(git-symbols --page $range {12})" \
+  --bind "p:execute-silent(git-symbols --peeks $range {2} {4} {5} {6} {12})+refresh-preview" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "C:execute($claude)+$refresh+refresh-preview" \
   --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \

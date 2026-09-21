@@ -22,7 +22,7 @@
 # list: a commit, a branch or an MR never changes, so their gloss is cached
 # by their shas for good; the worktree's is keyed by its symbols, so an edit
 # glosses again and staging does not (g asks again by hand). It goes into the
-# picker when it lands (git-fzf-bg --landing).
+# picker when it lands: the picker waits on the run (git-symbols --rows).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 mode=
@@ -94,8 +94,6 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=seam.glossModel GIT_CONFIG_VALUE_0=$model \
           order: .order, spine: .spine}' > "$file.new" 2>>"$dir/$key.err" && mv "$file.new" "$file"
 rm -rf "$dir/$key.table"
 [ -s "$file" ] && rm -f "$dir/$key.err"
-# Into the open picker without moving what you are on (git-fzf-bg
-# --landing): a review reloads its own list, with the threads on each symbol.
-if [ -n "$GMR_IID" ]; then git-fzf-bg --landing git-mr-files --list "$GMR_IID" "$rev"
-else git-fzf-bg --landing git-symbols --rows "$rev"; fi
+# The open picker takes it from here: it waits on this run (git-symbols
+# --rows) and reloads when it is done.
 exit 0

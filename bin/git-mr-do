@@ -4,6 +4,7 @@
 # git-mr-do claude <kind> <iid> <target> <url> <source> <head> <base> <pipeline id> [start]
 # git-mr-do approve <kind> <iid> <head> <base>
 # git-mr-do draft <kind> <iid>
+# git-mr-do page <kind> <iid> <head> <base> [start]
 # The MR keys shared by gb and gmr, as fzf actions for a transform binding.
 # A row with no MR gets a footer note instead of a dead key. [then] is an action
 # to chain after labels and reviewers, such as a reload.
@@ -45,6 +46,14 @@ if [ "$1" = approve ]; then
   [ "$2" = review ] || exec git-fzf-note "approve is for MRs you review, and !$3 is not one"
   echo "execute(git-mr-approve $3 $4 $5)+execute-silent(git-fzf-bg git-mr-list --refresh)"
   exit 0
+fi
+# page is gmr's G: seam's page for the MR in the browser, the diff the review
+# would open on (git-mr-base), from the table git-mr-prefetch keeps for it.
+if [ "$1" = page ]; then
+  case $2 in review|mine) ;; *) exec git-fzf-note "G is for open MRs" ;; esac
+  git cat-file -e "$4^{commit}" 2>/dev/null && git cat-file -e "$5^{commit}" 2>/dev/null ||
+    exec git-fzf-note "!$3 is not fetched yet: enter fetches it"
+  exec git-symbols --page "$(git-mr-base "$5" "$4" "$6")..$4"
 fi
 # draft is gmr's d on one of yours: draft to ready or back, whichever it is
 # now, adding or dropping the ready label with it (otis-config readyLabel), in

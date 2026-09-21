@@ -868,7 +868,7 @@ gd() {
 _gmr() {
   _g_repo || return 1
   local out
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=Claude reviews / proposes fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
+  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=Claude reviews / proposes fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
     --bind 'every(30):execute-silent(git-fzf-bg --tick git-mr-list)' \
@@ -888,6 +888,7 @@ _gmr() {
     --bind 's:print(switch)+accept' \
     --bind 'W:print(worktree)+accept' \
     --bind 'w:transform(git-mr-do web {2})' \
+    --bind 'G:transform(git-mr-do page {6} {2} {7} {8} {12})' \
     --bind 'y:transform(git-mr-do copy {2})' \
     --bind 'p:transform(git-ci-do pipeline {9} {2} {10})' \
     --bind 'v:execute(glab ci view -b {5})' \

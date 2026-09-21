@@ -31,26 +31,29 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]? | sele
 [ -n "$refspecs" ] && GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin $refspecs
 wait
 
-# Claude's gloss of each (git-symbols-gloss), started now rather than when
-# you open it, so a review opens glossed and stays as it opened: keyed as
-# git-mr-review's list keys it (git-mr-base's base, the head), and cached
-# by those shas for good, so each MR is glossed once a push. Only the gloss:
-# the callers' tsgo is gigabytes a run, for when you are in the review.
-command -v seam >/dev/null 2>&1 && command -v claude >/dev/null 2>&1 &&
-  [ "$(git config --get otis.symbolsModel)" != off ] || exit 0
-gdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-gloss
+# Each one's symbol table (git-symbols --table), built now rather than when
+# you open it, since seam was most of the first list; and Claude's gloss of
+# it (git-symbols-gloss), so a review opens glossed and stays as it opened.
+# Both keyed as git-mr-review's list keys them (git-mr-base's base, the
+# head), and cached by those shas for good, so each MR is read once a push.
+# Not the callers: tsgo is gigabytes a run, for when you are in the review.
+command -v seam >/dev/null 2>&1 || exit 0
+gloss=; command -v claude >/dev/null 2>&1 && [ "$(git config --get otis.symbolsModel)" != off ] && gloss=1
+cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
 jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
   | select(.author.username != $u.username)
   | [.targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
   while IFS="$(printf '\t')" read -r target head base start; do
     have "$head" && have "$base" || continue
-    # Glossed or being glossed at this head already: the usual case, a glob.
-    for f in "$gdir"/*-"$head".json; do [ -s "$f" ] && continue 2; done
-    for f in "$gdir"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && continue 2; done
+    # Read already at this head, the usual case: globs.
+    glossed=$([ -z "$gloss" ] && echo 1)
+    for f in "$cache/symbols-gloss"/*-"$head".json; do [ -s "$f" ] && glossed=1; done
+    for f in "$cache/symbols-gloss"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && glossed=1; done
+    tabled=
+    for f in "$cache/symbols"/*-"$head"-*.tsv; do [ -s "$f" ] && tabled=1; done
+    [ -n "$glossed" ] && [ -n "$tabled" ] && continue
     have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
     b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue
-    t=$(mktemp) || continue
-    SEAM_KINDS="git-test-files kinds" seam "$b..$head" > "$t" 2>/dev/null &&
-      OTIS_SYMBOLS_KEY=$b-$head git-symbols-gloss "$b..$head" "$t" >/dev/null 2>&1
-    rm -f "$t"
+    t=$(git-symbols --table "$b..$head") || continue
+    [ -n "$glossed" ] || OTIS_SYMBOLS_KEY=$b-$head git-symbols-gloss "$b..$head" "$t" >/dev/null 2>&1
   done

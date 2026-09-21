@@ -619,6 +619,7 @@ part_seam() {
   heading $1
   say "seam is the engine under the symbol view, and it has a view of its own: a page with the change as a graph, one box a definition and an arrow a mention. A solid arrow is a mention in a signature, so a change carries outward along it; a dashed one is in a body, where it stops."
   say "${k}g${r} on the page switches to the reading order: the same change as numbered threads, and ${k}space${r} marks one definition read and moves on. The page is one self-contained file, so it can be sent to someone."
+  say "In the symbol view or a review, ${k}G${r} opens it on the row you are on, and in gmr's list on the MR."
   local kw=20
   key "seam <range> --html" "the page"
   key "seam <range> --score" "the shape, as s showed it"
