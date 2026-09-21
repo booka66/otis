@@ -6,9 +6,9 @@
 #   git-split main... git-seam-check      split, checking with that
 #   git-split main... ""                  split, checking nothing
 #
-# With no check named, the repo's is used: a command a line in .seam/check,
-# with .seam/check.local before it and this user's after, the way seam reads
-# its own files. That is what lets the
+# With no check named, the repo's is used: seam finds it (.seam/check, with
+# check.local before it and this user's after) and says which in the plan it
+# answers with, so this shows the one seam will run. That is what lets the
 # key in the picker mean the same thing in a repo that has a typechecker and
 # one that has nothing to say.
 #
@@ -27,18 +27,8 @@
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 wait=; [ "$1" = --wait ] && { wait=1; shift; }
-rev=$1 check=$2
-if [ $# -lt 2 ]; then
-  # check.local before check, this repo before this user, the way seam reads
-  # its own: a repo that comes to ship one should not take over yours, and a
-  # .local is the one of these git is not meant to see.
-  for d in ./.seam/check.local ./.seam/check \
-           "${XDG_CONFIG_HOME:-$HOME/.config}/seam/check.local" "${XDG_CONFIG_HOME:-$HOME/.config}/seam/check"; do
-    [ -f "$d" ] || continue
-    check=$(sed 's/#.*//' "$d" | grep -v '^[[:space:]]*$' | head -1)
-    break
-  done
-fi
+rev=$1 check=$2 named=
+[ $# -ge 2 ] && named=1
 [ -n "$rev" ] || { echo "git-split <rev> [<check command>]" >&2; exit 2; }
 command -v seam >/dev/null 2>&1 || { echo "git-split: seam is not on your PATH" >&2; exit 2; }
 here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 2
@@ -73,8 +63,11 @@ pid=
 trap 'stop' EXIT TERM
 trap 'cancelled' INT
 
-seam "$rev" --split --json > "$tmp/plan" 2>"$tmp/err" || {
+# A check named, even '' for none, goes to seam as it is; an expansion like
+# ${named:+--check "$check"} would drop the empty one.
+if [ -n "$named" ]; then seam "$rev" --split --json --check "$check"; else seam "$rev" --split --json; fi > "$tmp/plan" 2>"$tmp/err" || {
   sed 's/^/  /' "$tmp/err" >&2; exit 1; }
+check=$(jq -r '.check // ""' "$tmp/plan")
 n=$(jq '.slices | length' "$tmp/plan")
 [ "$n" -gt 1 ] || { echo "git-split: one slice, which is the change as it is; nothing to split" >&2; exit 1; }
 base=$(jq -r '.base' "$tmp/plan")
