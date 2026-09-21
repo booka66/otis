@@ -67,7 +67,7 @@ fi
 # list, and the rows alone. A third of the time of --list.
 if [ "$1" = --light ]; then
   iid=$2 range=$3
-  OTIS_SYMBOL_MARKS=$st/marks git-symbols --rows "$range"
+  OTIS_SYMBOL_MARKS=$st/marks OTIS_SYMBOLS_FOLD=1 git-symbols --rows "$range"
   note=$(cat "$st/mr-note" 2>/dev/null)
   footer=$(cat "$st/footer" 2>/dev/null)
   [ -n "$note" ] && printf '%s\n' "${footer:+$footer · }$note" > "$st/footer"
@@ -79,8 +79,8 @@ if [ "$1" = --preview ]; then
   # view git-symbols cuts it to what no symbol claims, and a file it read no
   # symbols from comes back whole from there too.
   if [ -z "$s" ] && { [ -e "$st/by-file" ] || [ -e "$st/since" ]; }; then exec git-mr-file-preview "$iid" "$range" "$path"; fi
-  git-symbols --preview "$range" "$path" "$side" "$s" "$e" "$rid" | git-mr-file-preview --annotate "$iid" "$range" "$path"
-  exit 0
+  # The threads go under their lines there, so the preview is kept with them.
+  GIT_SYMBOLS_MR=$iid exec git-symbols --preview "$range" "$path" "$side" "$s" "$e" "$rid"
 fi
 # --refs <iid>: the MR's head, base, target, source and start, one line.
 refs() {

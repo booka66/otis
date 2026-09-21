@@ -60,15 +60,19 @@ EOF
   # Once you have submitted or deleted the last of Claude's drafts, its ids go,
   # so gmr stops saying there are drafts waiting here (git-mr-claude --marks;
   # --prune itself makes sure the list is newer than the ids).
-  [ -n "$json" ] && [ "${claude:-0}" -eq 0 ] && git-mr-claude --prune "$iid"
+  # No ids is the usual case, and a file test says so without the script.
+  . "$share/repo.sh"
+  [ -n "$json" ] && [ "${claude:-0}" -eq 0 ] && [ -f "$OTIS_GITDIR/gmr-claude/$iid.drafts" ] && git-mr-claude --prune "$iid"
   viewed=$(git-mr-viewed list "$iid" "${range#*..}")
   since=
   [ -e "$GIT_FZF_STATE/since" ] && since=$(git-mr-since files "$iid" "$range")
   # How big each file's change is, so a row can be triaged without moving the
   # cursor onto it. A commit range diffs two trees, so this never takes the
   # index lock a worktree diff would.
+  # The note is counts alone, and has no rows to size.
   numstat=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}/numstat.$$
-  git --no-optional-locks -c core.quotePath=false diff --numstat -M "$range" 2>/dev/null > "$numstat"
+  if [ "$mode" = --note ]; then : > "$numstat"
+  else git --no-optional-locks -c core.quotePath=false diff --numstat -M "$range" 2>/dev/null > "$numstat"; fi
   cols=${FZF_COLUMNS:-0}
   [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
   [ -n "$cols" ] || cols=100

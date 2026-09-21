@@ -137,7 +137,7 @@ git remote set-url origin git@gitlab.example.com:group/sub/repo.git
 # same questions are asked here three ways: worked out fresh, read back from
 # the file, and read from the environment a picker would have set.
 cached() { (eval "$(otis-config --env)"; otis-config "$@"); }
-rm -f "$(git rev-parse --path-format=absolute --git-common-dir)/otis-config-cache"
+rm -f "$(git rev-parse --path-format=absolute --git-dir)/otis-config-cache"
 expect config/cache-cold "$(otis-config main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
 expect config/cache-warm "$(otis-config main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
 expect config/cache-env "$(cached main base project | tr '\n' ' ')" "main origin/main group/sub/repo "
@@ -153,6 +153,18 @@ expect config/cache-after-unset "$(cached deployJob)" "deploy"
 printf '[otis]\n\tdeployJob = from-repo-file\n' > .otis
 expect config/cache-after-repo-file "$(cached deployJob)" "from-repo-file"
 rm -f .otis
+# A .otis value that could break out of a quote, run something, or pass git an
+# option is dropped, and the setting answers as if it were not there.
+printf '[otis]\n\tproject = x`touch %s/pwned`\n\tmainBranch = --upload-pack=evil\n\tdeployJob = deploy production\n' "$tmp" > .otis
+expect config/repo-file-unsafe "$(cached project main deployJob 2>/dev/null | tr '\n' '|')" "group/sub/repo|main|deploy production|"
+rm -f .otis
+# A worktree's .otis answers in that worktree alone: its cache is its own, so
+# an MR's head checked out for review cannot choose what the main checkout reads.
+git worktree add -q --detach "$tmp/cfg-wt"
+printf '[otis]\n\tdeployJob = from-worktree\n' > "$tmp/cfg-wt/.otis"
+expect config/worktree-own "$(cd "$tmp/cfg-wt" && otis-config deployJob)" "from-worktree"
+expect config/worktree-not-main "$(cached deployJob)" "deploy"
+git worktree remove --force "$tmp/cfg-wt"
 # The editor follows $OTIS_EDITOR, so it is never one of the answers kept.
 expect config/cache-editor-env "$(OTIS_EDITOR=chosen cached editor)" "chosen"
 expect config/cache-editor-none "$(cached editor)" "nvim"
@@ -558,6 +570,23 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/comment-claimed "$(awk -F'\t' '$3 == "fresh" { print $8, $9, $10, $11 }' "$table")" "15 16 16 2"
   expect symbols/unclaimed-count "$(awk -F'\t' '$2 == "file" && $1 == "lib.ts" { print $11, $12 }' "$table")" "1 0"
   expect symbols/unclaimed-preview "$(GIT_SYMBOLS_PLAIN=1 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new | grep '^@@\|^[-+][^-+]' | tr '\n' ' ')" "@@ -16,0 +18,1 @@ +console.log(fresh); "
+  # A review's preview has the MR's threads under their lines, and is kept
+  # with them: a second draw is the same, and a thread changing draws anew.
+  mrc=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
+  mkdir -p "$mrc"
+  thread() { printf '[{"id":"d1","resolvable":true,"resolved":false,"notes":[{"id":1,"body":"%s","author":{"username":"ann"},"position":{"new_line":3,"new_path":"lib.ts","head_sha":"%s","base_sha":"%s"}}]}]\n' "$1" "$head" "$base" > "$mrc/mr-7-threads.json"; }
+  thread "first thought"; echo '[]' > "$mrc/mr-7-drafts.json"
+  mrpv() { GIT_SYMBOLS_MR=7 GIT_FZF_STATE=$tmp/symst FZF_PREVIEW_COLUMNS=90 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c "$1"; }
+  expect symbols/mr-thread "$(mrpv 'first thought')" "1"
+  expect symbols/mr-thread-kept "$(mrpv 'first thought')" "1"
+  thread "second thought"
+  expect symbols/mr-thread-new "$(mrpv 'second thought'):$(mrpv 'first thought')" "1:0"
+  rm -f "$mrc"/mr-7-*
+  # v on a symbol marks every file it touched in one call: the same marks
+  # as a call a file, a deleted file's holding while it stays deleted.
+  git-mr-viewed add 7 "$head" lib.ts; git-mr-viewed add 7 "$head" pair.ts
+  printf 'remove\tlib.ts\nadd\tgen.generated.ts\nadd\tgone.ts\n' | git-mr-viewed apply 7 "$head"
+  expect mr-viewed/apply "$(git-mr-viewed list 7 "$head" | sort | tr '\n' ' ')" "gen.generated.ts gone.ts pair.ts "
   expect symbols/fields "$(printf '%s\n' "$rows" | strip | awk -F'\t' '{ print NF }' | sort -u)" "12"
   expect symbols/class-collapsed "$(printf '%s\n' "$rows" | strip | grep -c 'grow()')" "0"
   expect symbols/class-count "$(printf '%s\n' "$rows" | strip | cut -f1 | grep -c '▸ 1 export class Box$')" "1"

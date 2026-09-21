@@ -3,6 +3,7 @@
 # git-mr-viewed toggle <iid> <rev> <path>   flip it
 # git-mr-viewed remove <iid> <rev> <path>   unmark it
 # git-mr-viewed list <iid> <rev>            the viewed files, one per line
+# git-mr-viewed apply <iid> <rev>           add or remove, a tab and a path, a line each on stdin
 #
 # The review file picker's check marks, like GitLab's "viewed". A mark holds
 # the file's blob, so it lasts across new pushes until the file itself changes,
@@ -10,22 +11,41 @@
 # "deleted" and lasts while it stays deleted. Kept per MR in the git dir.
 action=$1 iid=$2 rev=$3 path=$4
 [ -n "$iid" ] && [ -n "$rev" ] || exit 0
-dir="$(git rev-parse --git-common-dir)/gmr-viewed"
+. "${0%/*}/../share/repo.sh" || exit 1
+dir="$OTIS_GITDIR/gmr-viewed"
 file="$dir/$iid"
 mkdir -p "$dir"
 touch "$file"
 
 blob() { git rev-parse -q --verify "$rev:$1" 2>/dev/null || echo deleted; }
+# blobs <paths file>: blob<TAB>path for each path at <rev>, deleted for one
+# not there, from one git call however many paths: it answers a line each,
+# in order, "<spec> missing" for what is not there.
+blobs() {
+  sed "s|^|$rev:|" "$1" | git cat-file --batch-check='%(objectname)' 2>/dev/null |
+    awk 'FILENAME == ARGV[1] { p[FNR] = $0; next } { print (/ missing$/ ? "deleted" : $0) "\t" p[FNR] }' "$1" -
+}
 # Marks whose blob still matches the file at <rev>, as "blob<TAB>path".
 current() {
-  cut -f2 "$file" | sort -u | while IFS= read -r p; do
-    b=$(blob "$p") && grep -qxF "$b	$p" "$file" && printf '%s\t%s\n' "$b" "$p"
-  done
+  cut -f2 "$file" | sort -u > "$file.$$"
+  blobs "$file.$$" | awk -F'\t' 'FILENAME == ARGV[1] { m[$0] = 1; next } $0 in m' "$file" -
+  rm -f "$file.$$"
 }
 
 case $action in
   list)
     current | cut -f2
+    ;;
+  apply)
+    # v's marks on every file it touched, in one pass (git-symbols --viewed).
+    cat > "$file.$$"
+    cut -f2 "$file.$$" > "$file.$$.p"
+    blobs "$file.$$.p" > "$file.$$.b"
+    awk -F'\t' 'FILENAME == ARGV[1] { act[$2] = $1; next }
+      FILENAME == ARGV[2] { if (act[$2] == "add") print; next }
+      !($2 in act)' "$file.$$" "$file.$$.b" "$file" > "$file.new"
+    mv "$file.new" "$file"
+    rm -f "$file.$$" "$file.$$.p" "$file.$$.b"
     ;;
   remove)
     awk -F'\t' -v p="$path" '$2 != p' "$file" > "$file.new"; mv "$file.new" "$file"

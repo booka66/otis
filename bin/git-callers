@@ -139,14 +139,25 @@ if [ "$mode" = --recheck ] || [ "$mode" = --recheck-run ]; then
   touched=$(git diff --name-only "$cbase" "$head" -- '*.ts' '*.tsx' 2>/dev/null)
   disk=$dir/$key.disk
   # What the disk has of them, as one hash; nothing to do while it is the head.
+  # Every reload in a review asks, so each side is one git call for all the
+  # files, not two a file: hash-object the ones on disk, and cat-file the
+  # head's, which answers "missing" for one it does not have.
+  paths=$(printf '%s\n' $broken $touched | sort -u)
+  nl='
+'
+  here=; for p in $paths; do [ -f "$p" ] && here="$here$p$nl"; done
+  sums=$dir/$key.sums.$$
+  { printf '%s' "$here" | git hash-object --stdin-paths 2>/dev/null; echo; printf "$head:%s\n" $paths | git cat-file --batch-check='%(objectname)' 2>/dev/null; } > "$sums"
   moved=
-  stamp=$(printf '%s\n' $broken $touched | sort -u | while read -r p; do
-    h=$(git hash-object "$p" 2>/dev/null || echo gone)
-    [ "$h" = "$(git rev-parse -q --verify "$head:$p" 2>/dev/null || echo gone)" ] || echo moved >&2
-    printf '%s %s\n' "$p" "$h"
-  done 2> "$dir/$key.moved" | git hash-object --stdin)
+  stamp=$(printf '%s\n' $paths | HERE=$here awk -v sums="$sums" '
+    BEGIN {
+      n = split(ENVIRON["HERE"], h, "\n"); for (i = 1; i <= n; i++) if (h[i] != "") on[h[i]] = 1
+      while ((getline l < sums) > 0 && l != "") d[++nd] = l
+      while ((getline l < sums) > 0) w[++nw] = (l ~ / missing$/) ? "gone" : l
+    }
+    { x = ($0 in on) ? d[++id] : "gone"; if (x != w[NR]) print "moved" > "/dev/stderr"; print $0 " " x }' 2> "$dir/$key.moved" | git hash-object --stdin)
   [ -s "$dir/$key.moved" ] && moved=1
-  rm -f "$dir/$key.moved"
+  rm -f "$dir/$key.moved" "$sums"
   [ -n "$moved" ] || { rm -f "$disk"; exit 0; }
   rrun=$dir/$key.recheck
   if [ "$mode" = --recheck ]; then

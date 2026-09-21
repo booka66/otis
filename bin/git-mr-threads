@@ -6,6 +6,7 @@
 # git-mr-threads --open <id>                      reply in nvim, edit or delete there
 # git-mr-threads --resolve <iid> <range> <id> <resolvable> <resolved>
 # git-mr-threads --json <iid> <range> <reload>    every thread, placed, from the cache
+# git-mr-threads --kick <iid> <range> <reload>    refetch in the background if old
 # git-mr-threads --refresh <iid> <reload>         refetch the cache now
 # git-mr-threads --fetch <iid> <range>            every thread, placed, fetched now
 #
@@ -114,6 +115,13 @@ case $mode in
     else
       place "$threads" "$drafts"
     fi
+    ;;
+  --kick)
+    # The two caches asked only whether they are old, a fetch started in the
+    # background if so: a preview that kept its threads (git-symbols) reads
+    # neither, and would otherwise never notice a thread made elsewhere.
+    git-cached-json --no-wait "mr-$iid-threads" 15 "$3" -- git-mr-pages "$api/discussions?per_page=100" >/dev/null 2>&1
+    git-cached-json --no-wait "mr-$iid-drafts" 15 "$3" -- git-mr-pages "$api/draft_notes?per_page=100" >/dev/null 2>&1
     ;;
   --refresh)
     reload=$2

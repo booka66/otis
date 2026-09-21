@@ -440,17 +440,59 @@ if [ "$mode" = --preview ]; then
   usesview=; [ -n "$rid" ] && [ "$usesfor" = "$rid" ] && usesview=uses
   { read -r key < "$st/key" && read -r croot < "$st/cache-root"; } 2>/dev/null || key= croot=
   read -r ckey 2>/dev/null < "$st/callers-key"
+  # In a review (git-mr-files --preview), GIT_SYMBOLS_MR is the MR, and its
+  # threads go under their lines (git-mr-file-preview --annotate) before the
+  # preview is kept: the caches they are read from are in its key, so a
+  # thread landing draws it again, and moving back onto a row is one cat
+  # rather than the threads placed and laid out again.
+  mr=$GIT_SYMBOLS_MR once=
+  # ahead: the row under this one rendered in the background once this one
+  # is shown, so j lands on a kept preview, a cat, rather than a render. A
+  # render that is itself ahead goes no further, or it would walk the list.
+  # fzf ends it with this preview's process group if you move on first.
+  ahead() {
+    [ -z "$GIT_SYMBOLS_AHEAD" ] && [ -n "$rid" ] && [ -s "$st/rows.last" ] || return 0
+    awk -F'\t' -v id="$rid" 'hit && $2 != "" { print $2; print $4; print $5; print $6; print $12; exit } $12 == id { hit = 1 }' "$st/rows.last" |
+      { IFS= read -r np && IFS= read -r nsd && IFS= read -r ns && IFS= read -r ne && IFS= read -r nid &&
+        GIT_SYMBOLS_AHEAD=1 git-symbols --preview "$rev" "$np" "$nsd" "$ns" "$ne" "$nid"; } >/dev/null 2>&1 3>&- &
+  }
   pv=
   if [ -n "$head" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$key" ] && [ -n "$croot" ]; then
-    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed")
+    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" \
+      ${mr:+"$croot/mr-$mr-threads.json" "$croot/mr-$mr-drafts.json" "${croot%/*}/gmr-claude/$mr.drafts" "${croot%/*}/gmr-claude/$mr.why.jsonl"})
     # cksum says the sum and then the size; the sum alone names the file.
-    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$nopeeks|$usesview|$FZF_PREVIEW_COLUMNS" | cksum)
+    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$nopeeks|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
     pv=$st/pv.${pv%% *}
-    [ -s "$pv" ] && exec cat "$pv"
+    if [ -s "$pv" ]; then
+      # Kept, so nothing read the threads' caches: ask them whether they are
+      # old, as the annotation would have, so a thread made elsewhere still
+      # lands while you move.
+      [ -n "$mr" ] && [ -z "$GIT_SYMBOLS_AHEAD" ] && git-mr-threads --kick "$mr" "$rev" "reload(git-mr-files --list $mr $rev)+refresh-preview" >/dev/null 2>&1 &
+      ahead
+      exec cat "$pv"
+    fi
+  elif [ -n "$mr" ]; then
+    pv=$st/pv.$$ once=1
+  fi
+  if [ -n "$pv" ]; then
     # The render goes to the file, and the file to the terminal at exit.
+    # Nothing below may exec, or the trap goes with it and the pane is blank.
+    # A review's render goes through the annotation on a fifo, so the two
+    # run side by side as they did in a pipe: its threads are read while
+    # the diff is drawn, not after.
     exec 3>&1
-    exec > "$pv.new"
-    trap 'mv -f "$pv.new" "$pv" 2>/dev/null; cat "$pv" 2>/dev/null >&3' EXIT
+    ann=
+    # Its own names, since a render ahead may be drawing the same row.
+    if [ -n "$mr" ]; then
+      mkfifo "$pv.$$.fifo"
+      git-mr-file-preview --annotate "$mr" "$rev" "$path" < "$pv.$$.fifo" > "$pv.$$" 2>/dev/null &
+      ann=$!
+      exec > "$pv.$$.fifo"
+      rm -f "$pv.$$.fifo"
+    else
+      exec > "$pv.$$"
+    fi
+    trap 'exec >&3; [ -z "$ann" ] || wait "$ann"; mv -f "$pv.$$" "$pv" 2>/dev/null; cat "$pv" 2>/dev/null; [ -z "$once" ] || rm -f "$pv"; [ -n "$once" ] || ahead' EXIT
   fi
   # Claude's gloss goes on the diff's hunk header, where delta draws it in
   # the header line above the symbol; what the symbol does, the change
@@ -637,8 +679,9 @@ EOF
       exit 0
     fi
     # A file with no symbols: the file picker'"'"'s own preview.
-    if [ -n "$head" ]; then exec git-preview-commit --diff "$rev" "$path"; fi
-    exec git-preview-file "$(git status --porcelain -- "$path" | cut -c1-2)" "$path"
+    if [ -n "$head" ]; then git-preview-commit --diff "$rev" "$path"
+    else git-preview-file "$(git status --porcelain -- "$path" | cut -c1-2)" "$path"; fi
+    exit 0
   fi
   # What the symbol uses, from the table, in the order it mentions them; a
   # member takes its class'"'"'s. deps is a row each: name, signature, what
@@ -892,13 +935,19 @@ if [ "$mode" = --viewed ]; then
   # is, and its row for what no symbol claims if it has one.
   if [ -n "$GMR_IID" ] && [ -n "$head" ]; then
     read -r OTIS_SYMBOLS_KEY < "$st/key" 2>/dev/null
+    # What v just hashed goes in the change's hashes, so viewed() below
+    # diffs only the rest of those files, not these again.
+    if [ -n "$OTIS_SYMBOLS_KEY" ]; then
+      : >> "$st/vh.$OTIS_SYMBOLS_KEY"
+      awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$st/vh.$OTIS_SYMBOLS_KEY" "$now" >> "$st/vh.$OTIS_SYMBOLS_KEY"
+    fi
     cut -f1 "$now" | sed 's/#.*//' | sort -u > "$keys.paths"
     awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } ($1 in want) { print ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$keys.paths" "$table" > "$keys.all"
     viewed "$keys.all" "$keys.done"
     awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } FILENAME == ARGV[2] { done[$1] = 1; next }
       ($1 in want) { k = ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3; if (!(k in done)) no[$1] = 1 }
       END { for (p in want) print (p in no ? "remove" : "add") "\t" p }' "$keys.paths" "$keys.done" "$table" |
-      while IFS='	' read -r act p; do git-mr-viewed "$act" "$GMR_IID" "$head" "$p"; done
+      git-mr-viewed apply "$GMR_IID" "$head"
     rm -f "$keys.paths" "$keys.all" "$keys.done"
   fi
   rm -f "$keys" "$now"
@@ -1028,19 +1077,30 @@ if [ "$mode" = --rows ]; then
     found=$(git-callers "$rev" "$table")
     case $found in running) finding=1 ;; /*) callers=$found ;; esac
   fi
+  # A fold key (l, h, L, H, b) reloads with OTIS_SYMBOLS_FOLD and changes
+  # nothing on disk, so what the last reload found of Claude's fixes, the
+  # checkout's callers and node_modules still holds ($st/held): three
+  # scripts, and most of a reload in a review whose change breaks a caller.
+  fixing= fixed= rechecking= nm= held=
+  if [ -n "$OTIS_SYMBOLS_FOLD" ] && [ -n "$GIT_FZF_STATE" ] && [ -s "$st/held" ]; then
+    { IFS= read -r hkey; IFS= read -r fixing; IFS= read -r rechecking; IFS= read -r nm; } < "$st/held"
+    if [ "$hkey" = "$OTIS_CALLERS_KEY" ]; then
+      held=1
+      while IFS= read -r l; do fixed="$fixed$l
+"; done 2>/dev/null < "$st/fixed"
+    else fixing= rechecking= nm=; fi
+  fi
   # Once a caller is broken, Claude'"'"'s fixes for it (git-callers-fix).
-  fixing=
-  [ "$callers" != /dev/null ] && [ "$(git-callers-fix "$rev" "$callers" "$table")" = running ] && fixing=1
+  [ -z "$held" ] && [ "$callers" != /dev/null ] && [ "$(git-callers-fix "$rev" "$callers" "$table")" = running ] && fixing=1
   # A commit's broken callers as this checkout has them, once a fix there
   # (F, or nvim) has moved them off the commit (git-callers --recheck): the
   # files tsgo finds none of the change's errors in, for the rows and the
   # previews ($st/fixed).
-  fixed= rechecking=
-  if [ -n "$head" ] && [ "$callers" != /dev/null ]; then
+  if [ -z "$held" ] && [ -n "$head" ] && [ "$callers" != /dev/null ]; then
     rc=$(git-callers --recheck "$rev" "$table")
     case $rc in running) rechecking=1 ;; /*) fixed=$(awk -F'\t' 'NR > 1 && $2 == 0 { print $1 }' "$rc") ;; esac
   fi
-  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$fixed" > "$st/fixed.new" && { cmp -s "$st/fixed.new" "$st/fixed" && rm -f "$st/fixed.new" || mv "$st/fixed.new" "$st/fixed"; }
+  [ -z "$held" ] && [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$fixed" > "$st/fixed.new" && { cmp -s "$st/fixed.new" "$st/fixed" && rm -f "$st/fixed.new" || mv "$st/fixed.new" "$st/fixed"; }
   : > "$order"
   # The gloss moves rows: its order puts the roots in reading order and its
   # spine is lines at the top. So a picker keeps the layout it opened with,
@@ -1374,7 +1434,7 @@ if [ "$mode" = --rows ]; then
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
     # node_modules against its lockfile (otis-node-modules --state): being
     # installed, or behind it, which is what a callers check is reading.
-    nm=$(otis-node-modules --state 2>/dev/null)
+    [ -n "$held" ] || nm=$(otis-node-modules --state 2>/dev/null)
     case $nm in
       installing) note="$note · $(printf "${GK_ATTENTION}installing node_modules${GK_R}")" ;;
       behind) note="$note · $(printf "${GK_ATTENTION}node_modules is behind the lockfile${GK_R}")" ;;
@@ -1398,6 +1458,7 @@ if [ "$mode" = --rows ]; then
   else
     note=$(printf "${GK_CONTEXT}nothing here is TypeScript, so there are only files${GK_R}")
   fi
+  [ -n "$held" ] || printf '%s\n' "$OTIS_CALLERS_KEY" "$fixing" "$rechecking" "$nm" > "$st/held"
   footer=; IFS= read -r footer 2>/dev/null < "$GIT_FZF_STATE/footer"
   printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
   exit 0
@@ -1407,8 +1468,9 @@ fi
 # fields after the display: path, line, side, start, end, base start, base
 # end, staged, unstaged, kind, id.
 list="git-symbols --rows $rev"
-# A fold key's reload: the worktree's skips the rebuild.
-fold=$list; [ -z "$head" ] && fold="OTIS_SYMBOLS_FOLD=1 $list"
+# A fold key's reload: the worktree's skips the rebuild, and any keeps what
+# the last reload found of the callers and node_modules.
+fold="OTIS_SYMBOLS_FOLD=1 $list"
 # f and the file picker's s switch between the two views. Opened from the file
 # picker, f goes back to it rather than opening another on top, or every trip
 # back and forth would be one more q on the way out.
@@ -1429,7 +1491,7 @@ if [ -z "$head" ]; then
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
   keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,C=cut it into a stack,p=peeks on/off,t=tests/config/generated,q=back to files'
-  set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($fold)"
+  set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
   keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,P=step through it,C=cut it into a stack,p=peeks on/off,t=tests/config/generated,u=refresh'
