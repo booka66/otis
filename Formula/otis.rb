@@ -1,15 +1,20 @@
 # otis through Homebrew, from GitHub:
 #
 #   brew tap booka66/otis https://github.com/booka66/otis
+#   brew trust --formula booka66/otis/otis booka66/seam/seam
 #   brew install booka66/otis/otis
 #   otis-setup
+#
+# Homebrew 7 loads formulae from taps outside its own only once trusted.
+# Installing one by its full name trusts it, but not seam, which comes in
+# as a dependency from its own tap, so both are trusted first.
 #
 # A release: bump version and tag below, commit, then tag that commit the same.
 class Otis < Formula
   desc "Git and GitLab from the terminal: a dashboard and fzf pickers"
   homepage "https://github.com/booka66/otis"
-  url "https://github.com/booka66/otis.git", using: :git, tag: "v0.1.0"
-  version "0.1.0"
+  url "https://github.com/booka66/otis.git", using: :git, tag: "v0.2.0"
+  version "0.2.0"
   head "https://github.com/booka66/otis.git", using: :git, branch: "main"
 
   depends_on "ast-grep"
@@ -21,7 +26,6 @@ class Otis < Formula
   depends_on "glab"
   depends_on "glow"
   depends_on "jq"
-  depends_on "neovim"
   uses_from_macos "curl"
   uses_from_macos "perl"
   uses_from_macos "zsh"
