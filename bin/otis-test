@@ -269,7 +269,7 @@ git remote set-url origin https://github.com/x/y.git
 mkdir -p "$tmp/dash"
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
-expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "14"
+expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "23"
 expect otis-list/here-last "$(printf '%s\n' "$rows" | tail -1 | cut -f6,11,14 | tr '\t' ' ')" "here here here"
 expect otis-list/here-always "$(printf '%s\n' "$rows" | strip | grep -c '── here ')" "1"
 expect otis-list/quiet "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "nothing waiting on you"
@@ -945,17 +945,19 @@ else
 fi
 git branch -qD stale; rm -f "$(git rev-parse --git-common-dir)/branch-mrs.tsv"
 
-# The dashboard. Origin is a path here, so it draws from the checkout alone:
-# the here section, and nothing waiting.
-if picker_open "otis"; then
-  expect otis/rows "$(picker_rows)" "2"
-  expect otis/here "$(picker_state | jq -r '.matches[-1].text' | strip | cut -f1 | tr -s ' ')" "▶ main nothing to commit or push"
-  picker_key j
-  expect otis/j-moves "$(picker_state | jq .position)" "1"
-  picker_close
-else
-  expect otis/opens "no picker on port $port" "opened"
-fi
+# The dashboard (otis-dash), in a pty: origin is a path here, so it draws
+# from the checkout alone, the here section and nothing waiting; j moves
+# nothing off the one row, and b hands gb to the otis function to run.
+dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash"; out=
+  for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *"nothing to commit"* ]] && break; sleep 0.1; done
+  zpty -wn d j; sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  zpty -wn d b; for _ in {1..20}; do while zpty -rt d buf; do out+=$buf; done; zpty -t d || break; sleep 0.1; done
+  zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing waiting on you')" "1"
+expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
+expect otis/enter-says "$(printf '%s\n' "$dash" | grep -o '⏎ read the branch' | head -1)" "⏎ read the branch"
+# The last thing it writes, after the screen is put back.
+expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
 
 printf 'a4\n' > a.ts && printf 'new\n' > d.ts
 # ga opens by symbol; these two files have none, so they list under a

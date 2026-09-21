@@ -993,11 +993,11 @@ part_ship_prod() {
 
 part_dashboard() {
   heading $1
-  say "${k}otis${r} is where a morning starts: everything that wants you in one list, ordered by what a delay costs."
+  say "${k}otis${r} is where a morning starts: everything that wants you, ordered by what a delay costs. The headline says how many; the one that wants you most sits in a card under it, with what enter does about it."
   look 1 "Production trouble first, a watch that found something. Then what is broken: a rollback, a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what Claude has left you, then what you can finish: a verdict in, one ready to merge, one nobody is reviewing."
   look 2 "One row a thing, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, the pipeline, because that is what you would do next."
   look 3 "Under that, what is moving without you: Claude's runs, your pipelines, and your merged MRs production has not taken yet, each saying where it has got to. Last, the branch you are on: uncommitted, unpushed, behind."
-  look 4 "${k}enter${r} does what the row says. ${k}m b d a w${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}D${r} discards otis's own note, never the MR's state. It reloads every 10 seconds."
+  look 4 "${k}enter${r} does what the row says. ${k}m b d a w${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}D${r} discards otis's own note, never the MR's state. ${k}space${r} reads the row's preview in a pager, where the terminal is too narrow to show it beside the list. It reloads every 10 seconds."
   say "Nothing waiting is the point: a section with nothing in it is simply gone."
   key gag "everything Claude is doing or has done here in the background, reviews, fixes, watches and verifications, running ones first. enter is every step; d forgets a finished run"
   offer "Open otis" otis

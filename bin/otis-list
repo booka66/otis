@@ -34,7 +34,11 @@
 # row's identity, start sha), so the MR keys shared by every picker act on it
 # unchanged (git-mr-do). Then two of its own: the run's directory for a row
 # about one of Claude's runs (the branch, for here), and what enter should do
-# (otis-do).
+# (otis-do). Then the row in parts, for the dashboard to lay out (otis-dash):
+# its glyph and the glyph's color, the verb, what it is about (the MR's
+# title), who (a review's author), how long ago, a note (a run's branch,
+# the here row's state), a pipeline's jobs done/total, and 1 if it is the
+# branch you are on.
 #
 # Nothing here fetches anything gmr does not: the same three caches under the
 # same names (git-cached-json, share/mr-query.sh), so opening one warms the
@@ -171,8 +175,15 @@ note=
 if otis-config gitlab >/dev/null 2>&1; then
   fetch mrs-review $age mrs.json "$mr_review_query" &
   fetch ci-mine $age ci.json "$mr_mine_query" &
+  # Where each merged MR has got to is shown at once from the last answer
+  # while a new one is fetched, and that fetch is slow. An answer older than
+  # five minutes may say "not out yet" of an MR that went out since, so its
+  # rows wait for the new one (ci-merged.old) rather than say that.
   { merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
-      cp "$merged" "$st/ci-merged.json"; } &
+      cp "$merged" "$st/ci-merged.json" &&
+      if [ $(( $(date +%s) - $(stat -f %m "$merged" 2>/dev/null || stat -c %Y "$merged") )) -gt 300 ]; then
+        : > "$st/ci-merged.old"
+      else rm -f "$st/ci-merged.old"; fi; } &
   { deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
       cp "$deploys" "$st/deploys.json"; } &
 elif git remote get-url origin >/dev/null 2>&1; then
@@ -195,7 +206,8 @@ out=$(jq -nr -L "$share" \
   --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
   --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
   --rawfile trash "$st/trash.tsv" --rawfile seen "$st/seen.tsv" \
-  --arg common "$common" --arg base "$base" --arg url "$url" '
+  --arg common "$common" --arg base "$base" --arg url "$url" \
+  --arg merged_old "$([ -e "$st/ci-merged.old" ] && echo 1)" '
   include "otis";
   (now | floor) as $NOW |
   ($runsf[0] // []) as $runs |
@@ -232,7 +244,9 @@ out=$(jq -nr -L "$share" \
         + ($x.tail // ""),
       (($x.iid // "") | tostring), ($x.target // ""), ($x.url // ""), ($x.source // ""),
       $x.kind, ($x.head // ""), ($x.base // ""), (($x.pipeline // "") | tostring), ($x.purl // ""),
-      $x.id, ($x.start // ""), ($x.extra // ""), ($x.verb_key // "")
+      $x.id, ($x.start // ""), ($x.extra // ""), ($x.verb_key // ""),
+      ($x.g // ""), ($x.gc // ""), ($x.verb // ""), (($x.title // "") | clean), ($x.who // ""),
+      ($x.when // ""), (($x.note // "") | clean), ($x.prog // ""), (if $x.mark then "1" else "" end)
     ] | join("\t");
 
   # A heading is a row with no merge request on it, so a key that acts on one
@@ -240,7 +254,7 @@ out=$(jq -nr -L "$share" \
   def sep($text; $id):
     ([ faint + "── " + $text + " "
          + (if (56 - ($text | length)) > 0 then "─" * (56 - ($text | length)) else "" end) + r,
-       "", "", "", "", "sep", "", "", "", "", $id, "", "", "" ] | join("\t"));
+       "", "", "", "", "sep", "", "", "", "", $id, "", "", "", "", "", $text, "", "", "", "", "", "" ] | join("\t"));
 
   ($review[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) as $asked_all |
   ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
@@ -298,7 +312,8 @@ out=$(jq -nr -L "$share" \
           and ((.updatedAt | at) > ($NOW - 3 * 86400)) then
        { rank: 12, g: "!", gc: attention, verb: "ask for a review", verb_key: "mr" }
      else empty end)
-    + mr_fields("mine") + { tail: (context + (.title | clean) + r) };
+    + mr_fields("mine") + { tail: (context + (.title | clean) + r), title: .title,
+        when: (if .updatedAt then since(.updatedAt | at) else "" end) };
 
   # One of yours that has merged, and has something left to say: production is
   # unhappy about it, or took it out again.
@@ -306,7 +321,7 @@ out=$(jq -nr -L "$share" \
     ($watch[.iid] // {}) as $w |
     (seen("gmr-watch"; .iid; ($w.verdict // ""))) as $wseen |
     (if $w.verdict == "likely" and ($wseen | not) then { rank: 1, g: "✗", gc: bad, verb: "prod: likely this" }
-     elif .state == "rolledback" and (seen("rollback"; .iid; "rolledback") | not) then
+     elif .state == "rolledback" and $merged_old == "" and (seen("rollback"; .iid; "rolledback") | not) then
        { rank: 2, g: "▼", gc: bad, verb: "rolled back", rb: true }
      elif $w.verdict == "possible" and ($wseen | not) then { rank: 3, g: "⚠", gc: yours, verb: "prod: possibly this" }
      else empty end) as $row
@@ -318,7 +333,8 @@ out=$(jq -nr -L "$share" \
         # there was one, else opens the MR as gmr does.
         extra: (if $w == {} then "" else "\($common)/gmr-watch/\(.iid)" end),
         verb_key: (if $row.rb then "rollback" else "run" end),
-        tail: (context + (.title | clean) + r) } | del(.rb);
+        tail: (context + (.title | clean) + r), title: .title,
+        when: (if .mergedAt then since(.mergedAt | at) else "" end) } | del(.rb);
 
   # One you were asked to review, until you have reviewed it.
   def review_row:
@@ -329,7 +345,8 @@ out=$(jq -nr -L "$share" \
          verb: "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit", verb_key: "mr" }
      else { rank: 7, g: " ", gc: context, verb: "review it", verb_key: "mr" } end)
     + mr_fields("review")
-    + { tail: (context + (.title | clean) + r + faint + "  " + (.author.username // "") + r) };
+    + { tail: (context + (.title | clean) + r + faint + "  " + (.author.username // "") + r),
+        title: .title, who: (.author.username // ""), when: (if .updatedAt then since(.updatedAt | at) else "" end) };
 
   # Fixes Claude proposed where there is no MR to hang them on: a branch of
   # your own (gb'"'"'s C), or a verification'"'"'s retrospective.
@@ -342,7 +359,7 @@ out=$(jq -nr -L "$share" \
     { rank: 8, g: "✎\($n)", gc: yours, verb: "fold in \($n) \(plural($n; "fix"; "fixes"))",
       kind: "run", extra: "\($common)/gmr-fix/\($e.key)", verb_key: "run",
       id: "w-fix-\($e.key)", mark: (($e.key | startswith("b-")) and ($e.key[2:] | gsub("%"; "/")) == $current),
-      tail: (context + $about + r) };
+      tail: (context + $about + r), title: $about };
 
   # A verification of a branch with no MR: its verdict, as mine_row gives an
   # MR'"'"'s.
@@ -356,7 +373,7 @@ out=$(jq -nr -L "$share" \
          verb: "verified: \(if $v.verdict == "pass" then "passed" else "unclear" end)" }
      else empty end)
     + { g: "●", kind: "run", extra: "\($common)/otis-verify/\($key)", verb_key: "run",
-        id: "w-verify-\($key)", mark: ($branch == $current), tail: (context + $branch + r) };
+        id: "w-verify-\($key)", mark: ($branch == $current), tail: (context + $branch + r), title: $branch };
 
   # One of Claude'"'"'s runs that broke rather than finishing (or died and could
   # not pick up again), of any kind, until you have seen it: otherwise it
@@ -373,7 +390,9 @@ out=$(jq -nr -L "$share" \
       iid: (if ($key | test("^[0-9]+$")) then $key elif ($key | test("^v-[0-9]+$")) then $key[2:] else "" end),
       tail: (faint + since($at) + r
             + (if ($key | startswith("b-")) then context + "  " + ($key[2:] | gsub("%"; "/")) + r else "" end)
-            + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)) };
+            + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)),
+      title: $run.last, when: since($at),
+      note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end) };
 
   # Claude'"'"'s background runs that are going now (git-agent-list --data).
   def run_row:
@@ -387,7 +406,9 @@ out=$(jq -nr -L "$share" \
         iid: (if ($key | test("^[0-9]+$")) then $key elif ($key | test("^v-[0-9]+$")) then $key[2:] else "" end),
         tail: (faint + since($run.started) + r
               + (if ($key | startswith("b-")) then context + "  " + ($key[2:] | gsub("%"; "/")) + r else "" end)
-              + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)) };
+              + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)),
+        title: $run.last, when: since($run.started),
+        note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end) };
 
   # Your pipelines, while they run.
   def pipe_rows:
@@ -401,13 +422,15 @@ out=$(jq -nr -L "$share" \
         id: "g-pipe-\(.iid)",
         tail: (faint + since(.headPipeline.createdAt | at) + r
               + (if ($jobs | length) > 0 then context + "  \($done) of \($jobs | length) jobs" + r else "" end)
-              + context + "  " + (.title | clean) + r) };
+              + context + "  " + (.title | clean) + r),
+        title: .title, when: since(.headPipeline.createdAt | at),
+        prog: (if ($jobs | length) > 0 then "\($done)/\($jobs | length)" else "" end) };
 
   # Yours that have merged and are not out yet: where each has got to on its
   # way to production. Nothing here wants you; it is the answer to whether your
   # change has shipped, which until now the dashboard could not give at all.
   def shipping_rows:
-    $merged_mrs[] | select(.state | IN("deploying", "queued", "waiting", "branch")) |
+    $merged_mrs[] | select($merged_old == "") | select(.state | IN("deploying", "queued", "waiting", "branch")) |
     (if .state == "deploying" then { g: "◐", gc: attention, verb: "deploying" }
      elif .state == "queued" then { g: "○", gc: attention, verb: "queued to deploy" }
      elif .state == "branch" then { g: "·", gc: context, verb: "merged, not on main" }
@@ -417,7 +440,8 @@ out=$(jq -nr -L "$share" \
         pipeline: ((.deploy.pipeline // (.pipeline.id | gid)) // ""), purl: (.deploy.url // .webUrl),
         id: "g-merged-\(.iid)", mark: false, extra: "", verb_key: "mr",
         tail: (faint + "merged " + since(.mergedAt | at) + " ago" + r
-               + context + "  " + (.title | clean) + r) };
+               + context + "  " + (.title | clean) + r),
+        title: .title, when: since(.mergedAt | at) };
 
   # A production deploy on its way, and what it is carrying. Only while it is
   # carrying none of yours: when it has yours in it, their own rows above say
@@ -431,7 +455,9 @@ out=$(jq -nr -L "$share" \
       extra: (.id | tostring),
       id: "g-deploy-\(.pipeline)", mark: false,
       tail: (faint + since(.at | at) + r + context + "  "
-            + (if (.mrs | length) > 0 then (.mrs | map("!" + .) | join(" ")) else "no merge requests" end) + r) }
+            + (if (.mrs | length) > 0 then (.mrs | map("!" + .) | join(" ")) else "no merge requests" end) + r),
+      title: (if (.mrs | length) > 0 then "carrying " + (.mrs | map("!" + .) | join(" ")) else "carrying no merge requests" end),
+      when: since(.at | at) }
     end;
 
   # Where you are. Always drawn, so the dashboard is never an empty screen.
@@ -449,7 +475,8 @@ out=$(jq -nr -L "$share" \
       extra: $here.branch, verb_key: "here",
       tail: ((if ($bits | length) > 0 then yours + ($bits | join(context + " · " + yours)) + r
              else good + "nothing to commit or push" + r end)
-           ) };
+           ),
+      title: ($mr.title // ""), note: ($bits | join(" · ")) };
 
   ([ ($mine_mrs[] | mine_row), ($merged_mrs[] | merged_row), ($asked[] | review_row), loose_fix_rows,
      branch_verify_rows, failed_rows ]
@@ -465,7 +492,9 @@ out=$(jq -nr -L "$share" \
         verb: "\($t | length) in the trash", verb_key: "trash",
         extra: ($t[0][1] | sub("/[^/]*$"; "")),
         tail: (context + plural($t | length; "a worktree you removed, "; "worktrees you removed, oldest ")
-               + since($t | map(.[0] | tonumber) | min) + " ago" + r) }
+               + since($t | map(.[0] | tonumber) | min) + " ago" + r),
+        title: plural($t | length; "a worktree you removed"; "worktrees you removed"),
+        when: since($t | map(.[0] | tonumber) | min) }
     end;
 
   # Production last: runs and pipelines are still yours to watch, while a

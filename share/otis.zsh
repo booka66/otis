@@ -755,46 +755,30 @@ gundo() {
 # gb. Every 5s it reloads if a run has moved on (git-fzf-bg), keeping the
 # cursor and where the preview is scrolled to.
 # The dashboard, and the one command named after the tool: everything that
-# wants you, then what is running, then where you are (otis-list). One row a
-# thing and never one a fact, so a merge request with a failed pipeline and
-# three threads on it is one row, the pipeline, because that is what you would
-# do about it next. enter does exactly what the row says, whatever that is:
-# opens an MR for review, the proposals of a fix run, the jobs of a failed
-# pipeline, the stage panel for what is uncommitted here (otis-do).
+# wants you, then what is running, then where you are (otis-list), drawn by
+# otis-dash: the thing that wants you most in a card of its own, the rest in
+# quiet sections under it, and the row's preview beside them on a wide
+# terminal. One row a thing and never one a fact, so a merge request with a
+# failed pipeline and three threads on it is one row, the pipeline, because
+# that is what you would do about it next. enter does exactly what the row
+# says, whatever that is: opens an MR for review, the proposals of a fix run,
+# the jobs of a failed pipeline, the stage panel for what is uncommitted here
+# (otis-do).
 #
 # m, b, a, d and w open the full list behind a section (gmr, gb, gag, gd, gw),
 # c otis's own settings (otis-config), and q there comes back here, so the
-# dashboard is a hub rather than a detour;
-# q here goes back to the shell. A picker that moved you, though, hands you to
-# the shell instead: gb switching a branch and gw going to a worktree both say
-# what they did, and redrawing over that would be the dashboard eating it.
-#
-# It redraws every 10s, not every 2 like gag: a draw costs about what gmr's
-# does, since it asks the same four scripts what Claude has left you, and a
-# dashboard left open all day should not spend a tenth of a core on ticking a
-# duration over. u draws now.
+# dashboard is a hub rather than a detour; they are run here, since gb and gw
+# may move you, which otis-dash cannot. q here goes back to the shell. A
+# picker that moved you, though, hands you to the shell instead: gb switching
+# a branch and gw going to a worktree both say what they did, and redrawing
+# over that would be the dashboard eating it.
 otis() {
   _g_repo || return 1
   local out at on
   while :; do
-    out=$(git-fzf 'otis ' 'enter=do what it says,m=every MR,b=branches,d=deploys,a=background runs,w=worktrees,c=otis settings,D=discard it,o=open MR,y=copy MR link (a run: its folder for Claude),u=refresh' --ansi --no-sort \
-      --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
-      --bind 'start:reload(otis-list | tee "$GIT_FZF_STATE/bg.shown")' \
-      --bind 'every(10):execute-silent(git-fzf-bg --tick otis-list)' \
-      --bind 'u:execute-silent(git-fzf-bg otis-list --refresh)' \
-      --bind 'enter:transform(otis-do enter {6} {14} {13} {2} {3} {4} {5} {7} {8} {9} {12})' \
-      --bind 'D:transform(otis-do dismiss {6} {14} {13} {2} {3} {4} {5} {7} {8} {9} {12})' \
-      --bind 'o:transform(git-mr-do web {2})' \
-      --bind 'y:transform(otis-do copy {6} {14} {13} {2} {3} {4} {5} {7} {8} {9} {12})' \
-      --bind 'm:print(gmr)+accept' \
-      --bind 'b:print(gb)+accept' \
-      --bind 'a:print(gag)+accept' \
-      --bind 'd:print(gd)+accept' \
-      --bind 'w:print(gw)+accept' \
-      --bind 'c:print(otis-config)+accept' \
-      --preview 'otis-preview {6} {2} {11} {13}' </dev/null) || return 0
+    out=$(otis-dash) || return 0
     at=$PWD on=$(git branch --show-current 2>/dev/null)
-    case ${${(f)out}[1]} in
+    case $out in
       gmr) gmr ;;
       gb)  gb ;;
       gag) gag ;;

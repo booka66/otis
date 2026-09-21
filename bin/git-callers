@@ -214,7 +214,10 @@ if [ "$mode" != --run ]; then
     fi
   fi
   cp "$table" "$dir/$key.table"
-  nohup git-callers --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  # At low priority: tsgo takes every core it can for a minute or so, and
+  # at the same priority as your terminal that was every picker lagging
+  # under it. Niced, it has whatever is idle and gives way to keys.
+  nohup nice -n 10 git-callers --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
   echo $! > "$running"
   [ "$rev" = worktree ] && echo $! > "$dir/worktree.running"
   echo running
