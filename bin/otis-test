@@ -454,9 +454,8 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   printf 'export const G = run({ a: 1 }, true);\n' > gen.generated.ts
   git add pair.ts gen.generated.ts && git commit -qam "Head" && head=$(git rev-parse HEAD)
   mkdir -p "$tmp/symst"
-  # p on run's row at a preview this wide, afresh: the notes under the names
-  # on its screen, which with no screen size noted is all of it.
-  peek() { rm -f "$tmp/symst/peek"; printf '%s' "${1:-100}" > "$tmp/symst/cols"; GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'; }
+  # p on run's row at a preview this wide, afresh: the notes under its names.
+  peek() { rm -f "$tmp/symst/peeks"; printf '%s' "${1:-100}" > "$tmp/symst/cols"; GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'; }
   rows=$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head")
   table=$tmp/symst/symbols.tsv
   # Roots first (nothing changed mentions them), then what they use: Opts is
@@ -683,10 +682,9 @@ EOF
   expect symbols/preview-uses "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c $'\e\[1;4;38;2;250;189;47mOpts\e\[22;24m')" "1"
   peek
   expect symbols/preview-uses-note "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳ type Opts = { a: number; b: string };  signature.changed')" "1"
-  # A picker starts with no notes; p brings them, for the lines on the
-  # screen, under the changed line that mentions the name rather than an
-  # unchanged one above it; p again takes them away, and the names stay
-  # marked either way.
+  # A picker starts with no notes; p brings them, under the changed line
+  # that mentions the name rather than an unchanged one above it; p again
+  # takes them away, and the names stay marked either way.
   mkdir -p "$tmp/symst-fresh" && cp "$tmp/symst"/*.tsv "$tmp/symst"/key "$tmp/symst"/cache-root "$tmp/symst-fresh/" 2>/dev/null
   expect symbols/peeks-off-to-start "$(GIT_FZF_STATE=$tmp/symst-fresh git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c '↳')" "0"
   runpv() { GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run'; }
@@ -696,22 +694,22 @@ EOF
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'
   expect symbols/peeks-off "$(runpv | strip | grep -c '↳')" "0"
   expect symbols/peeks-off-names-marked "$(runpv | grep -c $'\e\[1;4;38;2;250;189;47mOpts')" "1"
-  # Moving to another row drops them: back on run, there are none.
+  # They are the row's until p there again: another row has none, and
+  # coming back they are still there.
   peek
-  GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 19 19 'lib.ts#Wide' > /dev/null
-  expect symbols/peeks-dropped-moving-on "$(runpv | strip | grep -c '↳')" "0"
-  # Only what is on the screen: a one-row screen on the line naming Opts
-  # has its note, one above it has none, and scrolling onto the line after
-  # p brings none either.
+  expect symbols/peeks-this-row-only "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 19 19 'lib.ts#Wide' | strip | grep -c '↳')" "0"
+  expect symbols/peeks-kept-coming-back "$(runpv | strip | grep -c '↳')" "1"
+  # The line at the top of the pane stays there, on and off: scrolled to
+  # the line under the note's, p moves the position past the note, and p
+  # again moves it back.
+  rm -f "$tmp/symst/peeks"
   n=$(runpv | strip | grep -n 'function run' | cut -d: -f1)
-  printf '1\n' > "$tmp/symst/plines"; printf '%s\n' "$n" > "$tmp/symst/off.lib.ts#run"
-  peek
-  expect symbols/peek-in-view "$(runpv | strip | grep -c '↳')" "1"
-  printf '%s\n' "$((n - 1))" > "$tmp/symst/off.lib.ts#run"
-  peek
-  printf '%s\n' "$n" > "$tmp/symst/off.lib.ts#run"
-  expect symbols/peek-out-of-view-once "$(runpv | strip | grep -c '↳')" "0"
-  rm -f "$tmp/symst/plines" "$tmp/symst/off.lib.ts#run" "$tmp/symst/peek"
+  printf '%s\n' "$((n + 1))" > "$tmp/symst/off.lib.ts#run"
+  GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'
+  expect symbols/peek-keeps-the-top "$(cat "$tmp/symst/off.lib.ts#run"):$(runpv | strip | sed -n "$(cat "$tmp/symst/off.lib.ts#run")p" | grep -c '↳')" "$((n + 2)):0"
+  GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'
+  expect symbols/unpeek-keeps-the-top "$(cat "$tmp/symst/off.lib.ts#run")" "$((n + 1))"
+  rm -f "$tmp/symst/off.lib.ts#run" "$tmp/symst/peeks"
   # The review reads a change by symbol through the same preview, so every key
   # that changes what that preview shows has to be there too. p was missing:
   # peeks could be turned off everywhere but in a review, which is where you

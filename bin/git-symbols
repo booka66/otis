@@ -11,7 +11,7 @@
 # git-symbols --flip                         b: bottom up, or back to top down
 # git-symbols --uses <id> <start> <side>     i: the row's preview between its diff and what it uses
 # git-symbols --peeks <rev> <path> <side> <start> <end> <row id>
-#                                            p: the notes under the names on the screen now, or none
+#                                            p: the notes under the names in the row's preview, or none
 # git-symbols --stage <path> <side> <start> <end> <old start> <old end> <staged> <unstaged>
 #                                            ga's space: stage the symbol, or unstage it
 # git-symbols --edit <path> <line>           ga's enter
@@ -106,26 +106,41 @@ case $mode in
   # S: how seam would split the change, the same way. The two are one pane
   # between them, so turning either on turns the other off.
   --split) if [ -e "$st/split" ]; then rm -f "$st/split"; else rm -f "$st/shape"; : > "$st/split"; fi; exit 0 ;;
-  # p: the peeks, the notes under each changed name the preview uses, for
-  # the lines on the screen now: a question about what is in front of you,
-  # asked once. The row's id, then those lines as the preview drew them
-  # without notes, uncolored; the preview puts notes under those lines
-  # only, so scrolling brings no more, and moving to another row drops
-  # them (--preview). p again on the row takes them away. The names are
-  # marked either way. No screen size known (no picker) is the whole of it.
+  # p: the peeks, the notes under each changed name the preview uses, on
+  # this row and off again; a row keeps them until p there again, so its
+  # preview never changes under you. The line at the top of the pane stays
+  # there: its saved position (git-fzf-scroll's off.<item>) is moved past
+  # the notes above it, found by laying the preview without them against
+  # the preview with them, every line the one's in the other's order. The
+  # names are marked either way.
   --peeks)
     rev=$1 path=$2 side=$3 s=$4 e=$5 rid=$6
-    was=; read -r was 2>/dev/null < "$st/peek"
-    rm -f "$st/peek"
-    [ -n "$rid" ] && [ "$was" != "$rid" ] && [ -n "$s" ] && [ "$side" != file ] && [ "$(cat "$st/uses-for" 2>/dev/null)" != "$rid" ] || exit 0
+    [ -n "$rid" ] && [ -n "$s" ] && [ "$side" != file ] && [ "$(cat "$st/uses-for" 2>/dev/null)" != "$rid" ] || exit 0
     k=$(printf '%s' "$rid" | tr '/' '%'); while [ ${#k} -gt 200 ]; do k=${k#?}; done
-    off=$(cat "$st/off.$k" 2>/dev/null) rows=$(cat "$st/plines" 2>/dev/null)
     export FZF_PREVIEW_COLUMNS="$(cat "$st/cols" 2>/dev/null)"
-    { printf '%s\n' "$rid"
+    shown() {
       if [ -n "$GMR_IID" ]; then git-mr-files --preview "$GMR_IID" "$rev" "$path" "$side" "$s" "$e" "$rid"
-      else git-symbols --preview "$rev" "$path" "$side" "$s" "$e" "$rid"; fi 2>/dev/null |
-        LC_ALL=C awk -v from="${off:-1}" -v n="${rows:-0}" 'NR >= from && (!n || NR < from + n) { gsub(/\033\[[0-9;]*m/, ""); print }'
-    } > "$st/peek.$$" && mv -f "$st/peek.$$" "$st/peek"
+      else git-symbols --preview "$rev" "$path" "$side" "$s" "$e" "$rid"; fi 2>/dev/null | LC_ALL=C awk '{ gsub(/\033\[[0-9;]*m/, ""); print }'
+    }
+    shown > "$st/peek.was.$$"
+    if grep -qxF -- "$rid" "$st/peeks" 2>/dev/null; then
+      grep -vxF -- "$rid" "$st/peeks" > "$st/peeks.$$"; mv -f "$st/peeks.$$" "$st/peeks"; on=
+    else printf '%s\n' "$rid" >> "$st/peeks"; on=1; fi
+    off=$(cat "$st/off.$k" 2>/dev/null)
+    if [ "${off:-1}" -gt 1 ]; then
+      shown > "$st/peek.now.$$"
+      # With: the render that has the notes; top: the line at the top, in
+      # the render it is in now. Without's lines are in with's in order,
+      # so a walk down both pairs them, and a note is a line of with's left
+      # over: on, the top is where its line is in with; off, it is the
+      # lines of without's at or above it, the note's own line for a note.
+      if [ -n "$on" ]; then with=$st/peek.now.$$ without=$st/peek.was.$$; else with=$st/peek.was.$$ without=$st/peek.now.$$; fi
+      off=$(LC_ALL=C awk -v top="$off" -v on="$on" 'FNR == NR { plain[++n] = $0; next }
+        { if (j < n && $0 == plain[j + 1]) j++; at[FNR] = j; if (on && j == top && !done) { print FNR; done = 1 } }
+        END { if (!on) print (at[top] > 1 ? at[top] : 1); else if (!done) print top }' "$without" "$with")
+      printf '%s\n' "$off" > "$st/off.$k"
+    fi
+    rm -f "$st/peek.was.$$" "$st/peek.now.$$"
     exit 0 ;;
   # G: seam's page, the change as a graph and as threads to read, open on
   # the row's symbol (seam --at), or on nothing from a file row or gmr's list.
@@ -387,7 +402,6 @@ mark_awk='
       row = row (i > 1 ? "\n" : "") out gk_rep(" ", pad) bg " " (i == 1 ? GK_ATTENTION "\342\206\263 " : "  ") lines[i] gk_rep(" ", bw - lw[i]) " " GK_R
     return row
   }
-  BEGIN { if (peeks) { getline t < peekf; while ((getline t < peekf) > 0) inview[t] = 1 } }
   FILENAME == ARGV[1] { split($0, f, "\t"); if (f[1] != "" && !(f[1] in idx)) { idx[f[1]] = ++nn; names[nn] = f[1]; head[nn] = f[2]; chg[nn] = f[3]; gloss[nn] = f[8]; does[nn] = f[9] }; next }
   {
     raw = $0; vis = ""; nv = 0; i = 1
@@ -422,8 +436,6 @@ mark_awk='
     # that mentions it. The rows wait for the end, where each note goes under
     # its changed line if one mentioned it, else its first.
     if (!peeks || vis ~ /^[0-9]+: /) next
-    # Only under a line that was on the screen when p was pressed.
-    if (!(vis in inview)) next
     t = vis; sub(/^.*\342\224\202/, "", t); sub(/^ *[0-9]+  /, "", t)
     if (t ~ /^[ \t]*(\/\/|\/\*|\*([ \/]|$))/) next
     changed = orig ~ /\033\[48;/
@@ -444,7 +456,7 @@ mark_awk='
       for (x = 1; x <= m; x++) { t = noterow(preof[ks[x]], ks[x]); if (t != "") print t }
     }
   }'
-mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="${peeks:-0}" -v peekf="$st/peek" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$mark_awk" "$1" -; }
+mark() { LC_ALL=C awk -v w="${FZF_PREVIEW_COLUMNS:-100}" -v peeks="${peeks:-0}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$mark_awk" "$1" -; }
 
 rev=$1
 [ -n "$rev" ] || exit 2
@@ -505,15 +517,11 @@ if [ "$mode" = --preview ]; then
   # The flags and files the render reads, once, as tests and reads rather
   # than a process each: the cached preview is the common case, and every
   # process before the cat that answers it is felt on every move.
-  up= peeks=0 peekat= usesfor= key= croot= ckey=
+  up= peeks=0 usesfor= key= croot= ckey=
   [ -e "$st/up" ] && up=up
-  # p's notes are this row's, or they were another's and you have moved on:
-  # gone, so coming back is the row without them. A render ahead, or one
-  # with no row, is not you moving.
-  if [ -n "$rid" ] && [ -e "$st/peek" ]; then
-    peekfor=; read -r peekfor 2>/dev/null < "$st/peek"
-    if [ "$peekfor" = "$rid" ]; then peeks=1 peekat=$(mtimes "$st/peek")
-    elif [ -z "$GIT_SYMBOLS_AHEAD" ] && [ -z "$GIT_SYMBOLS_PLAIN" ]; then rm -f "$st/peek"; fi
+  # p's notes, if this row has them: a read of the few rows p was pressed on.
+  if [ -n "$rid" ] && [ -s "$st/peeks" ]; then
+    while IFS= read -r l; do [ "$l" = "$rid" ] && { peeks=1; break; }; done < "$st/peeks"
   fi
   read -r usesfor 2>/dev/null < "$st/uses-for"
   usesview=; [ -n "$rid" ] && [ "$usesfor" = "$rid" ] && usesview=uses
@@ -540,7 +548,7 @@ if [ "$mode" = --preview ]; then
     ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" \
       ${mr:+"$croot/mr-$mr-threads.json" "$croot/mr-$mr-drafts.json" "${croot%/*}/gmr-claude/$mr.drafts" "${croot%/*}/gmr-claude/$mr.why.jsonl"})
     # cksum says the sum and then the size; the sum alone names the file.
-    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$peekat|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
+    pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$peeks|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
     pv=$st/pv.${pv%% *}
     if [ -s "$pv" ]; then
       # Kept, so nothing read the threads' caches: ask them whether they are
@@ -1588,7 +1596,7 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peek at what is on screen,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
@@ -1599,11 +1607,11 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peek at what is on screen,y=copy its name,t=tests/config/generated,q=back to files'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files'
   set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peek at what is on screen,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
