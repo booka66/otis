@@ -19,8 +19,14 @@
 #
 # It redraws the rows every 10s in the background (u: now, refetching), and
 # keeps the cursor on the row it was on by the row's id.
+#
+# It keeps a line a frame (OTIS_DASH_TRACE, else ~/.cache/otis/dash.log): how
+# long it took to build and to write, its size, and how long after the key
+# that asked for it it was on the screen; and any upkeep between keys that
+# took over 20ms. For when it feels slow: it says whether the time went here
+# or in the terminal.
 setopt extendedglob no_nomatch
-zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files
+zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 [[ -n $OTIS_C_ROOT && $PWD == $OTIS_C_ROOT(|/*) ]] || eval "$(otis-config --env)"
@@ -31,6 +37,10 @@ export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-dash.$$.$RANDOM
 mkdir -m 700 $GIT_FZF_STATE || exit 1
 st=$GIT_FZF_STATE
 mkdir $st/pv
+# The last run's, kept past its end: when it felt slow, it is still there
+# to read.
+trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
+mkdir -p ${trace:h} 2>/dev/null; : > $trace
 
 e=$'\e'
 R=$e'[0m' B=$e'[1m' UB=$e'[22m'
@@ -47,10 +57,18 @@ exec 2>>$st/err </dev/null
 saved=$(stty -g <&$tty)
 # No line wrap while it is up: a line a column too wide is cut at the edge
 # rather than pushed onto the next row.
-screen_on() { stty -icanon -echo min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'; shown_rows=(); }
-screen_off() { print -nu $tty -- $e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; }
+# The mouse is this program's while it is up (press, drag and release, as
+# SGR reports): a drag in the pane selects its text alone, where the
+# terminal's own selection would take the list beside it too. Shift held
+# gives the terminal's back, in most terminals.
+screen_on() { stty -icanon -echo min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
+screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
 quit() { screen_off; rm -rf -- $st; exit ${1:-0}; }
 trap 'quit 1' HUP TERM INT
+# Whatever ends it, the terminal comes back as it was: an error that stops
+# the script must not leave you in its screen with no echo.
+screen=0
+trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
 size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
 # resize: the size again, and the screen drawn whole if it changed. A zsh
 # script holds its traps until the loop they land in ends, and this one's
@@ -61,27 +79,33 @@ size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
 winch=
 command -v perl >/dev/null 2>&1 &&
   exec {winch}< <(perl -e 'my $p = getppid(); $| = 1; $SIG{WINCH} = sub { print "\n" }; sleep 1 while getppid() == $p' </dev/null 2>/dev/null)
+# A window being dragged is a resize a step: each is drawn at once, and the
+# previews wait until the size has held for 0.3s (settle), so a drag draws
+# them once rather than every row at every width it passed through.
+float settle=0
 resize() {
   local oh=$H ow=$W
   size
+  print -r -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H" >> $trace
   (( H != oh || W != ow )) || return 1
-  shown_rows=(); draw; warm
+  shown_rows=(); draw
+  (( settle = EPOCHREALTIME + 0.3 ))
 }
 
 # --- the rows -------------------------------------------------------------
 # otis-list's fields, one array a field, an entry a row that is not a heading;
 # sec is the heading it is under.
-typeset -a kind iid id extra vkey glyph gc verb title who when note prog mark sec raw
+typeset -a kind iid id extra vkey glyph gc verb title who when note prog mark doing sec raw
 loaded=0
 load() {
   local line f s=
-  kind=() iid=() id=() extra=() vkey=() glyph=() gc=() verb=() title=() who=() when=() note=() prog=() mark=() sec=() raw=()
+  kind=() iid=() id=() extra=() vkey=() glyph=() gc=() verb=() title=() who=() when=() note=() prog=() mark=() doing=() sec=() raw=()
   for line in ${(f)"$(<$st/rows)"}; do
     f=("${(@ps:\t:)line}")
     if [[ $f[6] == sep ]]; then s=${f[11]#sep-}; continue; fi
     raw+=("$line") sec+=($s) kind+=("$f[6]") iid+=("$f[2]") id+=("$f[11]") extra+=("$f[13]") vkey+=("$f[14]")
     glyph+=("$f[15]") gc+=("$f[16]") verb+=("$f[17]") title+=("$f[18]") who+=("$f[19]") when+=("$f[20]")
-    note+=("$f[21]") prog+=("$f[22]") mark+=("$f[23]")
+    note+=("$f[21]") prog+=("$f[22]") mark+=("$f[23]") doing+=("$f[24]")
   done
   loaded=1
 }
@@ -89,6 +113,7 @@ load() {
 fields() { reply=("${(@ps:\t:)raw[cur]}"); }
 
 lpid= ltick=$EPOCHSECONDS lastsig=
+cache=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/git-alias-cache
 refresh() {
   [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null && return
   { otis-list $1 > $st/rows.new 2>/dev/null && mv -f $st/rows.new $st/rows } &!
@@ -103,17 +128,20 @@ landed() {
   cur=1
   for (( i = 1; i <= $#id; i++ )); do [[ $id[i] == $was ]] && { cur=$i; break }; done
   # The previews are drawn again only when what they are drawn from has
-  # changed: the rows, less how long ago (which moves every minute), and the
-  # JSON otis-list left for them. Most ticks it has not, and every kept
+  # changed: the rows, less how long ago (which moves every minute), the
+  # JSON otis-list left for them, and the threads. Most ticks it has not, and every kept
   # preview stands. When it has, the old ones are shown until the new are in.
   local sig= r
   local -a f
   for r in $raw; do f=("${(@ps:\t:)r}"); f[1]= f[20]=; sig+=${(pj:\t:)f}$'\n'; done
   sig+=$(cksum $st/{mrs,ci,ci-merged,deploys,marks,runs}.json(N) 2>/dev/null)
+  # And each MR's threads, which a preview fetches when it draws and which
+  # land after it (git-mr-threads --kick): their times, with no process.
+  local -a tm; local tf
+  for tf in $cache/mr-*-threads.json(N); do zstat -A tm +mtime -- $tf; sig+=$tf$tm[1]; done
   if [[ $sig != $lastsig ]]; then
     lastsig=$sig
     (( gen++ ))
-    print -r -- $gen > $st/pv/gen
     local -a old=($st/pv/*.$(( gen - 2 ))(N))
     (( $#old )) && rm -f -- $old
     warm
@@ -138,20 +166,9 @@ put() { line+=$1$2; (( used += ${(m)#2} )); }
 pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
 emit() { L+=("$line") LI+=($1) LU+=($used); line= used=0; }
 
-# What enter does, in the words of the footer: the row's verb says it.
-enter_says() {
-  case $vkey[cur] in
-    mr) [[ $kind[cur] == review ]] && REPLY="review it" || REPLY="open it" ;;
-    pipeline) REPLY="see its jobs" ;;
-    merge) REPLY="merge it" ;;
-    run) REPLY="open the run" ;;
-    rollback) REPLY="see what happened" ;;
-    deploy) REPLY="see the deploy" ;;
-    trash) REPLY="open the trash" ;;
-    here) [[ -n $note[cur] && $note[cur] == *uncommitted* ]] && REPLY="stage it" || REPLY="read the branch" ;;
-    *) REPLY= ;;
-  esac
-}
+# What enter does on the row, in the words the footer and the card say it
+# in (otis-list works it out).
+enter_says() { REPLY=$doing[cur]; }
 
 # A pipeline's jobs done, as a bar.
 bar() {
@@ -317,27 +334,70 @@ left() {
 # before it starts, moved into place when it is done, whatever it printed,
 # so a preview that fails is not tried again and again.
 gen=0 lastpv=
-print 0 > $st/pv/gen
+print "0 0" > $st/pv/gen
 pvname() { REPLY=$st/pv/${${1//\//%}:-none}.$2; }
 shown() {
   pvname "$id[cur]" $1
   local -a have=($REPLY.<->(Nom))
+  # None at this width yet (a resize): the row's at the width it last had,
+  # cut at the edge, rather than an empty pane until it is drawn again.
+  (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
   REPLY=${have[1]}
 }
-# render <width> <file> <kind> <iid> <row id> <extra>: otis-preview, cut to
-# the pane.
+# render <width> <file> <kind> <iid> <row id> <extra>: otis-preview, wrapped
+# to the pane. A long line breaks at its last space that fits (mid-word only
+# when there is none), and each piece after the first starts with the line's
+# own lead, its indent and any bar it opens with (│ ┃ ▌), in the line's
+# colors, so a thread or a callout stays one block. The colors in force at
+# the break carry on into the next piece. Which lines are such pieces, and
+# how wide their lead is, goes beside it (.cont), so text selected in the
+# pane copies as the lines it was rather than as the pane broke them.
 render() {
   FZF_PREVIEW_COLUMNS=$1 FZF_PREVIEW_LINES=$H otis-preview "$3" "$4" "$5" "$6" 2>/dev/null |
-    LC_ALL=C awk -v w=$1 '{
-      gsub(/\t/, "        "); out = ""; n = 0; i = 1; L = length($0)
-      while (i <= L) {
-        c = substr($0, i, 1)
-        if (c == "\033" && match(substr($0, i), /^\033\[[0-9;:?]*[A-Za-z]/)) { out = out substr($0, i, RLENGTH); i += RLENGTH; continue }
-        if (c !~ /[\200-\277]/) { if (++n > w) break }
-        out = out c; i++
+    LC_ALL=C awk -v w=$1 -v cont=$2.cont.tmp '
+      function esc(s) { return s == "\033[0m" || s == "\033[m" }
+      function out(s, piece) { print s; on++; if (piece) print on, lw > cont }
+      {
+        gsub(/\t/, "        ")
+        # The line in units: an escape (no width) or a character (one).
+        n = 0; i = 1; L = length($0)
+        while (i <= L) {
+          c = substr($0, i, 1)
+          if (c == "\033" && match(substr($0, i), /^\033\[[0-9;:?]*[A-Za-z]/)) { u[++n] = substr($0, i, RLENGTH); vis[n] = 0; i += RLENGTH; continue }
+          # A link (OSC 8) or a title: no width either.
+          if (c == "\033" && match(substr($0, i), /^\033\][^\007\033]*(\007|\033\\)/)) { u[++n] = substr($0, i, RLENGTH); vis[n] = 0; i += RLENGTH; continue }
+          j = i + 1
+          while (j <= L && substr($0, j, 1) ~ /[\200-\277]/) j++
+          u[++n] = substr($0, i, j - i); vis[n] = 1; i = j
+        }
+        # The lead: spaces and bars before the text.
+        lead = ""; lw = 0
+        for (k = 1; k <= n; k++) {
+          if (!vis[k]) { lead = lead u[k]; continue }
+          if (u[k] == " " || u[k] == "\342\224\202" || u[k] == "\342\224\203" || u[k] == "\342\226\214") { lead = lead u[k]; lw++; continue }
+          break
+        }
+        if (lw > w / 2) { lead = ""; lw = 0 }
+        cur = ""; cw = 0; sgr = ""; sp = 0; pc = 0
+        for (k = 1; k <= n; k++) {
+          if (!vis[k]) { cur = cur u[k]; if (esc(u[k])) sgr = ""; else if (u[k] ~ /m$/) sgr = sgr u[k]; continue }
+          if (cw >= w) {
+            if (sp > 0 && spw > lw) {
+              out(substr(cur, 1, sp) "\033[0m", pc); pc = 1
+              cur = lead spsgr substr(cur, sp + 1); cw = lw + cw - spw
+            } else {
+              out(cur "\033[0m", pc); pc = 1
+              cur = lead sgr; cw = lw
+            }
+            sp = 0
+          }
+          cur = cur u[k]; cw++
+          if (u[k] == " " && cw > lw) { sp = length(cur); spw = cw; spsgr = sgr }
+        }
+        out(cur "\033[0m", pc); pc = 0
       }
-      print out "\033[0m"
-    }' > $2.tmp
+      END { printf "" > cont }' > $2.tmp
+  mv -f $2.cont.tmp $2.cont
   mv -f $2.tmp $2
 }
 want() {
@@ -348,13 +408,14 @@ want() {
   : > $f.tmp
   render $w $f "$kind[cur]" "$iid[cur]" "$id[cur]" "$extra[cur]" &!
 }
-# A warm for an older generation stops at its next row (pv/gen), rather
-# than being killed mid-render and leaving a .tmp that would keep that
-# preview from ever being drawn.
+# A warm for an older generation, or another width, stops at its next row
+# (pv/gen), rather than being killed mid-render and leaving a .tmp that
+# would keep that preview from ever being drawn.
 warm() {
   (( pw > 0 && $#id )) || return
+  print -r -- "$gen $pw" > $st/pv/gen
   {
-    local i j f g=$gen
+    local i j f g="$gen $pw"
     for (( j = 0; j < $#id; j++ )); do
       [[ $(<$st/pv/gen) == $g ]] || break
       (( i = (cur - 1 + j) % $#id + 1 ))
@@ -383,15 +444,18 @@ glide() {
 }
 # What is on the screen now, a line a row; emptied when the screen may no
 # longer be it (a resize, back from another program), which draws it whole.
-typeset -a shown_rows
+typeset -a shown_rows shown_pane
+# The pane's lines as last drawn, for a selection to copy from.
+typeset -a P
 pw=0
 draw() {
+  local t0=$EPOCHREALTIME
   local lw y i f lo=0 hi=0 body foot rows
   pw=0
   if (( W >= 130 )); then (( lw = W * 60 / 100 )); (( pw = W - lw - 5 ))
   else lw=$W; fi
   left $lw
-  (( rows = H - 2 ))
+  (( rows = H - 2, px = lw + 6 ))
   # The cursor's row in view, with the headline kept when it fits.
   for (( y = 1; y <= $#LI; y++ )); do
     (( LI[y] == cur )) && { (( lo == 0 )) && lo=$y; hi=$y; }
@@ -399,7 +463,7 @@ draw() {
   (( hi > top + rows )) && (( top = hi - rows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
   (( lo > 0 && hi <= rows )) && top=0
-  local -a P
+  P=()
   if (( help )); then
       P=("" "  ${B}${T}keys${R}" "")
       local k v
@@ -423,18 +487,26 @@ draw() {
   # The frame, a line a screen row, and then only the rows that differ from
   # the last frame go out: a move is the two rows it changes and the pane,
   # a reload the rows it changed, rather than the whole screen every time.
-  local -a fr
+  # The list's side and the pane's are two frames, each diffed on its own:
+  # a move rewrites the two rows it changed and the pane, not every row the
+  # pane changed across the whole width, which on a big screen was most of
+  # the bytes, and a terminal under a multiplexer (herdr, tmux) parses and
+  # draws every one of them.
+  local -a fr pr
   local s
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     if (( i <= $#L )); then s=$L[i]$R; (( LU[i] < lw )) && s+=${(l:lw-LU[i]:: :)}
     else s=${(l:lw:: :)}; fi
-    if (( pw > 0 )); then
-      s+=$R"  "$F"│"$R"  "
-      f=$(( y + poff ))
-      (( f <= $#P )) && s+=$P[f]
-    fi
+    (( pw > 0 )) && s+=$R"  "$F"│"$R
     fr+=("$s")
+    if (( pw > 0 )); then
+      f=$(( y + poff )) s=
+      if (( f <= $#P )); then
+        if (( sel && f >= s1 && f <= s2 )); then selected $f; s=$REPLY; else s=$P[f]; fi
+      fi
+      pr+=("$s")
+    fi
   done
   fr+=("$F${(l:W::─:)}$R")
   # The footer: a note if a key left one, else what enter does, then the
@@ -449,14 +521,27 @@ draw() {
     foot+=$A"m"$R$C" MRs  "$A"b"$R$C" branches  "$A"d"$R$C" deploys  "$A"a"$R$C" runs  "$A"w"$R$C" worktrees  "$A"?"$R$C" keys"$R
   fi
   fr+=("$foot")
-  body=$e'[?2026h'
-  (( $#shown_rows )) || body+=$e'[2J'
+  # No synchronized output (mode 2026) around it: a terminal under a
+  # multiplexer (herdr) held every frame back behind it, which was a lag on
+  # every key that nothing here could measure. Only the rows that changed go
+  # out, so there is little to tear.
+  body=
+  (( $#shown_rows )) || { body+=$e'[2J'; shown_pane=(); }
   for (( y = 1; y <= $#fr; y++ )); do
-    [[ $fr[y] == "$shown_rows[y]" ]] || body+=$e"[$y;1H"$fr[y]$R$e'[K'
+    [[ $fr[y] == "$shown_rows[y]" ]] && continue
+    body+=$e"[$y;1H"$fr[y]$R
+    # A row with no pane beside it (the rule, the footer, a narrow screen)
+    # clears to the edge; one with a pane leaves the pane's side be.
+    (( y > rows || pw == 0 )) && body+=$e'[K'
   done
-  body+=$e'[?2026l'
-  shown_rows=("${fr[@]}")
+  for (( y = 1; y <= $#pr; y++ )); do
+    [[ $pr[y] == "$shown_pane[y]" ]] || body+=$e"[$y;$(( px - 2 ))H  "$pr[y]$R$e'[K'
+  done
+  shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
+  local t1=$EPOCHREALTIME
   print -nu $tty -- $body
+  print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk last=${(q)lastkey}" >> $trace
+  kt= nk=0
 }
 
 # --- keys ------------------------------------------------------------------
@@ -512,18 +597,100 @@ act() {
   ask otis-do $1 "$reply[6]" "$reply[14]" "$reply[13]" "$reply[2]" "$reply[3]" "$reply[4]" "$reply[5]" "$reply[7]" "$reply[8]" "$reply[9]" "$reply[12]"
 }
 key() {
-  local k
+  local k c seq=
   sysread -s 1 -i $tty k || quit
-  if [[ $k == $e ]]; then
-    local more=
-    zselect -t 2 -r $tty && sysread -s 2 -i $tty more
-    k=$k$more
+  # An escape sequence whole: an arrow (\e[B, \eOB) or a mouse report
+  # (\e[<0;12;7M), up to its final byte. A lone escape is esc.
+  if [[ $k == $e ]] && zselect -t 2 -r $tty; then
+    sysread -s 1 -i $tty seq
+    if [[ $seq == [\[O] ]]; then
+      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
+    fi
   fi
-  REPLY=$k
+  REPLY=$k$seq
+}
+
+# --- the mouse -------------------------------------------------------------------
+# A selection in the pane: from line sa, column ca to line sb, column cb, as
+# the pane's lines count (P, the preview with the blank line above it), and
+# s1..s2 the same lines in order. px is the screen column the pane starts in.
+integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0 px=0
+plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
+# The selection's ends in reading order: s1 c1 to s2 c2.
+ends() {
+  if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
+  else s1=$sb c1=$cb s2=$sa c2=$ca; fi
+}
+# selected <line>: the line with what is selected on it lit, its colors
+# dropped for the moment it is.
+selected() {
+  local from=1 to t
+  plain "$P[$1]"; t=$REPLY
+  (( $1 == s1 )) && from=$c1
+  to=$#t; (( $1 == s2 )) && to=$c2
+  REPLY=${t[1,from-1]}$e'[7m'${t[from,to]}$e'[27m'${t[to+1,-1]}
+}
+# copy: the selection as text, onto the clipboard. A line the pane broke
+# (the preview's .cont) goes back onto the one it came from, its lead off.
+copy() {
+  local -A piece
+  local l n lead out= t
+  shown $pw
+  [[ -s $REPLY.cont ]] && for l in ${(f)"$(<$REPLY.cont)"}; do piece[${l% *}]=${l#* }; done
+  for (( n = s1; n <= s2; n++ )); do
+    plain "$P[n]"; t=$REPLY
+    (( n == s2 )) && t=${t[1,c2]}
+    (( n == s1 )) && t=${t[c1,-1]}
+    t=${t%%[[:space:]]#}
+    # P[n] is the preview's line n - 1 (the blank line above it).
+    if (( n > s1 )) && [[ -n ${piece[$(( n - 1 ))]} ]]; then
+      t=${t[piece[$(( n - 1 ))]+1,-1]}
+      out+=" "$t
+    else
+      out+=${out:+$'\n'}$t
+    fi
+  done
+  [[ -n $out ]] || return
+  local -a got=("${(@f)out}")
+  if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
+  else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
+}
+# mouse <report>: a press, drag or release (the SGR form, \e[<b;x;yM, m on
+# release). In the pane a press starts a selection, a drag carries it and
+# the release copies it; a press in the list moves to the row. The wheel
+# scrolls the pane over it, and moves through the rows over the list.
+mouse() {
+  local r=${1#$e\[<} b x y up
+  [[ ${r[-1]} == m ]] && up=1
+  r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
+  (( y > H - 2 )) && return
+  if (( b == 64 || b == 65 )); then
+    if (( pw > 0 && x >= px )); then glide $(( b == 64 ? -3 : 3 ))
+    elif (( b == 64 )); then (( cur > 1 )) && (( cur-- )); poff=0 pto=0
+    else (( cur < $#id )) && (( cur++ )); poff=0 pto=0; fi
+    return
+  fi
+  if (( pw > 0 && (x >= px || sel == 2) )); then
+    (( x < px )) && x=$px
+    if (( b == 0 && ! up )); then sel=2 sa=$(( y + poff )) ca=$(( x - px + 1 )) sb=$sa cb=$ca
+    elif (( b == 32 && sel )); then sb=$(( y + poff )) cb=$(( x - px + 1 ))
+    elif (( up && sel == 2 )); then
+      sb=$(( y + poff )) cb=$(( x - px + 1 )); sel=1
+      if (( sa == sb && ca == cb )); then sel=0; else ends; copy; fi
+    fi
+    (( sel )) && ends
+    return
+  fi
+  if (( b == 0 && ! up && (pw == 0 || x < px) )); then
+    local at=$(( y + top ))
+    (( at <= $#LI && LI[at] > 0 )) && { cur=$LI[at]; poff=0 pto=0; sel=0; }
+  fi
 }
 
 # handle: one key. 1 to quit.
 handle() {
+  [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
+  sel=0
   case $1 in
     j|$e'[B') (( cur < $#id )) && (( cur++ )); poff=0 pto=0 ;;
     k|$e'[A') (( cur > 1 )) && (( cur-- )); poff=0 pto=0 ;;
@@ -569,10 +736,12 @@ while :; do
     resize
   fi
   if (( ${reply[(I)$tty]} )); then
-    key; handle $REPLY
-    while zselect -t 0 -r $tty; do key; handle $REPLY; done
+    kt=$EPOCHREALTIME nk=1
+    key; lastkey=$REPLY; handle $REPLY
+    while zselect -t 0 -r $tty; do key; lastkey=$REPLY; handle $REPLY; (( nk++ )); done
     draw
   else
+    float ti=$EPOCHREALTIME
     changed=0
     # Without perl, the size once a second.
     if [[ -z $winch ]] && (( EPOCHSECONDS != stick )); then
@@ -591,6 +760,11 @@ while :; do
     (( EPOCHSECONDS - ltick >= 10 )) && { refresh; changed=1; }
     (( changed )) && draw
     # The row you have stopped on, drawn if it is not kept yet.
-    (( ! help )) && want $pw
+    # The size has held since the last resize: the previews at it.
+    (( settle && EPOCHREALTIME >= settle )) && { settle=0; warm; }
+    # The row you have stopped on, drawn if it is not kept yet; not while a
+    # resize is still settling.
+    (( ! help && ! settle )) && want $pw
+    (( EPOCHREALTIME - ti > 0.02 )) && print -r -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed" >> $trace
   fi
 done

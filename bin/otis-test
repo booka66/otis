@@ -269,7 +269,7 @@ git remote set-url origin https://github.com/x/y.git
 mkdir -p "$tmp/dash"
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
-expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "23"
+expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "24"
 expect otis-list/here-last "$(printf '%s\n' "$rows" | tail -1 | cut -f6,11,14 | tr '\t' ' ')" "here here here"
 expect otis-list/here-always "$(printf '%s\n' "$rows" | strip | grep -c '── here ')" "1"
 expect otis-list/quiet "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "nothing waiting on you"
@@ -332,7 +332,6 @@ printf '2\n' > "$common/gmr-fix/b-feature/folded"
 expect mr-fix/discard-refused "$(git-mr-fix --discard b-feature 2 </dev/null | head -1)" "that one is folded into your commits already. press enter"
 rm -f "$common/gmr-fix/b-feature"/02.patch "$common/gmr-fix/b-feature/folded" \
   "$common/gmr-fix/b-feature/accepted" "$common/gmr-fix/b-feature/declined"
-expect otis-preview/heading "$(GIT_FZF_STATE=$tmp/dash otis-preview sep "" sep-waiting "" | strip | head -1)" "waiting on you"
 # D discards what otis is telling you, and nothing else: a merge request's own
 # state is the merge request's to change.
 expect otis-do/dismiss-refused "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss mine mr "" 42 "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "otis discards what it is telling you, Claude's fixes and its runs' verdicts; that row is the merge request's own state"
@@ -955,7 +954,9 @@ dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 c
   zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
 expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing waiting on you')" "1"
 expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
-expect otis/enter-says "$(printf '%s\n' "$dash" | grep -o '⏎ read the branch' | head -1)" "⏎ read the branch"
+# Nothing uncommitted and nothing past the base: enter has nothing to do,
+# so the footer offers only the keys that open the rest.
+expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c 'm MRs')" "0:1"
 # The last thing it writes, after the screen is put back.
 expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
 

@@ -211,7 +211,7 @@ if [ "$mode" != --run ]; then
   mkdir -p "$dir" || exit 0
   # The callers cache and the table may be replaced while this runs.
   cp "$callers" "$dir/$key.callers"; cp "$table" "$dir/$key.table"
-  nohup git-callers-fix --run "$rev" "$dir/$key.callers" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  otis-detach git-callers-fix --run "$rev" "$dir/$key.callers" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
   echo $! > "$running"
   echo running
   exit 0

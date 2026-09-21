@@ -575,7 +575,7 @@ start() {
   # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
   printf '%s\n' git-mr-fix --run "$key" "${range%%..*}..$(cat "$d/head")" > "$d/cmd"
   pwd > "$d/cwd"
-  nohup git-mr-fix --run "$key" "${range%%..*}..$(cat "$d/head")" </dev/null > "$d/log" 2>&1 &
+  otis-detach git-mr-fix --run "$key" "${range%%..*}..$(cat "$d/head")" </dev/null > "$d/log" 2>&1 &
   echo $! > "$d/pid"
 }
 

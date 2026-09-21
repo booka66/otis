@@ -124,7 +124,7 @@ resume() {
     printf '%s %s\n' "$dead" "$(wc -c < "$dir/events.jsonl" | tr -d ' ')" > "$dir/lives"
     # cmd holds the argv one a line (a branch name can hold shell syntax).
     (cd "$where" && IFS='
-' && set -f && set -- $(cat "$dir/cmd") && nohup "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
+' && set -f && set -- $(cat "$dir/cmd") && otis-detach "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
   fi
   rmdir "$1/resuming"
 }

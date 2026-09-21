@@ -37,8 +37,8 @@
 # (otis-do). Then the row in parts, for the dashboard to lay out (otis-dash):
 # its glyph and the glyph's color, the verb, what it is about (the MR's
 # title), who (a review's author), how long ago, a note (a run's branch,
-# the here row's state), a pipeline's jobs done/total, and 1 if it is the
-# branch you are on.
+# the here row's state), a pipeline's jobs done/total, 1 if it is the
+# branch you are on, and what enter does, in a few words (otis-do's enter).
 #
 # Nothing here fetches anything gmr does not: the same three caches under the
 # same names (git-cached-json, share/mr-query.sh), so opening one warms the
@@ -235,6 +235,12 @@ out=$(jq -nr -L "$share" \
   # The fixed zone, which the pane never cuts: whether the row is the branch
   # you are on, the glyph, the merge request, and the verb. Everything after
   # it is context.
+  # What enter does on the row, in the words the dashboard shows it in.
+  def does:
+    if .does then .does
+    else {mr: (if .kind == "review" then "review it" elif .kind == "merged" then "see its deploy" else "open it" end),
+          pipeline: "see its jobs", merge: "merge it", run: "open the run", rollback: "see what happened",
+          deploy: "see the deploy", trash: "open the trash"}[.verb_key // ""] // "" end;
   def render:
     . as $x |
     [ (if $x.mark then elsewhere + "▶" + r else " " end) + " "
@@ -246,7 +252,8 @@ out=$(jq -nr -L "$share" \
       $x.kind, ($x.head // ""), ($x.base // ""), (($x.pipeline // "") | tostring), ($x.purl // ""),
       $x.id, ($x.start // ""), ($x.extra // ""), ($x.verb_key // ""),
       ($x.g // ""), ($x.gc // ""), ($x.verb // ""), (($x.title // "") | clean), ($x.who // ""),
-      ($x.when // ""), (($x.note // "") | clean), ($x.prog // ""), (if $x.mark then "1" else "" end)
+      ($x.when // ""), (($x.note // "") | clean), ($x.prog // ""), (if $x.mark then "1" else "" end),
+      ($x | does)
     ] | join("\t");
 
   # A heading is a row with no merge request on it, so a key that acts on one
@@ -254,7 +261,7 @@ out=$(jq -nr -L "$share" \
   def sep($text; $id):
     ([ faint + "── " + $text + " "
          + (if (56 - ($text | length)) > 0 then "─" * (56 - ($text | length)) else "" end) + r,
-       "", "", "", "", "sep", "", "", "", "", $id, "", "", "", "", "", $text, "", "", "", "", "", "" ] | join("\t"));
+       "", "", "", "", "sep", "", "", "", "", $id, "", "", "", "", "", $text, "", "", "", "", "", "", "" ] | join("\t"));
 
   ($review[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) as $asked_all |
   ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
@@ -473,6 +480,7 @@ out=$(jq -nr -L "$share" \
       source: $here.branch, head: ($mr.diffRefs.headSha // ""), base: ($mr.diffRefs.baseSha // ""),
       start: ($mr.diffRefs.startSha // ""),
       extra: $here.branch, verb_key: "here",
+      does: (if $here.dirty > 0 then "stage it" elif $here.ahead > 0 then "read the branch" else "" end),
       tail: ((if ($bits | length) > 0 then yours + ($bits | join(context + " · " + yours)) + r
              else good + "nothing to commit or push" + r end)
            ),

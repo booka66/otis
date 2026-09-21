@@ -23,5 +23,5 @@ mr_mine_query='query($repo: String!) { currentUser { username authoredMergeReque
   detailedMergeStatus updatedAt resolvableDiscussionsCount resolvedDiscussionsCount diffRefs { headSha baseSha startSha }
   reviewers { nodes { username mergeRequestInteraction { reviewState } } }
   labels { nodes { title } }
-  headPipeline { id status path createdAt finishedAt
+  headPipeline { id status path createdAt finishedAt stages { nodes { name } }
     jobs(statuses: [FAILED, RUNNING, PENDING, CREATED, SUCCESS], retried: false, first: 200) { nodes { name status allowFailure stage { name } } } } } } } }'

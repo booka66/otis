@@ -1,0 +1,10 @@
+#!/bin/sh
+# otis-detach <command...>: run it in a session of its own, with no terminal.
+# For Claude's runs and the other work otis leaves going in the background,
+# in place of nohup. nohup keeps the terminal the run was started from, and
+# claude opens it (/dev/tty) and reads from it: while a run was going, the
+# keys you typed into the dashboard or a picker went to it instead, a few at
+# a time, which felt like lag. With no terminal there is nothing to read and
+# no hangup to catch. The pid stays the command's: this execs perl, and perl
+# execs the command. macOS has no setsid(1), so perl's.
+exec perl -MPOSIX -e 'POSIX::setsid(); exec { $ARGV[0] } @ARGV or die "otis-detach: $ARGV[0]: $!\n"' "$@"

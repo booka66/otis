@@ -1,26 +1,58 @@
 #!/bin/sh
 # otis-preview <kind> <iid> <row id> <extra>: the dashboard's preview pane.
 #
-# Every row is already about something one of the other pickers knows how to
-# show, so this mostly hands over: a merge request previews as it does in gmr
-# (git-mr-preview, from the JSON otis-list left in the picker's state), one of
-# Claude's runs as it does in gag (git-agent-preview), a deploy as it does in
-# gd. Only the headings and the here row are this script's own.
+# It opens the way the row does: a callout in the row's color saying what it
+# wants of you, why, and what enter does about it (the row's own words, from
+# otis-list's rows in the picker's state). Then the thing itself.
+#
+# A merge request is drawn here, for the pane beside the dashboard rather
+# than for gmr (git-mr-preview): its title, the pipeline as a bar and a bar a
+# stage with only what failed or is running named, where the review stands,
+# what Claude has on it, then its verification and its threads. One to
+# review ends with its description. Everything comes from the JSON otis-list
+# left in the state, so moving never waits on GitLab.
+#
+# Anything else hands over under the callout: one of Claude's runs as gag
+# shows it (git-agent-preview), a deploy as gd does, a merged MR as gmr
+# does. The here row and the trash are this script's own.
 kind=$1 iid=$2 row=$3 extra=$4
+st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+w=${FZF_PREVIEW_COLUMNS:-80}
+
+# The row as otis-list drew it: its glyph's color, its verb, what enter does.
+IFS='	' read -r gc verb does <<EOF
+$(awk -F'\t' -v id="$row" '$11 == id { print $16 "\t" $17 "\t" $24; exit }' "$st/rows" 2>/dev/null)
+EOF
+
+# callout <why>: the row's verb in its color, why it wants you, and the key.
+callout() {
+  bar="${gc:-$GK_YOURS}┃$GK_R"
+  printf '%b %b%s\033[22m%b\n' "$bar" "\033[1m${gc:-$GK_YOURS}" "$verb" "$GK_R"
+  [ -n "$1" ] && printf '%b %b%s%b\n' "$bar" "$GK_TEXT" "$1" "$GK_R"
+  [ -n "$does" ] && printf '%b %b⏎ %s%b\n' "$bar" "$GK_ATTENTION" "$does" "$GK_R"
+  printf '\n'
+}
+heading() { printf "${GK_CONTEXT}%s${GK_R}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
 case $kind in
-  review|mine|merged) exec git-mr-preview "$iid" "$kind" "" ;;
-  run)                exec git-agent-preview "$extra" ;;
+  run)
+    callout ""
+    exec git-agent-preview "$extra" ;;
+  deploy)
+    callout "Production is taking a new build."
+    exec git-deploy-preview "$extra" ;;
+  merged)
+    callout "Merged. Where it has got to on its way to production:"
+    exec git-ci-preview --merged "$iid" ;;
   trash)
-    printf "${GK_ATTENTION}the trash${GK_R}\n\n"
-    printf "${GK_CONTEXT}Worktrees otis took out of your way instead of deleting, so what git\n"
-    printf "would have dropped along with the directory — an .env, a local database,\n"
-    printf "a build — is still in there.\n\n"
-    printf "Its .git went with it, so each is a directory of files now and not a\n"
-    printf "worktree: W on the branch in gb makes a fresh one, and what you wanted\n"
-    printf "kept is here to copy across. Empty it when you are sure; enter opens it.${GK_R}\n\n"
+    callout "Worktrees otis took out of your way instead of deleting."
+    printf "${GK_CONTEXT}So what git would have dropped along with the directory, an .env, a\n"
+    printf "local database, a build, is still in there. Its .git went with it, so\n"
+    printf "each is a directory of files now and not a worktree: W on the branch in\n"
+    printf "gb makes a fresh one, and what you wanted kept is here to copy across.\n"
+    printf "Empty it when you are sure.${GK_R}\n\n"
     git-worktree-trash --list | while IFS='	' read -r at dst src branch; do
       was=$src; case $src in "$HOME"/*) was="~${src#"$HOME"}" ;; esac
       printf "${GK_TEXT}%s${GK_R}${GK_CONTEXT}  %s${GK_R}\n" "${dst##*/}" \
@@ -29,60 +61,208 @@ case $kind in
       [ -n "$branch" ] && printf "${GK_FAINT}  on %s${GK_R}\n" "$branch"
     done
     exit 0 ;;
-  deploy)             exec git-deploy-preview "$extra" ;;
+  sep) exit 0 ;;
+  here)
+    # The checkout under you, git's own answers rather than a cache: what is
+    # uncommitted by what state it is in, then what the branch carries.
+    b=$extra base=$(otis-config base)
+    status=$(git --no-optional-locks status --porcelain 2>/dev/null)
+    ahead=0; [ -n "$b" ] && ahead=$(git rev-list --count "$base..HEAD" 2>/dev/null || echo 0)
+    if [ -n "$status" ]; then why="Uncommitted work: enter opens the stage panel to commit it."
+    elif [ "$ahead" != 0 ]; then why="Nothing uncommitted. The branch is $ahead past $base."
+    else why="Nothing here yet: no changes, nothing past $base."; fi
+    # The list cuts the branch to fit its column; here it has the room.
+    verb="${b:-detached HEAD}"
+    callout "$why"
+    [ -z "$b" ] && printf "${GK_ATTENTION}at %s${GK_R}\n\n" "$(git rev-parse --short HEAD 2>/dev/null)"
+    [ -n "$iid" ] && printf "${GK_ATTENTION}!%s${GK_R}${GK_CONTEXT}  its merge request${GK_R}\n\n" "$iid"
+    if [ -n "$status" ]; then
+      heading "uncommitted"
+      printf '%s\n' "$status" | awk -v g="$GK_GOOD" -v y="$GK_YOURS" -v x="$GK_BAD" -v c="$GK_CONTEXT" -v t="$GK_TEXT" -v R="$GK_R" '
+        { s = substr($0, 1, 2); p = substr($0, 4)
+          if (s == "??") { u[++nu] = "? " p; next }
+          if (substr(s, 1, 1) != " ") st[++ns] = substr(s, 1, 1) " " p
+          if (substr(s, 2, 1) != " ") wt[++nw] = substr(s, 2, 1) " " p }
+        function show(title, a, n, col,   i) {
+          if (!n) return
+          printf "  %s%s %d%s\n", c, title, n, R
+          for (i = 1; i <= n && i <= 15; i++) printf "    %s%s%s %s%s%s\n", col, substr(a[i], 1, 1), R, t, substr(a[i], 3), R
+          if (n > 15) printf "    %s%d more%s\n", c, n - 15, R
+        }
+        END { show("staged", st, ns, g); show("not staged", wt, nw, y); show("untracked", u, nu, x) }'
+      printf '\n'
+    fi
+    if [ -n "$b" ] && [ "$ahead" != 0 ]; then
+      heading "past $base"
+      git -c color.ui=always log --format="  %C(yellow)%h%C(reset)  %s  %C(dim)%cr%C(reset)" "$base..HEAD" 2>/dev/null | head -20
+      printf '\n'
+    fi
+    behind=$(git rev-list --count "HEAD..$base" 2>/dev/null || echo 0)
+    [ "$behind" != 0 ] && printf "${GK_CONTEXT}%s behind %s: gup brings it up to date.${GK_R}\n" "$behind" "$base"
+    exit 0 ;;
 esac
 
-if [ "$kind" = sep ]; then
-  case $row in
-    sep-waiting)
-      printf "${GK_ATTENTION}waiting on you${GK_R}\n\n"
-      printf "${GK_CONTEXT}One row a merge request, never one a fact: an MR with a failed\n"
-      printf "pipeline and three threads on it is the pipeline, because that is\n"
-      printf "what you would do about it next.${GK_R}\n\n"
-      printf "${GK_CONTEXT}The order is what a delay costs. Production first, then what is\n"
-      printf "broken, then what a person is waiting on, then what Claude has left\n"
-      printf "you, then what you can finish.${GK_R}\n" ;;
-    sep-going)
-      printf "${GK_ATTENTION}going${GK_R}\n\n"
-      printf "${GK_CONTEXT}What is running right now, newest first: Claude's background runs,\n"
-      printf "your pipelines, and a production deploy on its way.\n\n"
-      printf "Nothing here needs you. It is here so you know what not to start.${GK_R}\n" ;;
-    sep-here)
-      printf "${GK_ATTENTION}here${GK_R}\n\n"
-      printf "${GK_CONTEXT}%s${GK_R}\n" "$(otis-config project)"
-      printf "${GK_CONTEXT}default branch %s${GK_R}\n" "$(otis-config main)"
-      n=$(git worktree list | wc -l | tr -d ' ')
-      printf "${GK_CONTEXT}%s worktree%s (gw)${GK_R}\n" "$n" "$([ "$n" = 1 ] || echo s)"
-      strip=$(git-deploy-list --strip 2>/dev/null)
-      [ -n "$strip" ] && printf "\n${GK_CONTEXT}production, oldest left${GK_R}\n%b\n" "$strip" ;;
-  esac
-  exit 0
-fi
+# A merge request, open: yours (the pipelines JSON, with its jobs) or one
+# you were asked to review (the review JSON, which has its description).
+[ -n "$iid" ] || exit 0
+# Its threads, from the cache the file picker shares (git-mr-threads), asked
+# to fetch in the background if old: the dashboard draws this again when it
+# lands.
+git-mr-threads --kick "$iid" "" "" >/dev/null 2>&1
+threads=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/git-alias-cache/mr-$iid-threads.json
+[ -s "$threads" ] || threads=/dev/null
+[ -s "$st/marks.json" ] || echo '{"gates": [], "watch": {}, "claude": {}, "fixes": {}, "verify": {}}' > "$st/marks.json"
+jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does "$does" --argjson w "$w" \
+  --slurpfile mine "$st/ci.json" --slurpfile asked "$st/mrs.json" --slurpfile marks "$st/marks.json" \
+  --slurpfile disc "$threads" '
+  include "otis";
+  def B: "\u001b[1m"; def UB: "\u001b[22m";
+  def heading($t): context + ($t | ascii_upcase) + r;
+  def since: if . == null then "" else ago end;
+  # A bar of $n cells for $total things, the counts by color in the order
+  # given ([[count, color, cell]]), what is left faint.
+  def bar($n; $total; $parts): ([$total, ($parts | map(.[0]) | add)] | max) as $t |
+    if $t == 0 then faint + ("─" * $n) + r else
+      (reduce $parts[] as $p ({s: "", used: 0, left: $t};
+        (if $p[0] == 0 then 0 else ([(($p[0] * $n / $t) + 0.5 | floor), 1] | max) end) as $k |
+        ([$k, $n - .used] | min) as $k |
+        .s += (if $k > 0 then $p[1] + ($p[2] * $k) else "" end) | .used += $k)) as $b |
+      $b.s + (if $b.used < $n then faint + ("─" * ($n - $b.used)) else "" end) + r end;
+  # A path by its last three parts; a name cut at 24.
+  def short: split("/") | if length > 3 then "…/" + (.[-3:] | join("/")) else join("/") end;
+  def who: if length > 24 then .[0:23] + "…" else . end;
+  def names($a; $max): ($a | length) as $n | ($a[0:$max] | join(", ")) + (if $n > $max then ", and \($n - $max) more" else "" end);
 
-# here: the checkout under you. git's own answers, not a cache.
-b=$extra
-base=$(otis-config base)
-if [ -z "$b" ]; then
-  printf "${GK_ATTENTION}detached at %s${GK_R}\n" "$(git rev-parse --short HEAD 2>/dev/null)"
-else
-  printf "${GK_ATTENTION}%s${GK_R}\n" "$b"
-fi
-[ -n "$iid" ] && printf "${GK_CONTEXT}!%s · m opens it in the merge request list${GK_R}\n" "$iid"
-printf '\n'
+  ($marks[0]) as {gates: $gates, claude: $claude, fixes: $fixes, verify: $verify} |
+  (($mine[0].data.currentUser.authoredMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $m |
+  (($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $a |
+  ($m // $a) as $mr | select($mr != null) |
+  ($mr.headPipeline.jobs.nodes // []) as $jobs |
+  [$jobs[] | select(.status == "FAILED" and (.allowFailure | not)) | .name] as $failed |
+  [$jobs[] | select(.status == "RUNNING") | .name] as $running |
+  ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
+  (($mr.resolvableDiscussionsCount // 0) - ($mr.resolvedDiscussionsCount // 0)) as $threads |
+  ($claude[$iid] // {}) as $cl | ($fixes[$iid] // {}) as $fx | ($verify[$iid] // {}) as $vf |
 
-status=$(git -c color.status=always --no-optional-locks status --short 2>/dev/null)
-if [ -n "$status" ]; then
-  printf "${GK_FAINT}── uncommitted ── ${GK_CONTEXT}enter stages it (ga)${GK_R}\n"
-  printf '%s\n' "$status" | head -40
-  printf '\n'
-fi
+  # Why the row wants you, in a sentence, from what it says.
+  (if $verb == "pipeline failed" then
+     if ($failed | length) > 0 then "It cannot go out as it is: " + names($failed; 4) + " failed." else "Its pipeline failed." end
+   elif ($verb | test("to address$")) then "A reviewer is waiting on you: \($threads) unresolved \(plural($threads; "thread"; "threads"))."
+   elif $verb == "review it" then "\($mr.author.username // "Someone") is waiting on your review" + (if $mr.updatedAt then ", updated \($mr.updatedAt | ago) ago." else "." end)
+   elif ($verb | test("to submit$")) then "Claude drafted \($cl.drafts // 0) \(plural($cl.drafts // 0; "comment"; "comments")) on it: yours to keep, change or drop before they post."
+   elif $verb == "merge it" then "Approved, green and nothing in the way."
+   elif $verb == "ask for a review" then "Nobody has been asked to review it yet: a in gmr asks someone."
+   elif ($verb | test("^pipeline (running|queued)")) then
+     "\($done) of \($jobs | length) jobs done" + (if ($running | length) > 0 then ", \($running | length) running." else "." end)
+   elif ($verb | test("^fold in")) then "Claude proposed fixes for it: enter shows each, to take or leave."
+   elif ($verb | test("^verified")) then "Its verification has a verdict; the report is below."
+   else "" end) as $why |
 
-if [ -n "$b" ]; then
-  log=$(git -c color.ui=always log --oneline --no-decorate "$base..HEAD" 2>/dev/null | head -30)
-  if [ -n "$log" ]; then
-    printf "${GK_FAINT}── this branch, past %s ──${GK_R}\n" "$base"
-    printf '%s\n' "$log"
-  else
-    printf "${GK_CONTEXT}nothing here past %s yet${GK_R}\n" "$base"
+  # The callout.
+  (if $verb != "" then
+     ($gc | if . == "" then yours else . end) as $bc |
+     ($bc + "┃" + r + " " + B + $bc + $verb + UB + r),
+     (if $why != "" then $bc + "┃" + r + " " + text + $why + r else empty end),
+     (if $does != "" then $bc + "┃" + r + " " + attention + "⏎ " + $does + r else empty end),
+     ""
+   else empty end),
+
+  # The merge request.
+  (attention + B + "!\($mr.iid)" + UB + r),
+  (B + text + $mr.title + UB + r),
+  (context + "\($mr.sourceBranch) → \($mr.targetBranch)"
+    + (if $a and $mr.author then "  ·  " + $mr.author.username else "" end)
+    + (if $mr.updatedAt then "  ·  updated \($mr.updatedAt | ago) ago" else "" end) + r),
+  (if $mr.draft then yours + "draft" + r else empty end),
+  "",
+
+  # The threads still open, each where it sits, who started it and what it
+  # says, the first few lines: what "threads to address" is about.
+  (($asked[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me |
+   [($disc[0] // [])[] | select(.resolvable and ((.notes | map(select(.resolvable)) | all(.resolved)) | not))] as $open |
+   if ($open | length) == 0 then empty else
+     heading("threads") + "  " + yours + "\($open | length) unresolved" + r,
+     ($open[] | .notes[0] as $n | (.notes | last) as $last |
+       ($n.position // {}) as $p |
+       (if $p.new_path // $p.old_path then "\($p.new_path // $p.old_path | short):\($p.new_line // $p.old_line // "")" else "on the MR" end) as $where |
+       "",
+       "  " + yours + "┃" + r + " " + elsewhere + $where + r + context + "  ·  " + ($n.author.username | who)
+         + "  ·  " + ($n.created_at | ago) + " ago" + r,
+       (($n.body // "") | gsub("<!--[^>]*-->"; "") | gsub("!?\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; "\(.t)") | gsub("\\*\\*"; "")
+         | split("\n") | map(select(test("\\S"))) | .[0:3] | join("\n")
+         | if length > 280 then .[0:279] + "…" else . end | split("\n")[] | "  " + yours + "┃" + r + " " + text + . + r),
+       (if (.notes | length) > 1 then
+          "  " + yours + "┃" + r + " " + context + "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
+          + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) + r
+        else empty end)),
+     ""
+   end),
+
+  # The pipeline: one bar for all of it, one a stage, and by name only what
+  # failed or is running.
+  (if ($jobs | length) > 0 then
+     ($mr.headPipeline | effective($gates)) as $eff |
+     ([$w - 22, 40] | min) as $bw |
+     (if $eff == "SUCCESS" then good + "passed" elif $eff == "FAILED" then bad + "failed"
+      elif $eff == "RUNNING" then attention + "running" elif $eff == "APPROVAL" then elsewhere + "waiting on approval gates"
+      else context + ($eff // "" | ascii_downcase) end) as $state |
+     heading("pipeline") + "  " + $state + r
+       + context + (if $mr.headPipeline.createdAt then "  ·  started \($mr.headPipeline.createdAt | ago) ago" else "" end) + r,
+     "  " + bar($bw; ($jobs | length); [[$done, good, "━"], [($failed | length), bad, "━"], [($running | length), attention, "━"]])
+       + "  " + text + "\($done)" + context + "/\($jobs | length)" + r,
+     "",
+     ((($mr.headPipeline.stages.nodes // []) | map(.name)) as $order |
+      ($order + ([$jobs[] | .stage.name] | unique) | reduce .[] as $s ([]; if index([$s]) then . else . + [$s] end)) as $stages |
+      ([$stages[] | length] | max // 5) as $sw |
+      $stages[] as $s |
+      [$jobs[] | select(.stage.name == $s)] as $sj | select(($sj | length) > 0) |
+      ([$sj[] | select(.status == "SUCCESS")] | length) as $sd |
+      ([$sj[] | select(.status == "FAILED" and (.allowFailure | not))] | length) as $sf |
+      ([$sj[] | select(.status == "RUNNING")] | length) as $sr |
+      (if $sf > 0 then bad + "✗" elif $sr > 0 then attention + "◐" elif $sd == ($sj | length) then good + "✓" else faint + "○" end) as $g |
+      "  " + $g + r + " " + text + ($s | padr($sw)) + r + "  " + bar(12; ($sj | length); [[$sd, good, "━"], [$sf, bad, "━"], [$sr, attention, "━"]])
+        + "  " + context + "\($sd)/\($sj | length)" + r),
+     (if ($failed | length) > 0 then "", "  " + bad + "failed  " + r + text + names($failed; 8) + r else empty end),
+     (if ($running | length) > 0 then "", "  " + attention + "running  " + r + text + names($running; 6) + r else empty end),
+     ""
+   elif $mr.headPipeline.status then
+     heading("pipeline") + "  " + (($mr.headPipeline.status | ascii_downcase) as $s |
+       (if $s == "success" then good elif $s == "failed" then bad elif $s == "running" then attention else context end) + $s) + r, ""
+   else empty end),
+
+  # Where the review stands.
+  heading("review"),
+  (if $mr.approved then "  " + good + "✓ approved" + r
+   else "  " + context + "○ needs \($mr.approvalsLeft // 1) more \(plural($mr.approvalsLeft // 1; "approval"; "approvals"))" + r end),
+  (($mr.reviewers.nodes // []) | if length == 0 then "  " + attention + "! nobody asked to review" + r else
+     "  " + (map((.username | who) + " " + (.mergeRequestInteraction.reviewState // "UNREVIEWED" |
+       if . == "APPROVED" then good + "approved" elif . == "REQUESTED_CHANGES" then bad + "wants changes"
+       elif . == "REVIEWED" then context + "reviewed" else faint + "not yet" end) + r + text) | join(context + "  ·  " + text)) + r end),
+  (if $threads > 0 then "  " + yours + "\($threads) unresolved \(plural($threads; "thread"; "threads"))" + r
+   else "  " + faint + "no unresolved threads" + r end),
+  (if $mr.autoMergeEnabled then "  " + good + "⏵ merges when the pipeline succeeds" + r
+     + (if $mr.mergeUser then context + "  ·  set by \($mr.mergeUser.username)" + r else "" end) else empty end),
+  (if ($mr.detailedMergeStatus // "MERGEABLE" | IN("MERGEABLE", "UNCHECKED", "CHECKING") | not) and ($mr.autoMergeEnabled | not) then
+     "  " + context + "not mergeable yet: " + ($mr.detailedMergeStatus | ascii_downcase | gsub("_"; " ")) + r else empty end),
+  (($mr.labels.nodes // []) | if length > 0 then "  " + context + "labels  " + r + text + (map(.title) | join(", ")) + r else empty end),
+  "",
+
+  # What Claude has on it.
+  ([ (if $cl.reviewing then attention + "◌ reviewing it now" + r else empty end),
+     (if ($cl.drafts // 0) > 0 then yours + "✎ \($cl.drafts) draft \(plural($cl.drafts; "comment"; "comments")) to look over" + r else empty end),
+     (if $cl.clean != null and $cl.clean == $mr.diffRefs.headSha then good + "✓ found nothing to comment on" + r else empty end),
+     (if $fx.fixing then attention + "◌ proposing fixes now" + r else empty end),
+     (if ($fx.fixes // 0) > 0 and ($fx.fixing | not) then yours + "✎ \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes")) to fold in" + r else empty end),
+     (if $vf.verifying then attention + "◎ verifying in Cursor Cloud" + r else empty end) ] |
+   if length > 0 then heading("claude"), (.[] | "  " + .), "" else empty end)
+' 2>/dev/null
+git-verify --preview "$iid" 2>/dev/null
+# One to review: what its author says it is.
+if [ "$kind" = review ]; then
+  desc=$(jq -r --arg iid "$iid" '.data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid) | .description // ""' "$st/mrs.json" 2>/dev/null)
+  if [ -n "$desc" ]; then
+    printf '\n'; heading "description"
+    printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null
   fi
 fi
+exit 0

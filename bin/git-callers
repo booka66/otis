@@ -164,7 +164,7 @@ if [ "$mode" = --recheck ] || [ "$mode" = --recheck-run ]; then
     [ "$(head -1 "$disk" 2>/dev/null)" = "$stamp" ] && { printf '%s\n' "$disk"; exit 0; }
     [ -s "$rrun" ] && kill -0 "$(cat "$rrun")" 2>/dev/null && { echo running; exit 0; }
     command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
-    nohup git-callers --recheck-run "$rev" "$table" </dev/null >/dev/null 2>>"$dir/$key.err" &
+    otis-detach git-callers --recheck-run "$rev" "$table" </dev/null >/dev/null 2>>"$dir/$key.err" &
     echo $! > "$rrun"
     echo running
     exit 0
@@ -217,7 +217,7 @@ if [ "$mode" != --run ]; then
   # At low priority: tsgo takes every core it can for a minute or so, and
   # at the same priority as your terminal that was every picker lagging
   # under it. Niced, it has whatever is idle and gives way to keys.
-  nohup nice -n 10 git-callers --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  otis-detach nice -n 10 git-callers --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
   echo $! > "$running"
   [ "$rev" = worktree ] && echo $! > "$dir/worktree.running"
   echo running

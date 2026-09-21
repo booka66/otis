@@ -460,7 +460,7 @@ start() {
   # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
   printf '%s\n' git-mr-claude --run "$iid" "$range" > "$d/cmd"
   pwd > "$d/cwd"
-  nohup git-mr-claude --run "$iid" "$range" </dev/null > "$d/log" 2>&1 &
+  otis-detach git-mr-claude --run "$iid" "$range" </dev/null > "$d/log" 2>&1 &
   echo $! > "$d/pid"
 }
 

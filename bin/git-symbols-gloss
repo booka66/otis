@@ -65,7 +65,7 @@ if [ "$mode" != --run ]; then
     command -v seam >/dev/null 2>&1 || exit 0
   mkdir -p "$dir" || exit 0
   cp "$table" "$dir/$key.table"
-  nohup git-symbols-gloss --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+  otis-detach git-symbols-gloss --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
   echo $! > "$running"
   echo running
   exit 0

@@ -116,7 +116,7 @@ install() {
   mkdir -p "$cache" || return 1
   : > "$at"
   unlink_ours
-  (cd "$main" && nohup sh -c "$cmd" </dev/null > "$log" 2>&1; if [ $? -eq 0 ]; then rm -f "$failed"; else : > "$failed"; fi; rm -f "$pidfile") &
+  (cd "$main" && otis-detach sh -c "$cmd" </dev/null > "$log" 2>&1; if [ $? -eq 0 ]; then rm -f "$failed"; else : > "$failed"; fi; rm -f "$pidfile") &
   echo $! > "$pidfile"
 }
 

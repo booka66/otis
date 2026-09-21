@@ -112,7 +112,7 @@ start() {
   date +%s > "$d/started"
   printf "Claude's production watch of !%s\n" "$iid" > "$d/title"
   : > "$d/events.jsonl"
-  nohup git-mr-watch-run "$iid" </dev/null > "$d/log" 2>&1 &
+  otis-detach git-mr-watch-run "$iid" </dev/null > "$d/log" 2>&1 &
   echo $! > "$d/pid"
 }
 
