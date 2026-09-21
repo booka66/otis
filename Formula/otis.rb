@@ -31,7 +31,7 @@ class Otis < Formula
     # Only otis-setup goes on PATH here: the commands (gb, gd, ...) come with
     # the line it adds to your shell, so nothing named like them lands in
     # Homebrew's bin. Through opt, so that line survives an upgrade.
-    (bin/"otis-setup").write_exec_script opt_libexec/"bin/otis-setup"
+    bin.write_exec_script opt_libexec/"bin/otis-setup"
   end
 
   def caveats
