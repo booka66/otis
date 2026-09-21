@@ -1,0 +1,101 @@
+#!/bin/sh
+#seam: split
+# members: which changed definition reads a member another one added or
+# changed, from tsgo, for seam --split. otis puts this directory on
+# SEAM_PATH, so seam finds it without anything written into your config.
+#
+# seam's edges are names, and a field is read by a name neither end shares
+# with the other: `writeResult.discountCodes` in one function, `discountCodes?`
+# added to an interface in another file. Split by names alone, the reader can
+# land before the field, or stand up only because a slice happened to be the
+# larger one. tsgo knows where a member is used through the types, so it is
+# asked, for every member the change adds or alters: the properties on the
+# added lines of a changed interface, type or const (a zod schema is a const,
+# and its type is read through z.infer), and every class member the
+# change adds or whose signature it changes. A reference inside another
+# changed definition is a row, from the reader to the definition that owns the
+# member, which is what the split holds in order.
+#
+# seam runs it only to split (#seam: split) and keeps the answer by the two
+# commits. The changed files are opened as the head has them, from git, so
+# the checkout can be anywhere; everything else tsgo reads off the disk.
+# Without tsgo or node it says nothing and seam splits as it would have.
+command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
+share=$(cd "$(dirname "$0")/../.." && pwd)
+root=$(git rev-parse --show-toplevel) || exit 0
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/table"
+
+# The top-level definitions of TypeScript files, by the lines the head has
+# them on: what a reference is placed in, and what owns a member.
+awk -F'\t' '$2 != "file" && $4 == "" && $7 == "new" && $1 ~ /\.(ts|tsx|mts|cts)$/ {
+    print $1 "\t" $1 "#" $3 "\t" $8 "\t" $9 "\t" $2
+  }' "$tmp/table" > "$tmp/defs"
+[ -s "$tmp/defs" ] || exit 0
+
+# The members to ask about. A class member is a row of its own; a property of
+# an interface or a type is a line the change added inside it that declares
+# one: an optional modifier or two, a name, then ? or : or (.
+if [ -n "$SEAM_HEAD" ]; then
+  git diff -U0 --no-renames "$SEAM_BASE" "$SEAM_HEAD" -- $(cut -f1 "$tmp/defs" | sort -u) 2>/dev/null
+else
+  git diff -U0 --no-renames "$SEAM_BASE" -- $(cut -f1 "$tmp/defs" | sort -u) 2>/dev/null
+fi > "$tmp/diff"
+awk -F'\t' '
+  FILENAME == ARGV[1] {
+    if ($5 == "interface" || $5 == "type" || $5 == "const") { n[$1]++; ID[$1, n[$1]] = $2; A[$1, n[$1]] = $3 + 0; Z[$1, n[$1]] = $4 + 0 }
+    next
+  }
+  FILENAME == ARGV[2] {
+    if ($2 != "file" && $4 != "" && $7 == "new" && ($6 == "added" || $6 == "signature") && $1 ~ /\.(ts|tsx|mts|cts)$/ && $3 ~ /^[A-Za-z_$][A-Za-z0-9_$]*$/)
+      print $1 "#" $4 "\t" $1 "\t" $8 "\t" $3
+    next
+  }
+  /^\+\+\+ / { f = substr($0, 5); sub(/^b\//, "", f); next }
+  /^@@/ { split($0, w, " "); split(substr(w[3], 2), b, ","); l = b[1] + 0; next }
+  /^\+/ {
+    t = substr($0, 2)
+    if (match(t, /^[ \t]*((readonly|public|private|protected|static|declare)[ \t]+)*[A-Za-z_$][A-Za-z0-9_$]*[ \t]*[?:(]/)) {
+      nm = substr(t, 1, RLENGTH); sub(/[ \t]*[?:(]$/, "", nm); sub(/^.*[ \t]/, "", nm)
+      for (k = 1; k <= n[f]; k++) if (l >= A[f, k] && l <= Z[f, k]) { print ID[f, k] "\t" f "\t" l "\t" nm; break }
+    }
+    l++
+  }
+' "$tmp/defs" "$tmp/table" "$tmp/diff" | sort -u > "$tmp/members"
+[ -s "$tmp/members" ] || exit 0
+
+# Every changed TypeScript file, open as the head has it: the members are
+# asked about there, and opening them loads the projects the readers are in.
+mkdir "$tmp/head"
+cut -f1 "$tmp/defs" | sort -u > "$tmp/files"
+i=0
+while read -r p; do
+  i=$((i + 1))
+  if [ -n "$SEAM_HEAD" ]; then git show "$SEAM_HEAD:$p" > "$tmp/head/$i" 2>/dev/null || continue
+  else cp "$root/$p" "$tmp/head/$i" 2>/dev/null || continue; fi
+  printf '%s\t%s\n' "$p" "$tmp/head/$i"
+done < "$tmp/files" > "$tmp/opened"
+jq -n -R --arg root "$root" --rawfile opened "$tmp/opened" --rawfile members "$tmp/members" '
+  ($opened | split("\n") | map(select(length > 0) | split("\t") | {path: .[0], from: .[1]})) as $open
+  | ($members | split("\n") | map(select(length > 0) | split("\t"))) as $m
+  | {root: $root, open: $open,
+     queries: [$m | to_entries[] | {id: "\(.key)", path: .value[1], line: (.value[2] | tonumber), name: .value[3]}],
+     # One importer naming every file the queries are in, so the one batch
+     # asks all of them; the changed files are open already.
+     importers: [{path: $open[0].path, of: [$m[][1]] | unique}]}' > "$tmp/job"
+( cd "$root" && node "$share/lsp-references.mjs" < "$tmp/job" ) > "$tmp/refs" 2>/dev/null || exit 1
+
+# Each reference placed in the changed definition around it; one in the
+# member's own definition is not a dependency on it.
+awk -F'\t' '
+  FILENAME == ARGV[1] { n[$1]++; ID[$1, n[$1]] = $2; A[$1, n[$1]] = $3 + 0; Z[$1, n[$1]] = $4 + 0; next }
+  FILENAME == ARGV[2] { q++; OWNER[q - 1] = $1; NAME[q - 1] = $4; next }
+  $1 == "R" {
+    for (k = 1; k <= n[$3]; k++) if ($4 + 0 >= A[$3, k] && $4 + 0 <= Z[$3, k]) {
+      if (ID[$3, k] != OWNER[$2]) print ID[$3, k] "\tbody\t" OWNER[$2] "\t" NAME[$2]
+      break
+    }
+  }
+' "$tmp/defs" "$tmp/members" "$tmp/refs" | sort -u |
+  awk -F'\t' '{ print $1 "\t" $3 "\t" $2 "\treads " $4 }'
