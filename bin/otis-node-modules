@@ -130,7 +130,16 @@ else
     [ "$src" -nt "$dst/.otis-mirror" ] && rm -rf "$dst"
   fi
   if [ ! -e "$dst" ]; then
-    mkdir -p "$dst" || exit 1
+    # Built aside and moved into place whole: a run killed partway (a newer
+    # callers run ends the older one, children and all) would otherwise leave
+    # a mirror with no .otis-mirror, read ever after as an install of your
+    # own and never finished. The links are copied, not followed, so where
+    # it is built does not change where they point.
+    mkdir -p "$cache" || exit 1
+    new=$cache/mirror.$$
+    rm -rf "$new"; mkdir "$new" || exit 1
+    trap 'rm -rf "$new"' EXIT
+    trap 'exit 1' INT TERM HUP
     # One cp for the links: -P keeps a link as it is, relative target and all.
     # The scope directories and .bin are walked one level the same way, so one
     # that holds real packages (npm's layout) is linked, not copied. Any other
@@ -143,17 +152,20 @@ else
       elif [ -d "$e" ]; then
         case $n in
           @*|.bin)
-            mkdir -p "$dst/$n"
+            mkdir -p "$new/$n"
             for s in "$e"/* "$e"/.[!.]*; do
               [ -e "$s" ] || [ -L "$s" ] || continue
-              if [ -L "$s" ]; then cp -P "$s" "$dst/$n/"; else ln -s "$s" "$dst/$n/"; fi
+              if [ -L "$s" ]; then cp -P "$s" "$new/$n/"; else ln -s "$s" "$new/$n/"; fi
             done ;;
-          *) ln -s "$e" "$dst/$n" ;;
+          *) ln -s "$e" "$new/$n" ;;
         esac
-      else ln -s "$e" "$dst/$n"; fi
+      else ln -s "$e" "$new/$n"; fi
     done
-    [ $# -gt 0 ] && (cd "$src" && cp -RP "$@" "$dst/")
-    : > "$dst/.otis-mirror"
+    { [ $# -eq 0 ] || (cd "$src" && cp -RP "$@" "$new/"); } || exit 1
+    : > "$new/.otis-mirror"
+    # Another run may have put its mirror there first; mv would then move
+    # this one inside it.
+    [ -e "$dst" ] || mv "$new" "$dst"
   fi
   workspace
   install
