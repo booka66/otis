@@ -29,8 +29,10 @@ setopt extendedglob no_nomatch
 zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
-[[ -n $OTIS_C_ROOT && $PWD == $OTIS_C_ROOT(|/*) ]] || eval "$(otis-config --env)"
+. ${0:A:h:h}/share/in-root.sh
+in_root || eval "$(otis-config --env)"
 export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
+wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
 # Not under a picker: the scripts that would post to one must not find one.
 unset FZF_PORT FZF_API_KEY
 export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-dash.$$.$RANDOM
@@ -61,7 +63,7 @@ saved=$(stty -g <&$tty)
 # SGR reports): a drag in the pane selects its text alone, where the
 # terminal's own selection would take the list beside it too. Shift held
 # gives the terminal's back, in most terminals.
-screen_on() { stty -icanon -echo min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
+screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
 screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
 quit() { screen_off; rm -rf -- $st; exit ${1:-0}; }
 trap 'quit 1' HUP TERM INT
@@ -345,58 +347,11 @@ shown() {
   REPLY=${have[1]}
 }
 # render <width> <file> <kind> <iid> <row id> <extra>: otis-preview, wrapped
-# to the pane. A long line breaks at its last space that fits (mid-word only
-# when there is none), and each piece after the first starts with the line's
-# own lead, its indent and any bar it opens with (│ ┃ ▌), in the line's
-# colors, so a thread or a callout stays one block. The colors in force at
-# the break carry on into the next piece. Which lines are such pieces, and
-# how wide their lead is, goes beside it (.cont), so text selected in the
-# pane copies as the lines it was rather than as the pane broke them.
+# to the pane (share/pane-wrap.awk), the pieces a line broke into beside it
+# (.cont).
 render() {
   FZF_PREVIEW_COLUMNS=$1 FZF_PREVIEW_LINES=$H otis-preview "$3" "$4" "$5" "$6" 2>/dev/null |
-    LC_ALL=C awk -v w=$1 -v cont=$2.cont.tmp '
-      function esc(s) { return s == "\033[0m" || s == "\033[m" }
-      function out(s, piece) { print s; on++; if (piece) print on, lw > cont }
-      {
-        gsub(/\t/, "        ")
-        # The line in units: an escape (no width) or a character (one).
-        n = 0; i = 1; L = length($0)
-        while (i <= L) {
-          c = substr($0, i, 1)
-          if (c == "\033" && match(substr($0, i), /^\033\[[0-9;:?]*[A-Za-z]/)) { u[++n] = substr($0, i, RLENGTH); vis[n] = 0; i += RLENGTH; continue }
-          # A link (OSC 8) or a title: no width either.
-          if (c == "\033" && match(substr($0, i), /^\033\][^\007\033]*(\007|\033\\)/)) { u[++n] = substr($0, i, RLENGTH); vis[n] = 0; i += RLENGTH; continue }
-          j = i + 1
-          while (j <= L && substr($0, j, 1) ~ /[\200-\277]/) j++
-          u[++n] = substr($0, i, j - i); vis[n] = 1; i = j
-        }
-        # The lead: spaces and bars before the text.
-        lead = ""; lw = 0
-        for (k = 1; k <= n; k++) {
-          if (!vis[k]) { lead = lead u[k]; continue }
-          if (u[k] == " " || u[k] == "\342\224\202" || u[k] == "\342\224\203" || u[k] == "\342\226\214") { lead = lead u[k]; lw++; continue }
-          break
-        }
-        if (lw > w / 2) { lead = ""; lw = 0 }
-        cur = ""; cw = 0; sgr = ""; sp = 0; pc = 0
-        for (k = 1; k <= n; k++) {
-          if (!vis[k]) { cur = cur u[k]; if (esc(u[k])) sgr = ""; else if (u[k] ~ /m$/) sgr = sgr u[k]; continue }
-          if (cw >= w) {
-            if (sp > 0 && spw > lw) {
-              out(substr(cur, 1, sp) "\033[0m", pc); pc = 1
-              cur = lead spsgr substr(cur, sp + 1); cw = lw + cw - spw
-            } else {
-              out(cur "\033[0m", pc); pc = 1
-              cur = lead sgr; cw = lw
-            }
-            sp = 0
-          }
-          cur = cur u[k]; cw++
-          if (u[k] == " " && cw > lw) { sp = length(cur); spw = cw; spsgr = sgr }
-        }
-        out(cur "\033[0m", pc); pc = 0
-      }
-      END { printf "" > cont }' > $2.tmp
+    LC_ALL=C awk -v w=$1 -v cont=$2.cont.tmp "$wrap_awk" > $2.tmp
   mv -f $2.cont.tmp $2.cont
   mv -f $2.tmp $2
 }
@@ -429,33 +384,42 @@ warm() {
 
 # --- the frame -------------------------------------------------------------------
 top=0 help=0 flash=
-# The pane's scroll: poff where it is, pto where ctrl-d and ctrl-u are taking
-# it, from pfrom since pt0; plen its lines, for where it stops.
-integer poff=0 pto=0 pfrom=0 plen=0
-float pt0=0
-# glide <lines>: ctrl-d and ctrl-u. Half a page, over 0.14s, a line or so a
-# frame, rather than a jump: the eye follows the text past. Another press
-# mid-glide carries on from where the pane is to a goal further on.
-glide() {
+# The pane's scroll: poff where it is; plen its lines, for where it stops.
+integer poff=0 plen=0
+# scroll <lines>: the wheel, ctrl-d and ctrl-u, in one frame. A glide sent a
+# frame of the whole pane every 10ms, which under a multiplexer stuttered
+# rather than glided.
+scroll() {
   local max
-  (( max = plen - (H - 3), max < 0 ? (max = 0) : 0 ))
-  (( pto += $1, pto > max ? (pto = max) : 0, pto < 0 ? (pto = 0) : 0 ))
-  pfrom=$poff pt0=$EPOCHREALTIME
+  (( max = plen - ph, max < 0 ? (max = 0) : 0 ))
+  (( poff += $1, poff > max ? (poff = max) : 0, poff < 0 ? (poff = 0) : 0 ))
 }
 # What is on the screen now, a line a row; emptied when the screen may no
 # longer be it (a resize, back from another program), which draws it whole.
 typeset -a shown_rows shown_pane
+shown_geom=
 # The pane's lines as last drawn, for a selection to copy from.
 typeset -a P
-pw=0
+# The layout: the pane beside the list from 130 columns (side), else under
+# it on a screen tall enough for both, as in a split that is tall and
+# narrow; else no pane, and space reads the preview in a pager. rows is the
+# list's height; the pane is pw wide and ph high, from row py, column px.
+integer pw=0 side=0 py=1 ph=0
+pfile=
 draw() {
   local t0=$EPOCHREALTIME
   local lw y i f lo=0 hi=0 body foot rows
-  pw=0
-  if (( W >= 130 )); then (( lw = W * 60 / 100 )); (( pw = W - lw - 5 ))
+  pw=0 side=0 py=1
+  if (( W >= 130 )); then (( lw = W * 60 / 100, pw = W - lw - 5, side = 1 ))
   else lw=$W; fi
   left $lw
-  (( rows = H - 2, px = lw + 6 ))
+  if (( side )); then (( rows = H - 2, ph = rows, px = lw + 6 ))
+  elif (( H >= 30 )); then
+    # Under the list: the list as tall as it is, up to half the screen, and
+    # never under ten rows; the pane has the rest, under a rule.
+    (( rows = $#L + 1, rows > (H - 2) / 2 ? (rows = (H - 2) / 2) : 0, rows < 10 ? (rows = 10) : 0 ))
+    (( py = rows + 2, ph = H - 2 - rows - 1, pw = W - 4, px = 3 ))
+  else rows=$(( H - 2 )) ph=0; fi
   # The cursor's row in view, with the headline kept when it fits.
   for (( y = 1; y <= $#LI; y++ )); do
     (( LI[y] == cur )) && { (( lo == 0 )) && lo=$y; hi=$y; }
@@ -463,7 +427,6 @@ draw() {
   (( hi > top + rows )) && (( top = hi - rows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
   (( lo > 0 && hi <= rows )) && top=0
-  P=()
   if (( help )); then
       P=("" "  ${B}${T}keys${R}" "")
       local k v
@@ -474,15 +437,21 @@ draw() {
         P+=("  ${A}${(r:9:: :)k}${R} ${C}$v${R}")
       done
       [[ -s $st/legend ]] && P+=("" "  ${B}${T}glyphs${R}" "" "${(@f)$(<$st/legend)}")
-      plen=$#P
+      plen=$#P pfile=
       # No pane to put it in: it is the screen.
       (( pw > 0 )) || { L=("${(@)P[1+poff,-1]}") LU=("${(@)L/*/$lw}") top=0; }
   elif (( pw > 0 )); then
     if (( $#id )); then
+      # Read and split once when it lands, not every frame: a frame of a
+      # scroll is then the lines it shows and nothing else.
       shown $pw; lastpv=$REPLY
-      [[ -n $REPLY ]] && P=("" "${(@f)$(<$REPLY)}") || P=("" "${F}…${R}")
+      if [[ $REPLY != $pfile || -z $pfile ]]; then
+        pfile=$REPLY
+        [[ -n $REPLY ]] && P=("" "${(@f)$(<$REPLY)}") || P=("" "${F}…${R}")
+      fi
       plen=$#P
-    fi
+    else P=() pfile=; fi
+  else P=() pfile=
   fi
   # The frame, a line a screen row, and then only the rows that differ from
   # the last frame go out: a move is the two rows it changes and the pane,
@@ -492,23 +461,26 @@ draw() {
   # pane changed across the whole width, which on a big screen was most of
   # the bytes, and a terminal under a multiplexer (herdr, tmux) parses and
   # draws every one of them.
-  local -a fr pr
+  # fr the list's lines and the rules and footer, fy the screen row of each;
+  # pr the pane's.
+  local -a fr fy pr
   local s
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     if (( i <= $#L )); then s=$L[i]$R; (( LU[i] < lw )) && s+=${(l:lw-LU[i]:: :)}
     else s=${(l:lw:: :)}; fi
-    (( pw > 0 )) && s+=$R"  "$F"│"$R
-    fr+=("$s")
-    if (( pw > 0 )); then
-      f=$(( y + poff )) s=
-      if (( f <= $#P )); then
-        if (( sel && f >= s1 && f <= s2 )); then selected $f; s=$REPLY; else s=$P[f]; fi
-      fi
-      pr+=("$s")
-    fi
+    (( side )) && s+=$R"  "$F"│"$R
+    fr+=("$s") fy+=($y)
   done
-  fr+=("$F${(l:W::─:)}$R")
+  (( pw > 0 && ! side )) && { fr+=("$F${(l:W::─:)}$R") fy+=($(( rows + 1 ))); }
+  for (( y = 1; y <= ph && pw > 0; y++ )); do
+    f=$(( y + poff )) s=
+    if (( f <= $#P )); then
+      if (( sel && f >= s1 && f <= s2 )); then selected $f; s=$REPLY; else s=$P[f]; fi
+    fi
+    pr+=("$s")
+  done
+  fr+=("$F${(l:W::─:)}$R") fy+=($(( H - 1 )))
   # The footer: a note if a key left one, else what enter does, then the
   # keys that open the rest.
   foot="  "
@@ -520,26 +492,31 @@ draw() {
     [[ -n $REPLY ]] && foot+=$B$A"⏎ "$REPLY$UB$R$C"   ·   "$R
     foot+=$A"m"$R$C" MRs  "$A"b"$R$C" branches  "$A"d"$R$C" deploys  "$A"a"$R$C" runs  "$A"w"$R$C" worktrees  "$A"?"$R$C" keys"$R
   fi
-  fr+=("$foot")
+  fr+=("$foot") fy+=($H)
   # No synchronized output (mode 2026) around it: a terminal under a
   # multiplexer (herdr) held every frame back behind it, which was a lag on
   # every key that nothing here could measure. Only the rows that changed go
   # out, so there is little to tear.
+  # The diff is line for line, so a frame laid out differently (the list
+  # grown or shrunk, the pane under it moved with it) is drawn whole: the
+  # pane's lines kept where they were drawn repeated down the screen.
+  local geom="$side $rows $py $ph $pw"
+  [[ $geom == $shown_geom ]] || { shown_rows=(); shown_geom=$geom; }
   body=
   (( $#shown_rows )) || { body+=$e'[2J'; shown_pane=(); }
   for (( y = 1; y <= $#fr; y++ )); do
     [[ $fr[y] == "$shown_rows[y]" ]] && continue
-    body+=$e"[$y;1H"$fr[y]$R
-    # A row with no pane beside it (the rule, the footer, a narrow screen)
+    body+=$e"[$fy[y];1H"$fr[y]$R
+    # A row with no pane beside it (the rules, the footer, a narrow screen)
     # clears to the edge; one with a pane leaves the pane's side be.
-    (( y > rows || pw == 0 )) && body+=$e'[K'
+    (( y > rows || ! side )) && body+=$e'[K'
   done
   for (( y = 1; y <= $#pr; y++ )); do
-    [[ $pr[y] == "$shown_pane[y]" ]] || body+=$e"[$y;$(( px - 2 ))H  "$pr[y]$R$e'[K'
+    [[ $pr[y] == "$shown_pane[y]" ]] || body+=$e"[$(( py + y - 1 ));$(( px - 2 ))H  "$pr[y]$R$e'[K'
   done
   shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
   local t1=$EPOCHREALTIME
-  print -nu $tty -- $body
+  print -rnu $tty -- $body
   print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk last=${(q)lastkey}" >> $trace
   kt= nk=0
 }
@@ -664,26 +641,30 @@ mouse() {
   [[ ${r[-1]} == m ]] && up=1
   r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
   (( y > H - 2 )) && return
+  # In the pane: beside the list, right of it; under it, below it.
+  local inpane=0 l
+  (( pw > 0 && (side ? x >= px : y >= py) )) && inpane=1
+  (( l = y - py + 1 + poff ))
   if (( b == 64 || b == 65 )); then
-    if (( pw > 0 && x >= px )); then glide $(( b == 64 ? -3 : 3 ))
-    elif (( b == 64 )); then (( cur > 1 )) && (( cur-- )); poff=0 pto=0
-    else (( cur < $#id )) && (( cur++ )); poff=0 pto=0; fi
+    if (( inpane )); then scroll $(( b == 64 ? -3 : 3 ))
+    elif (( b == 64 )); then (( cur > 1 )) && (( cur-- )); poff=0
+    else (( cur < $#id )) && (( cur++ )); poff=0; fi
     return
   fi
-  if (( pw > 0 && (x >= px || sel == 2) )); then
+  if (( inpane || (pw > 0 && sel == 2) )); then
     (( x < px )) && x=$px
-    if (( b == 0 && ! up )); then sel=2 sa=$(( y + poff )) ca=$(( x - px + 1 )) sb=$sa cb=$ca
-    elif (( b == 32 && sel )); then sb=$(( y + poff )) cb=$(( x - px + 1 ))
+    if (( b == 0 && ! up )); then sel=2 sa=$l ca=$(( x - px + 1 )) sb=$sa cb=$ca
+    elif (( b == 32 && sel )); then sb=$l cb=$(( x - px + 1 ))
     elif (( up && sel == 2 )); then
-      sb=$(( y + poff )) cb=$(( x - px + 1 )); sel=1
+      sb=$l cb=$(( x - px + 1 )); sel=1
       if (( sa == sb && ca == cb )); then sel=0; else ends; copy; fi
     fi
     (( sel )) && ends
     return
   fi
-  if (( b == 0 && ! up && (pw == 0 || x < px) )); then
+  if (( b == 0 && ! up && ! inpane )); then
     local at=$(( y + top ))
-    (( at <= $#LI && LI[at] > 0 )) && { cur=$LI[at]; poff=0 pto=0; sel=0; }
+    (( at <= $#LI && LI[at] > 0 )) && { cur=$LI[at]; poff=0; sel=0; }
   fi
 }
 
@@ -692,11 +673,12 @@ handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
   sel=0
   case $1 in
-    j|$e'[B') (( cur < $#id )) && (( cur++ )); poff=0 pto=0 ;;
-    k|$e'[A') (( cur > 1 )) && (( cur-- )); poff=0 pto=0 ;;
-    g) cur=1 poff=0 pto=0 ;;
-    G) cur=$#id poff=0 pto=0 ;;
-    q|$e) quit ;;
+    j|$e'[B') (( cur < $#id )) && (( cur++ )); poff=0 ;;
+    k|$e'[A') (( cur > 1 )) && (( cur-- )); poff=0 ;;
+    g) cur=1 poff=0 ;;
+    G) cur=$#id poff=0 ;;
+    # ctrl-c is a key here (-isig), since a signal's trap would never run.
+    q|$e|$'\x03') quit ;;
     $'\n'|$'\r') (( $#id )) && act enter ;;
     D) (( $#id )) && act dismiss ;;
     y) (( $#id )) && act copy ;;
@@ -706,9 +688,9 @@ handle() {
       screen_off
       case $1 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac
       rm -rf -- $st; exit 0 ;;
-    '?') help=$(( !help )) poff=0 pto=0 ;;
-    $'\x04') glide $(( H / 2 )) ;;
-    $'\x15') glide $(( - H / 2 )) ;;
+    '?') help=$(( !help )) poff=0 ;;
+    $'\x04') scroll $(( ph / 2 )) ;;
+    $'\x15') scroll $(( - ph / 2 )) ;;
     ' ') if (( $#id )); then
            screen_off
            otis-preview "$kind[cur]" "$iid[cur]" "$id[cur]" "$extra[cur]" 2>/dev/null | less -R
@@ -725,10 +707,8 @@ draw
 # Keys first: every key waiting is handled before the one draw after them,
 # so a held j costs a frame per burst rather than per key. Between keys, a
 # tick every 50ms takes in whatever landed: rows, previews, a key's answer.
-# A glide ticks every 10ms until it is there.
-integer tmo stick=0
+integer tmo=5 stick=0
 while :; do
-  (( tmo = poff != pto ? 1 : 5 ))
   reply=()
   zselect -t $tmo -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
@@ -743,15 +723,12 @@ while :; do
   else
     float ti=$EPOCHREALTIME
     changed=0
-    # Without perl, the size once a second.
-    if [[ -z $winch ]] && (( EPOCHSECONDS != stick )); then
+    # Once a second: whatever opened this is still there (else it goes,
+    # rather than read keys under a shell's prompt), and, without perl, the size.
+    if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
-      resize
-    fi
-    if (( poff != pto )); then
-      float t=$(( (EPOCHREALTIME - pt0) / 0.14 ))
-      if (( t >= 1 )); then poff=$pto; else (( poff = pfrom + (pto - pfrom) * t + (pto > pfrom ? 0.5 : -0.5) )); fi
-      changed=1
+      kill -0 $PPID 2>/dev/null || quit 1
+      [[ -z $winch ]] && resize
     fi
     landed && changed=1
     answered && changed=1

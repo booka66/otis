@@ -675,9 +675,12 @@ gunwip() {
   git reset --soft HEAD~1 && git status --short
 }
 
+# The terminal as it should be after a full-screen program that died in it:
+# its modes (stty sane: echo, line editing, a newline that returns), and the
+# screen's (scroll region, wrap, cursor, mouse reporting, the main screen).
 # clear does not reset the scroll region; a TUI that exits badly leaves it set
 # and later output scrolls out of view.
-fixterm() { printf '\033[r\033[?7h\033[?25h\033[0m'; clear }
+fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?1049l'; clear }
 
 # The three things lazygit still does better, as pickers.
 
