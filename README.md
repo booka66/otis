@@ -1,6 +1,6 @@
 # otis
 
-Git and GitLab from the terminal. `otis` is a dashboard of everything that wants you: MRs to review, failed pipelines, threads on yours, deploys. Under it are fzf pickers for branches, staging, the log, worktrees and merge requests. You review and comment on lines right in the picker (or in nvim, with the comments inline), and read a change by symbol instead of file by file. Claude Code can review an MR, propose fixes, watch production after a deploy, or check that a change actually works. It runs on macOS and Linux.
+Git and GitLab from the terminal. `otis` is a dashboard of everything that wants you: MRs to review, failed pipelines, threads on yours, deploys. Under it are pickers for branches, staging, the log, worktrees and merge requests, drawn in the terminal, whose footer says what each key does on the row you are on. You review and comment on lines right in the picker (or in nvim, with the comments inline), and read a change by symbol instead of file by file. Claude Code can review an MR, propose fixes, watch production after a deploy, or check that a change actually works. It runs on macOS and Linux.
 
 ## Install
 

@@ -21,6 +21,11 @@ function out(s, piece) { print s; on++; if (piece) print on, lw > cont }
   if (index($0, "\r")) $0 = substr($0, match($0, /\r[^\r]*$/) + 1)
   gsub(/[\001-\010\013-\032\034-\037\177]/, "")
   gsub(/\t/, "        ")
+  # Most lines fit and carry nothing but colors: as they are. Only a line
+  # too wide, or with some other escape to drop, is taken apart below, a
+  # character at a time.
+  t = $0; gsub(/\033\[[0-9;:]*m/, "", t)
+  if (index(t, "\033") == 0) { gsub(/[\200-\277]/, "", t); if (length(t) <= w) { out($0 "\033[0m", 0); next } }
   # The line in units: an escape (no width) or a character (one).
   n = 0; i = 1; L = length($0)
   while (i <= L) {

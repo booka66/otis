@@ -153,12 +153,15 @@ state() {
 }
 
 case $1 in
-  # --rows <dir> <detail> <from>: the events from line <from> on as rows,
+  # --rows <dir> <detail> <from> [to]: the events after line <from> (to line <to>) as rows,
   # kind, text, the event's line, who and when (epoch seconds), for
   # otis-agent, which draws the run.
   --rows)
     d=$2
-    sed -n "$(( ${4:-0} + 1 )),\$p" "$d/events.jsonl" | lines "$3" "${4:-0}" true ;;
+    # Up to line <to> when given: the run is still writing, and a reader
+    # that counted the lines first must take exactly those, or it takes a
+    # line written meanwhile twice.
+    sed -n "$(( ${4:-0} + 1 )),${5:-\$}p" "$d/events.jsonl" | lines "$3" "${4:-0}" true ;;
   # --stream <dir> <detail>: the rows, every event so far and then each new one
   # as it lands, until the run is over (and its last events are out) or the
   # picker is gone. fzf reads it as it comes.

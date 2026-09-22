@@ -14,77 +14,71 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 
 # A merged MR (git-ci-merged): where it is on the way to production.
 if [ "$kind" = merged ] || { [ -z "$kind" ] && jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; }; then
-  jq -r -L "$share" --arg iid "$iid" --arg url "$(otis-config url)" '
+  # As every preview speaks (share/pane.sh): where it has got to as a
+  # callout, then the MR, then the way to production as a line of steps,
+  # then a line a fact, each cut to the pane. Links are the keys' (enter
+  # its deploy, p its pipeline), not printed.
+  jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
     include "otis";
+    def B: "\u001b[1m";
+    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+    def callout($c; $head; $why): $c + "▌ " + B + ($head | cut($w - 2)) + r,
+      (if $why != "" then $c + "▌ " + r + text + ($why | cut($w - 2)) + r else empty end), "";
+    def fact($c; $t): "  " + $c + ($t | cut($w - 2)) + r;
+    def step($on; $g; $c; $label): $c + $g + " " + $label + r;
     . as $all | .mrs[] | select(.iid == $iid) |
-    attention + "!\(.iid)  " + text + .title + r,
-    context + .sourceBranch + " -> " + .targetBranch + r,
+    (.deploy.sha // "" | .[0:8]) as $sha |
+    (if .state == "live" then callout(good; "Live in production" + (if .deploy then " since " + (.deploy.at | ago) + " ago" else "" end); if $sha != "" then "Shipped by the deploy of " + $sha + "." else "" end)
+     elif .state == "deploying" then callout(attention; "Deploying now, started " + (.deploy.at | ago) + " ago"; "The running deploy of " + $sha + " has it.")
+     elif .state == "queued" then callout(attention; "Queued to go out"; "The deploy of " + $sha + " has it; it goes when the running one finishes.")
+     elif .state == "rolledback" then callout(bad; "Rolled back: production does not have it"; "The next deploy of a later commit brings it back.")
+     elif .state == "branch" then callout(elsewhere; "Merged into " + .targetBranch + ", not main"; "It goes out once that branch reaches main.")
+     else callout(yours; "Not out yet"; "") end),
+    ((.iid | length) as $il | attention + B + "!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r),
+    (context + ((.sourceBranch + " → " + .targetBranch + "  ·  merged " + (.mergedAt | ago) + " ago") | cut($w)) + r),
+    (if .via then context + (("reached main with !" + .via) | cut($w)) + r else empty end),
     "",
-    context + "merged " + (.mergedAt | when) + r,
-    (if .via then context + "reached main with !" + .via + ", which merged the branch it went into" + r else empty end),
-    (if .state == "live" then
-       good + "live" + r
-         + (if .deploy then " since " + (.deploy.at | when) else "" end),
-       (if .deploy then context + "shipped by the deploy of " + .deploy.sha[0:8] + r, context + .deploy.url + r else empty end)
-     elif .state == "deploying" then
-       attention + "deploying now" + r + ", started " + (.deploy.at | when),
-       context + "the running deploy of " + .deploy.sha[0:8] + " has it" + r,
-       context + .deploy.url + r
-     elif .state == "queued" then
-       attention + "queued" + r + ": the deploy of " + .deploy.sha[0:8] + " has it and passed its tests",
-       context + "it goes out when the running deploy finishes" + r
-         + (if $all.running then context + " (" + $all.running.sha[0:8] + ", started " + ($all.running.at | when) + ")" + r else "" end),
-       context + .deploy.url + r
-     elif .state == "rolledback" then
-       bad + "rolled back" + r + ": production was rolled back " + (.deploy.at | when),
-       context + "to the build of " + .deploy.sha[0:8] + " (pipeline #" + .deploy.version + "), which does not have it" + r,
-       context + "the next deploy of a later commit brings it back" + r,
-       context + .deploy.url + r
-     elif .state == "branch" then
-       elsewhere + "merged into " + .targetBranch + ", not main" + r,
-       context + "it goes out once that branch reaches main" + r
-     else
-       elsewhere + "not deployed yet" + r,
-       # The deploy job in its own pipeline, in words. Deploys take one lock and the newest
-       # ready one goes first; any deploy of a later commit has this one, and an
-       # older deploy that finds production already ahead refuses and fails.
-       (if .pipeline then
-          (.pipeline.job.status // "") as $job |
-          (if $job == "CREATED" then
-             "its build and tests are still running; then it deploys on its own"
-           elif $job == "WAITING_FOR_RESOURCE" then
-             "build and tests passed; queued behind the deploy that is running"
-           elif $job | IN("PENDING", "PREPARING") then
-             "build and tests passed; its deploy is about to start"
-           elif $job == "RUNNING" then
-             "its deploy is starting"
-           elif $job == "SKIPPED" then
-             "its pipeline did not pass, so it will not deploy itself; the next main pipeline that passes takes it"
-           elif $job == "FAILED" then
-             "its own deploy job failed, usually because a newer deploy went first; the next deploy takes it"
-           elif $job | IN("CANCELED", "CANCELING") then
-             "its own deploy was canceled; the next deploy takes it"
-           elif $job == "MANUAL" then
-             "its deploy is waiting for someone to run it"
-           elif $job == "SUCCESS" then
-             "its deploy job passed; checking again shortly"
-           elif .pipeline.status | IN("SUCCESS", "FAILED", "CANCELED", "SKIPPED") then
-             "its pipeline has no deploy job (a deploy freeze leaves it out); the next deploy takes it"
-           else
-             "its pipeline has not reached the deploy job yet"
-           end) as $words |
-          $words,
-          context + "pipeline " + (.pipeline.status | ascii_downcase) + ", deploy job " + ($job | ascii_downcase | gsub("_"; " ") | if . == "" then "none" else . end) + r,
-          (if .pipeline.job.webPath then context + $url + .pipeline.job.webPath + r else empty end)
-        else context + "no main pipeline for its merge commit yet" + r end),
-       "",
-       (if $all.running then attention + "a deploy is running" + r + " on " + $all.running.sha[0:8] + ", started " + ($all.running.at | when) + context + ", without it" + r else empty end),
-       (if $all.rollback then bad + "production rolled back " + ($all.rollback.at | when) + r + context + " to the build of " + $all.rollback.sha[0:8] + r
-        elif $all.lastDeploy then context + "production is on " + $all.lastDeploy.sha[0:8] + ", deployed " + ($all.lastDeploy.at | when) + r else empty end)
-     end),
+    context + "ON ITS WAY" + r,
+    "",
+    # The steps to production, each done, going, waiting or gone wrong.
+    (.state as $s | (.pipeline.job.status // "") as $job |
+     "  " + ([ step(1; "✓"; good; "merged"),
+       (if $s | IN("live", "deploying", "queued", "rolledback") then step(1; "✓"; good; "built")
+        elif $job | IN("FAILED", "SKIPPED", "CANCELED") then step(1; "✗"; bad; "built")
+        elif .pipeline then step(1; "◐"; attention; if $w < 50 then "build" else "building" end) else step(1; "○"; faint; "built") end),
+       (if $s == "live" or $s == "rolledback" then step(1; "✓"; good; if $w < 50 then "out" else "deployed" end)
+        elif $s == "deploying" then step(1; "◐"; attention; if $w < 50 then "going" else "deploying" end)
+        elif $s == "queued" then step(1; "○"; attention; "queued") else step(1; "○"; faint; if $w < 50 then "out" else "deploy" end) end),
+       (if $s == "live" then step(1; "✓"; good; "live") elif $s == "rolledback" then step(1; "✗"; bad; if $w < 50 then "undone" else "rolled back" end) else step(1; "○"; faint; "live") end)
+     ] | join(faint + (if $w < 50 then " → " else "  →  " end) + r))),
+    "",
+    (if .state == "live" and .deploy then fact(context; "deploy of " + $sha + ", " + (.deploy.at | when))
+     elif .state == "rolledback" then fact(bad; "rolled back " + (.deploy.at | ago) + " ago to the build of " + $sha + " (pipeline #" + (.deploy.version // "") + ")")
+     elif .state == "queued" and $all.running then fact(context; "running now: " + $all.running.sha[0:8] + ", started " + ($all.running.at | ago) + " ago")
+     elif (.state | IN("live", "deploying", "queued", "branch")) then empty
+     elif .pipeline then
+       (.pipeline.job.status // "") as $job |
+       fact(text; if $job == "CREATED" then "its build and tests are still running; then it deploys itself"
+         elif $job == "WAITING_FOR_RESOURCE" then "tests passed; queued behind the deploy that is running"
+         elif $job | IN("PENDING", "PREPARING") then "tests passed; its deploy is about to start"
+         elif $job == "RUNNING" then "its deploy is starting"
+         elif $job == "SKIPPED" then "its pipeline did not pass; the next main pipeline that passes takes it"
+         elif $job == "FAILED" then "its deploy job failed (a newer deploy went first); the next deploy takes it"
+         elif $job | IN("CANCELED", "CANCELING") then "its deploy was canceled; the next deploy takes it"
+         elif $job == "MANUAL" then "its deploy waits for someone to run it"
+         elif $job == "SUCCESS" then "its deploy job passed; checking again shortly"
+         elif .pipeline.status | IN("SUCCESS", "FAILED", "CANCELED", "SKIPPED") then "its pipeline has no deploy job (a freeze); the next deploy takes it"
+         else "its pipeline has not reached the deploy job yet" end),
+       fact(context; "pipeline " + (.pipeline.status | ascii_downcase) + ", deploy job " + ($job | ascii_downcase | gsub("_"; " ") | if . == "" then "none" else . end)),
+       (if $all.running then fact(attention; "a deploy is running on " + $all.running.sha[0:8] + ", without it") else empty end)
+     else fact(context; "no main pipeline for its merge commit yet") end),
     (if $all.rollback and (.state | IN("live", "deploying", "queued")) then
-       "", bad + "production rolled back " + ($all.rollback.at | when) + r + context + " to the build of " + $all.rollback.sha[0:8] + r
-     else empty end)
+       fact(bad; "production rolled back " + ($all.rollback.at | ago) + " ago, to the build of " + $all.rollback.sha[0:8])
+     elif (.state | IN("live", "rolledback") | not) and $all.lastDeploy then
+       fact(context; "production is on " + $all.lastDeploy.sha[0:8] + ", deployed " + ($all.lastDeploy.at | ago) + " ago")
+     else empty end),
+    "",
+    faint + ("  ⏎ its deploy  ·  p its pipeline" | cut($w)) + r
   ' "$GIT_FZF_STATE/ci-merged.json"
   exec git-mr-watch --preview "$iid"
 fi

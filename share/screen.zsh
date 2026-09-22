@@ -24,7 +24,10 @@ CODEBG=$e"[${OTIS_T_CODEBG}m"
 # as it was: the traps are set here, at the file's level, since a trap on
 # EXIT set inside a function fires when that function returns.
 integer screen=0
-trap 'quit 1' HUP TERM INT
+trap 'quit 1' TERM INT
+# A hangup is the terminal gone: nothing is written to it, since a write to a
+# terminal that has gone can block for good, holding the port open with it.
+trap 'screen=0; rm -rf -- $st; exit 1' HUP
 trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
 screen_start() {
   exec {tty}<>/dev/tty
@@ -68,8 +71,19 @@ readkey() {
     if [[ $seq == [\[O] ]]; then
       while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
     fi
-  elif [[ $k == [$'\xc0'-$'\xff'] ]]; then
-    while zselect -t 0 -r $tty && sysread -s 1 -i $tty c; do k+=$c; [[ $c == [$'\x80'-$'\xbf'] ]] || break; done
+  elif [[ $k == [$'\xc0'-$'\xf7'] ]]; then
+    # As many bytes after it as its lead byte says (110xxxxx one, 1110xxxx
+    # two, 11110xxx three), and no more: reading on until a byte that is not
+    # a continuation took the next character's lead byte with it, and a fast
+    # paste of "é漢" came out "é�字". Each is waited for a moment, since a
+    # paste can arrive split.
+    local -i more=1 i
+    [[ $k == [$'\xe0'-$'\xef'] ]] && more=2
+    [[ $k == [$'\xf0'-$'\xf7'] ]] && more=3
+    for (( i = 0; i < more; i++ )); do
+      zselect -t 5 -r $tty && sysread -s 1 -i $tty c || break
+      k+=$c
+    done
   fi
   REPLY=$k$seq
 }
@@ -88,7 +102,13 @@ keyname() {
 
 # --- text ----------------------------------------------------------------------------
 # plain <text>: its colors, links and titles out.
-plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
+plain() {
+  REPLY=$1
+  [[ $REPLY == *$e* ]] || return 0
+  REPLY=${(S)REPLY//$e\[[0-9;:?]#[a-zA-Z]/}
+  [[ $REPLY == *$e\]* ]] && REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}
+  return 0
+}
 # vw <text>: its width on the screen, its colors aside.
 vw() { plain "$1"; REPLY=${(m)#REPLY}; }
 # fit <text> <width>: plain text cut to that many columns with an ellipsis.
@@ -103,14 +123,22 @@ fit() {
 # cut <text> <width>: colored text cut to that many columns with an ellipsis,
 # its colors kept, a character at a time; only a line too wide is.
 cut() {
-  local s=$1 out= c
-  integer w=$2 n=0
+  local s=$1 out= run
+  integer w=$2 n=0 k
   vw "$s"; (( REPLY <= w )) && { REPLY=$s; return }
+  # A run of text and the escape after it at a time: whole while it fits,
+  # then the part of it that does. A character at a time was most of what
+  # drawing a long list cost.
   while [[ -n $s ]]; do
     if [[ $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then out+=$match[1]; s=${s:${#match[1]}}; continue; fi
-    c=${s[1]}
-    (( n + ${(m)#c} > w - 1 )) && break
-    out+=$c; (( n += ${(m)#c} )); s=${s:1}
+    run=${s%%$e*}; s=${s:${#run}}
+    if (( n + ${(m)#run} <= w - 1 )); then out+=$run; (( n += ${(m)#run} )); continue; fi
+    (( k = w - 1 - n ))
+    (( k > 0 )) || break
+    run=${run[1,k]}
+    while (( ${(m)#run} > w - 1 - n )); do run=${run[1,-2]}; done
+    out+=$run
+    break
   done
   REPLY=$out$R…
 }

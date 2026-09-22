@@ -456,7 +456,12 @@ out=$(jq -nr -L "$share" \
   # so, with the change each one is, which is what you wanted to know.
   def deploy_rows:
     if any($merged_mrs[]; .state | IN("deploying", "queued")) then empty else
-    [$deploys[] | select(.status | IN("running", "created", "pending"))][0:1][] |
+    # Not one a finished deploy started after: GitLab leaves a deploy job
+    # created and never run when a later pipeline deploys first, and that
+    # one is not on its way anywhere. (The at of a finished deploy is when it
+    # ended; started is when it began.)
+    ([$deploys[] | select(.status | IN("success", "failed", "canceled")) | (.started // .at) | at] | max // 0) as $done |
+    [$deploys[] | select(.status | IN("running", "created", "pending")) | select((.at | at) > $done)][0:1][] |
     { rank: (0 - (.at | at)), g: "◐", gc: attention,
       verb: (if .kind == "rollback" then "rolling production back" | fit(21) else "deploying" end),
       kind: "deploy", pipeline: (.pipeline | tostring), purl: .url, verb_key: "deploy",

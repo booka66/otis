@@ -58,9 +58,9 @@ expect rowfmt/stat "$(awk_fn 'gk_stat(4, 12, 2, 2)')" "+ 4 -12"
 expect rowfmt/stat-blank "$(awk_fn 'gk_stat("", "", 2, 2)')" "       "
 expect rowfmt/numstat-rename "$(awk_fn 'gk_numstat_path("dir/{old => new}.ts")')" "dir/new.ts"
 expect rowfmt/numstat-plain "$(awk_fn 'gk_numstat_path("old.ts => new.ts")')" "new.ts"
-expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(110)')" "104"
-expect rowfmt/width-side-by-side "$(awk_fn 'gk_list_width(120)')" "50"
-expect rowfmt/width-wide "$(awk_fn 'gk_list_width(220)')" "95"
+expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(110)')" "107"
+expect rowfmt/width-side-by-side "$(awk_fn 'gk_list_width(120)')" "57"
+expect rowfmt/width-wide "$(awk_fn 'gk_list_width(220)')" "125"
 
 # --- share/otis.jq
 expect jq/gid "$(jq_fn '"gid://gitlab/Ci::Pipeline/123" | gid')" "123"

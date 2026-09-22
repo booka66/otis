@@ -135,15 +135,19 @@ integer code=130
 at_quit() { (( $#outq )) && print -rl -- $outq; exit $code; }
 
 # --- the layout ------------------------------------------------------------------
-# Side by side from 120 columns, the rows in 45% of it, as fzf had them and
-# as the lists cut their rows (share/rowfmt.awk's gk_list_width); under that
+# Side by side from 120 columns, the pane 42% of it within 56..88 columns
+# and the rows the rest (share/rowfmt.awk's gk_list_width); under that
 # the preview under the rows. lw the list's width, lh its height; the pane at
 # column px, row py, pw wide and ph high; a rule a column in from the rows.
 integer lw lh px py pw ph side phd=0
 layout() {
   if (( W >= 120 )); then
-    side=1; (( lw = W * 45 / 100 ))
-    (( lh = H - 2, px = lw + 4, py = 1, pw = W - px, ph = H - 2 ))
+    # The pane is sized first, 42% clamped to 56..88 columns, and the rows
+    # take the rest: a preview wider than that was empty space while rows
+    # were cut. Rows are cut to lw - 3 = W - pw - 7 (rowlines), which
+    # share/rowfmt.awk's gk_list_width matches.
+    side=1; (( pw = W * 42 / 100, pw < 56 ? (pw = 56) : 0, pw > 88 ? (pw = 88) : 0 ))
+    (( px = W - pw, lw = px - 4, lh = H - 2, py = 1, ph = H - 2 ))
   else
     side=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
   fi
@@ -156,7 +160,7 @@ resize() {
   size
   (( H != oh || W != ow )) || return 1
   print -r -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H" >> $trace
-  layout; dirty=1 shown_rows=(); draw
+  layout; shown_rows=(); draw
   # The previews at the new width once it has held for 0.3s: a drag draws
   # them once, not at every width it passes through.
   (( settle = EPOCHREALTIME + 0.3 ))
@@ -167,7 +171,7 @@ resize() {
 # raw: each row as the list printed it; rid its id (the --id-nth field, or
 # the row itself); shw what --with-nth shows of it; head whether it is a
 # section's heading (drawn by the list as "── name ──"); hay what / searches.
-typeset -a raw rid shw head hay
+typeset -a raw rid shw head hay PL HIDX
 integer loaded=0
 # fields <row>: its fields in fld, as fzf numbered them.
 typeset -a fld
@@ -185,25 +189,39 @@ nth() {
   local i; for (( i = a; i <= b; i++ )); do reply+=("$fld[i]"); done
 }
 load() {
-  local line i s p
-  local -a parts
-  raw=() rid=() shw=() head=() hay=()
-  for line in ${(f)"$(<$1)"}; do
-    raw+=("$line")
-  done
-  for (( i = 1; i <= $#raw; i++ )); do
-    fields $i
-    if (( $#withnth )); then
-      parts=()
+  local i p
+  local -a parts f pl
+  # A row at a time costs a function call's 50µs each, which at a few
+  # thousand rows was a third of a second with the keys frozen; so what can
+  # be is done to the whole list at once.
+  raw=(${(f)"$(<$1)"})
+  if (( ! $#withnth )); then shw=("${raw[@]}")
+  elif (( $#withnth == 1 )) && [[ $withnth[1] == 1 && -n $delim ]]; then shw=("${(@)raw%%$delim*}")
+  else
+    shw=()
+    for (( i = 1; i <= $#raw; i++ )); do
+      fields $i; parts=()
       for p in $withnth; do nth $p; parts+=("${(@)reply}"); done
-      s=${(pj:$delim:)parts}
-    else s=$raw[i]; fi
-    shw+=("$s")
-    if (( idnth )); then rid+=("$fld[idnth]"); else rid+=("$raw[i]"); fi
-    plain "$s"
-    if [[ $REPLY == [[:space:]]#──' '* ]]; then head+=(1); else head+=(0); fi
-    hay+=("${(L)REPLY}")
-  done
+      shw[i]=${(pj:$delim:)parts}
+    done
+  fi
+  if (( ! idnth )); then rid=("${raw[@]}")
+  else
+    rid=()
+    for (( i = 1; i <= $#raw; i++ )); do
+      if [[ -n $delim ]]; then f=("${(@ps:$delim:)raw[i]}"); else f=(${=raw[i]}); fi
+      rid[i]=$f[idnth]
+    done
+  fi
+  pl=("${(@S)shw//$e\[[0-9;:?]#[a-zA-Z]/}")
+  PL=("${(@S)pl//$e\][^$'\a'$e]#($'\a'|$e\\)/}")
+  hay=("${(@L)PL}")
+  # The headings, found by the shell's own search of the list, a heading at
+  # a time, rather than a test a row.
+  head=("${(@)PL/*/0}") HIDX=()
+  local pat='[[:space:]]#── *'
+  integer k=1 n
+  while n=${PL[(in:k:)$~pat]}; (( n <= $#PL )); do head[n]=1 HIDX+=($n); (( k++ )); done
   loaded=1 dirty=1 rlw=0
 }
 
@@ -224,11 +242,25 @@ rowline() {
     put "$C" "${(U)t}"
     rest=${shw[i]##*─}; rest=${rest#$R}; rest=${rest## #}
     [[ -n $rest ]] && { put "" "  "; line+=$rest; }
+    vw "$line"; (( REPLY > w )) && { cut "$line" $w; line=$REPLY; }
     RL[i]=$line$R
     return
   fi
   cut "$shw[i]" $w; line=$REPLY; vw "$line"; used=$REPLY
   RL[i]=$line$R
+}
+# rowlines: every row's line for the list's width. Most fit as they are;
+# only one too wide is cut, a character at a time.
+rowlines() {
+  local i
+  integer w=$(( lw - 3 ))
+  RL=()
+  for (( i = 1; i <= $#raw; i++ )); do
+    if (( head[i] )); then rowline $i
+    elif (( ${(m)#PL[i]} <= w )); then RL[i]=$shw[i]$R
+    else cut "$shw[i]" $w; RL[i]=$REPLY$R; fi
+  done
+  rlw=$lw
 }
 # lit <row>: the row's line with the words the search found underlined,
 # a character at a time, so its colors stay.
@@ -257,86 +289,93 @@ lit() {
 }
 
 # --- the list --------------------------------------------------------------------
-# L: its lines, LI the row each is (0 for none); vis the rows the cursor
-# may land on, in order, the search applied; marked the rows marked (--multi).
-typeset -a L LI vis
+# Two parts. The headline (HL): the picker's name, its header, what the list
+# said and the search, built every frame, since what it reads changes under
+# it (the footer file a command writes) and it is a few lines. Then the rows
+# (ROWL, and ROWI the row each line is, 0 for a heading's), built only when
+# the rows, the search or the width change (dirty): at a few thousand rows
+# that is the costly part. RY is each row's line in it; vis the rows the
+# cursor may land on, in order; marked the rows marked (--multi).
+typeset -a HL ROWL ROWI RY vis
 typeset -A marked
-integer dirty=1 cur=0 top=0 rlw=0
-matches() {
-  local w
-  (( head[$1] )) && return 1
-  (( disabled )) && return 0
-  [[ -z $query ]] && return 0
-  for w in ${=${(L)query}}; do [[ $hay[$1] == *"$w"* ]] || return 1; done
-  return 0
-}
-# The headline: the picker's name, the header its list gave it, and what
-# the list said.
+integer dirty=1 cur=0 top=0 rlw=0 qdirty=0
 headline() {
-  local w=$1 t s
+  local w=$1 t s l
   local -a words segs
-  L+=("") LI+=(0)
+  HL=("")
   line= used=0; put "" "  "
   t=$title
   if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
   put "$B$T" "$t"; line+=$UB
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
-  L+=("$line") LI+=(0)
-  L+=("") LI+=(0)
+  HL+=("$line" "")
   if [[ -n $header ]]; then
     for t in ${(f)header}; do
       plain "$t"; words=(${=REPLY}); s=
       for t in $words; do
-        if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > w - 4 )); then L+=("  $T$s$R") LI+=(0); s=; fi
+        if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > w - 4 )); then HL+=("  $T$s$R"); s=; fi
         s+=${s:+ }$t
       done
-      [[ -n $s ]] && L+=("  $T$s$R") LI+=(0)
+      [[ -n $s ]] && HL+=("  $T$s$R")
     done
-    L+=("") LI+=(0)
+    HL+=("")
   fi
   if [[ -s $st/footer ]]; then
-    segs=("${(@s: · :)${(j: · :)${(f)$(<$st/footer)}}}") s=
+    segs=("${(@s: · :)${(j: · :)${(f)"$(<$st/footer)"}}}") s=
     for t in $segs; do
       vw "$s · $t"
-      if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); s=; fi
+      if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); HL+=("  $REPLY$R"); s=; fi
       s+=${s:+$C · $R}$t
     done
-    [[ -n $s ]] && { cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); }
+    [[ -n $s ]] && { cut "$s" $(( w - 4 )); HL+=("  $REPLY$R"); }
   fi
   local stale=($st/stale.*(N))
-  (( $#stale )) && L+=("  ${X}could not refresh from GitLab: this is what it said last · ? shows why$R") LI+=(0)
-  [[ -s $st/footer || $#stale -gt 0 ]] && { L+=("") LI+=(0); }
-  (( loaded )) || { L+=("  ${C}loading…$R") LI+=(0); }
+  (( $#stale )) && HL+=("  ${X}could not refresh from GitLab: this is what it said last · ? shows why$R")
+  [[ -s $st/footer || $#stale -gt 0 ]] && HL+=("")
+  (( loaded )) || HL+=("  ${C}loading…$R")
+  if (( loaded )) && { [[ -n $query ]] || (( searching )); }; then
+    l="  "$A"/"$R" "$T$query$R
+    (( searching )) && l+=$A"▏"$R
+    HL+=("$l" "")
+  fi
+  # Nothing here may run past the list into the pane beside it.
+  for (( l = 1; l <= $#HL; l++ )); do
+    vw "$HL[l]"; (( REPLY > w - 1 )) && { cut "$HL[l]" $(( w - 1 )); HL[l]=$REPLY; }
+  done
 }
 list() {
-  local i
-  if (( rlw != lw )); then
-    RL=()
-    for (( i = 1; i <= $#raw; i++ )); do rowline $i; done
-    rlw=$lw
+  local i w h
+  local -a words
+  integer n=0 a=1 b
+  (( rlw != lw )) && rowlines
+  ROWL=() ROWI=() RY=() vis=()
+  (( loaded )) || { dirty=0; return }
+  (( disabled )) || words=(${=${(L)query}})
+  if (( ! $#words )); then
+    # Every row: the runs between headings a run at a time.
+    for h in $HIDX $(( $#raw + 1 )); do
+      if (( h > a )); then
+        (( b = h - 1 ))
+        ROWI[n+1,n+h-a]=({$a..$b}); RY[a,b]=({$((n + 1))..$((n + h - a))}); vis+=({$a..$b})
+        (( n += h - a ))
+      fi
+      (( h > $#raw )) && break
+      if [[ -z $query ]]; then
+        (( n && (ROWI[n] || $#ROWL[n]) )) && { (( n++ )); ROWL[n]= ROWI[n]=0; }
+        (( n++ )); ROWL[n]="  ${RL[h]}" ROWI[n]=0
+      fi
+      (( a = h + 1 ))
+    done
+  else
+    for (( i = 1; i <= $#raw; i++ )); do
+      (( head[i] )) && continue
+      for w in $words; do [[ $hay[i] == *"$w"* ]] || continue 2; done
+      (( n++ )); ROWI[n]=$i RY[i]=$n; vis+=($i)
+    done
   fi
-  L=() LI=() vis=()
-  headline $lw
-  (( loaded )) || return
-  if [[ -n $query ]] || (( searching )); then
-    line="  "$A"/"$R" "$T$query$R
-    (( searching )) && line+=$A"▏"$R
-    L+=("$line") LI+=(0) L+=("") LI+=(0)
-  fi
-  for (( i = 1; i <= $#raw; i++ )); do
-    if (( head[i] )); then
-      [[ -n $query ]] && continue
-      (( $#L > 0 )) && [[ -n $L[-1] ]] && { L+=("") LI+=(0); }
-      L+=("  ${RL[i]}") LI+=(0)
-      continue
-    fi
-    matches $i || continue
-    L+=("$i") LI+=($i)
-    vis+=($i)
-  done
   if (( ! $#vis )); then
-    if [[ -n $query ]]; then L+=("  ${C}nothing matches$R") LI+=(0)
-    elif (( ! $#raw )); then L+=("  ${C}nothing here$R") LI+=(0); fi
+    if [[ -n $query ]]; then (( n++ )); ROWL[n]="  ${C}nothing matches$R" ROWI[n]=0
+    elif (( ! $#raw )); then (( n++ )); ROWL[n]="  ${C}nothing here$R" ROWI[n]=0; fi
   fi
   dirty=0
 }
@@ -389,7 +428,11 @@ key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
 pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
 shown() {
   pvname "$rid[cur]" $pw
-  local -a have=($REPLY.<->(Nom))
+  # This gen's, when it is there; else the newest gen there is, by its
+  # number: a slower render of an older gen that lands after is not newer
+  # for landing later.
+  [[ -e $REPLY.$gen ]] && { REPLY=$REPLY.$gen; return }
+  local -a have=($REPLY.<->(NnOn))
   (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
   REPLY=${have[1]}
 }
@@ -426,7 +469,8 @@ subst() {
 }
 # tell: what fzf told a command about the picker, for the one about to run.
 tell() {
-  local at=${vis[(Ie)$cur]} n=0 i
+  local at=$cur n=0 i
+  [[ -n $query ]] && at=${vis[(Ie)$cur]}
   for i in ${(k)marked}; do (( marked[$i] )) && (( n++ )); done
   export FZF_QUERY=$query FZF_POS=$at FZF_TOTAL_COUNT=$#raw FZF_MATCH_COUNT=$#vis FZF_SELECT_COUNT=$n FZF_PROMPT="$title "
 }
@@ -506,7 +550,7 @@ rowkeys() {
   local f l
   keysfor; f=$REPLY
   [[ $f == $rkfor ]] && return
-  rkl=()
+  rkl=() rkfor=
   [[ -e $f ]] || return
   rkfor=$f
   for l in "${(@f)$(<$f)}"; do [[ $l == *$'\t'* ]] && rkl[${l%%$'\t'*}]=${l#*$'\t'}; done
@@ -532,21 +576,23 @@ helplines() {
     drag "in the preview: its text, copied" "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
-  (( multi )) && P+=("  ${A}${(r:9:: :)tab}$R ${C}mark a row; the keys that take marked rows take them all$R")
+  (( multi )) && P+=("  ${A}${(r:9:: :)${:-tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
   [[ -s $st/legend ]] && P+=("" "${(@f)$(<$st/legend)}")
   [[ -s $st/last-error ]] && { P+=("" "  ${X}last error$R"); wrap "$(<$st/last-error)" $(( pw - 4 )); P+=("  "${^reply}); }
 }
 draw() {
   local t0=$EPOCHREALTIME
   local y i f s lo=0 hi=0 body rows m foot
-  (( dirty )) && list
+  integer nh total
+  (( dirty || rlw != lw )) && list
   settle_cur
-  (( rows = lh ))
-  for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
+  headline $lw
+  (( nh = $#HL, total = nh + $#ROWI, rows = lh ))
+  (( cur && RY[cur] )) && (( lo = hi = nh + RY[cur] ))
   (( hi > top + rows )) && (( top = hi - rows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
   (( lo > 0 && hi <= rows )) && top=0
-  (( top > $#L - rows )) && (( top = $#L - rows ))
+  (( top > total - rows )) && (( top = total - rows ))
   (( top < 0 )) && top=0
   # The pane: the preview, or ? its keys.
   if (( help )); then helplines; pfile=
@@ -564,14 +610,15 @@ draw() {
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     s=
-    if (( i <= $#L )); then
-      if (( LI[i] )); then
-        f=$LI[i]
+    if (( i <= nh )); then s=$HL[i]$R
+    elif (( i <= total )); then
+      if (( ROWI[i - nh] )); then
+        f=${ROWI[i-nh]}
         if [[ -n $query ]]; then lit $f; else REPLY=$RL[f]; fi
         if (( multi && ${marked[$f]:-0} )); then m=$G"▎"$R; else m=" "; fi
         if (( f == cur )); then s=$A"▌"$R$BG$m${REPLY//$R/$R$BG}$R
         else s=" "$m$REPLY; fi
-      else s=$L[i]$R; fi
+      else s=${ROWL[i-nh]}$R; fi
     fi
     (( side )) && s=$e"[${lw}X"$s$e"[$(( lw + 1 ))G"$R" "$F"│"$R
     fr+=("$s")
@@ -653,11 +700,13 @@ reload() {
 landed() {
   local p f
   integer n newest=0
+  (( rgot < rgen )) || return 1
   for p in $rpid; do kill -0 $p 2>/dev/null || rpid=(${rpid:#$p}); done
   local -a got=($st/list.<->(N))
   for f in $got; do n=${f##*.}; (( n > newest )) && newest=n; done
-  (( newest > rgot )) || return 1
+  (( newest > rgot )) || { rm -f $got; return 1; }
   rgot=$newest
+  # An older reload landing after a newer one is never shown: gone too.
   for f in $got; do (( ${f##*.} < newest )) && rm -f $f; done
   take $st/list.$newest
   rm -f $st/list.$newest
@@ -705,7 +754,11 @@ offin() {
 # fire <event>: its binding, unless unbound.
 fire() { [[ -n $bind[$1] ]] && (( ! ${off[$1]:-0} )) && run "$bind[$1]" $cur; }
 # The search changed: what it finds, then whoever asked to hear of it.
-requery() { dirty=1; list; settle_cur; fire change; fire result; }
+requery() { qdirty=0; dirty=1; list; settle_cur; fire change; fire result; }
+# flushq: the search the keys typed so far asked for, before anything that
+# reads the rows it finds. Typing asks only for this (qdirty), so a burst of
+# keys searches once, not once a key.
+flushq() { (( qdirty )) && requery; }
 # run <actions> <row>: fzf's actions, as a binding or a transform gives them.
 run() {
   local s=$1 name arg i c q depth open close out
@@ -728,7 +781,7 @@ run() {
     subst "$arg" $row; arg=$REPLY
     case $name in
       execute)
-        offout; tell; screen_off; zsh -fc "$arg" <&$tty >&$tty 2>&1; screen_on; offin; resize; dirty=1 ;;
+        offout; tell; screen_off; zsh -fc "$arg" <&$tty >&$tty 2>&1; screen_on; offin; resize ;;
       execute-silent)
         offout; tell; zsh -fc "$arg" </dev/null >/dev/null 2>&1; offin ;;
       transform)
@@ -754,8 +807,8 @@ run() {
       clear-query) query=; requery ;;
       change-query) query=$arg; requery ;;
       change-prompt) title=${arg% } ;;
-      change-header) header=$arg; dirty=1 ;;
-      transform-header) tell; header=$(zsh -fc "$arg" </dev/null 2>/dev/null); dirty=1 ;;
+      change-header) header=$arg ;;
+      transform-header) tell; header=$(zsh -fc "$arg" </dev/null 2>/dev/null) ;;
       show-preview) pshow=1 ;;
       hide-preview) pshow=0 ;;
       toggle-preview) pshow=$(( ! pshow )) ;;
@@ -793,7 +846,6 @@ act() {
   flash="…"; draw
   run "$bind[$1]" $cur
   if (( gen != g && poff != was )); then pwant=$poff pgen=$gen poff=$was; fi
-  dirty=1
 }
 # --- the mouse -------------------------------------------------------------------
 inpane() { (( y >= py + phd && y < py + ph && (side ? x >= px : 1) )); }
@@ -820,8 +872,8 @@ mouse() {
     return
   fi
   if (( b == 0 && ! up && y <= lh )) && (( side ? x < lw : 1 )); then
-    local at=$(( y + top ))
-    (( at <= $#LI && LI[at] > 0 )) && go $LI[at]
+    local at=$(( y + top - $#HL ))
+    (( at > 0 && at <= $#ROWI && ROWI[at] > 0 )) && go $ROWI[at]
   fi
 }
 # ]/[: the next or the last change in the preview, a run of lines on a
@@ -862,18 +914,31 @@ handle() {
   kname "$k"; local n=$REPLY
   if (( searching )); then
     case $n in
-      enter) searching=0 dirty=1; if [[ -n $bind[enter] ]]; then act enter; else accept; fi; return ;;
-      esc) searching=0 dirty=1; return ;;
+      bspace) query=${query[1,-2]} qdirty=1; return ;;
+      ctrl-u) query= qdirty=1; return ;;
+    esac
+    if [[ $k == [[:print:]]* && $k != $e* && $n != (space|enter|tab) ]] || [[ $n == space && -z $bind[space] ]]; then
+      query+=$k qdirty=1; return
+    fi
+    flushq
+    # A key the picker binds, that is not text (tab, enter, ctrl-…, an
+    # arrow), does what the picker says, as under fzf: the reviewers
+    # picker, which opens searching, toggles with tab.
+    if [[ $n != esc && -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
+      [[ $n == enter ]] && searching=0
+      act $n; return
+    fi
+    case $n in
+      enter) searching=0; accept; return ;;
+      esc) searching=0; return ;;
       tab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1; return ;;
-      bspace) query=${query[1,-2]}; requery; return ;;
       up|ctrl-k|ctrl-p) step -1; return ;;
       down|ctrl-j|ctrl-n) step 1; return ;;
-      ctrl-u) query=; requery; return ;;
       ctrl-c) code=130; quit 130 ;;
     esac
-    [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k; requery; }
     return
   fi
+  flushq
   sel=0
   # A key that runs a command, held down, is one press: its repeats within
   # 0.3s of the last are dropped. One that only moves or marks repeats.
@@ -881,7 +946,7 @@ handle() {
     if [[ $bind[$n] == *[\(:]* ]]; then
       if (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
       act $n; held[$n]=$EPOCHREALTIME
-    else run "$bind[$n]" $cur; dirty=1; fi
+    else run "$bind[$n]" $cur; fi
     return
   fi
   case $n in
@@ -896,7 +961,7 @@ handle() {
     btab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step -1 ;;
     q) code=130; quit 130 ;;
     esc) if [[ -n $query ]]; then query=; requery; else code=130; quit 130; fi ;;
-    /) searching=1 dirty=1 ;;
+    /) searching=1 ;;
     '?') help=$(( !help )) poff=0 ;;
     ctrl-d) scroll $(( (ph - phd) / 2 )) ;;
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
@@ -911,7 +976,8 @@ handle() {
 # --- the port ----------------------------------------------------------------------
 # What fzf's GET answered, as far as anything reads it; a POST is actions.
 port_state() {
-  local out i at=${vis[(Ie)$cur]} reading=false
+  local out i at=$cur reading=false
+  [[ -n $query ]] && at=${vis[(Ie)$cur]}
   local -a m sl
   (( $#rpid )) && reading=true
   for i in $vis; do json "$raw[i]"; m+=("{\"index\":$(( i - 1 )),\"text\":\"$REPLY\"}"); done
@@ -922,7 +988,7 @@ port_state() {
   out+=",\"matches\":[${(j:,:)m}],\"selected\":[${(j:,:)sl}]}"
   REPLY=$out
 }
-port_post() { run "$1" $cur; dirty=1; }
+port_post() { flushq; run "$1" $cur; }
 
 # --- the loop ----------------------------------------------------------------------
 screen_on
@@ -945,6 +1011,7 @@ while :; do
     kt=$EPOCHREALTIME nk=1
     readkey; handle $REPLY
     while zselect -t 0 -r $tty; do readkey; handle $REPLY; (( nk++ )); done
+    flushq
     draw
   else
     float ti=$EPOCHREALTIME
@@ -956,7 +1023,8 @@ while :; do
     fi
     landed && changed=1
     [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
-    (( cur && ! help && pshow )) && [[ -n $preview ]] && { shown; [[ $REPLY != $lastpv ]] && changed=1; }
+    # This row's preview landing: one file test, not a look through pv/.
+    (( cur && ! help && pshow )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }
     if (( settle && EPOCHREALTIME >= settle )); then
       settle=0
       (( gen++ )); warm
@@ -964,7 +1032,7 @@ while :; do
     for i in $ticks; do
       (( EPOCHREALTIME >= tnext[$i] )) || continue
       (( tnext[$i] = EPOCHREALTIME + i ))
-      run "$tevery[$i]" $cur; changed=1 dirty=1
+      run "$tevery[$i]" $cur; changed=1
     done
     (( changed )) && draw
     (( ! help && ! settle )) && want

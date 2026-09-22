@@ -77,6 +77,7 @@ case $mode in
     exit 0
     ;;
   --preview)
+    . "$share/palette.sh"; . "$share/pane.sh"
     d=$top/$1
     [ -z "$1" ] && d="$top/b-$(printf '%s' "$2" | tr '/' '%')"
     [ -d "$d" ] || exit 0
@@ -96,12 +97,14 @@ case $mode in
     [ -n "$OTIS_REPORT_NO_COST" ] && spent=
     if [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ -s "$d/verdict.json" ]; then
       retro=0; [ -s "$d/retro.json" ] && retro=$(jq '(.recommendations // []) | length' "$d/retro.json" 2>/dev/null)
-      jq -r -L "$share" --slurpfile plan "$d/plan.json" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" \
+      # A run with no plan (one that stopped early) has only the verdict's own words.
+      plan=$d/plan.json; [ -s "$plan" ] || plan=/dev/null
+      jq -r -L "$share" --slurpfile plan "$plan" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" \
         --arg spent "$spent" --argjson arts "$n" --argjson retro "${retro:-0}" '
         include "otis";
         def one: gsub("[\\s]+"; " ") | gsub("`|\\*\\*|_"; "") | ltrimstr(" ");
         def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
-        ($plan[0].criteria | map({(.id): .claim}) | add // {}) as $claims |
+        (($plan[0] // {}).criteria // [] | map({(.id): .claim}) | add // {}) as $claims |
         (.criteria | length) as $total |
         ([.criteria[] | select(.result == "verified")] | length) as $ok |
         ([.criteria[] | select(.result == "failed")] | length) as $bad |
@@ -110,7 +113,9 @@ case $mode in
         "",
         "  " + text + ((.summary // "") | one | split(". ")[0] | rtrimstr(".") | cut($w - 2)) + r,
         "",
-        "  " + (reduce .criteria[] as $c (""; . + (if $c.result == "verified" then good + "━━━" elif $c.result == "failed" then bad + "━━━" else faint + "───" end) + r + " "))
+        # A segment a criterion, as wide as the pane has room for beside its count.
+        ([[((($w - 22) / ([$total, 1] | max)) | floor) - 1, 3] | min, 1] | max) as $sw |
+        "  " + (reduce .criteria[] as $c (""; . + (if $c.result == "verified" then good + ("━" * $sw) elif $c.result == "failed" then bad + ("━" * $sw) else faint + ("─" * $sw) end) + r + (if ($w - 22) / ([$total, 1] | max) >= 2 then " " else "" end)))
           + context + " \($ok) of \($total) verified" + (if $bad > 0 then ", " + bad + "\($bad) failed" + context else "" end) + r,
         "",
         (.criteria[] |
@@ -126,14 +131,16 @@ case $mode in
         "",
         "  " + faint + ([(if $arts > 0 then "a \($arts) artifacts" else empty end), "h the report",
           (if $retro > 0 then "i \($retro) to change" else empty end), "V how it went"] | join("  ·  ") | cut($w - 2)) + r
-      ' "$d/verdict.json"
+      ' "$d/verdict.json" 2>/dev/null
     else
       printf "\n${GK_CONTEXT}VERIFICATION${GK_R}  "
       if running "$d"; then printf "${GK_ATTENTION}going${GK_R}"; else printf "${GK_CONTEXT}%s${GK_R}" "$(cat "$d/status" 2>/dev/null || echo stopped)"; fi
       [ -n "$spent" ] && printf "${GK_FAINT}  %s${GK_R}" "${spent# · }"
       printf '\n'
       last=$(jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -1)
-      [ -n "$last" ] && printf "\n  ${GK_TEXT}%s${GK_R}\n" "$(printf '%s' "$last" | tr '\n' ' ' | awk -v w=$(( ${FZF_PREVIEW_COLUMNS:-80} - 3 )) '{ if (length($0) > w) $0 = substr($0, 1, w - 1) "…"; print }')"
+      # Two lines at most, broken between words, the second cut with … if
+      # there is more.
+      [ -n "$last" ] && { echo; pane_wrap "$last"; }
       printf "\n  ${GK_FAINT}V how it is going${GK_R}\n"
     fi
     exit 0

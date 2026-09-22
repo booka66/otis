@@ -238,7 +238,7 @@ _g_free_branch() {
 gw() {
   _g_repo || return 1
   local main=$(git-worktree-path main) here=$(git rev-parse --show-toplevel) sel
-  sel=$(cd "$main" && GW_HERE=$here git-fzf 'worktree ' 'enter=go there,space=mark,d=remove,M=mark safe to remove,u=refresh' \
+  sel=$(cd "$main" && GW_HERE=$here GW_MAIN=$main git-fzf 'worktree ' 'enter=go there,space=mark,d=remove,M=mark safe to remove,u=refresh' \
       --multi --ansi --track --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys worktree {2} {3} {4} {5}' \
       --bind 'start:reload(git-worktree-list | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-worktree-list --refresh)' \

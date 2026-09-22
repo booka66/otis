@@ -88,6 +88,8 @@ refresh() {
 landed() {
   [[ -n $lpid ]] && ! kill -0 $lpid 2>/dev/null || return 1
   lpid=
+  # The refresh u asked for is done.
+  [[ $flash == "refreshing from GitLab…" ]] && flash=
   [[ -s $st/rows ]] || return 1
   local was=$id[cur] i
   load
@@ -448,9 +450,11 @@ draw() {
   # The footer: a note if a key left one, else what enter does, then the
   # keys that open the rest.
   foot="  "
+  # A note or a flash stays until the next key: a preview landing redraws
+  # the frame, and a note gone then was gone before it was read.
   if [[ -s $st/note ]]; then
-    foot+=$A$(<$st/note)$R; rm -f $st/note
-  elif [[ -n $flash ]]; then foot+=$A$flash$R; [[ -n $apid ]] || flash=
+    foot+=$A$(<$st/note)$R
+  elif [[ -n $flash ]]; then foot+=$A$flash$R
   else
     enter_says
     [[ -n $REPLY ]] && foot+=$B$A"⏎ "$REPLY$UB$R$C"   ·   "$R
@@ -505,8 +509,11 @@ run() {
     elif [[ $s == (#b)([a-z-]##):(*) ]]; then name=$match[1] arg=$match[2] s=
     else name=${s%%+*} arg= s=${s#$name}; fi
     s=${s#+}
-    # {n}: the row's nth field, quoted, as fzf would.
-    while [[ $arg == (#b)(*)\{([0-9]##)\}(*) ]]; do arg=$match[1]${(qq)fld[$match[2]]}$match[3]; done
+    # {n}: the row's nth field, quoted, as fzf would; from the right, so
+    # what a field says is never read for placeholders itself.
+    local done_=
+    while [[ $arg == (#b)(*)\{([0-9]##)\}(*) ]]; do done_=${(qq)fld[$match[2]]}$match[3]$done_ arg=$match[1]; done
+    arg=$arg$done_
     case $name in
       execute) screen_off; sh -c "$arg" <&$tty >&$tty 2>&1; screen_on; refresh ;;
       execute-silent) sh -c "$arg" </dev/null >/dev/null 2>&1; refresh ;;
@@ -581,6 +588,8 @@ mouse() {
 # handle: one key. 1 to quit.
 handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
+  [[ -n $apid ]] || flash=
+  rm -f $st/note
   sel=0
   case $1 in
     j|$e'[B') (( cur < $#id )) && (( cur++ )); poff=0 ;;
@@ -646,7 +655,6 @@ while :; do
     (( pw > 0 && ! help )) && { shown $pw; [[ $REPLY != $lastpv ]] && changed=1; }
     (( EPOCHSECONDS - ltick >= 10 )) && { refresh; changed=1; }
     (( changed )) && draw
-    # The row you have stopped on, drawn if it is not kept yet.
     # The size has held since the last resize: the previews at it.
     (( settle && EPOCHREALTIME >= settle )) && { settle=0; warm; }
     # The row you have stopped on, drawn if it is not kept yet; not while a

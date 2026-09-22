@@ -123,7 +123,7 @@ resize() {
 # last field); typ what it is (sym, callers, package, caller, file from
 # --rows' parts; head for a heading; plain for a row with no parts); the
 # parts, dep through err; hay what / searches in.
-typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err cm hay gd
+typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err cm hay gd gdw
 integer loaded=0 wa=1 wd=1 wt=0 mr=0
 load() {
   local line i
@@ -138,8 +138,10 @@ load() {
     else typ+=(plain); fi
     dep+=("${f[14]:-0}") fold+=("$f[15]") kids+=("$f[16]") chg+=("$f[17]") add+=("$f[18]") del+=("$f[19]")
     vwd+=("$f[20]") nop+=("$f[21]") ndr+=("$f[22]") nedge+=("$f[23]") dim+=("$f[24]") lab+=("$f[25]") err+=("$f[26]") cm+=("$f[27]")
-    plain "${f[25]:-$f[1]}"; hay+=("${(L)REPLY} ${(L)f[2]}")
   done
+  # What / searches is worked out on the first search, not on every load:
+  # it was a third of what a reload of a big change cost.
+  hayok=0
   [[ -s $st/layout ]] && read -r wa wd wt mr < $st/layout
   guides
   loaded=1 dirty=1 rlw=0
@@ -154,9 +156,9 @@ fields() { fld=("${(@ps:\t:)raw[${1:-$cur}]}"); }
 guides() {
   local -A seen
   local i d k s
-  gd=()
+  gd=() gdw=()
   for (( i = $#raw; i >= 1; i-- )); do
-    if [[ $typ[i] == (head|plain|file) ]]; then seen=(); gd[i]=; continue; fi
+    if [[ $typ[i] == (head|plain|file) ]]; then seen=(); gd[i]= gdw[i]=0; continue; fi
     d=$dep[i] s=
     for (( k = 1; k < d; k++ )); do [[ -n $seen[$k] ]] && s+="│  " || s+="   "; done
     if (( d > 0 )); then
@@ -164,7 +166,9 @@ guides() {
       # A call new to the change: ⇢ where the branch meets the row.
       if [[ -n $nedge[i] ]]; then s+=$A"⇢"$R$F" "; else s+="─ "; fi
     fi
-    gd[i]=$s
+    # Its width, three columns a level, kept: the colors in it would
+    # otherwise have to be measured out of it on every row drawn.
+    gd[i]=$s gdw[i]=$(( d > 0 ? 3 * d : 0 ))
     seen[$d]=1
     for k in ${(k)seen}; do (( k > d )) && unset "seen[$k]"; done
   done
@@ -200,7 +204,7 @@ rowline() {
       ;;
     *)
       (( wt )) && { [[ $typ[i] == sym ]] && cells $i || put "" "   "; }
-      put "$F" "$gd[i]"
+      line+=$F$gd[i]; (( used += gdw[i] ))
       case $fold[i] in
         open) put "$A" "▾ " ;; closed) put "$A" "▸ " ;; quiet) put "$C" "▸ " ;; *) put "" "  " ;;
       esac
@@ -216,16 +220,29 @@ rowline() {
       lc=$lab[i]
       case $typ[i] in
         sym) if [[ -n $dim[i] || $chg[i] == removed ]]; then put "$C" "$lc"; else line+=$lc; vw "$lc"; (( used += REPLY )); fi ;;
-        file) t=${lc:h}/; [[ $lc == */* ]] || t=; put "$C" "$t"; put "${${dim[i]:+$C}:-$T}" "${lc:t}" ;;
+        file)
+          # Too long for the room left: its folder gives way from the left,
+          # never its name, which a cut at the end would take.
+          local nm=${lc:t} dir=${lc:h}/
+          [[ $lc == */* ]] || dir=
+          integer room=$(( w - rz - used )) k
+          if (( ${(m)#dir} + ${(m)#nm} > room )); then
+            if (( ${(m)#nm} + 2 > room )); then dir=; fit "$nm" $room; nm=$REPLY
+            else
+              (( k = room - ${(m)#nm} - 1 )); dir="…"${dir[-k,-1]}
+              while (( ${(m)#dir} + ${(m)#nm} > room )); do dir="…"${dir[3,-1]}; done
+            fi
+          fi
+          put "$C" "$dir"; put "${${dim[i]:+$C}:-$T}" "$nm" ;;
         callers) line+=$lc; vw "$lc"; (( used += REPLY )) ;;
         package) put "$EL" "$lc" ;;
         caller) put "$C" "$lc" ;;
       esac
       # How much is under a closed row, after its name.
       [[ $fold[i] == (closed|quiet) && -n $kids[i] && $typ[i] == sym ]] && put "$F" " ${kids[i]}"
-      # The width so far as the screen has it, measured rather than added
-      # up, so the right's columns stand where every other row has them.
-      vw "$line"; used=$REPLY
+      # The width so far is added up piece by piece (put, and the label and
+      # the guide measured on their own), so the right's columns stand where
+      # every other row has them without measuring the whole line again.
       (( used > w - rz )) && { cut "$line" $(( w - rz )); line=$REPLY; vw "$line"; used=$REPLY; }
       pad $(( w - rz ))
       (( rz )) || { pad $w; RL[i]=$line$R RU[i]=$used; return; }
@@ -260,11 +277,23 @@ rowline() {
 typeset -a L LI vis
 integer dirty=1 cur=0 top=0 rlw=0
 query=
+integer hayok=0
+buildhay() {
+  local i
+  local -a f
+  hay=()
+  for (( i = 1; i <= $#raw; i++ )); do
+    f=("${(@ps:\t:)raw[i]}")
+    plain "${f[25]:-$f[1]}"; hay+=("${(L)REPLY} ${(L)f[2]}")
+  done
+  hayok=1
+}
 matches() {
   local w
   [[ -z $query ]] && return 0
+  (( hayok )) || buildhay
   [[ $typ[$1] == head ]] && return 1
-  for w in ${=${(L)query}}; do [[ $hay[$1] == *$w* ]] || return 1; done
+  for w in ${=${(L)query}}; do [[ $hay[$1] == *"$w"* ]] || return 1; done
   return 0
 }
 # The headline: what this is, Claude's sentence on the change, how much of
@@ -317,11 +346,21 @@ headline() {
   (( $#stale )) && L+=("  ${X}could not refresh from GitLab: this is what it said last$R") LI+=(0)
   L+=("") LI+=(0)
 }
+# A row drawn once is kept by all it is drawn from (the list's width and
+# columns, its guide, its line), so a reload that changed a few rows (v, l,
+# h, a landing) draws those few, not the thousands around them.
+typeset -A rlc ruc
 list() {
-  local i first=1
+  local i first=1 ctx key
   if (( rlw != lw )); then
     RL=() RU=()
-    for (( i = 1; i <= $#raw; i++ )); do rowline $i; done
+    ctx="$lw $wa $wd $wt $mr"
+    (( $#rlc > 3 * $#raw + 200 )) && rlc=() ruc=()
+    for (( i = 1; i <= $#raw; i++ )); do
+      key=$ctx$'\1'$gd[i]$'\1'$raw[i]
+      if (( ${+rlc[$key]} )); then RL[i]=$rlc[$key] RU[i]=$ruc[$key]
+      else rowline $i; rlc[$key]=$RL[i] ruc[$key]=$RU[i]; fi
+    done
     rlw=$lw
   fi
   L=() LI=() vis=()
@@ -401,6 +440,9 @@ key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
 pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
 shown() {
   pvname "$rid[cur]" $pw
+  # This gen's, when it is there, whatever landed after it: a render of an
+  # older gen that finished later is newer on disk, and stale.
+  [[ -e $REPLY.$gen ]] && { REPLY=$REPLY.$gen; return }
   local -a have=($REPLY.<->(Nom))
   (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
   REPLY=${have[1]}
@@ -514,13 +556,13 @@ symkeys() {
     head|plain) rkl=(l "" h "" v "" i "" c "" F "" space "" y "") ; return ;;
   esac
   case $fold[i] in
-    closed|quiet) rkl[l]="open it${kids[i]:+, ${kids[i]} under it}"; rkl[h]="" ;;
+    closed|quiet) if (( kids[i] > 0 )); then rkl[l]="open it: ${kids[i]} under it"; else rkl[l]="open it"; fi; rkl[h]="" ;;
     open) rkl[l]=""; rkl[h]="close it" ;;
     *) rkl[l]=""; rkl[h]="" ;;
   esac
   if [[ $typ[i] == (sym|file) ]]; then
     if [[ $vwd[i] == all ]]; then rkl[v]="mark it not viewed"
-    elif [[ -n $kids[i] ]]; then rkl[v]="mark it and all under it viewed"
+    elif (( kids[i] > 0 )); then rkl[v]="mark it and all under it viewed"
     else rkl[v]="mark it viewed"; fi
   else rkl[v]=""; fi
   [[ $typ[i] == sym ]] || rkl[i]=""
@@ -983,7 +1025,13 @@ while :; do
       [[ -z $winch ]] && resize
     fi
     landed && changed=1
-    (( cur && ! help )) && [[ -n $preview ]] && { shown; [[ $REPLY != $lastpv ]] && changed=1; }
+    # The row's preview landing: one test for the file this gen and width
+    # draw, and none once it shows. A glob of every kept preview, twenty
+    # times a second, was the loop's whole cost at rest.
+    if (( cur && ! help )) && [[ -n $preview ]]; then
+      pvname "$rid[cur]" $pw
+      [[ $lastpv != $REPLY.$gen && -e $REPLY.$gen ]] && changed=1
+    fi
     # The size has held: the rows cut to it, and the previews drawn at it.
     if (( settle && EPOCHREALTIME >= settle )); then
       settle=0

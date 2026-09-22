@@ -67,8 +67,18 @@ draw() {
   (( $#shw )) && fr+=("")
   prow=$(( $#fr + 1 ))
   s="  $A$title$R "
-  pcol=$(( 4 + ${(m)#title} + ${(m)#${text[1,at]}} ))
-  fr+=("$s$T$text$R")
+  # The text in a window the cursor stays in: line wrap is off, so a line
+  # longer than the screen scrolls sideways under it, … marking what is out
+  # of sight either side.
+  local room=$(( W - 5 - ${(m)#title} )) from=1 shown
+  (( room < 8 )) && room=8
+  while (( ${(m)#${text[from,at]}} > room - 1 )); do (( from++ )); done
+  shown=${text[from,-1]}
+  (( from > 1 )) && shown="…"${shown:1}
+  while (( ${(m)#shown} > room )); do shown=${shown[1,-2]}; done
+  (( from + $#shown - 1 < $#text )) && shown=${shown[1,-2]}"…"
+  pcol=$(( 4 + ${(m)#title} + ${(m)#${text[from,at]}} ))
+  fr+=("$s$T$shown$R")
   local body= y
   (( $#shown_rows )) || body+=$e'[2J'
   for (( y = 1; y <= $#fr; y++ )); do

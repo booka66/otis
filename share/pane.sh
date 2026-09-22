@@ -32,9 +32,25 @@ pane_color() {
   esac
 }
 
+# PANE_AWK: ulen(s), the columns plain text takes, and ufit(s, w), it cut to
+# w columns with an ellipsis, a character at a time: an awk that counts
+# bytes (macOS's, or any under LC_ALL=C) split a character in two and cut
+# the line short. For an awk run LC_ALL=C, so every awk counts the same.
+PANE_AWK='
+function ulen(s,   t) { t = s; return length(s) - gsub(/[\200-\277]/, "", t) }
+function ufit(s, w,   i, n, L) {
+  if (ulen(s) <= w) return s
+  L = length(s); n = 0
+  for (i = 1; i <= L; i++) if (substr(s, i, 1) !~ /[\200-\277]/ && ++n > w - 1) break
+  return substr(s, 1, i - 1) "\342\200\246"
+}'
+
 # pane_fit <text> [width]: plain text cut to the width with an ellipsis.
 pane_fit() {
-  printf '%s' "$1" | awk -v w="${2:-$PANE_W}" '{ if (length($0) > w) $0 = substr($0, 1, w - 1) "…"; print }'
+  # No process for what fits already, nearly every line: its length in
+  # bytes is at least its length in characters.
+  if [ "${#1}" -le "${2:-$PANE_W}" ]; then printf '%s\n' "$1"; return; fi
+  printf '%s' "$1" | LC_ALL=C awk -v w="${2:-$PANE_W}" "$PANE_AWK"'{ print ufit($0, w) }'
 }
 
 # pane_callout <color> <head> [<line>...]: what wants you. A line may hold
@@ -47,15 +63,40 @@ pane_callout() {
     case $_pn_l in
       keys:*)
         printf "${_pn_c}▌ ${GK_R}"
-        printf '%s' "${_pn_l#keys:}" | awk -v a="$(printf "$GK_ATTENTION")" -v x="$(printf "$GK_CONTEXT")" -v r="$(printf "$GK_R")" '
-          { n = split($0, ks, " · "); out = ""
+        # As many keys as the line holds, the first ones.
+        printf '%s' "${_pn_l#keys:}" | LC_ALL=C awk -v w=$((PANE_W - 2)) -v a="$(printf "$GK_ATTENTION")" -v x="$(printf "$GK_CONTEXT")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
+          { n = split($0, ks, " · "); out = ""; used = 0
             for (i = 1; i <= n; i++) { k = ks[i]; sp = index(k, " ")
-              out = out (i > 1 ? "    " : "") a (sp ? substr(k, 1, sp - 1) : k) r x (sp ? substr(k, sp) : "") r }
+              if (used + (i > 1 ? 4 : 0) + ulen(k) > w && i > 1) break
+              out = out (i > 1 ? "    " : "") a (sp ? substr(k, 1, sp - 1) : k) r x (sp ? substr(k, sp) : "") r
+              used += (i > 1 ? 4 : 0) + ulen(k) }
             print out }' ;;
-      *) printf "${_pn_c}▌ ${GK_R}%b\n" "$_pn_l" ;;
+      *)
+        # Cut to the pane like any line; one in a color of its own keeps it.
+        _pn_p=$(printf '%b' "$_pn_l" | sed 's/\[[0-9;:]*m//g')
+        if [ "${#_pn_p}" -le $((PANE_W - 2)) ]; then printf "${_pn_c}▌ ${GK_R}%b\n" "$_pn_l"
+        else
+          case $_pn_l in "\033["*m*) _pn_k=${_pn_l%%m*}m ;; *) _pn_k= ;; esac
+          printf "${_pn_c}▌ ${GK_R}${_pn_k}%s${GK_R}\n" "$(pane_fit "$_pn_p" $((PANE_W - 2)))"
+        fi ;;
     esac
   done
   echo
+}
+
+# pane_wrap <text> [color] [lines]: a sentence that matters, indented two,
+# broken between words over at most that many lines (2), the last cut
+# with … when there is more: never one line cut at the pane's edge.
+pane_wrap() {
+  pane_color "${2:-text}"
+  printf '%s' "$1" | tr '\n' ' ' | LC_ALL=C awk -v w=$((PANE_W - 2)) -v most="${3:-2}" -v t="$(printf "$PANE_C")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
+    { n = split($0, ws, " "); line = ""; k = 0
+      for (i = 1; i <= n; i++) {
+        if (line != "" && ulen(line " " ws[i]) > w) {
+          if (++k == most) { for (j = i; j <= n; j++) line = line " " ws[j]; print "  " t ufit(line, w) r; exit }
+          print "  " t line r; line = ws[i]
+        } else line = line (line == "" ? "" : " ") ws[i] }
+      if (line != "") print "  " t ufit(line, w) r }'
 }
 
 pane_title() { printf "${GK_TEXT}\033[1m%s${GK_R}\n" "$(pane_fit "$1")"; }
@@ -69,9 +110,16 @@ pane_meta() {
 # pane_section <NAME> [<count> <color>] [<aside>]: a heading, a blank line
 # before it and after.
 pane_section() {
-  printf "\n${GK_CONTEXT}%s${GK_R}" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
-  if [ -n "$2" ]; then pane_color "${3:-text}"; printf "  ${PANE_C}%s${GK_R}" "$2"; fi
-  [ -n "$4" ] && printf "  ${GK_FAINT}%s${GK_R}" "$4"
+  _pn_p=$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')
+  printf "\n${GK_CONTEXT}%s${GK_R}" "$_pn_p"
+  # What fits after it: the count, cut if it must be, and the aside only
+  # when there is room for the whole of it.
+  _pn_n=$((PANE_W - ${#_pn_p} - 2))
+  if [ -n "$2" ] && [ "$_pn_n" -gt 4 ]; then
+    pane_color "${3:-text}"; printf "  ${PANE_C}%s${GK_R}" "$(pane_fit "$2" "$_pn_n")"
+    _pn_n=$((_pn_n - ${#2} - 2))
+  fi
+  [ -n "$4" ] && [ "${#4}" -le "$_pn_n" ] && printf "  ${GK_FAINT}%s${GK_R}" "$4"
   printf '\n\n'
 }
 
@@ -84,8 +132,11 @@ pane_bar() {
   [ "$_pn_n" -gt 0 ] && [ "$_pn_k" -eq 0 ] && _pn_k=1
   [ "$_pn_k" -gt "$_pn_w" ] && _pn_k=$_pn_w
   _pn_fill=${5:-─}
-  printf "${PANE_C}%s${GK_FAINT}%s${GK_R}" "$(awk -v k="$_pn_k" 'BEGIN { while (k-- > 0) printf "━" }')" \
-    "$(awk -v k=$((_pn_w - _pn_k)) -v f="$_pn_fill" 'BEGIN { while (k-- > 0) printf "%s", f }')"
+  # Built in the shell: two awks a bar were most of what a preview cost.
+  _pn_on= _pn_off= _pn_i=0
+  while [ "$_pn_i" -lt "$_pn_k" ]; do _pn_on="${_pn_on}━"; _pn_i=$((_pn_i + 1)); done
+  while [ "$_pn_i" -lt "$_pn_w" ]; do _pn_off="${_pn_off}${_pn_fill}"; _pn_i=$((_pn_i + 1)); done
+  printf "${PANE_C}%s${GK_FAINT}%s${GK_R}" "$_pn_on" "$_pn_off"
 }
 
 # pane_keys <key label>...: the keys that act, last and faint.

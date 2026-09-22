@@ -50,7 +50,7 @@ state() {
   local started ended took
   [[ -r $d/started ]] && started=$(<$d/started); [[ -r $d/ended ]] && ended=$(<$d/ended)
   (( took = ${ended:-$EPOCHSECONDS} - ${started:-$EPOCHSECONDS} ))
-  took="$(( took / 60 ))m$(printf '%02d' $(( took % 60 )))s"
+  took="$(( took / 60 ))m${(l:2::0:)$(( took % 60 ))}s"
   if running; then REPLY="◌ running for $took" reply=($Y)
   else case $(<$d/status) in
     done) REPLY="✓ done in $took" reply=($G) ;;
@@ -58,11 +58,20 @@ state() {
     *) REPLY="✗ stopped short after $took" reply=($X) ;;
   esac; fi
 }
+# costs: what it has cost, in REPLY; worked out again only when what it is
+# read from changes (the header asks on every frame, and it reads the whole
+# of events.jsonl).
+costsig= costsval=
 costs() {
-  local c u
+  local c u sig
+  local -a a b
+  zstat -A a +size -- $d/events.jsonl 2>/dev/null; zstat -A b +mtime -- $d/usage.json 2>/dev/null
+  sig="$a[1] $b[1]"
+  [[ $sig == $costsig ]] && { REPLY=$costsval; return }
   c=$(jq -r 'select(.type == "result") | .total_cost_usd // empty' $d/events.jsonl 2>/dev/null | awk '{ s += $1 } END { if (s > 0) printf "Claude $%.2f", s }')
   u=$(jq -r '.cost.chargedCents // empty' $d/usage.json 2>/dev/null | awk '{ if ($1 > 0) printf "Cursor $%.2f", $1 / 100 }')
   REPLY=${c}${c:+${u:+  ·  }}$u
+  costsig=$sig costsval=$REPLY
 }
 
 # --- the steps ----------------------------------------------------------------------------
@@ -81,7 +90,7 @@ typeset -A seen
 take() {
   local line f
   local -a fs
-  for line in ${(f)"$(git-claude-view --rows $d $detail $nev)"}; do
+  for line in ${(f)"$(git-claude-view --rows $d $detail $nev $1)"}; do
     fs=("${(@ps:\t:)line}")
     ek+=("$fs[1]") et+=("$fs[2]") eid+=("$fs[3]") ew+=("$fs[4]") ea+=("$fs[5]")
     # The tester's steps carry the criterion it was last on; anyone else's
@@ -100,11 +109,24 @@ take() {
     fi
   done
 }
-reload() { ek=() et=() eid=() ew=() ea=() ec=() lastcrit= nev=0; take; nev=$(wc -l < $d/events.jsonl | tr -d ' '); }
+# The lines are counted first and exactly those taken: the run writes on
+# while they are read, and a line taken twice would show twice.
+reload() {
+  local total=$(wc -l < $d/events.jsonl 2>/dev/null | tr -d ' ')
+  ek=() et=() eid=() ew=() ea=() ec=() lastcrit= nev=0
+  take ${total:-0}; nev=${total:-0}
+}
+integer esize=-1
 grown() {
+  # Asked once a second: its size first, a builtin, and only a change counts
+  # its lines, which takes two processes.
+  local -a sz
+  zstat -A sz +size -- $d/events.jsonl 2>/dev/null || return 1
+  (( sz[1] != esize )) || return 1
+  esize=$sz[1]
   local total=$(wc -l < $d/events.jsonl 2>/dev/null | tr -d ' ')
   (( total > nev )) || return 1
-  take; nev=$total
+  take $total; nev=$total
 }
 
 # --- the run's shape, on the left ------------------------------------------------------------
@@ -116,7 +138,7 @@ criteria() {
   [[ -s $d/plan.json ]] || return
   local line i r now=
   local -A res art
-  for line in ${(f)"$(jq -r '.criteria[] | "\(.id)\t\(.claim)"' $d/plan.json 2>/dev/null)"}; do
+  for line in ${(f)"$(jq -r '.criteria[] | "\(.id)\t\(.claim | gsub("[\t\r\n]+"; " "))"' $d/plan.json 2>/dev/null)"}; do
     cid+=("${line%%	*}") cclaim+=("${line#*	}")
   done
   ncrit=$#cid
@@ -207,7 +229,8 @@ visible() {
 }
 color_of() { case $1 in tool) REPLY=$EL ;; text) REPLY=$T ;; otis) REPLY=$Y ;; think) REPLY=$C ;; out) REPLY=$F ;; bad) REPLY=$X ;; *) REPLY=$T ;; esac; }
 # clock <epoch>: minutes and seconds since the run started, for a step.
-clock() { local s; [[ $1 == <-> ]] || { REPLY=; return }; (( s = $1 - ${started:-$1} )); REPLY="$(( s / 60 )):$(printf '%02d' $(( s % 60 )))"; }
+clock() { local s; [[ $1 == <-> ]] || { REPLY=; return }; (( s = $1 - ${started:-$1} )); REPLY="$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}"; }
+ckfor= ckok= cknote=
 # left <width>: the left column's lines, in L.
 left() {
   local w=$1 i t g gc s n
@@ -248,11 +271,15 @@ left() {
     local ck=($d/checkin-<->.json(Nn))
     if (( $#ck )); then
       L+=("")
-      local ok=$(jq -r '.ok' $ck[-1]) note=$(jq -r '.note // .why // ""' $ck[-1])
+      # Read once a check-in: this runs on every frame.
+      if [[ $ckfor != $ck[-1] ]]; then
+        ckfor=$ck[-1]; ckok=$(jq -r '.ok' $ck[-1] 2>/dev/null); cknote=$(jq -r '.note // .why // ""' $ck[-1] 2>/dev/null)
+      fi
+      local ok=$ckok note=$cknote
       [[ $ok == true ]] && L+=("  ${G}judge looked in$R$C · all as it should be$R") || L+=("  ${Y}judge stepped in$R$C · round $(( ${#ck} ))$R")
       wrap "$note" $(( w - 4 ))
-      for t in ${reply[1,5]}; do L+=("  $T$t$R"); done
-      (( $#reply > 5 )) && L+=("  $C…$R")
+      for t in ${reply[1,2]}; do L+=("  $T$t$R"); done
+      (( $#reply > 2 )) && L+=("  $C…  enter on its step shows the rest$R")
     fi
   elif (( $#sid )); then
     integer nr=0 ng=0
@@ -269,7 +296,7 @@ left() {
       [[ -n $sdraft[i] ]] && { pad $(( w - 5 )); put "$Y" "✎ $sdraft[i]"; }
       L+=("$line")
     done
-    local nd=$(wc -l < $d/drafts.jsonl 2>/dev/null | tr -d ' ')
+    local nd=0; [[ -s $d/drafts.jsonl ]] && nd=${#${(f)"$(<$d/drafts.jsonl)"}}
     (( nd > 0 )) && L+=("" "  ${Y}✎ $nd draft${${nd:#1}:+s}$R$C, yours to read in the review$R")
   else
     line= used=0; put "$C" "WHAT IT SAYS OF ITSELF"; L+=("$line" "")
@@ -301,17 +328,28 @@ now() {
   fi
 }
 # pane: the step under the cursor in full, wrapped to the pane, kept by id.
+# A step not drawn yet is drawn in the background, the pane keeping what
+# it showed until it lands (the loop looks for it), so the cursor moves at
+# once rather than after the step is read.
+pwait=
 pane() {
   local i=$1 f
-  (( i )) || { P=(); return }
+  (( i )) || { P=() pshown=; return }
   f=$pcache[$eid[i]]
   if [[ -z $f ]]; then
     f=$st/pv/$eid[i].$rw
-    git-claude-view --show $d $eid[i] 2>/dev/null | LC_ALL=C awk -v w=$rw -v cont=$f.cont "$wrap_awk" > $f
+    if [[ ! -e $f ]]; then
+      [[ -e $f.tmp ]] || { : > $f.tmp; { git-claude-view --show $d $eid[i] 2>/dev/null | LC_ALL=C awk -v w=$rw -v cont=$f.cont "$wrap_awk" > $f.tmp; mv -f $f.tmp $f } &! }
+      pwait=$f
+      return
+    fi
     pcache[$eid[i]]=$f
   fi
-  P=("${(@f)$(<$f)}")
+  pwait=
+  [[ $f == $pshown ]] && return
+  P=("${(@f)$(<$f)}") pshown=$f
 }
+pshown=
 draw() {
   local t0=$EPOCHREALTIME
   local y i s t lo body foot
@@ -380,7 +418,7 @@ draw() {
   fr+=("$F${(l:W::─:)}$R")
   # The pane: the step under the cursor, or ? the keys.
   if (( help )); then
-    P=("  ${B}${T}keys$R" "")
+    P=("  ${B}${T}keys$R" "") pshown=
     local k v
     for k v in enter "this step in full" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
       v "more or less detail: thinking, what tools returned" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective" \
@@ -397,8 +435,10 @@ draw() {
   done
   fr+=("$F${(l:W::─:)}$R")
   foot="  "
-  if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
-  elif [[ -n $flash ]]; then foot+=$A$flash$R; flash=
+  # A note or a flash stays until the next key: the clock redraws every
+  # second, and a note gone on the next frame was gone before it was read.
+  if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R
+  elif [[ -n $flash ]]; then foot+=$A$flash$R
   else
     foot+=$B$A"⏎ this step in full"$UB$R$C"   ·   "$R
     (( ncrit )) && foot+=$A"1-$ncrit"$R$C" one criterion  "$R
@@ -426,8 +466,18 @@ draw() {
 act() {
   local out s
   out=$(git-claude-view "$@" 2>/dev/null </dev/null)
+  integer i depth q
+  local c
   while [[ -n $out ]]; do
-    s=${out%%+*}; out=${out#$s}; out=${out#+}
+    # The next action: up to a + outside brackets and quotes, since a
+    # command in one may hold a + (a branch's name in a run's folder).
+    depth=0 q=0
+    for (( i = 1; i <= $#out; i++ )); do
+      c=$out[i]
+      if (( q )); then [[ $c == "'" ]] && q=0; continue; fi
+      case $c in "'") q=1 ;; '('|'[') (( depth++ )) ;; ')'|']') (( depth-- )) ;; +) (( depth == 0 )) && break ;; esac
+    done
+    s=${out[1,i-1]} out=${out[i+1,-1]}
     case $s in
       execute\(*) screen_off; zsh -fc "${${s#execute\(}%\)}" <&$tty >&$tty 2>&1; screen_on; shown_rows=() ;;
       execute-silent\(*) zsh -fc "${${s#execute-silent\(}%\)}" </dev/null >/dev/null 2>&1 ;;
@@ -446,6 +496,7 @@ step() {
 }
 handle() {
   local k=$1
+  flash=; rm -f $st/note
   if [[ $k == $e'[<'* ]]; then
     local r=${k#$e\[<} b x y up
     [[ ${r[-1]} == m ]] && up=1
@@ -477,7 +528,8 @@ handle() {
     a) act --artifacts $d ;;
     h) act --html $d ;;
     p) act --attach $d ;;
-    [1-9]) (( ncrit )) && { filter=c$REPLY; follow=1; flash="$filter's steps alone · 0 shows all"; } ;;
+    [1-9]) if (( ncrit && REPLY <= ncrit )); then filter=c$REPLY; follow=1; flash="$filter's steps alone · 0 shows all"
+           elif (( ncrit )); then flash="there is no c$REPLY: it has $ncrit criteria"; fi ;;
     0) filter=; follow=1 ;;
     '?') help=$(( !help )) poff=0 ;;
     q|esc|ctrl-c) quit 0 ;;
@@ -509,6 +561,8 @@ while :; do
       grown && { criteria; symbols; }
       changed=1
     fi
+    # The step under the cursor, drawn in the background, has landed.
+    [[ -n $pwait && -e $pwait ]] && changed=1
     (( changed )) && draw
   fi
 done

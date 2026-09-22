@@ -17,7 +17,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/pane.sh"
 . "$share/claude-run.sh"
 
-state=$(cat "$d/status" 2>/dev/null)
+state=; [ -r "$d/status" ] && read -r state < "$d/status"
 if [ -z "$state" ]; then
   if running "$d"; then state=running; else state=died; fi
 fi
@@ -29,9 +29,11 @@ case ${d%/*} in
   */gmr-watch) kind="production watch" verb=Watching ;;
   *) kind=run verb=Running ;;
 esac
-title=$(cat "$d/title" 2>/dev/null)
-started=$(cat "$d/started" 2>/dev/null)
-ended=$(cat "$d/ended" 2>/dev/null)
+# read, not cat: a process each was a good part of what a move cost.
+title= started= ended=
+[ -r "$d/title" ] && read -r title < "$d/title"
+[ -r "$d/started" ] && read -r started < "$d/started"
+[ -r "$d/ended" ] && read -r ended < "$d/ended"
 now=$(date +%s)
 # A time in seconds: date -r on macOS, date -d @ on Linux.
 at() { date -r "$1" "$2" 2>/dev/null || date -d "@$1" "$2" 2>/dev/null; }
@@ -91,7 +93,7 @@ case $state in
       inconclusive) pane_callout yours "Inconclusive: yours to judge" "${GK_TEXT}${held}${GK_R}" ;;
       *)
         if [ "$drafts" -gt 0 ]; then
-          pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}gmr's review of it shows them, where they go${GK_R}"
+          pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}$(pane_fit "gmr's review of it shows them, where they go" $((PANE_W - 2)))${GK_R}"
         elif [ "$fixes" -gt 0 ]; then
           pane_callout yours "$fixes $( [ "$fixes" -eq 1 ] && echo fix || echo fixes) to accept or drop" "keys:⏎ the proposals"
         fi ;;
@@ -152,14 +154,18 @@ if [ -s "$d/plan.json" ] && [ ! -s "$d/verdict.json" ]; then
   pane_bar "$good" "$total" "$bw" good
   printf "${GK_CONTEXT}  %s/%s${GK_R}\n" "$good" "$total"
   # The judge's last look in, and when.
-  ck=$(ls -t "$d"/checkin-*.json 2>/dev/null | head -1)
+  # The last by number (checkin-9 before checkin-10 by name), not by time:
+  # a copied run has them all at one time.
+  ck=$(ls "$d"/checkin-*.json 2>/dev/null | awk -F'checkin-' '{ n = $NF + 0; if (n > m) { m = n; f = $0 } } END { print f }')
   if [ -n "$ck" ]; then
-    note=$(jq -r '.note // ""' "$ck" 2>/dev/null)
+    # What it said: its note to the tester, or, when it had none (all was
+    # well), why it thought so.
+    note=$(jq -r 'if (.note // "") != "" then .note else .why // "" end' "$ck" 2>/dev/null)
     ok=$(jq -r '.ok' "$ck" 2>/dev/null)
     ago=$(span $(( now - $(stat -f %m "$ck" 2>/dev/null || stat -c %Y "$ck") )))
     if [ "$ok" = false ]; then pane_section "the judge" "not happy" bad "$ago ago"
     else pane_section "the judge" "" "" "$ago ago"; fi
-    printf "  ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$(printf '%s' "$note" | tr '\n' ' ')" $((PANE_W - 2)))"
+    pane_wrap "$note" context
   fi
 fi
 
@@ -169,8 +175,8 @@ if [ "$kind" = review ]; then
   opened=$(jq -r 'select(.type == "tool" and .name == "Read") | .input.file_path // empty' "$d/events.jsonl" 2>/dev/null | sort -u | grep -c .)
   if [ "$syms" -gt 0 ] || [ "$opened" -gt 0 ] || [ "$drafts" -gt 0 ]; then
     pane_section "its reading"
-    [ "$syms" -gt 0 ] && printf "  ${GK_GOOD}●${GK_R} ${GK_TEXT}%s${GK_CONTEXT} symbols, in the order to read them${GK_R}\n" "$syms"
-    [ "$opened" -gt 0 ] && printf "  ${GK_ELSEWHERE}●${GK_R} ${GK_TEXT}%s${GK_CONTEXT} files opened beyond the diff${GK_R}\n" "$opened"
+    [ "$syms" -gt 0 ] && printf "  ${GK_GOOD}●${GK_R} ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$syms symbols, in the order to read them" $((PANE_W - 4)))"
+    [ "$opened" -gt 0 ] && printf "  ${GK_ELSEWHERE}●${GK_R} ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$opened files opened beyond the diff" $((PANE_W - 4)))"
     [ "$drafts" -gt 0 ] && printf "  ${GK_YOURS}✎${GK_R} ${GK_TEXT}%s${GK_CONTEXT} drafts${GK_R}\n" "$drafts"
   fi
 fi

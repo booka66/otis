@@ -12,6 +12,7 @@
 iid=$1 kind=$2 row=$3
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
 
 if [ "$kind" = sep ]; then
   case $row in
@@ -57,25 +58,28 @@ if [ "$kind" = sep ]; then
     def oldest($these; $when; glyph; word):
       if ($these | length) > 0 then
         section("oldest first"),
-        ($these | sort_by(.[$when] // "") | .[0:8][] | (glyph) as $g | (word) as $wd | mr_line($g; $wd[0]; $wd[1])),
-        (if ($these | length) > 8 then "  " + faint + "+ \(($these | length) - 8) more" + r else empty end)
+        ($these | sort_by(.[$when] // "") | .[0:5][] | (glyph) as $g | (word) as $wd | mr_line($g; $wd[0]; $wd[1])),
+        (if ($these | length) > 5 then "  " + faint + "+ \(($these | length) - 5) more" + r else empty end)
       else empty end;
-    def ids($xs): $xs | map("!" + .iid) | join(", ");
-    # Claude on them: each thing a line, only the ones there are.
+    # Claude on them: a merge request a line, with what is most pressing
+    # on it, five at most.
     def claude_lines($these; $kind):
-      [ ([$these[] | select($claude[.iid].reviewing)] as $g | if ($g | length) > 0 then "  " + attention + "◐ " + r + context + "reviewing " + r + attention + ids($g) + r else empty end),
-        ([$these[] | select(($claude[.iid].drafts // 0) > 0)] as $d | if ($d | length) > 0 then "  " + yours + "✎ " + r + context + "drafts to read before you submit on " + r + attention + ids($d) + r else empty end),
-        ([$these[] | select($claude[.iid].clean != null and $claude[.iid].clean == .diffRefs.headSha)] as $c | if ($c | length) > 0 then "  " + good + "⇢ " + r + context + "nothing to comment on in " + r + attention + ids($c) + r else empty end),
-        ([$these[] | select($fixes[.iid].fixing)] as $g | if $kind == "mine" and ($g | length) > 0 then "  " + attention + "◐ " + r + context + "fixing " + r + attention + ids($g) + r else empty end),
-        ([$these[] | select(($fixes[.iid].fixes // 0) > 0)] as $f | if $kind == "mine" and ($f | length) > 0 then "  " + yours + "✎ " + r + context + "fixes to fold in on " + r + attention + ids($f) + r else empty end),
-        ([$these[] | select($verify[.iid].verifying)] as $g | if ($g | length) > 0 then "  " + attention + "◎ " + r + context + "verifying " + r + attention + ids($g) + r + context + " in Cursor Cloud" + r else empty end),
-        ($these[] | select(($verify[.iid] // {}) | .status == "done" and .verdict != "") | select($verify[.iid].head == .diffRefs.headSha)
-          | $verify[.iid].verdict as $v
-          | "  " + (if $v == "pass" then good elif $v == "fail" then bad else context end) + "● " + r
-            + attention + "!\(.iid)" + r + context + " verified: " + r
-            + (if $v == "pass" then good + "passed" elif $v == "fail" then bad + "failed" else context + $v end) + r + context + ", at its head" + r)
-      ] as $l |
-      if ($l | length) > 0 then section("claude"), $l[] else empty end;
+      [ $these[] |
+        ($claude[.iid] // {}) as $cl | ($fixes[.iid] // {}) as $fx | ($verify[.iid] // {}) as $vf |
+        ($vf.status == "done" and $vf.verdict != "" and $vf.head == .diffRefs.headSha) as $verified |
+        (if ($cl.drafts // 0) > 0 then [yours + "✎", "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to read", yours]
+         elif $kind == "mine" and ($fx.fixes // 0) > 0 and ($fx.fixing | not) then [yours + "✎", "\($fx.fixes) \(plural($fx.fixes; "fix"; "fixes")) to fold in", yours]
+         elif $verified and $vf.verdict == "fail" then [bad + "●", "verified: failed", bad]
+         elif $cl.reviewing then [attention + "◐", "reviewing", attention]
+         elif $kind == "mine" and $fx.fixing then [attention + "◐", "fixing", attention]
+         elif $vf.verifying then [attention + "◎", "verifying", attention]
+         elif $verified then [(if $vf.verdict == "pass" then good else context end) + "●", "verified: " + (if $vf.verdict == "pass" then "passed" else $vf.verdict end), (if $vf.verdict == "pass" then good else context end)]
+         elif $cl.clean != null and $cl.clean == .diffRefs.headSha then [good + "⇢", "nothing to say", good]
+         else empty end) as $s |
+        mr_line($s[0] + r; $s[1]; $s[2]) ] as $l |
+      if ($l | length) > 0 then section("claude"), $l[0:5][],
+        (if ($l | length) > 5 then "  " + faint + "+ \(($l | length) - 5) more" + r else empty end)
+      else empty end;
     def threads($these): ([$these[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0);
 
     (.data.currentUser.username // "") as $me |
@@ -97,7 +101,8 @@ if [ "$kind" = sep ]; then
        ([$all[] | select($watch[.iid].watching)] | length) as $wn |
        if ($bad | length) > 0 or $wn > 0 then
          section("claude"),
-         (if ($bad | length) > 0 then "  " + yours + "⚠ " + r + context + "the production watch flagged " + r + attention + ids($bad) + r else empty end),
+         ($bad[0:5][] | mr_line(yours + "⚠" + r; "watch: " + $watch[.iid].verdict; yours)),
+         (if ($bad | length) > 5 then "  " + faint + "+ \(($bad | length) - 5) more" + r else empty end),
          (if $wn > 0 then "  " + attention + "◐ " + r + context + "watching production for \($wn) of them" + r else empty end)
        else empty end)
 
@@ -161,24 +166,26 @@ case $kind in
       exec otis-preview "$kind" "$iid" "" ""
     fi ;;
 esac
-case $kind in
-  merged)
-    exec git-ci-preview --merged "$iid" ;;
-  mine)
-    # Listed from every open MR (f), yours may not be in the pipelines JSON.
-    if jq -e --arg iid "$iid" '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid)' "$st/ci.json" >/dev/null 2>&1; then
-      git-ci-preview --open "$iid"
-      exec git-mr-threads --overview "$iid"
-    fi ;;
-esac
+[ "$kind" = merged ] && exec git-ci-preview --merged "$iid"
+# One from every open MR (f), not in the JSON the dashboard's preview reads:
+# the MR, a line a fact, its description's opening lines, its threads.
 mr='first((.data.currentUser.reviewRequestedMergeRequests, .data.project.mergeRequests) | .nodes[]? | select(.iid == $iid))'
-jq -r -L "$share" --arg iid "$iid" '
+jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
   include "otis";
-  '"$mr"' |
-  attention + "!\(.iid)  " + text + .title + r + "\n"
-  + context + "\(.author.username) · \(.sourceBranch) → \(.targetBranch) · \(.detailedMergeStatus | ascii_downcase | gsub("_"; " ")) · updated \(.updatedAt[0:10])" + r + "\n"
+  def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+  '"$mr"' | (.iid | length) as $il |
+  attention + "\u001b[1m!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r,
+  context + ("\(.author.username)  ·  \(.sourceBranch) → \(.targetBranch)" | cut($w)) + r,
+  context + ("\(.detailedMergeStatus | ascii_downcase | gsub("_"; " "))  ·  updated \(.updatedAt | ago) ago" | cut($w)) + r
 ' "$st/mrs.json"
 git-verify --preview "$iid"
-jq -r --arg iid "$iid" "$mr"' | .description // ""' "$st/mrs.json" |
-  glow -s "${OTIS_T_GLOW:-dark}" -w "${FZF_PREVIEW_COLUMNS:-100}" - 2>/dev/null
+desc=$(jq -r --arg iid "$iid" "$mr"' | .description // ""' "$st/mrs.json" |
+  glow -s "${OTIS_T_GLOW:-dark}" -w "${FZF_PREVIEW_COLUMNS:-100}" - 2>/dev/null | perl -ne 'my $p = $_; $p =~ s/\e\[[0-9;]*m//g; print if $p =~ /\S/')
+if [ -n "$desc" ]; then
+  # Its opening lines, not the whole of it: the rest is in the MR.
+  printf "\n${GK_CONTEXT}DESCRIPTION${GK_R}\n\n"
+  printf '%s\n' "$desc" | head -5
+  more=$(printf '%s\n' "$desc" | sed 1,5d | grep -c .)
+  [ "$more" -gt 0 ] && printf "${GK_FAINT}  + %s more lines: w opens the MR${GK_R}\n" "$more"
+fi
 git-mr-threads --overview "$iid"

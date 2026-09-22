@@ -23,11 +23,14 @@ case $picker in
         k enter "review it"; k A "approve it"; k C "Claude reviews it"
         none d D ;;
       mine)
-        mr=$(jq -c --arg iid "$iid" '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid)' "$st/ci.json" 2>/dev/null)
-        threads=$(printf '%s' "$mr" | jq '(.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)' 2>/dev/null)
-        if [ "${threads:-0}" -gt 0 ]; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
+        # One jq for both: this runs on every move.
+        read -r threads draft <<EOF
+$(jq -r --arg iid "$iid" 'first(.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid))
+  | "\((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) \(.draft)"' "$st/ci.json" 2>/dev/null)
+EOF
+        if [ "${threads:-0}" -gt 0 ] 2>/dev/null; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
         else k enter "read it by symbol"; fi
-        if [ "$(printf '%s' "$mr" | jq -r '.draft' 2>/dev/null)" = true ]; then k d "mark it ready"; else k d "mark it draft"; fi
+        if [ "$draft" = true ]; then k d "mark it ready"; else k d "mark it draft"; fi
         k C "Claude proposes fixes"
         none A D ;;
       merged)
@@ -56,13 +59,15 @@ case $picker in
     [ -n "$p" ] || { none enter space d M; exit 0; }
     [ "$p" = "$GW_HERE" ] && k enter ""
     if [ "$safe" = safe ]; then k d "remove it: nothing would be lost"
-    elif [ "$p" = "$(git-worktree-path main 2>/dev/null)" ]; then none d space
+    elif [ "$p" = "${GW_MAIN:-$(git-worktree-path main 2>/dev/null)}" ]; then none d space
     else k d "remove it"; fi ;;
 
   # gag: the run's folder.
   run)
     d=$1
-    if [ ! -s "$d/status" ]; then k enter "watch it"; none d
+    # Running: no status yet and its process alive (share/claude-run.sh's
+    # running). One the laptop killed has neither, and d forgets it.
+    if [ ! -s "$d/status" ] && [ -r "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then k enter "watch it"; none d
     else
       case ${d%/*} in */gmr-fix) k enter "its proposals" ;; *) k enter "every step" ;; esac
       k d "forget it"
@@ -70,7 +75,7 @@ case $picker in
 
   # ga's file panel: path, status (XY, . for blank).
   file)
-    st2=$2 x=$(printf '%s' "$2" | cut -c1) y=$(printf '%s' "$2" | cut -c2)
+    st2=$2 x=${2%?} y=${2#?}
     if [ "$st2" = '??' ]; then k space "stage it (new)"; none p; k d "delete it"
     elif [ "$y" = . ]; then k space "unstage it"; none p
     elif [ "$x" != . ]; then k space "stage the rest of it"

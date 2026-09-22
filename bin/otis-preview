@@ -34,6 +34,21 @@ callout() {
   [ -n "$does" ] && printf '%b %b⏎ %s%b\n' "$bar" "$GK_ATTENTION" "$does" "$GK_R"
   printf '\n'
 }
+# fit: each line cut to the pane with …, measured without its colors and
+# with a wide character as two columns: the pane wraps a line too long for
+# it, and a preview says one thing a line.
+fit() {
+  perl -CSD -Mutf8 -ne 'BEGIN { $w = shift @ARGV } chomp; my $v = $_; $v =~ s/\e\[[0-9;:]*[A-Za-z]//g;
+    my $n = 0; $n += (/\p{Ea=W}|\p{Ea=F}/ ? 2 : 1) for $v =~ /\X/g;
+    if ($n <= $w) { print "$_\n"; next }
+    my ($o, $m, $s) = ("", 0, $_);
+    while (length $s) {
+      if ($s =~ s/^(\e\[[0-9;:]*[A-Za-z])//) { $o .= $1; next }
+      $s =~ s/^(\X)//; my $c = $1; my $cw = ($c =~ /\p{Ea=W}|\p{Ea=F}/) ? 2 : 1;
+      last if $m + $cw > $w - 1; $o .= $c; $m += $cw;
+    }
+    print "$o\e[0m…\n"' "$w"
+}
 heading() { printf "${GK_CONTEXT}%s${GK_R}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
 case $kind in
@@ -104,7 +119,8 @@ esac
 
 # A merge request, open: yours (the pipelines JSON, with its jobs) or one
 # you were asked to review (the review JSON, which has its description).
-[ -n "$iid" ] || exit 0
+# Only a merge request's number: a section heading's row has none.
+case $iid in ''|*[!0-9]*) exit 0 ;; esac
 # Its threads, from the cache the file picker shares (git-mr-threads), asked
 # to fetch in the background if old: the dashboard draws this again when it
 # lands.
@@ -146,19 +162,28 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
   ($mr.headPipeline | if . then effective($gates) else null end) as $eff0 |
   # Opened from gmr rather than the dashboard, there is no row to say what
   # the MR wants of you: worked out here, the same way.
-  (if $verb != "" then $verb
+  # Yours by its state; one you review by what is yours to do on it, since
+  # its pipeline and threads belong to the author.
+  (($asked[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me0 |
+   [$mr.reviewers.nodes[]? | select(.username == $me0) | .mergeRequestInteraction.reviewState][0] as $mine_review |
+   if $verb != "" then $verb
+   elif ($m | not) then
+     if ($cl.drafts // 0) > 0 then "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit"
+     elif ($mine_review // "UNREVIEWED" | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES") | not) then "review it"
+     else "" end
    elif ($failed | length) > 0 or $eff0 == "FAILED" then "pipeline failed"
    elif $threads > 0 then "\($threads) \(plural($threads; "thread"; "threads")) to address"
    elif ($cl.drafts // 0) > 0 then "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit"
    elif ($fx.fixes // 0) > 0 and ($fx.fixing | not) then "fold in \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes"))"
    elif ($running | length) > 0 or $eff0 == "RUNNING" then "pipeline running"
    elif $m and $mr.approved and $eff0 == "SUCCESS" then "merge it"
-   elif $m and (($mr.reviewers.nodes // []) | length) == 0 and ($mr.draft | not) then "ask for a review"
+   elif (($mr.reviewers.nodes // []) | length) == 0 and ($mr.draft | not) then "ask for a review"
    else "" end) as $verb |
   (if $gc != "" then $gc elif $verb == "pipeline failed" then bad elif $verb == "merge it" then good
    elif $verb == "pipeline running" then attention else yours end) as $gc |
   (if $does != "" then $does elif ($verb | test("to address$")) then "address them"
-   elif $verb == "pipeline failed" then "review / address comments  ·  c the jobs and logs" else "" end) as $does |
+   elif $verb == "pipeline failed" then "address comments  ·  c the jobs and logs"
+   elif $verb == "review it" then "review it" else "" end) as $does |
 
   # Why the row wants you, in a sentence, from what it says.
   (if $verb == "pipeline failed" then
@@ -240,8 +265,13 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
       (if $sf > 0 then bad + "✗" elif $sr > 0 then attention + "◐" elif $sd == ($sj | length) then good + "✓" else faint + "○" end) as $g |
       "  " + $g + r + " " + text + ($s | padr($sw)) + r + "  " + bar(12; ($sj | length); [[$sd, good, "━"], [$sf, bad, "━"], [$sr, attention, "━"]])
         + "  " + context + "\($sd)/\($sj | length)" + r),
-     (if ($failed | length) > 0 then "", "  " + bad + "failed  " + r + text + names($failed; 8) + r else empty end),
-     (if ($running | length) > 0 then "", "  " + attention + "running  " + r + text + names($running; 6) + r else empty end),
+     # What failed and what is running, a job a line: a list, not a sentence.
+     (if ($failed | length) > 0 then "", "  " + bad + "failed" + r + context + "  \($failed | length)" + r,
+        ($failed[0:5][] | "    " + bad + "✗ " + r + text + (if length > ($w - 8) then .[0:$w - 9] + "…" else . end) + r),
+        (if ($failed | length) > 5 then "    " + faint + "+ \($failed | length - 5) more" + r else empty end) else empty end),
+     (if ($running | length) > 0 then "", "  " + attention + "running" + r + context + "  \($running | length)" + r,
+        ($running[0:5][] | "    " + attention + "◐ " + r + text + (if length > ($w - 8) then .[0:$w - 9] + "…" else . end) + r),
+        (if ($running | length) > 5 then "    " + faint + "+ \($running | length - 5) more" + r else empty end) else empty end),
      ""
    elif $mr.headPipeline.status then
      heading("pipeline") + "  " + (($mr.headPipeline.status | ascii_downcase) as $s |
@@ -273,7 +303,7 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
      (if ($fx.fixes // 0) > 0 and ($fx.fixing | not) then yours + "✎ \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes")) to fold in" + r else empty end),
      (if $vf.verifying then attention + "◎ verifying in Cursor Cloud" + r else empty end) ] |
    if length > 0 then heading("claude"), (.[] | "  " + .), "" else empty end)
-' 2>/dev/null
+' 2>/dev/null | fit
 git-verify --preview "$iid" 2>/dev/null
 # One to review: what its author says it is.
 if [ "$kind" = review ]; then
