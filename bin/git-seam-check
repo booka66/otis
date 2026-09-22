@@ -91,6 +91,10 @@ node "$share/lsp-references.mjs" < "$tmp/job" > "$tmp/out" 2>"$tmp/err" || {
   # The server not answering is not the commit's fault, and saying a slice is
   # bad because a tool fell over is the one thing a check must never do.
   echo "git-seam-check: tsgo did not answer:" >&2; head -5 "$tmp/err" >&2; exit 2; }
+# A run stopped short (its budget, or tsgo holding too much for too long)
+# checked only some of the files, and the rest are not clean for it.
+grep -q '^U' "$tmp/out" && {
+  echo "git-seam-check: tsgo stopped before checking every file:" >&2; head -5 "$tmp/err" >&2; exit 2; }
 
 awk -F'\t' '$1 == "D" { print $2 ":" $3 "  " $4 }' "$tmp/out" > "$tmp/diags"
 [ -s "$tmp/diags" ] || exit 0

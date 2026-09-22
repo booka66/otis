@@ -15,8 +15,9 @@
 //
 // tsgo answers nothing until its own requests to the client (registering
 // capabilities) are answered, so every server request gets a null reply.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { totalmem } from "node:os";
 import { dirname, resolve, relative } from "node:path";
 
 const job = JSON.parse(readFileSync(0, "utf8"));
@@ -154,8 +155,39 @@ const started = Date.now();
 const seenRefs = new Set();
 const checked = new Set();
 let left = 0;
+const finish = () => {
+  if (left > 0) out.push(["U", left].join("\t"));
+  clearTimeout(die);
+  clearInterval(watch);
+  if (job.baselineOut && baselineOut) {
+    try { writeFileSync(job.baselineOut, JSON.stringify(baselineOut)); } catch {}
+  }
+  process.stdout.write(out.join("\n") + (out.length ? "\n" : ""));
+  lsp.kill();
+};
+// The budget is looked at between batches, and one batch can be most of the
+// machine for longer than anyone would give it: a batch of big packages
+// holding half the memory, swapping everything else out, or still going
+// well past the budget. Either is the run's end mid-batch, keeping what it
+// found and counting the batch among the packages it never reached.
+const HEAVY = totalmem() / 2, HEAVY_FOR = 120000, OVER = BUDGET + 300000;
+let batchAt = 0, heavySince = 0;
+const watch = setInterval(() => {
+  execFile("ps", ["-o", "rss=", "-p", String(lsp.pid)], (err, stdout) => {
+    const rss = err ? 0 : Number(stdout.trim()) * 1024;
+    heavySince = rss > HEAVY ? heavySince || Date.now() : 0;
+    const why = heavySince && Date.now() - heavySince > HEAVY_FOR ? `tsgo held ${Math.round(rss / 2 ** 30)} GB for over two minutes`
+      : Date.now() - started > OVER ? "tsgo ran five minutes past its budget" : "";
+    if (!why) return;
+    process.stderr.write(`${why}: stopped, keeping what it found\n`);
+    left = pkgs.length - batchAt;
+    finish();
+    process.exit(0);
+  });
+}, 10000);
 for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
   if (i > 0 && Date.now() - started > BUDGET) { left = pkgs.length - i; break; }
+  batchAt = i;
   const opened = [];
   const load = (p) => {
     if (texts.has(p) || opened.includes(p)) return;
@@ -227,10 +259,4 @@ for (let i = 0; i === 0 || i < pkgs.length; i += BATCH) {
   }
   for (const p of opened) close(p);
 }
-if (left > 0) out.push(["U", left].join("\t"));
-clearTimeout(die);
-if (job.baselineOut && baselineOut) {
-  try { writeFileSync(job.baselineOut, JSON.stringify(baselineOut)); } catch {}
-}
-process.stdout.write(out.join("\n") + (out.length ? "\n" : ""));
-lsp.kill();
+finish();
