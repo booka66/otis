@@ -329,7 +329,7 @@ Review the way the tree reads, starting from symbols.md:
 
 Read the diff, and read the code around it wherever you need to be sure of a claim. Propose a comment only for something worth the author's time: a bug, a case the change gets wrong, a risk it creates, or a clearly simpler way to do the same thing. No style nits, no praise, no restating what the change does, nothing a linter or type checker catches, and nothing the threads already raise. A few strong comments beat many weak ones, and none is a fine answer.
 
-Write each comment as the reviewer, to the author: plain and direct, saying what is wrong and the fix, in a few sentences, never more than about 80 words. The author gets the comment; the reviewer gets why. So the evidence, the mechanism and the background go in why, and the comment keeps only what the author needs to act. Markdown is fine.
+Write each comment as the reviewer, to the author: what is wrong, then the fix, in one or two short sentences, under 40 words. Lead with the consequence, the way a colleague would say it at a desk ("A team with the queue off loses SMS here: check recoverSmsSender only when recoverEnabled."), not the chain of reasoning that found it. No preamble, no restating the code, no hedging. The author gets the comment; the reviewer gets why. So the evidence, the mechanism and the background go in why, and the comment keeps only what the author needs to act. Markdown is fine: name code with backticks.
 
 Where each comment goes:
 - path is relative to the repository root, and must be a file the MR changes.
