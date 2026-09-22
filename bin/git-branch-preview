@@ -132,44 +132,85 @@ printf '%s\n' "$log" | LC_ALL=C awk -F'\t' -v now="$now" -v w="$PANE_W" -v a="$(
   { oldest = ago($2) }
   END { if (total > 8) printf "        %s+ %d more, back to %s ago%s\n", f, total - 8, oldest, r }'
 
-# What they touch, by the top of each path: a directory's share of the lines
-# as a bar. Three dots, the branch's own changes since it left the base;
-# unrelated, the commits' own, since there is no since.
+# What they touch, by directory: a directory's share of the lines as a bar.
+# From the top of each path, the biggest directory with more than one file
+# is opened into the directories under it, until there are six rows: a branch all
+# in app/ shows app/'s parts, not one bar. Three dots, the branch's own
+# changes since it left the base; unrelated, the commits' own, since there
+# is no since.
 if [ -n "$unrelated" ]; then numstat=$(git log --numstat --format= "$base..$b" 2>/dev/null)
 else numstat=$(git diff --numstat --no-renames "$base...$b" 2>/dev/null); fi
 if [ -n "$numstat" ]; then
   printf '%s\n' "$numstat" | LC_ALL=C awk -F'\t' -v w="$PANE_W" -v c="$(printf "$GK_CONTEXT")" -v t="$(printf "$GK_TEXT")" \
     -v g="$(printf "$GK_GOOD")" -v x="$(printf "$GK_BAD")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
     function num(v,   s) { v = v ""; s = ""; while (length(v) > 3) { s = " " substr(v, length(v) - 2) s; v = substr(v, 1, length(v) - 3) }; return v s }
-    NF == 3 { d = $3; if (index(d, "/")) d = substr(d, 1, index(d, "/")); else d = "(root)"
+    # the next step of a path under a directory: a directory, or the file
+    function child(p, pre,   rest) { rest = substr(p, length(pre) + 1)
+      return index(rest, "/") ? pre substr(rest, 1, index(rest, "/")) : p }
+    # pfit: a path to w columns by the middle, the top and the end kept,
+    # app/…/ai/execution/; a name too long for even that, cut at its end
+    function pfit(s, w,   q, n, i, sl, out) { if (ulen(s) <= w) return s
+      sl = (s ~ /\/$/) ? "/" : ""; if (sl) s = substr(s, 1, length(s) - 1)
+      n = split(s, q, "/"); out = q[n] sl
+      if (n < 2 || ulen(q[1] "/…/" out) > w) return ufit(out, w)
+      for (i = n - 1; i > 1 && ulen(q[1] "/…/" q[i] "/" out) <= w; i--) out = q[i] "/" out
+      return q[1] "/…/" out }
+    # open group k into what is under it, down past directories it is all
+    # of; one whose parts are only files stays whole, a row of its own
+    function open(k,   i, c, one, pre, n) { pre = G[k]
+      for (;;) { one = ""
+        for (i = 1; i <= np; i++) if (grp[i] == k) { c = child(P[i], pre); if (one == "") one = c; else if (c != one) break }
+        if (i <= np) break
+        pre = one }
+      for (i = 1; i <= np; i++) if (grp[i] == k && child(P[i], pre) ~ /\/$/) break
+      if (i > np) { leaf[k] = 1; return }
+      split("", ci); n = 0
+      for (i = 1; i <= np; i++) if (grp[i] == k) { c = child(P[i], pre)
+        if (!(c in ci)) { ci[c] = n++ ? ++ng : k; G[ci[c]] = c }
+        grp[i] = ci[c] } }
+    NF == 3 { if (!($3 in fi)) { fi[$3] = ++np; P[np] = $3 }
       a = ($1 == "-") ? 0 : $1; m = ($2 == "-") ? 0 : $2
-      if (!(d in add)) { ds[++nd] = d }
-      add[d] += a; del[d] += m; if (!seen[$3]++) { files[d]++; nf++ }
-      ta += a; tm += m }
+      add[fi[$3]] += a; del[fi[$3]] += m; ta += a; tm += m }
     END {
-      if (!nd) exit
+      if (!np) exit
+      nf = np
       head = nf " file" (nf == 1 ? "" : "s") "  +" num(ta) " −" num(tm)
       if (17 + ulen(head) <= w) printf "\n%sWHAT IT TOUCHES%s  %s%d file%s  %s+%s%s %s−%s%s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), g, num(ta), r, x, num(tm), r
       else printf "\n%sWHAT IT TOUCHES%s  %s%d file%s%s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), r
+      # the top of each path, the files at the root together
+      for (i = 1; i <= np; i++) { d = index(P[i], "/") ? substr(P[i], 1, index(P[i], "/")) : ""
+        if (!(d in gi)) { gi[d] = ++ng; G[ng] = d }
+        grp[i] = gi[d] }
+      for (;;) {
+        for (k = 1; k <= ng; k++) { ga[k] = gd[k] = gf[k] = 0 }
+        for (i = 1; i <= np; i++) { ga[grp[i]] += add[i]; gd[grp[i]] += del[i]; gf[grp[i]]++ }
+        if (ng >= 6) break
+        best = 0; for (k = 1; k <= ng; k++) if (gf[k] > 1 && !leaf[k] && (!best || ga[k] + gd[k] > ga[best] + gd[best])) best = k
+        if (!best) break
+        open(best) }
       # biggest first, by lines either way
-      for (i = 1; i <= nd; i++) for (j = i + 1; j <= nd; j++)
-        if (add[ds[j]] + del[ds[j]] > add[ds[i]] + del[ds[i]]) { s = ds[i]; ds[i] = ds[j]; ds[j] = s }
-      top = add[ds[1]] + del[ds[1]]; if (top < 1) top = 1
-      nw = 0; for (i = 1; i <= nd && i <= 6; i++) if (ulen(ds[i]) > nw) nw = ulen(ds[i]); if (nw > 18) nw = 18
-      # Narrow, the files column goes before the bar gets too short to read.
-      fc = (w >= 56); bw = w - nw - (fc ? 34 : 22); if (bw > 30) bw = 30; if (bw < 6) bw = 6
-      for (i = 1; i <= nd && i <= 6; i++) {
-        d = ds[i]; nm = ufit(d, nw); nm = nm substr("                  ", 1, nw - ulen(nm))
-        k = int((add[d] + del[d]) * bw / top + 0.5); if (k < 1) k = 1
-        ka = int(k * add[d] / (add[d] + del[d] > 0 ? add[d] + del[d] : 1) + 0.5); kd = k - ka
+      for (i = 1; i <= ng; i++) ds[i] = i
+      for (i = 1; i <= ng; i++) for (j = i + 1; j <= ng; j++)
+        if (ga[ds[j]] + gd[ds[j]] > ga[ds[i]] + gd[ds[i]]) { s = ds[i]; ds[i] = ds[j]; ds[j] = s }
+      top = ga[ds[1]] + gd[ds[1]]; if (top < 1) top = 1
+      for (i = 1; i <= ng; i++) nm_[i] = (G[i] == "") ? "(root)" : G[i]
+      # Narrow, the files column goes before the bar gets too short to read;
+      # the names get what the bar can spare down to 10.
+      fc = (w >= 56); nw = 0; for (i = 1; i <= ng && i <= 6; i++) if (ulen(nm_[ds[i]]) > nw) nw = ulen(nm_[ds[i]])
+      k = w - (fc ? 34 : 22) - 10; if (k > 40) k = 40; if (k < 12) k = 12; if (nw > k) nw = k
+      bw = w - nw - (fc ? 34 : 22); if (bw > 30) bw = 30; if (bw < 6) bw = 6
+      for (i = 1; i <= ng && i <= 6; i++) {
+        d = ds[i]; nm = pfit(nm_[d], nw); nm = nm substr("                                        ", 1, nw - ulen(nm))
+        k = int((ga[d] + gd[d]) * bw / top + 0.5); if (k < 1) k = 1
+        ka = int(k * ga[d] / (ga[d] + gd[d] > 0 ? ga[d] + gd[d] : 1) + 0.5); kd = k - ka
         bar = g; for (j = 0; j < ka; j++) bar = bar "━"; bar = bar x; for (j = 0; j < kd; j++) bar = bar "━"
         pad = ""; for (j = k; j < bw; j++) pad = pad " "
-        printf "  %s%s%s  %s%s%s%s  ", t, nm, r, bar, r, pad, ""
-        if (fc) printf "%s%3d file%s%s  ", c, files[d], (files[d] == 1 ? " " : "s"), r
-        printf "%s+%s%s", g, num(add[d]), r
-        if (del[d]) printf " %s−%s%s", x, num(del[d]), r
+        printf "  %s%s%s  %s%s%s  ", t, nm, r, bar, r, pad
+        if (fc) printf "%s%3d file%s%s  ", c, gf[d], (gf[d] == 1 ? " " : "s"), r
+        printf "%s+%s%s", g, num(ga[d]), r
+        if (gd[d]) printf " %s−%s%s", x, num(gd[d]), r
         printf "\n" }
-      if (nd > 6) printf "  %s+ %d more%s\n", f, nd - 6, r }'
+      if (ng > 6) printf "  %s+ %d more%s\n", f, ng - 6, r }'
 fi
 
 # The diff itself, for scrolling into.
