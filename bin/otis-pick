@@ -133,6 +133,36 @@ screen_start
 typeset -a outq
 integer code=130
 at_quit() { (( $#outq )) && print -rl -- $outq; exit $code; }
+# What it showed when it last closed (screen.zsh's memo), for a picker whose
+# rows come from a reload: drawn at once, the picker early until its own
+# list lands. Early, the previews, the per-row keys and a key that runs
+# something wait for that list, since what they read under $st is its; a
+# key pressed meanwhile (pend) runs when it lands, on the row you are on.
+memo=
+integer early=0
+typeset -a pend
+if [[ -n $OTIS_C_GITDIR && $startacts == *reload* ]] && (( ! disabled && ! $#piped )); then
+  memo=$(print -rn -- "$PWD $title $startacts" | cksum)
+  memo=$OTIS_C_GITDIR/git-alias-cache/screens/pick-${memo%% *}
+fi
+at_leave() {
+  [[ -n $memo ]] && (( rgot && ! early )) || return
+  local f n g
+  local -A best
+  mkdir -p ${memo:h} 2>/dev/null
+  print -rl -- "${raw[@]}" > $memo
+  for f in header footer; do
+    if [[ -s $st/$f ]]; then print -rn -- "$(<$st/$f)" > $memo.$f; else rm -f $memo.$f; fi
+  done
+  # Each row's newest preview at this width.
+  for f in $st/pv/*.$pw.<->(N); do
+    n=${f%.*} g=${f##*.}
+    (( g > ${best[$n]:--1} )) && best[$n]=$g
+  done
+  local -a keep
+  for n g in ${(kv)best}; do keep+=($n.$g); done
+  memo_keep $keep
+}
 
 # --- the layout ------------------------------------------------------------------
 # Side by side from 120 columns, the pane 42% of it within 56..88 columns
@@ -320,8 +350,10 @@ headline() {
     done
     HL+=("")
   fi
-  if [[ -s $st/footer ]]; then
-    segs=("${(@s: · :)${(j: · :)${(f)"$(<$st/footer)"}}}") s=
+  local foot=$st/footer
+  (( early )) && [[ ! -s $foot ]] && foot=$memo.footer
+  if [[ -s $foot ]]; then
+    segs=("${(@s: · :)${(j: · :)${(f)"$(<$foot)"}}}") s=
     for t in $segs; do
       vw "$s · $t"
       if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); HL+=("  $REPLY$R"); s=; fi
@@ -331,7 +363,7 @@ headline() {
   fi
   local stale=($st/stale.*(N))
   (( $#stale )) && HL+=("  ${X}could not refresh from GitLab: this is what it said last · ? shows why$R")
-  [[ -s $st/footer || $#stale -gt 0 ]] && HL+=("")
+  [[ -s $foot || $#stale -gt 0 ]] && HL+=("")
   (( loaded )) || HL+=("  ${C}loading…$R")
   if (( loaded )) && { [[ -n $query ]] || (( searching )); }; then
     l="  "$A"/"$R" "$T$query$R
@@ -491,7 +523,7 @@ render() {
 integer wpid=0
 want() {
   local f
-  (( cur && pw > 0 && pshow )) && [[ -n $preview ]] || return 1
+  (( cur && pw > 0 && pshow && ! early )) && [[ -n $preview ]] || return 1
   (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
   pvname "$rid[cur]" $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
@@ -504,7 +536,7 @@ want() {
 # so j and k find them drawn. It stops at a gen or a width that is not the
 # one it was started for.
 warm() {
-  (( pw > 0 && $#vis && pshow )) && [[ -n $preview ]] || return
+  (( pw > 0 && $#vis && pshow && ! early )) && [[ -n $preview ]] || return
   print -r -- "$gen $pw" > $st/pv/gen
   local -a near
   local at=${vis[(Ie)$cur]} j
@@ -537,7 +569,7 @@ typeset -A rkl
 rkfor=
 wantkeys() {
   local f
-  (( cur )) && [[ -n $keysfrom ]] || return 1
+  (( cur && ! early )) && [[ -n $keysfrom ]] || return 1
   keysfor; f=$REPLY
   [[ -e $f || -e $f.tmp ]] && return 1
   : > $f.tmp
@@ -708,8 +740,10 @@ landed() {
   rgot=$newest
   # An older reload landing after a newer one is never shown: gone too.
   for f in $got; do (( ${f##*.} < newest )) && rm -f $f; done
+  early=0
   take $st/list.$newest
   rm -f $st/list.$newest
+  if (( $#pend )); then local -a p=($pend); pend=(); $p; fi
   return 0
 }
 # take <file>: its rows as the list, the cursor kept on the row it was on
@@ -727,11 +761,17 @@ take() {
   done
   (( cur )) || cur=$pcur
   (( cur > $#raw )) && cur=$#raw
-  (( hdr )) && { header=; [[ -s $st/header ]] && header=$(<$st/header); }
+  if (( hdr )); then
+    header=
+    if [[ -s $st/header ]]; then header=$(<$st/header)
+    elif (( early )) && [[ -s $memo.header ]]; then header=$(<$memo.header); fi
+  fi
   (( lent )) && header=
   list; settle_cur
   (( cur )) && poff=${offs[$rid[cur]]:-0}
-  (( gen++ )); warm
+  (( gen++ ))
+  (( early )) && return
+  warm
   fire load; fire result
 }
 # Before a command runs: the scroll of the row it is about where the scripts
@@ -830,18 +870,20 @@ run() {
 }
 # accept: the marked rows, else the one under the cursor, handed back.
 accept() {
+  (( early )) && { pend=(accept); return }
   local i
   integer n=0
   if (( multi )); then for (( i = 1; i <= $#raw; i++ )); do (( ${marked[$i]:-0} )) && { outq+=("$raw[i]"); (( n++ )); }; done; fi
   (( n )) || { (( cur )) && outq+=("$raw[cur]"); }
   code=0; quit 0
 }
-quit_screen() { (( screen )) && screen_off; rm -rf -- $st; }
+quit_screen() { (( screen )) && screen_off; at_leave; rm -rf -- $st; }
 # act <key>: its binding, for the row under the cursor. The footer says it
 # is on it first, since some take a moment.
 integer pwant=-1 pgen=0
 typeset -A held
 act() {
+  (( early )) && { pend=(act $1); flash="…"; return }
   local was=$poff g=$gen
   flash="…"; draw
   run "$bind[$1]" $cur
@@ -995,6 +1037,7 @@ screen_on
 size
 layout
 (( $#piped )) && { print -rl -- $piped > $st/list.piped; take $st/list.piped; rm -f $st/list.piped; }
+[[ -n $memo && -s $memo ]] && { early=1; memo_restore; take $memo; }
 draw
 run "$startacts" 0
 for i in $ticks; do (( tnext[$i] = EPOCHREALTIME + i )); done

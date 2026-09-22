@@ -85,6 +85,29 @@ refresh() {
   { otis-list $1 > $st/rows.new 2>/dev/null && mv -f $st/rows.new $st/rows } &!
   lpid=$! ltick=$EPOCHSECONDS
 }
+# What it showed when it last closed (screen.zsh's memo): drawn at once, the
+# dashboard early until otis-list's first rows land. Early, the previews and
+# the row keys wait for them, since what they read under $st is otis-list's;
+# a key pressed meanwhile (pend) runs when they land, on the row you are on.
+memo=
+integer early=0
+typeset -a pend
+[[ -n $OTIS_C_GITDIR ]] && { memo=$(print -rn -- "$PWD" | cksum); memo=$OTIS_C_GITDIR/git-alias-cache/screens/dash-${memo%% *}; }
+at_leave() {
+  [[ -n $memo && -s $st/rows ]] && (( ! early )) || return
+  local f n g
+  local -A best
+  mkdir -p ${memo:h} 2>/dev/null
+  print -rn -- "$(<$st/rows)" > $memo
+  # Each row's newest preview at this width.
+  for f in $st/pv/*.$pw.<->(N); do
+    n=${f%.*} g=${f##*.}
+    (( g > ${best[$n]:--1} )) && best[$n]=$g
+  done
+  local -a keep
+  for n g in ${(kv)best}; do keep+=($n.$g); done
+  memo_keep $keep
+}
 landed() {
   [[ -n $lpid ]] && ! kill -0 $lpid 2>/dev/null || return 1
   lpid=
@@ -107,6 +130,7 @@ landed() {
   # land after it (git-mr-threads --kick): their times, with no process.
   local -a tm; local tf
   for tf in $cache/mr-*-threads.json(N); do zstat -A tm +mtime -- $tf; sig+=$tf$tm[1]; done
+  early=0
   if [[ $sig != $lastsig ]]; then
     lastsig=$sig
     (( gen++ ))
@@ -114,6 +138,7 @@ landed() {
     (( $#old )) && rm -f -- $old
     warm
   fi
+  if (( $#pend )); then local -a p=($pend); pend=(); $p; fi
   return 0
 }
 
@@ -324,7 +349,7 @@ render() {
 }
 want() {
   local w=$1 f
-  (( w > 0 && $#id )) || return 1
+  (( w > 0 && $#id && ! early )) || return 1
   pvname "$id[cur]" $w; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
   : > $f.tmp
@@ -334,7 +359,7 @@ want() {
 # (pv/gen), rather than being killed mid-render and leaving a .tmp that
 # would keep that preview from ever being drawn.
 warm() {
-  (( pw > 0 && $#id )) || return
+  (( pw > 0 && $#id && ! early )) || return
   print -r -- "$gen $pw" > $st/pv/gen
   {
     local i j f g="$gen $pw"
@@ -541,6 +566,7 @@ answered() {
 }
 # The row, as otis-do takes it: kind, verb, extra, then gmr's fields.
 act() {
+  (( early )) && { pend=(act $1); flash="…"; return }
   fields
   ask otis-do $1 "$reply[6]" "$reply[14]" "$reply[13]" "$reply[2]" "$reply[3]" "$reply[4]" "$reply[5]" "$reply[7]" "$reply[8]" "$reply[9]" "$reply[12]"
 }
@@ -606,11 +632,12 @@ handle() {
     m|b|a|d|w|c)
       screen_off
       case $1 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac
-      rm -rf -- $st; exit 0 ;;
+      at_leave; rm -rf -- $st; exit 0 ;;
     '?') help=$(( !help )) poff=0 ;;
     $'\x04') scroll $(( ph / 2 )) ;;
     $'\x15') scroll $(( - ph / 2 )) ;;
-    ' ') if (( $#id )); then
+    ' ') if (( early )); then pend=(handle ' '); flash="…"
+         elif (( $#id )); then
            screen_off
            otis-preview "$kind[cur]" "$iid[cur]" "$id[cur]" "$extra[cur]" 2>/dev/null | less -R
            screen_on
@@ -621,6 +648,7 @@ handle() {
 screen_on
 size
 cur=1
+[[ -n $memo && -s $memo ]] && { print -rn -- "$(<$memo)" > $st/rows; load; early=1; memo_restore; }
 refresh
 draw
 # Keys first: every key waiting is handled before the one draw after them,

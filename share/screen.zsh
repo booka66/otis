@@ -5,7 +5,8 @@
 # calls screen_start once, then screen_on.
 #
 # A script may define at_quit, run as it leaves with the screen given back
-# (otis-symbols prints what an accept hands back there).
+# (otis-symbols prints what an accept hands back there), and at_leave, run
+# before that while $st is still there (what it showed, kept for next time).
 zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
 
 # The palette, as the bytes the screen is drawn with.
@@ -50,6 +51,7 @@ screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e
 screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
 quit() {
   (( screen )) && screen_off
+  (( $+functions[at_leave] )) && at_leave
   rm -rf -- $st
   (( $+functions[at_quit] )) && at_quit
   exit ${1:-0}
@@ -217,6 +219,30 @@ copy() {
   local -a got=("${(@f)out}")
   if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
   else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
+}
+
+# --- what it showed last -----------------------------------------------------------
+# A screen opens on what it showed when it last closed, rather than empty
+# until its list has run: the rows at $memo, their previews in $memo.pv.
+# Previews are kept as gen 0, so the pane shows one (the newest of any gen)
+# until the first that is drawn from the fresh rows lands.
+# memo_keep <preview files...>: those kept, each under its name at gen 0.
+memo_keep() {
+  local f n
+  mkdir -p $memo.pv.new 2>/dev/null || return
+  for f; do
+    n=${f:t}; n=${n%.*}.0
+    print -rn -- "$(<$f)" > $memo.pv.new/$n
+    [[ -e $f.cont ]] && print -rn -- "$(<$f.cont)" > $memo.pv.new/$n.cont
+  done
+  rm -rf -- $memo.pv; mv -f -- $memo.pv.new $memo.pv
+  # Every MR reviewed leaves one; a month unopened is gone.
+  { find ${memo:h} -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2>/dev/null } &!
+}
+# memo_restore: the kept previews into $st/pv.
+memo_restore() {
+  local f
+  for f in $memo.pv/*(N); do print -rn -- "$(<$f)" > $st/pv/${f:t}; done
 }
 
 # --- a port ------------------------------------------------------------------------

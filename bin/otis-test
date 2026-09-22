@@ -939,6 +939,23 @@ else
 fi
 git branch -qD stale; rm -f "$(git rev-parse --git-common-dir)/branch-mrs.tsv"
 
+# A picker opens on the rows it had when it last closed, while its list
+# runs again behind them; a key that runs something waits for that list.
+slow="git-fzf memo '' --bind 'start:reload(sleep 2; printf \"a\\\\nb\\\\n\")' --bind 'x:execute-silent(touch $tmp/memo-x)'"
+if picker_open "$slow"; then
+  picker_rows >/dev/null; sleep 2.5; picker_close
+fi
+if picker_open "$slow"; then
+  expect memo/rows-at-once "$(picker_state | jq -c '[.reading, .totalCount]')" '[true,2]'
+  picker_key x
+  expect memo/key-waits "$([ -e "$tmp/memo-x" ] && echo ran || echo waits)" "waits"
+  sleep 2.5
+  expect memo/key-runs-after "$([ -e "$tmp/memo-x" ] && echo ran || echo waits)" "ran"
+  picker_close
+else
+  expect memo/opens "no picker on port $port" "opened"
+fi
+
 # The dashboard (otis-dash), in a pty: origin is a path here, so it draws
 # from the checkout alone, the here section and nothing waiting; j moves
 # nothing off the one row, and b hands gb to the otis function to run.
