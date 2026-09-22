@@ -1,34 +1,112 @@
 #!/bin/sh
-# otis-try: opens otis on GitHub in Safari.
+# otis-try: set otis up the way a new engineer would, on a Mac that has never
+# seen it: a fresh macOS virtual machine (Tart, on Apple silicon), with no
+# Homebrew, no git config, no glab login and no dotfiles. Safari opens in it
+# on otis's GitHub page, to install from there as a new engineer would. Closing
+# the VM's window deletes it; --keep leaves it for next time (tart run <name>).
 #
-# otis-try --clean takes away everything the old VM otis-try ever left: VMs
-# kept or orphaned by a kill, the cached macOS image, and Tart itself where
-# otis-try fetched it.
+# otis-try --clean takes away everything it ever left: VMs kept or orphaned
+# by a kill, the cached macOS image, and Tart itself where otis-try fetched it.
+# In braces, so sh reads all of it before running any: it runs for as long
+# as the VM does, and a script changed under a running sh is read from the
+# middle.
+{
 image=ghcr.io/cirruslabs/macos-tahoe-vanilla:latest
+keep= clean=
+case $1 in
+  --keep) keep=1 ;;
+  --clean) clean=1 ;;
+esac
 
-if [ "$1" != --clean ]; then
-  exec open -a Safari https://github.com/booka66/otis
-fi
-
+[ "$(uname)" = Darwin ] && [ "$(uname -m)" = arm64 ] || { echo "otis-try: needs a Mac with Apple silicon" >&2; exit 1; }
+# Tart from its own release, signed by Cirrus Labs, kept here and nowhere
+# else: its brew formula is refused by current Homebrew, and otis-try is the
+# only thing that uses it. One on PATH is used instead where there is one.
 tart_app=${XDG_DATA_HOME:-$HOME/.local/share}/otis-try/tart.app
 if command -v tart >/dev/null 2>&1; then
   tart() { command tart "$@"; }
 elif [ -x "$tart_app/Contents/MacOS/tart" ]; then
   tart() { "$tart_app/Contents/MacOS/tart" "$@"; }
-else
+elif [ -n "$clean" ]; then
   tart() { :; }
+else
+  printf 'otis-try runs a fresh Mac in Tart (tart.run), which is not here. Download it into %s? [y/N] ' "${tart_app%/*}"
+  read -r a
+  [ "$a" = y ] || [ "$a" = Y ] || exit 1
+  mkdir -p "${tart_app%/*}" &&
+    curl -fL --progress-bar https://github.com/cirruslabs/tart/releases/latest/download/tart.tar.gz |
+    tar -xz -C "${tart_app%/*}" || exit 1
+  [ -x "$tart_app/Contents/MacOS/tart" ] || { echo "otis-try: the download has no tart.app in it" >&2; exit 1; }
+  tart() { "$tart_app/Contents/MacOS/tart" "$@"; }
 fi
 
-for vm in $(tart list --source local --quiet 2>/dev/null | grep '^otis-try-'); do
-  tart stop "$vm" >/dev/null 2>&1
-  tart delete "$vm" && echo "deleted the VM $vm"
-done
-for img in $(tart list --source oci --quiet 2>/dev/null | grep -F "${image%:*}"); do
-  tart delete "$img" && echo "deleted the cached image $img"
-done
-if [ -d "${tart_app%/*}" ]; then
-  rm -rf "${tart_app%/*}" && echo "deleted Tart from ${tart_app%/*}"
+if [ -n "$clean" ]; then
+  for vm in $(tart list --source local --quiet 2>/dev/null | grep '^otis-try-'); do
+    tart stop "$vm" >/dev/null 2>&1
+    tart delete "$vm" && echo "deleted the VM $vm"
+  done
+  for img in $(tart list --source oci --quiet 2>/dev/null | grep -F "${image%:*}"); do
+    tart delete "$img" && echo "deleted the cached image $img"
+  done
+  if [ -d "${tart_app%/*}" ]; then
+    rm -rf "${tart_app%/*}" && echo "deleted Tart from ${tart_app%/*}"
+  fi
+  [ -d "$(brew --repository 2>/dev/null)/Library/Taps/cirruslabs/homebrew-cli" ] &&
+    echo "left: the cirruslabs/cli brew tap (brew untap cirruslabs/cli)"
+  echo "left: any glab token a VM logged in with, on GitLab under Preferences, Access tokens"
+  exit 0
 fi
-[ -d "$(brew --repository 2>/dev/null)/Library/Taps/cirruslabs/homebrew-cli" ] &&
-  echo "left: the cirruslabs/cli brew tap (brew untap cirruslabs/cli)"
-echo "left: any glab token a VM logged in with, on GitLab under Preferences, Access tokens"
+
+# The first run downloads the image, tens of GB, cached in ~/.tart after.
+# Each VM is a copy-on-write clone of it, so later runs take little.
+if ! tart list --source oci 2>/dev/null | grep -qF "${image%:*}"; then
+  free=$(df -g "$HOME" | awk 'NR == 2 { print $4 }')
+  if [ "$free" -lt 60 ]; then
+    echo "otis-try: the first run downloads a macOS image of tens of GB, and $HOME has ${free}GB free; make room for about 60" >&2
+    exit 1
+  fi
+  echo "first run: downloading a fresh macOS, which takes a while"
+fi
+
+name=otis-try-$(date +%Y%m%d-%H%M%S)
+tart clone "$image" "$name" || exit 1
+if [ -z "$keep" ]; then
+  trap 'tart stop "$name" >/dev/null 2>&1; tart delete "$name" && echo "deleted $name"' EXIT
+  trap 'exit 1' INT TERM
+fi
+
+cat <<EOF
+
+A fresh Mac is starting in its own window, logged in as admin (password:
+admin, which Homebrew's installer asks for). Once it is up, Safari opens on
+otis's GitHub page by itself.
+
+Everything in the VM is its own: installs, logins, git config. A glab login
+in there makes a real token on GitLab, which outlives the VM.
+
+$([ -n "$keep" ] && echo "Kept after you close it: tart run $name, and tart delete $name when done." || echo "Close the VM's window when you are done, and it is deleted.")
+
+EOF
+tart run "$name" &
+vm=$!
+
+# Into the VM over ssh as admin, the vanilla image having no agent for tart
+# exec. The password comes from an askpass that says it, so nothing is typed.
+ask=$(mktemp -d)/askpass
+printf '#!/bin/sh\necho admin\n' > "$ask" && chmod +x "$ask"
+invm() {
+  SSH_ASKPASS=$ask SSH_ASKPASS_REQUIRE=force ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR -o ConnectTimeout=5 "admin@$ip" "$@" </dev/null
+}
+by_hand='in it, open https://github.com/booka66/otis in Safari'
+if ip=$(tart ip --wait 180 "$name" 2>/dev/null); then
+  tries=0
+  until invm true 2>/dev/null || [ $tries -ge 60 ]; do sleep 2; tries=$((tries + 1)); done
+  invm 'open -a Safari https://github.com/booka66/otis' || echo "otis-try: could not get into the VM; $by_hand" >&2
+else
+  echo "otis-try: the VM has no address; $by_hand" >&2
+fi
+rm -rf "${ask%/*}"
+wait $vm
+exit
+}
