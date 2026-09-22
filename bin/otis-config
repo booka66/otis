@@ -291,6 +291,12 @@ cache_fresh() {
   [ "$c" -nt "$0" ] || return 1
   [ ! -e "$d/config" ] || [ "$c" -nt "$d/config" ] || return 1
   [ ! -e "$r/.otis" ] || [ "$c" -nt "$r/.otis" ] || return 1
+  # A .otis that has since been deleted leaves no file to be newer than, so
+  # the line above would go on letting the cache answer out of one that is
+  # gone. Whether there was one when it was built is written in the cache
+  # itself; a cache from before that line is simply remade.
+  was=no; [ -e "$r/.otis" ] && was=yes
+  [ "$(awk -F'\t' '$1 == "REPOFILE" { print $2; exit }' "$c")" = "$was" ] || return 1
   for g in "$GIT_CONFIG_GLOBAL" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "$HOME/.gitconfig"; do
     [ -z "$g" ] || [ ! -e "$g" ] || [ "$c" -nt "$g" ] || return 1
   done
@@ -323,6 +329,9 @@ build_cache() {
       *) printf '%s\t%s\n' "$key" "$val" ;;
     esac
   done
+  # Whether the repo had a .otis when this was built, for cache_fresh: its
+  # removal is the one change to it no mtime can show.
+  if [ -e "$repofile" ]; then printf 'REPOFILE\tyes\n'; else printf 'REPOFILE\tno\n'; fi
   printf 'UNSET\t%s\n' "${unset_keys# }"
 }
 
