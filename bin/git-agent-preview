@@ -76,11 +76,11 @@ case $state in
   running)
     now_doing=$(doing)
     case $now_doing in
-      *"	"*) line2="${GK_TEXT}$(pane_fit "${now_doing%%	*}" $((PANE_W - 2)))${GK_R}"
+      *"	"*) line2="${GK_TEXT}${now_doing%%	*}${GK_R}"
             line3="${GK_ELSEWHERE}$(pane_fit "${now_doing#*	}" $((PANE_W - 2)))${GK_R}"
             pane_callout attention "$verb${title:+: $title} · $took" "$line2" "$line3" ;;
       '') pane_callout attention "$verb${title:+: $title} · $took" ;;
-      *) pane_callout attention "$verb${title:+: $title} · $took" "${GK_TEXT}$(pane_fit "$now_doing" $((PANE_W - 2)))${GK_R}" ;;
+      *) pane_callout attention "$verb${title:+: $title} · $took" "${GK_TEXT}$now_doing${GK_R}" ;;
     esac ;;
   done)
     # The one fact: how many held, and which did not.
@@ -99,7 +99,7 @@ case $state in
         fi ;;
     esac ;;
   stopped) pane_callout context "Stopped${ended:+ at $(at "$ended" '+%a %H:%M')}" "keys:r runs it again" ;;
-  *) pane_callout bad "It $( [ "$state" = died ] && echo died || echo failed)${took:+ after $took}" "${GK_TEXT}$(pane_fit "${lastword:-no word from it on why}" $((PANE_W - 2)))${GK_R}" ;;
+  *) pane_callout bad "It $( [ "$state" = died ] && echo died || echo failed)${took:+ after $took}" "${GK_TEXT}${lastword:-no word from it on why}${GK_R}" ;;
 esac
 
 # --- what it is ----------------------------------------------------------------------
@@ -146,7 +146,7 @@ if [ -s "$d/plan.json" ] && [ ! -s "$d/verdict.json" ]; then
       in) g="${GK_ELSEWHERE}●" ;; *) g="${GK_FAINT}○" ;;
     esac
     case $s in verified) sc=$GK_GOOD ;; failed) sc=$GK_BAD ;; testing) sc=$GK_ATTENTION ;; in) sc=$GK_ELSEWHERE ;; *) sc=$GK_FAINT ;; esac
-    printf "  %b ${GK_CONTEXT}%-4s${GK_TEXT}%-${cw}s ${sc}%s${GK_R}\n" "$g" "$id" "$(pane_fit "$claim" "$cw")" "$s"
+    pane_hang "  $g ${GK_CONTEXT}$(printf '%-4s' "$id")" 8 text 3 "$claim" "${sc}$s"
   done
   bw=$((PANE_W - 10)); [ "$bw" -gt 50 ] && bw=50
   echo
@@ -202,8 +202,6 @@ said=$(jq -r 'select(.type == "otis") | .text | gsub("[\t\n]"; " ")' "$d/events.
 if [ -n "$said" ] && [ ! -s "$d/verdict.json" ]; then
   said=$(printf '%s\n' "$said" | tail -6)
   pane_section "what it said" "" "" "as it went, newest last"
-  printf '%s\n' "$said" | while IFS= read -r l; do printf "  ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$l" $((PANE_W - 2)))"; done
+  printf '%s\n' "$said" | while IFS= read -r l; do pane_hang "  ${GK_FAINT}·${GK_R} " 4 context 2 "$l"; done
 fi
 
-if [ "$state" = running ]; then pane_keys "⏎ every step" "x stops it" "y copies its folder"
-else pane_keys "⏎ every step" "r runs it again" "d forgets it"; fi

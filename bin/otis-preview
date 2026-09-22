@@ -181,9 +181,9 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
    else "" end) as $verb |
   (if $gc != "" then $gc elif $verb == "pipeline failed" then bad elif $verb == "merge it" then good
    elif $verb == "pipeline running" then attention else yours end) as $gc |
-  (if $does != "" then $does elif ($verb | test("to address$")) then "address them"
-   elif $verb == "pipeline failed" then "address comments  ·  c the jobs and logs"
-   elif $verb == "review it" then "review it" else "" end) as $does |
+  # What enter does comes from the dashboard row; opened from gmr, the
+  # picker footer says it for the row, and this names no key.
+  $does as $does |
 
   # Why the row wants you, in a sentence, from what it says.
   (if $verb == "pipeline failed" then
@@ -203,7 +203,7 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
   (if $verb != "" then
      ($gc | if . == "" then yours else . end) as $bc |
      ($bc + "┃" + r + " " + B + $bc + $verb + UB + r),
-     (if $why != "" then $bc + "┃" + r + " " + text + $why + r else empty end),
+     (if $why != "" then ($why | wrapl($w - 2; 2)[] | $bc + "┃" + r + " " + text + . + r) else empty end),
      (if $does != "" then $bc + "┃" + r + " " + attention + "⏎ " + $does + r else empty end),
      ""
    else empty end),
@@ -227,17 +227,17 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
        ($n.position // {}) as $p |
        (if $p.new_path // $p.old_path then "\($p.new_path // $p.old_path | short):\($p.new_line // $p.old_line // "")" else "on the MR" end) as $where |
        "",
-       "  " + yours + "┃" + r + " " + elsewhere + $where + r + context + "  ·  " + ($n.author.username | who)
-         + "  ·  " + ($n.created_at | ago) + " ago" + r,
+       "  " + yours + "┃" + r + " " + elsewhere + ($where | if length > ($w - 4) then "…" + .[length - $w + 5:] else . end) + r,
        (($n.body // "") | gsub("<!--[^>]*-->"; "") | gsub("!?\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; "\(.t)") | gsub("\\*\\*"; "")
-         # One line of what it says, past a heading a review bot puts first
-         # ("AI review (medium)"): the rest is behind enter.
-         | split("\n") | map(select(test("\\S")) | gsub("^[#>\\s]+"; "")) | (if length > 1 and (.[0] | test("^[^.]{0,30}$")) then .[1:] else . end) | .[0] // ""
-         | if length > ($w - 6) then .[0:$w - 7] + "…" else . end | "  " + yours + "┃" + r + " " + text + . + r),
-       (if (.notes | length) > 1 then
-          "  " + yours + "┃" + r + " " + context + "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
-          + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) + r
-        else empty end)),
+         # What it says, wrapped to three lines, past a heading a review
+         # bot puts first ("AI review (medium)"): the rest is behind enter.
+         | split("\n") | map(select(test("\\S")) | gsub("^[#>\\s]+"; "")) | (if length > 1 and (.[0] | test("^[^.]{0,30}$")) then .[1:] else . end) | join(" ")
+         | wrapl($w - 6; 3)[] | "  " + yours + "┃" + r + " " + text + . + r),
+       # Who, when, and how it has gone since.
+       ("  " + yours + "┃" + r + " " + context + ([($n.author.username | who), ($n.created_at | ago) + " ago",
+          (if (.notes | length) > 1 then "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
+             + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) else empty end)]
+          | join("  ·  ") | if length > ($w - 4) then .[0:$w - 5] + "…" else . end) + r)),
      ""
    end),
 

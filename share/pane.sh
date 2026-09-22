@@ -61,23 +61,23 @@ pane_callout() {
   printf "${_pn_c}▌ \033[1m%s${GK_R}\n" "$(pane_fit "$1" $((PANE_W - 2)))"; shift
   for _pn_l in "$@"; do
     case $_pn_l in
-      keys:*)
-        printf "${_pn_c}▌ ${GK_R}"
-        # As many keys as the line holds, the first ones.
-        printf '%s' "${_pn_l#keys:}" | LC_ALL=C awk -v w=$((PANE_W - 2)) -v a="$(printf "$GK_ATTENTION")" -v x="$(printf "$GK_CONTEXT")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
-          { n = split($0, ks, " · "); out = ""; used = 0
-            for (i = 1; i <= n; i++) { k = ks[i]; sp = index(k, " ")
-              if (used + (i > 1 ? 4 : 0) + ulen(k) > w && i > 1) break
-              out = out (i > 1 ? "    " : "") a (sp ? substr(k, 1, sp - 1) : k) r x (sp ? substr(k, sp) : "") r
-              used += (i > 1 ? 4 : 0) + ulen(k) }
-            print out }' ;;
+      # The keys are the footer's to say, for the row and the screen it is
+      # on: a preview is shown under more than one, so it names none.
+      keys:*) ;;
       *)
-        # Cut to the pane like any line; one in a color of its own keeps it.
-        _pn_p=$(printf '%b' "$_pn_l" | sed 's/\[[0-9;:]*m//g')
+        _pn_p=$(printf '%b' "$_pn_l" | sed 's/\[[0-9;:]*m//g')
         if [ "${#_pn_p}" -le $((PANE_W - 2)) ]; then printf "${_pn_c}▌ ${GK_R}%b\n" "$_pn_l"
         else
-          case $_pn_l in "\033["*m*) _pn_k=${_pn_l%%m*}m ;; *) _pn_k= ;; esac
-          printf "${_pn_c}▌ ${GK_R}${_pn_k}%s${GK_R}\n" "$(pane_fit "$_pn_p" $((PANE_W - 2)))"
+          # Too long for a line: wrapped, to three at most, in its own color.
+          case $_pn_l in "\033["*m*) _pn_k=${_pn_l%%m*}m ;; *) _pn_k=$GK_TEXT ;; esac
+          printf '%s' "$_pn_p" | tr '\n' ' ' | LC_ALL=C awk -v w=$((PANE_W - 2)) -v most=3 -v b="$(printf "${_pn_c}▌ ${GK_R}${_pn_k}")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
+            { n = split($0, ws, " "); line = ""; k = 0
+              for (i = 1; i <= n; i++) {
+                if (line != "" && ulen(line " " ws[i]) > w) {
+                  if (++k == most) { print b ufit(line " …", w) r; exit }
+                  print b line r; line = ws[i]
+                } else line = line (line == "" ? "" : " ") ws[i] }
+              if (line != "") print b ufit(line, w) r }'
         fi ;;
     esac
   done
@@ -139,9 +139,25 @@ pane_bar() {
   printf "${PANE_C}%s${GK_FAINT}%s${GK_R}" "$_pn_on" "$_pn_off"
 }
 
-# pane_keys <key label>...: the keys that act, last and faint.
-pane_keys() {
-  _pn_out= _pn_sep=
-  for _pn_k in "$@"; do _pn_out="$_pn_out$_pn_sep$_pn_k"; _pn_sep="  ·  "; done
-  printf "\n${GK_FAINT}  %s${GK_R}\n" "$(pane_fit "$_pn_out" $((PANE_W - 2)))"
+# pane_keys: nothing. The footer says what the keys do, for the row and the
+# screen it is on; a preview, shown under more than one, names none.
+pane_keys() { :; }
+
+# pane_hang <lead> <lead's columns> <color> <lines> <text> [tail]: the text
+# after a lead (a glyph and an id, colors and all), wrapped under itself to
+# at most that many lines, the tail (a state, colored) after the first.
+pane_hang() {
+  pane_color "$3"
+  printf '%s' "$5" | tr '\n\t' '  ' | LC_ALL=C awk -v w=$((PANE_W - $2 - ${#6} - 1)) -v most="$4" -v ind="$2" \
+    -v lead="$(printf '%b' "$1")" -v t="$(printf "$PANE_C")" -v r="$(printf "$GK_R")" -v tail="$(printf '%b' "$6")" "$PANE_AWK"'
+    function emit(s) { if (k == 0) printf "%s%s%s%s", lead, t, s, r; else printf "%" ind "s%s%s%s", "", t, s, r
+      if (k == 0 && tail != "") printf "%" (w - ulen(s) + 1) "s%s%s", "", tail, r
+      printf "\n"; k++ }
+    { n = split($0, ws, " "); line = ""; k = 0
+      for (i = 1; i <= n; i++) {
+        if (line != "" && ulen(line " " ws[i]) > w) {
+          if (k + 1 == most) { emit(ufit(line " …", w)); exit }
+          emit(line); line = ws[i]
+        } else line = line (line == "" ? "" : " ") ws[i] }
+      if (line != "") emit(ufit(line, w)) }'
 }

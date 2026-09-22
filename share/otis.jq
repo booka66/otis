@@ -61,3 +61,18 @@ def deploy_glyph:
   elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)
   elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
   else attention + "○" end;
+
+# wrapl($w; $n): the text word-wrapped to lines at most $w wide, at most $n
+# of them, the last ending in … when there was more: a sentence that matters
+# reads whole, or nearly, rather than cut off after its first few words.
+def wrapl($w; $n):
+  (tostring | gsub("[\\s]+"; " ") | ltrimstr(" ") | rtrimstr(" ") | split(" ")) as $words |
+  (reduce $words[] as $x ({lines: [], cur: ""};
+     if .cur == "" then .cur = $x
+     elif ((.cur | length) + 1 + ($x | length)) <= $w then .cur += " " + $x
+     else .lines += [.cur] | .cur = $x end)
+   | .lines + (if .cur != "" then [.cur] else [] end)) as $all |
+  ($all | map(if length > $w then .[0:$w - 1] + "…" else . end)) as $all |
+  if ($all | length) > $n then
+    $all[0:$n] | .[-1] |= ((if length > $w - 2 then .[0:$w - 2] | sub(" [^ ]*$"; "") else . end) + " …")
+  else $all end;

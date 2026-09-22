@@ -77,8 +77,7 @@ if [ "$kind" = merged ] || { [ -z "$kind" ] && jq -e --arg iid "$iid" '.mrs[] | 
      elif (.state | IN("live", "rolledback") | not) and $all.lastDeploy then
        fact(context; "production is on " + $all.lastDeploy.sha[0:8] + ", deployed " + ($all.lastDeploy.at | ago) + " ago")
      else empty end),
-    "",
-    faint + ("  ⏎ its deploy  ·  p its pipeline" | cut($w)) + r
+    ""
   ' "$GIT_FZF_STATE/ci-merged.json"
   exec git-mr-watch --preview "$iid"
 fi

@@ -91,7 +91,7 @@ case $mode in
     # What it found, a line a thing, each cut to the pane: the verdict and
     # its gist, each criterion as a glyph and its claim, the concerns, how
     # much looking back has to say. What any of it says in full is behind
-    # a key (h the report, V how it went), never here.
+    # a key, which the footer names.
     spent=$(costs "$d")
     # Under a run's preview, whose own line says what it cost.
     [ -n "$OTIS_REPORT_NO_COST" ] && spent=
@@ -111,7 +111,7 @@ case $mode in
         (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else yours + "inconclusive" end) as $v |
         "", context + "VERIFICATION" + r + "  " + $v + r + (if $spent != "" then faint + "  " + ($spent | ltrimstr(" · ") | ltrimstr("  ")) + r else "" end),
         "",
-        "  " + text + ((.summary // "") | one | split(". ")[0] | rtrimstr(".") | cut($w - 2)) + r,
+        ((.summary // "") | one | wrapl($w - 2; 3)[] | "  " + text + . + r),
         "",
         # A segment a criterion, as wide as the pane has room for beside its count.
         ([[((($w - 22) / ([$total, 1] | max)) | floor) - 1, 3] | min, 1] | max) as $sw |
@@ -120,17 +120,22 @@ case $mode in
         "",
         (.criteria[] |
           (if .result == "verified" then good + "✓" elif .result == "failed" then bad + "✗" else yours + "?" end) as $g |
-          "  " + $g + r + " " + attention + .id + r + "  " + text + (($claims[.id] // .evidence // "") | one | cut($w - 8)) + r,
+          # The claim wraps under itself, the glyph and the id left alone.
+          ((($claims[.id] // .evidence // "") | one | wrapl($w - 8; 3)) as $ls |
+           "  " + $g + r + " " + attention + (.id | .[0:4]) + r + (" " * (4 - ([(.id | length), 4] | min))) + text + $ls[0] + r,
+           ($ls[1:][] | "        " + text + . + r)),
           (if .result != "verified" and (.evidence // "") != "" then
-             "       " + (if .result == "failed" then bad else context end) + (.evidence | one | cut($w - 8)) + r else empty end)),
+             (.result) as $res | (.evidence | one | wrapl($w - 8; 2)[] | "        " + (if $res == "failed" then bad else context end) + . + r) else empty end)),
         (if ((.concerns // []) | length) > 0 then
            "", context + "CONCERNS" + r + "  " + yours + "\(.concerns | length)" + r,
-           (.concerns[0:3][] | "  " + yours + "!" + r + " " + text + (one | cut($w - 5)) + r),
+           (.concerns[0:3][] | (one | wrapl($w - 4; 2)) as $ls | "  " + yours + "!" + r + " " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r)),
            (if (.concerns | length) > 3 then "  " + faint + "+ \(.concerns | length - 3) more in the report" + r else empty end)
          else empty end),
         "",
-        "  " + faint + ([(if $arts > 0 then "a \($arts) artifacts" else empty end), "h the report",
-          (if $retro > 0 then "i \($retro) to change" else empty end), "V how it went"] | join("  ·  ") | cut($w - 2)) + r
+        # What there is beyond this, as facts: the footer names the key
+        # for the screen this is under.
+        "  " + faint + ([(if $arts > 0 then "\($arts) artifacts" else empty end), "the full report",
+          (if $retro > 0 then "\($retro) things to change" else empty end)] | join("  ·  ") | cut($w - 2)) + r
       ' "$d/verdict.json" 2>/dev/null
     else
       printf "\n${GK_CONTEXT}VERIFICATION${GK_R}  "
@@ -141,7 +146,6 @@ case $mode in
       # Two lines at most, broken between words, the second cut with … if
       # there is more.
       [ -n "$last" ] && { echo; pane_wrap "$last"; }
-      printf "\n  ${GK_FAINT}V how it is going${GK_R}\n"
     fi
     exit 0
     ;;
