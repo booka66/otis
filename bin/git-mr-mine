@@ -17,11 +17,17 @@ iid=$1 target=${2:-$(otis-config main)} url=$3 b=$4 head=$5 base=$6 start=$7
 [ -n "$iid" ] && [ -n "$b" ] || exit 0
 pause() { printf '%s. press enter\n' "$1"; read -r _; }
 
-# Nothing to fetch when your branch is already at the MR's head (as gmr's list
-# reports it) and its base is here: the usual case, and then this opens at once.
-if [ -n "$head" ] && [ "$(git rev-parse -q --verify "refs/heads/$b")" = "$head" ] &&
-  git cat-file -e "$base^{commit}" 2>/dev/null && { [ -z "$start" ] || git cat-file -e "$start^{commit}" 2>/dev/null; }; then
+# Nothing to fetch when the MR's head (as gmr's list reports it) and its base
+# are here: your branch at it, the usual case, or git-mr-prefetch fetched it
+# ahead. Then this opens at once. A branch of yours somewhere else than the
+# head has its base found again below, as after a fetch, from the target
+# branch as it is here.
+have() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
+mine=$(git rev-parse -q --verify "refs/heads/$b")
+if [ -n "$head" ] && have "$head" && have "$base" && { [ -z "$start" ] || have "$start"; } &&
+  { [ "$mine" = "$head" ] || git rev-parse -q --verify "refs/remotes/origin/$target" >/dev/null; }; then
   git update-ref "refs/remotes/origin/$b" "$head"
+  [ "$mine" = "$head" ] || base=
 else
   printf 'fetching !%s ...\n' "$iid"
   GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin "+refs/heads/$target:refs/remotes/origin/$target" \

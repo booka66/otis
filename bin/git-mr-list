@@ -338,5 +338,5 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
       open_section("reviewed, waiting on them"; $seen_already; "review")
     end
   end'
-[ "$scope" = sections ] && git-mr-prefetch "$st/mrs.json" </dev/null >/dev/null 2>&1 &
+[ "$scope" = sections ] && git-mr-prefetch "$st/mrs.json" "$st/ci.json" </dev/null >/dev/null 2>&1 &
 exit 0

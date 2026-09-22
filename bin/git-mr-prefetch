@@ -1,12 +1,15 @@
 #!/bin/sh
-# git-mr-prefetch <mrs.json>: fetch the commits of the MRs requesting your
-# review that are not here yet, from the JSON git-mr-list saved, so that opening
-# one (git-mr-review) finds them and starts without the network. One fetch for
-# all of them: each missing MR's head ref, and its target branch when its base
-# is missing too. Their comment threads are cached too, for the file picker's
-# counts and previews. Only one runs at a time; the list reloads often.
-json=$1
+# git-mr-prefetch <mrs.json> [ci.json]: fetch the commits of the MRs requesting
+# your review that are not here yet, from the JSON git-mr-list saved, so that
+# opening one (git-mr-review) finds them and starts without the network; and,
+# given the JSON of your own (ci.json), theirs, so git-mr-mine does too. One
+# fetch for all of them: each missing MR's head ref (your branch, for yours),
+# and its target branch when its base is missing too. The comment threads of
+# those you review are cached too, for the file picker's counts and previews.
+# Only one runs at a time; the list reloads often.
+json=$1 mine=$2
 [ -r "$json" ] || exit 0
+[ -r "$mine" ] || mine=/dev/null
 common=$(git rev-parse --git-common-dir) || exit 0
 lock="$common/gmr-prefetch.lock"
 # A lock older than two minutes is from a fetch that died.
@@ -15,13 +18,19 @@ mkdir "$lock" 2>/dev/null || exit 0
 trap 'rmdir "$lock"' EXIT
 
 have() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
-refspecs=$(jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
+refspecs=$({ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
   | select(.author.username != $u.username)
   | [.iid, .targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
   while IFS="$(printf '\t')" read -r iid target head base start; do
     have "$head" || printf '+refs/merge-requests/%s/head:refs/mr/%s\n' "$iid" "$iid"
     { have "$base" && { [ -z "$start" ] || have "$start"; }; } || printf '+refs/heads/%s:refs/remotes/origin/%s\n' "$target" "$target"
-  done | sort -u)
+  done
+  jq -r '.data.currentUser.authoredMergeRequests.nodes[]?
+    | [.sourceBranch, .targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$mine" 2>/dev/null |
+  while IFS="$(printf '\t')" read -r source target head base start; do
+    have "$head" || printf '+refs/heads/%s:refs/remotes/origin/%s\n' "$source" "$source"
+    { have "$base" && { [ -z "$start" ] || have "$start"; }; } || printf '+refs/heads/%s:refs/remotes/origin/%s\n' "$target" "$target"
+  done; } | sort -u)
 # Threads not cached yet; with no picker to reload, git-cached-json fetches them now.
 jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]? | select(.author.username != $u.username) | .iid' "$json" |
   while read -r iid; do

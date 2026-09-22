@@ -545,4 +545,7 @@ w=${counts%%	*} g=${counts#*	}
   [ -n "$note" ] && printf "${GK_CONTEXT} · %s${GK_R}" "$note"
   printf '\n'
 } > "$st/footer"
+# The commits of the MRs here, fetched ahead, so enter on one opens it
+# without the network (git-mr-prefetch), as gmr's list does.
+[ -s "$st/mrs.json" ] && git-mr-prefetch "$st/mrs.json" "$st/ci.json" </dev/null >/dev/null 2>&1 &
 exit 0
