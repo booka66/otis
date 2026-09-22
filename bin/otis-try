@@ -1,3 +1,34 @@
 #!/bin/sh
 # otis-try: opens otis on GitHub in Safari.
-exec open -a Safari https://github.com/booka66/otis
+#
+# otis-try --clean takes away everything the old VM otis-try ever left: VMs
+# kept or orphaned by a kill, the cached macOS image, and Tart itself where
+# otis-try fetched it.
+image=ghcr.io/cirruslabs/macos-tahoe-vanilla:latest
+
+if [ "$1" != --clean ]; then
+  exec open -a Safari https://github.com/booka66/otis
+fi
+
+tart_app=${XDG_DATA_HOME:-$HOME/.local/share}/otis-try/tart.app
+if command -v tart >/dev/null 2>&1; then
+  tart() { command tart "$@"; }
+elif [ -x "$tart_app/Contents/MacOS/tart" ]; then
+  tart() { "$tart_app/Contents/MacOS/tart" "$@"; }
+else
+  tart() { :; }
+fi
+
+for vm in $(tart list --source local --quiet 2>/dev/null | grep '^otis-try-'); do
+  tart stop "$vm" >/dev/null 2>&1
+  tart delete "$vm" && echo "deleted the VM $vm"
+done
+for img in $(tart list --source oci --quiet 2>/dev/null | grep -F "${image%:*}"); do
+  tart delete "$img" && echo "deleted the cached image $img"
+done
+if [ -d "${tart_app%/*}" ]; then
+  rm -rf "${tart_app%/*}" && echo "deleted Tart from ${tart_app%/*}"
+fi
+[ -d "$(brew --repository 2>/dev/null)/Library/Taps/cirruslabs/homebrew-cli" ] &&
+  echo "left: the cirruslabs/cli brew tap (brew untap cirruslabs/cli)"
+echo "left: any glab token a VM logged in with, on GitLab under Preferences, Access tokens"
