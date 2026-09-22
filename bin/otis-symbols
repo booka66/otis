@@ -40,7 +40,6 @@
 # through the rows, and a drag in the preview selects its text and copies
 # it. Each frame's timing goes to ~/.cache/otis/symbols.log (OTIS_SYMBOLS_TRACE).
 setopt extendedglob no_nomatch
-zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 . ${0:A:h:h}/share/in-root.sh
@@ -80,38 +79,11 @@ while (( $# )); do
   esac
 done
 
-e=$'\e'
-R=$e'[0m' B=$e'[1m' UB=$e'[22m' IT=$e'[3m' UIT=$e'[23m'
-A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
-EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
-C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
-BG=$e"[${OTIS_T_CODEBG:-48;5;236}m"
-CODEBG=$e"[${OTIS_T_CODEBG}m"
-
-exec {tty}<>/dev/tty
-# Keys are read from $tty alone, and a program given the screen (execute)
-# is given it by name; what the rest says goes to a file.
-exec 2>>$st/err </dev/null
-saved=$(stty -g <&$tty)
-# No line wrap while it is up, and the mouse as SGR reports: press, drag and
-# release. Shift held gives the terminal's own selection back, in most.
-# ctrl-c and ctrl-z come in as keys (-isig), not signals: a zsh script holds
-# its traps until the loop they land in ends, so a ctrl-c killed the scripts
-# that opened this and left it running, raw, under your shell's prompt.
-screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
-screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
+. ${0:A:h:h}/share/screen.zsh
+screen_start
+# What an accept hands back, printed once the screen is given back.
 typeset -a outq
-quit() { (( screen )) && screen_off; rm -rf -- $st; (( $#outq )) && print -rl -- $outq; exit ${1:-0}; }
-trap 'quit 1' HUP TERM INT
-screen=0
-trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
-size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
-# A resize wakes the loop at once: perl takes the signal and writes a line,
-# since a zsh script holds its traps until a loop that never ends ends (as
-# otis-dash). Without perl the size is asked once a second.
-winch=
-command -v perl >/dev/null 2>&1 &&
-  exec {winch}< <(perl -e 'my $p = getppid(); $| = 1; $SIG{WINCH} = sub { print "\n" }; sleep 1 while getppid() == $p' </dev/null 2>/dev/null)
+at_quit() { (( $#outq )) && print -rl -- $outq; }
 
 # --- the layout ------------------------------------------------------------------
 # Side by side from 120 columns, as git-fzf had them (the preview's 55% at 66
@@ -151,7 +123,7 @@ resize() {
 # last field); typ what it is (sym, callers, package, caller, file from
 # --rows' parts; head for a heading; plain for a row with no parts); the
 # parts, dep through err; hay what / searches in.
-typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err hay gd
+typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err cm hay gd
 integer loaded=0 wa=1 wd=1 wt=0 mr=0
 load() {
   local line i
@@ -198,28 +170,6 @@ guides() {
   done
 }
 
-# --- text -----------------------------------------------------------------------
-plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
-# vw <text>: its width on the screen, its colors aside.
-vw() { plain "$1"; REPLY=${(m)#REPLY}; }
-# cut <text> <width>: cut to that many columns with an ellipsis, its colors
-# kept, a character at a time; only a row too wide for its list is.
-cut() {
-  local s=$1 out= c
-  integer w=$2 n=0
-  vw "$s"; (( REPLY <= w )) && { REPLY=$s; return }
-  while [[ -n $s ]]; do
-    if [[ $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then out+=$match[1]; s=${s:${#match[1]}}; continue; fi
-    c=${s[1]}
-    (( n + ${(m)#c} > w - 1 )) && break
-    out+=$c; (( n += ${(m)#c} )); s=${s:1}
-  done
-  REPLY=$out$R…
-}
-line= used=0
-put() { line+=$1$2; (( used += ${(m)#2} )); }
-pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
-
 # --- a row ---------------------------------------------------------------------
 # RL: each row's line as drawn without the cursor, RU its width, both for
 # the list's width; built once a load (or a resize), since a frame is then
@@ -260,7 +210,7 @@ rowline() {
         *:signature:*) put "$B$A" "~ "; line+=$UB ;; *:added:*) put "$G" "+ " ;; *:removed:*) put "$X" "- " ;;
         sym:*|file:*) put "$F" "· " ;; *) put "" "  " ;;
       esac
-      (( rz = 1 + (wa + wd + 4) + 6 + (mr ? 8 : 0) ))
+      (( rz = 1 + (wa + wd + 4) + 6 + (mr ? 10 : 0) ))
       # Callers elsewhere have none of the right's cells: their words run on.
       [[ $typ[i] == (callers|package|caller) ]] && rz=0
       lc=$lab[i]
@@ -539,7 +489,7 @@ crumb() {
 # --- the frame -------------------------------------------------------------------
 integer help=0 poff=0 plen=0
 flash=
-typeset -a shown_rows shown_pane P
+typeset -a shown_rows shown_pane
 # scroll <lines>: the preview moved, in one frame. A glide sent a frame of
 # the whole pane every 10ms, which under a multiplexer stuttered and lagged
 # rather than glided.
@@ -787,64 +737,8 @@ act() {
   if (( gen != g && poff != was )); then pwant=$poff pgen=$gen poff=$was; fi
   dirty=1
 }
-readkey() {
-  local k c seq=
-  sysread -s 1 -i $tty k || quit
-  if [[ $k == $e ]] && zselect -t 2 -r $tty; then
-    sysread -s 1 -i $tty seq
-    if [[ $seq == [\[O] ]]; then
-      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
-    fi
-  elif [[ $k == [$'\xc0'-$'\xff'] ]]; then
-    # A character in more than one byte (typed into a search): the rest.
-    while zselect -t 0 -r $tty && sysread -s 1 -i $tty c; do k+=$c; [[ $c == [$'\x80'-$'\xbf'] ]] || break; done
-  fi
-  REPLY=$k$seq
-}
-# The key's fzf name, for the bindings.
-keyname() {
-  case $1 in
-    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $e) REPLY=esc ;;
-    $e'[A'|$e'OA') REPLY=up ;; $e'[B'|$e'OB') REPLY=down ;;
-    $'\x7f'|$'\b') REPLY=bspace ;;
-    $'\x03') REPLY=ctrl-c ;; $'\x04') REPLY=ctrl-d ;; $'\x05') REPLY=ctrl-e ;; $'\x0b') REPLY=ctrl-k ;;
-    $'\x0e') REPLY=ctrl-n ;; $'\x10') REPLY=ctrl-p ;; $'\x15') REPLY=ctrl-u ;; $'\x19') REPLY=ctrl-y ;;
-    *) REPLY=$1 ;;
-  esac
-}
-
 # --- the mouse -------------------------------------------------------------------
-# A selection in the preview, from line sa, column ca to line sb, column cb
-# of P; s1..s2 the same in reading order.
-integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
-ends() {
-  if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
-  else s1=$sb c1=$cb s2=$sa c2=$ca; fi
-}
-# gut <plain line>: where a diff's line has its code, after delta's gutter
-# ("old ⋮ new │"), in REPLY; 0 for a line that is not one, -1 for a row
-# on the gutter with no number (a peek's note, a thread), which is lit with
-# the lines around it and copied with none of them.
-gut() {
-  local g=${1%%│*}
-  if [[ $1 != *│* || $g != [[:space:]0-9⋮]# ]]; then REPLY=0
-  elif [[ $g == *[0-9]* ]]; then REPLY=$(( ${#g} + 2 ))
-  else REPLY=-1; fi
-}
-# selected <line>: the line with what is selected on it lit, its colors
-# dropped for the moment it is. A diff's line is selected whole, gutter and
-# all, as lines are picked to comment on.
-selected() {
-  local from=1 to t
-  plain "$P[$1]"; t=$REPLY
-  to=$#t
-  gut "$t"
-  if (( ! REPLY )); then
-    (( $1 == s1 )) && from=$c1
-    (( $1 == s2 )) && to=$c2
-  fi
-  REPLY=${t[1,from-1]}$e'[7m'${t[from,to]}$e'[27m'${t[to+1,-1]}
-}
+# The selection is share/screen.zsh's (sel, s1..s2 over P, the pane's lines).
 # selrange: the file lines the selection covers, as "side first last" for
 # git-mr-say, in selr. Its ends are the first and the last line of the
 # diff in it, each on its own side: a line the change kept or added by its
@@ -869,33 +763,6 @@ selrange() {
   [[ -n $fs ]] || return
   if [[ $fs == $ls ]]; then selr="$fs $fl $ll"; else selr="$fs,$ls $fl $ll"; fi
 }
-# copy: the selection onto the clipboard, a line the pane broke (.cont) as
-# the one line it was.
-copy() {
-  local -A piece
-  local l n out= t
-  shown
-  [[ -s $REPLY.cont ]] && for l in ${(f)"$(<$REPLY.cont)"}; do piece[${l% *}]=${l#* }; done
-  for (( n = s1; n <= s2; n++ )); do
-    plain "$P[n]"; t=$REPLY
-    # A diff's line is its code, whole, without the gutter.
-    gut "$t"
-    (( REPLY < 0 )) && continue
-    if (( REPLY )); then t=${t[REPLY,-1]}
-    else
-      (( n == s2 )) && t=${t[1,c2]}
-      (( n == s1 )) && t=${t[c1,-1]}
-    fi
-    t=${t%%[[:space:]]#}
-    if (( n > s1 )) && [[ -n ${piece[$n]} ]]; then out+=" "${t[piece[$n]+1,-1]}
-    else out+=${out:+$'\n'}$t; fi
-  done
-  [[ -n $out ]] || return
-  local -a got=("${(@f)out}")
-  if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
-  else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
-  selrange
-}
 inpane() { (( y >= py + phd && y < py + ph && (side ? x >= px : 1) )); }
 mouse() {
   local r=${1#$e\[<} b up
@@ -914,7 +781,7 @@ mouse() {
     elif (( b == 32 && sel )); then sb=$l cb=$c
     elif (( up && sel == 2 )); then
       sb=$l cb=$c sel=1
-      if (( sa == sb && ca == cb )); then sel=0; else ends; copy; fi
+      if (( sa == sb && ca == cb )); then sel=0; else ends; shown; copy $REPLY.cont 0 && selrange; fi
     fi
     (( sel )) && ends
     return
@@ -1050,7 +917,7 @@ while :; do
     # rather than read keys under a shell's prompt), and, without perl, the size.
     if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
-      kill -0 $PPID 2>/dev/null || quit 1
+      orphaned && quit 1
       [[ -z $winch ]] && resize
     fi
     landed && changed=1

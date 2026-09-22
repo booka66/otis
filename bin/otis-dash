@@ -26,7 +26,6 @@
 # took over 20ms. For when it feels slow: it says whether the time went here
 # or in the terminal.
 setopt extendedglob no_nomatch
-zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 . ${0:A:h:h}/share/in-root.sh
@@ -44,43 +43,8 @@ mkdir $st/pv
 trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 
-e=$'\e'
-R=$e'[0m' B=$e'[1m' UB=$e'[22m'
-A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
-EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
-C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
-BG=$e"[${OTIS_T_CODEBG:-48;5;236}m"
-
-exec {tty}<>/dev/tty
-# What a background job says goes to a file, never over the screen, and none
-# of them reads the terminal: keys are read from $tty alone, and a program
-# that is shown the screen (execute, the pager) is given it by name.
-exec 2>>$st/err </dev/null
-saved=$(stty -g <&$tty)
-# No line wrap while it is up: a line a column too wide is cut at the edge
-# rather than pushed onto the next row.
-# The mouse is this program's while it is up (press, drag and release, as
-# SGR reports): a drag in the pane selects its text alone, where the
-# terminal's own selection would take the list beside it too. Shift held
-# gives the terminal's back, in most terminals.
-screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
-screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
-quit() { screen_off; rm -rf -- $st; exit ${1:-0}; }
-trap 'quit 1' HUP TERM INT
-# Whatever ends it, the terminal comes back as it was: an error that stops
-# the script must not leave you in its screen with no echo.
-screen=0
-trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
-size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
-# resize: the size again, and the screen drawn whole if it changed. A zsh
-# script holds its traps until the loop they land in ends, and this one's
-# never does, so a WINCH trap here would never run. perl takes the signal
-# instead and writes a line to $winch, which the loop waits on with the
-# keys: a resize wakes it at once. perl goes when this does (its parent is
-# gone), and without perl the loop asks for the size once a second.
-winch=
-command -v perl >/dev/null 2>&1 &&
-  exec {winch}< <(perl -e 'my $p = getppid(); $| = 1; $SIG{WINCH} = sub { print "\n" }; sleep 1 while getppid() == $p' </dev/null 2>/dev/null)
+. ${0:A:h:h}/share/screen.zsh
+screen_start
 # A window being dragged is a resize a step: each is drawn at once, and the
 # previews wait until the size has held for 0.3s (settle), so a drag draws
 # them once rather than every row at every width it passed through.
@@ -97,7 +61,7 @@ resize() {
 # --- the rows -------------------------------------------------------------
 # otis-list's fields, one array a field, an entry a row that is not a heading;
 # sec is the heading it is under.
-typeset -a kind iid id extra vkey glyph gc verb title who when note prog mark doing sec raw
+typeset -a kind iid id extra vkey glyph gc verb title who when note prog mark doing sub dots sec raw
 loaded=0
 load() {
   local line f s=
@@ -152,20 +116,8 @@ landed() {
 }
 
 # --- text ------------------------------------------------------------------
-# fit <text> <width>: cut to that many columns with an ellipsis.
-fit() {
-  local s=$1 w=$2
-  (( w <= 0 )) && { REPLY=; return }
-  if (( ${(m)#s} <= w )); then REPLY=$s; return; fi
-  s=${s[1,w-1]}
-  while (( ${(m)#s} > w - 1 )); do s=${s[1,-2]}; done
-  REPLY=$s…
-}
-# A line is built from pieces whose widths are known, so it can be padded
-# to the column exactly: put <color> <text>.
-line= used=0
-put() { line+=$1$2; (( used += ${(m)#2} )); }
-pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
+# A line is built from pieces whose widths are known (put, pad, share/screen.zsh),
+# then kept with the row it is part of.
 emit() { L+=("$line") LI+=($1) LU+=($used); line= used=0; }
 
 # What enter does on the row, in the words the footer and the card say it
@@ -399,7 +351,6 @@ scroll() {
 typeset -a shown_rows shown_pane
 shown_geom=
 # The pane's lines as last drawn, for a selection to copy from.
-typeset -a P
 # The layout: the pane beside the list from 130 columns (side), else under
 # it on a screen tall enough for both, as in a split that is tall and
 # narrow; else no pane, and space reads the preview in a pager. rows is the
@@ -573,65 +524,11 @@ act() {
   fields
   ask otis-do $1 "$reply[6]" "$reply[14]" "$reply[13]" "$reply[2]" "$reply[3]" "$reply[4]" "$reply[5]" "$reply[7]" "$reply[8]" "$reply[9]" "$reply[12]"
 }
-key() {
-  local k c seq=
-  sysread -s 1 -i $tty k || quit
-  # An escape sequence whole: an arrow (\e[B, \eOB) or a mouse report
-  # (\e[<0;12;7M), up to its final byte. A lone escape is esc.
-  if [[ $k == $e ]] && zselect -t 2 -r $tty; then
-    sysread -s 1 -i $tty seq
-    if [[ $seq == [\[O] ]]; then
-      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
-    fi
-  fi
-  REPLY=$k$seq
-}
-
 # --- the mouse -------------------------------------------------------------------
-# A selection in the pane: from line sa, column ca to line sb, column cb, as
-# the pane's lines count (P, the preview with the blank line above it), and
-# s1..s2 the same lines in order. px is the screen column the pane starts in.
-integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0 px=0
-plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
-# The selection's ends in reading order: s1 c1 to s2 c2.
-ends() {
-  if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
-  else s1=$sb c1=$cb s2=$sa c2=$ca; fi
-}
-# selected <line>: the line with what is selected on it lit, its colors
-# dropped for the moment it is.
-selected() {
-  local from=1 to t
-  plain "$P[$1]"; t=$REPLY
-  (( $1 == s1 )) && from=$c1
-  to=$#t; (( $1 == s2 )) && to=$c2
-  REPLY=${t[1,from-1]}$e'[7m'${t[from,to]}$e'[27m'${t[to+1,-1]}
-}
-# copy: the selection as text, onto the clipboard. A line the pane broke
-# (the preview's .cont) goes back onto the one it came from, its lead off.
-copy() {
-  local -A piece
-  local l n lead out= t
-  shown $pw
-  [[ -s $REPLY.cont ]] && for l in ${(f)"$(<$REPLY.cont)"}; do piece[${l% *}]=${l#* }; done
-  for (( n = s1; n <= s2; n++ )); do
-    plain "$P[n]"; t=$REPLY
-    (( n == s2 )) && t=${t[1,c2]}
-    (( n == s1 )) && t=${t[c1,-1]}
-    t=${t%%[[:space:]]#}
-    # P[n] is the preview's line n - 1 (the blank line above it).
-    if (( n > s1 )) && [[ -n ${piece[$(( n - 1 ))]} ]]; then
-      t=${t[piece[$(( n - 1 ))]+1,-1]}
-      out+=" "$t
-    else
-      out+=${out:+$'\n'}$t
-    fi
-  done
-  [[ -n $out ]] || return
-  local -a got=("${(@f)out}")
-  if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
-  else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
-}
+# The selection is share/screen.zsh's (sel, s1..s2 over P, the pane's lines,
+# the preview with a blank line above it). px is the screen column the pane
+# starts in.
+integer px=0
 # mouse <report>: a press, drag or release (the SGR form, \e[<b;x;yM, m on
 # release). In the pane a press starts a selection, a drag carries it and
 # the release copies it; a press in the list moves to the row. The wheel
@@ -657,7 +554,7 @@ mouse() {
     elif (( b == 32 && sel )); then sb=$l cb=$(( x - px + 1 ))
     elif (( up && sel == 2 )); then
       sb=$l cb=$(( x - px + 1 )); sel=1
-      if (( sa == sb && ca == cb )); then sel=0; else ends; copy; fi
+      if (( sa == sb && ca == cb )); then sel=0; else ends; shown $pw; copy $REPLY.cont 1; fi
     fi
     (( sel )) && ends
     return
@@ -717,8 +614,8 @@ while :; do
   fi
   if (( ${reply[(I)$tty]} )); then
     kt=$EPOCHREALTIME nk=1
-    key; lastkey=$REPLY; handle $REPLY
-    while zselect -t 0 -r $tty; do key; lastkey=$REPLY; handle $REPLY; (( nk++ )); done
+    readkey; lastkey=$REPLY; handle $REPLY
+    while zselect -t 0 -r $tty; do readkey; lastkey=$REPLY; handle $REPLY; (( nk++ )); done
     draw
   else
     float ti=$EPOCHREALTIME
@@ -727,7 +624,7 @@ while :; do
     # rather than read keys under a shell's prompt), and, without perl, the size.
     if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
-      kill -0 $PPID 2>/dev/null || quit 1
+      orphaned && quit 1
       [[ -z $winch ]] && resize
     fi
     landed && changed=1

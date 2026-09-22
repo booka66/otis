@@ -1,0 +1,192 @@
+# screen.zsh: what the screens drawn by hand share (otis-dash, otis-symbols,
+# otis-agent): the terminal taken and given back, keys read, text measured
+# and cut, and a selection in a pane copied. Sourced by a zsh -f script
+# after it has made its state directory ($st) and loaded the theme; it
+# calls screen_start once, then screen_on.
+#
+# A script may define at_quit, run as it leaves with the screen given back
+# (otis-symbols prints what an accept hands back there).
+zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
+
+# The palette, as the bytes the screen is drawn with.
+e=$'\e'
+R=$e'[0m' B=$e'[1m' UB=$e'[22m' IT=$e'[3m' UIT=$e'[23m'
+A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
+EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
+C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
+BG=$e"[${OTIS_T_CODEBG:-48;5;236}m"
+CODEBG=$e"[${OTIS_T_CODEBG}m"
+
+# --- the terminal ------------------------------------------------------------------
+# screen_start: the terminal by name for keys and frames ($tty); what a
+# background job says goes to a file ($st/err), never over the screen, and
+# none of them reads the terminal. Whatever ends it, the terminal comes back
+# as it was: the traps are set here, at the file's level, since a trap on
+# EXIT set inside a function fires when that function returns.
+integer screen=0
+trap 'quit 1' HUP TERM INT
+trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
+screen_start() {
+  exec {tty}<>/dev/tty
+  exec 2>>$st/err </dev/null
+  saved=$(stty -g <&$tty)
+  # A resize wakes the loop at once: perl takes the signal and writes a
+  # line to $winch, since a zsh script holds its traps until a loop that
+  # never ends ends, so a WINCH trap would never run. perl goes when this
+  # does; without perl, the loop asks for the size once a second.
+  winch=
+  command -v perl >/dev/null 2>&1 &&
+    exec {winch}< <(perl -e 'my $p = getppid(); $| = 1; $SIG{WINCH} = sub { print "\n" }; sleep 1 while getppid() == $p' </dev/null 2>/dev/null)
+}
+# No line wrap while it is up, and the mouse as SGR reports: press, drag and
+# release; shift held gives the terminal's own selection back, in most.
+# ctrl-c and ctrl-z come in as keys (-isig), not signals: a signal's trap
+# would never run (above), and a ctrl-c killed the scripts that opened the
+# screen and left it running, raw, under the shell's prompt.
+screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
+screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
+quit() {
+  (( screen )) && screen_off
+  rm -rf -- $st
+  (( $+functions[at_quit] )) && at_quit
+  exit ${1:-0}
+}
+size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
+# orphaned: whatever opened this is gone, so it should go too rather than
+# read keys under a shell's prompt. Cheap: ask it once a second.
+orphaned() { ! kill -0 $PPID 2>/dev/null; }
+
+# --- keys ----------------------------------------------------------------------------
+# readkey: one key in REPLY: an escape sequence whole (an arrow, \e[B or
+# \eOB; a mouse report, \e[<0;12;7M), a lone escape as esc, a character in
+# more than one byte whole.
+readkey() {
+  local k c seq=
+  sysread -s 1 -i $tty k || quit
+  if [[ $k == $e ]] && zselect -t 2 -r $tty; then
+    sysread -s 1 -i $tty seq
+    if [[ $seq == [\[O] ]]; then
+      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
+    fi
+  elif [[ $k == [$'\xc0'-$'\xff'] ]]; then
+    while zselect -t 0 -r $tty && sysread -s 1 -i $tty c; do k+=$c; [[ $c == [$'\x80'-$'\xbf'] ]] || break; done
+  fi
+  REPLY=$k$seq
+}
+# keyname <key>: its name as fzf spells it, for bindings.
+keyname() {
+  case $1 in
+    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $e) REPLY=esc ;;
+    $e'[A'|$e'OA') REPLY=up ;; $e'[B'|$e'OB') REPLY=down ;;
+    $e'[5~') REPLY=page-up ;; $e'[6~') REPLY=page-down ;;
+    $'\x7f'|$'\b') REPLY=bspace ;;
+    $'\x03') REPLY=ctrl-c ;; $'\x04') REPLY=ctrl-d ;; $'\x05') REPLY=ctrl-e ;; $'\x0b') REPLY=ctrl-k ;;
+    $'\x0e') REPLY=ctrl-n ;; $'\x10') REPLY=ctrl-p ;; $'\x15') REPLY=ctrl-u ;; $'\x19') REPLY=ctrl-y ;;
+    *) REPLY=$1 ;;
+  esac
+}
+
+# --- text ----------------------------------------------------------------------------
+# plain <text>: its colors, links and titles out.
+plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
+# vw <text>: its width on the screen, its colors aside.
+vw() { plain "$1"; REPLY=${(m)#REPLY}; }
+# fit <text> <width>: plain text cut to that many columns with an ellipsis.
+fit() {
+  local s=$1 w=$2
+  (( w <= 0 )) && { REPLY=; return }
+  if (( ${(m)#s} <= w )); then REPLY=$s; return; fi
+  s=${s[1,w-1]}
+  while (( ${(m)#s} > w - 1 )); do s=${s[1,-2]}; done
+  REPLY=$s…
+}
+# cut <text> <width>: colored text cut to that many columns with an ellipsis,
+# its colors kept, a character at a time; only a line too wide is.
+cut() {
+  local s=$1 out= c
+  integer w=$2 n=0
+  vw "$s"; (( REPLY <= w )) && { REPLY=$s; return }
+  while [[ -n $s ]]; do
+    if [[ $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then out+=$match[1]; s=${s:${#match[1]}}; continue; fi
+    c=${s[1]}
+    (( n + ${(m)#c} > w - 1 )) && break
+    out+=$c; (( n += ${(m)#c} )); s=${s:1}
+  done
+  REPLY=$out$R…
+}
+# A line is built from pieces whose widths are known, so it can be padded to
+# a column exactly: put <color> <text>, pad <column>.
+line= used=0
+put() { line+=$1$2; (( used += ${(m)#2} )); }
+pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
+# wrap <text> <width>: plain text in lines of at most that width, broken at
+# spaces, in reply.
+wrap() {
+  local s t
+  reply=()
+  for t in ${=1}; do
+    if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > $2 )); then reply+=("$s"); s=; fi
+    s+=${s:+ }$t
+  done
+  [[ -n $s ]] && reply+=("$s")
+}
+
+# --- a selection in a pane --------------------------------------------------------------
+# From line sa, column ca to line sb, column cb of the pane's lines ($P), and
+# s1..s2 the same in reading order; sel 2 while the button is down, 1 once
+# it is up.
+integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
+typeset -a P
+ends() {
+  if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
+  else s1=$sb c1=$cb s2=$sa c2=$ca; fi
+}
+# gut <plain line>: where a diff's line has its code, after delta's gutter
+# ("old ⋮ new │"), in REPLY; 0 for a line that is not one, -1 for a row on
+# the gutter with no number (a peek's note, a thread), lit with the lines
+# around it and copied with none of them.
+gut() {
+  local g=${1%%│*}
+  if [[ $1 != *│* || $g != [[:space:]0-9⋮]# ]]; then REPLY=0
+  elif [[ $g == *[0-9]* ]]; then REPLY=$(( ${#g} + 2 ))
+  else REPLY=-1; fi
+}
+# selected <line>: the line with what is selected on it lit, its colors
+# dropped for the moment it is; a diff's line whole, gutter and all.
+selected() {
+  local from=1 to t
+  plain "$P[$1]"; t=$REPLY
+  to=$#t
+  gut "$t"
+  if (( ! REPLY )); then
+    (( $1 == s1 )) && from=$c1
+    (( $1 == s2 )) && to=$c2
+  fi
+  REPLY=${t[1,from-1]}$e'[7m'${t[from,to]}$e'[27m'${t[to+1,-1]}
+}
+# copy <cont file> <offset>: the selection onto the clipboard, a flash saying
+# so. A line the pane broke (the wrap's .cont, numbered as P less offset)
+# goes back onto the one it came from; a diff's line is its code, whole,
+# without the gutter.
+copy() {
+  local -A piece
+  local l n out= t
+  [[ -s $1 ]] && for l in ${(f)"$(<$1)"}; do piece[${l% *}]=${l#* }; done
+  for (( n = s1; n <= s2; n++ )); do
+    plain "$P[n]"; t=$REPLY
+    gut "$t"
+    (( REPLY < 0 )) && continue
+    if (( REPLY )); then t=${t[REPLY,-1]}
+    else
+      (( n == s2 )) && t=${t[1,c2]}
+      (( n == s1 )) && t=${t[c1,-1]}
+    fi
+    t=${t%%[[:space:]]#}
+    if (( n > s1 )) && [[ -n ${piece[$(( n - $2 ))]} ]]; then out+=" "${t[piece[$(( n - $2 ))]+1,-1]}
+    else out+=${out:+$'\n'}$t; fi
+  done
+  [[ -n $out ]] || return 1
+  local -a got=("${(@f)out}")
+  if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
+  else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
+}
