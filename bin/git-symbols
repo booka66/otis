@@ -49,7 +49,8 @@
 # as signatures; their preview is the caller whole with the calls underlined,
 # and enter opens it. The files that are not code
 # the way this reads it (schema, sql, config) follow as plain file rows.
-# Enter opens nvim on the symbol, with the MR's comments in a review. The
+# Enter opens nvim on the symbol, with the MR's comments in a review. a
+# talks the change over with Claude, about the row (git-symbols-ask). The
 # preview is the whole symbol as the change leaves it, its changed lines
 # marked, with the file's real line numbers, rather than the hunks and three
 # lines around each.
@@ -1607,14 +1608,16 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files'
-  set -- --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
+  set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
+    --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
-  set -- --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
+  set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
+    --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
     --bind "f:$files" \
     --bind "u:reload($list)+refresh-preview"
 fi

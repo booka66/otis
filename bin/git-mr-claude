@@ -34,7 +34,8 @@
 # The reviewer reads the change by symbol (git-symbols), so Claude is given
 # it that way too, told it is part of otis and what the view already shows:
 # seam's table as a list of symbols (what happened to each, the entry
-# points, what each newly uses) with Haiku's gloss where it has landed, and
+# points, what each newly uses) with Haiku's gloss where it has landed,
+# seam's score of the change's shape (how many stories, any cycle), and
 # tsgo's callers elsewhere (git-callers), with the errors the change brings
 # to each and Sonnet's proposed fix under them (git-callers-fix). So it adds
 # to the view rather than repeat it: a ✗ is on screen already, the callers
@@ -82,6 +83,7 @@ ids=$top/$iid.drafts
 whys=$top/$iid.why.jsonl
 
 . "$share/claude-run.sh"
+. "$share/mr-context.sh"
 
 # state: none, running, done, moved, failed or stopped, in $state.
 get_state() {
@@ -201,13 +203,7 @@ if [ "$mode" = --run ]; then
 
   git diff --no-color --no-ext-diff --no-renames -U10 "$base" "$head" > "$ctx/diff.patch"
   threads=$(git-mr-threads --fetch "$iid" "$range" 2>&1) || finish failed "could not load the MR's threads: $(oneline "$threads")"
-  printf '%s' "$threads" | jq -r '.[]
-    | .where as $w
-    | "## " + (if $w.state == "line" then "\($w.path):\($w.from)-\($w.line)\(if $w.side == "old" then " (removed lines)" else "" end)"
-        elif $w.state == "outdated" then "\($w.path), outdated (was line \($w.line))"
-        elif $w.state == "file" then "\($w.path), the whole file" else "the MR" end)
-      + (if .draft then " · unsubmitted draft" elif .resolved then " · resolved" else "" end),
-      (.notes[] | "**\(.author.username)**\(if .draft then " (draft)" else "" end): \(.body)", ""), ""' > "$ctx/threads.md"
+  printf '%s' "$threads" | threads_md > "$ctx/threads.md"
   stopping
 
   # The change by symbol, the way the reviewer reads it and will read the
@@ -220,7 +216,7 @@ if [ "$mode" = --run ]; then
   if [ ! -s "$table" ] && command -v seam >/dev/null 2>&1; then
     SEAM_KINDS="git-test-files kinds" seam "$range" > "$table.new" 2> "$d/seam.err" && mv "$table.new" "$table"
   fi
-  callers=/dev/null
+  callers=/dev/null shape_ctx=
   if [ -s "$table" ]; then
     found=$(git-callers "$range" "$table")
     if [ "$found" = running ] && [ -e "$d/wait-callers" ]; then
@@ -247,28 +243,15 @@ if [ "$mode" = --run ]; then
     [ "$callers" != /dev/null ] && seam --table "$table" "$range" --callers >/dev/null 2>&1
     SEAM_KINDS="git-test-files kinds" seam --table "$table" "$range" --md > "$ctx/symbols.md" 2>/dev/null ||
       printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"
+    # The shape of it, as s shows the reviewer: the one thing --md leaves out,
+    # and the only ground for asking to split the MR or undo a cycle.
+    COLUMNS=100 seam --score --table "$table" "$range" > "$ctx/shape.md" 2>/dev/null &&
+      shape_ctx="- seam's score of the change's shape, what makes it hard to read: $ctx/shape.md"
   else
     printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"
   fi
   if [ "$callers" != /dev/null ]; then
-    # Sonnet's read of each broken caller, under its error in the view
-    # (git-callers-fix), once it has landed. Not waited for either.
-    fx=$(git-callers-fix --file "$callers")
-    if [ -n "$fx" ]; then jq -r '.fixes[] | [.caller, "\(.where): \(.fix)"] | @tsv' "$fx" > "$d/fixes.tsv"; else : > "$d/fixes.tsv"; fi
-    # Past two hundred importing packages git-callers finds the callers and
-    # checks none of them.
-    unchecked=$(cat "${callers%.tsv}.unchecked" 2>/dev/null)
-    # And the packages the finding's budget never reached, whose callers are
-    # missing from the list rather than absent from the change's reach.
-    left=$(cat "${callers%.tsv}.partial" 2>/dev/null)
-    awk -F'\t' -v unchecked="$unchecked" -v left="$left" '
-      FILENAME == ARGV[1] { fix[$1] = $2; next }
-      BEGIN { if (unchecked != "") { print "# Callers elsewhere\n\nCode this change did not touch that uses a changed exported symbol, found by tsgo. " unchecked " packages import the changed files, too many to type check, so none of these callers was: whether the change breaks them is for you to judge, reading the ones that matter." } else
-        print "# Callers elsewhere\n\nCode this change did not touch that uses a changed exported symbol, found by tsgo. Each caller was type checked with the changed files as the base has them, then as the change leaves them: ✗ is an error the change brings. An error the caller had already is not listed. A caller with no ✗ still type checks, which is not the same as still being right. Under a ✗, what the reviewer is shown as the fix, from another model, when it has one: where it belongs (the caller or the change) and what it is." }
-      $1 != last { printf "\n## %s\n", ($1 == "-" ? "Errors the change brings outside any caller" : $1); last = $1 }
-      { printf "- %s (%s), lines %s-%s%s\n    %s\n", $4, $11, $6, $7, ($1 == "-" ? "" : ", " $8 " call" ($8 == 1 ? "" : "s") " from line " $3), $5
-        if ($9 > 0) { k = split($12, e, "\036"); for (i = 1; i <= k; i++) print "  ✗ " $2 ":" e[i]; if ($4 in fix) print "  proposed fix, in " fix[$4] } }
-      END { if (left != "") print "\nThe finding ran out of time with " left " packages left, so their callers are missing from this list: it is what was found, not all there is. The packages that import the most of the change were looked in first." }' "$d/fixes.tsv" "$callers" > "$ctx/callers.md"
+    callers_md "$callers" "$d" > "$ctx/callers.md"
     callers_ctx="- The callers elsewhere, what the change reaches without touching: $ctx/callers.md"
   elif [ ! -s "$table" ]; then
     callers_ctx="- seam could not read the change by symbol, so there is no symbol table and no callers list: find what calls a changed signature yourself, with Grep."
@@ -325,6 +308,7 @@ You are reviewing GitLab merge request !$iid and proposing review comments. A pe
 - Its diff, base $base to head $head, with 10 lines of context: $ctx/diff.patch
 - The comment threads already on it, unsubmitted drafts included: $ctx/threads.md
 - The change by symbol, as the reviewer reads it: $ctx/symbols.md
+$shape_ctx
 $callers_ctx
 - The repository, checked out at the MR's head, is the working directory.
 
@@ -333,6 +317,7 @@ You are part of otis, the tool the reviewer reviews with. They don't read this c
 - A fast model's gloss: a few words on what each symbol does and what the change does to it, a suggested reading order and one line on the change, from the diff alone. Where symbols.md has it, it is what they are reading. If a gloss is wrong in a way that would mislead them, say so in why.
 - Under each changed exported symbol, a row of its callers elsewhere, found by tsgo (callers.md). A caller the change breaks carries ✗, with its type error under the line and, under that, another model's proposed fix, which one key applies. A ✗ is already in front of them, so comment on one only to say what the error doesn't: that the change shouldn't break that caller at all, that the fix belongs in the change rather than the caller, or that the proposed fix is wrong. The callers with no ✗ are where you are needed: they still type check, and nothing in the view says whether they are still right.
 - The threads already on the MR, beside the symbols they sit on (threads.md).
+- seam's score of the change's shape (shape.md), one key away. A line with advice under it is one the score flags.
 
 Your comments go beside their symbol, marked as Claude's, with your why under each for the reviewer alone. otis heads each why with a line of its own: the symbol, what happened to it, how it is reached from an entry point, and its callers. The reviewer edits or deletes each draft in nvim before anything posts under their name.
 
@@ -340,6 +325,7 @@ Review the way the tree reads, starting from symbols.md:
 - A changed signature (~) or a removed export is where a change breaks code it did not touch. Check its callers, most of all the ones with no ✗.
 - A newly used symbol (⇢) is rewiring. Check that the new call is made at the right point, with the right arguments, and that it handles what comes back.
 - A body-only change can only be wrong inside itself. Give it less of your time unless it is an entry point or carries the change's logic.
+- The shape is worth a comment only when the score flags stories or knots. Stories: the MR is several changes that nothing makes you read together; if they are really unrelated, ask for the split, naming which entry points go where, on the first entry point's signature line. Knots: a cycle the change brings, on one of its symbols, saying where to break it. Leave chain, spread and heaviest alone unless they hide a bug.
 
 Read the diff, and read the code around it wherever you need to be sure of a claim. Propose a comment only for something worth the author's time: a bug, a case the change gets wrong, a risk it creates, or a clearly simpler way to do the same thing. No style nits, no praise, no restating what the change does, nothing a linter or type checker catches, and nothing the threads already raise. A few strong comments beat many weak ones, and none is a fine answer.
 
@@ -355,7 +341,7 @@ Where each comment goes:
 
 In why, don't repeat otis's line. Say where in the tree to look to see it for themselves: which caller, which newly used symbol, which other symbol's lines.
 
-The files you were given are yours alone. The reviewer never sees symbols.md, callers.md, threads.md or diff.patch, so never name them in a comment or in why. Name what they see instead: the symbol, its callers row, a caller's ✗ and the fix proposed under it, the gloss, a thread, a line of a file.
+The files you were given are yours alone. The reviewer never sees symbols.md, shape.md, callers.md, threads.md or diff.patch, so never name them in a comment or in why. Name what they see instead: the symbol, its callers row, a caller's ✗ and the fix proposed under it, the gloss, the score, a thread, a line of a file.
 
 $learn
 

@@ -47,9 +47,11 @@ api="projects/:fullpath/merge_requests/$iid"
 # Lines marked with \001 are comment text: wrapped to the preview and indented.
 wrap() {
   awk -v width="$(( ${FZF_PREVIEW_COLUMNS:-100} - 4 ))" '
-    { gsub(/[\002-\010\013-\036\177]/, "") }
     !/^\001/ { print; next }
     {
+      # Comment text is what someone typed: no control characters of its
+      # own. The lines around it are ours, and their colors are escapes.
+      gsub(/[\002-\010\013-\036\177]/, "")
       n = split(substr($0, 2), words, " "); out = ""
       for (i = 1; i <= n; i++) {
         if (out != "" && length(out) + 1 + length(words[i]) > width) { print "  " out; out = words[i] }

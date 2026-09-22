@@ -51,9 +51,14 @@ case $mode in
   --reply)
     id=$1
     case $id in draft-*) fail "that is a draft of yours, not yet a thread to reply to; enter edits it" ;; esac
-    context=$(jq -r -L "$share" --arg id "$id" 'include "otis";
+    # Clipped here rather than by clip, which would take the colors with
+    # the control characters.
+    context=$(jq -r -L "$share" --arg id "$id" --argjson w "$((cols - 4))" 'include "otis";
       .[] | select(.id == $id) | .notes[-4:][]
-      | attention + .author.username + r + "  " + (.body | gsub("[\t\n]+"; " "))' "$GIT_FZF_STATE/threads.json" 2>/dev/null | clip)
+      | ($w - (.author.username | length) - 2) as $room
+      | (.body | gsub("[\t\n]+"; " ") | gsub("[\u0000-\u001f\u007f]"; "")) as $b
+      | attention + .author.username + r + "  "
+        + (if ($b | length) > $room then $b[0:$room - 1] + "…" else $b end)' "$GIT_FZF_STATE/threads.json" 2>/dev/null)
     ;;
   --edit|--delete)
     id=$1

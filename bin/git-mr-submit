@@ -25,7 +25,10 @@ fail() {
 
 asked=
 [ -z "$answer" ] && asked=1
-drafts=$(git-mr-pages "$api/draft_notes?per_page=100" 2>&1) || fail "could not list your drafts: $drafts"
+# stderr apart from the list: a warning mixed into it is not JSON.
+err=$(mktemp) || exit 1
+trap 'rm -f "$err"' EXIT
+drafts=$(git-mr-pages "$api/draft_notes?per_page=100" 2>"$err") || fail "could not list your drafts: $(cat "$err")"
 n=$(printf '%s' "$drafts" | jq length)
 if [ -n "$asked" ]; then
   [ "$n" -gt 0 ] || fail "you have no drafts on !$iid to submit"

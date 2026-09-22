@@ -28,7 +28,9 @@
 # switches either way. C has Claude review the MR in the background and draft comments
 # for you to read, showing its progress (git-mr-claude); on your own MR, C
 # has Claude propose fixes for its threads instead, for you to accept, fold
-# into your commits and push (git-mr-fix). Reviewing also adds
+# into your commits and push (git-mr-fix). a talks it over with Claude,
+# about the row you are on, in a conversation the MR keeps (git-symbols-ask).
+# Reviewing also adds
 # approve (at the head the picker shows), n for what changed since your last
 # review (git-mr-since), and u catching up
 # with a push: when the MR's head has moved, the picker closes and the review
@@ -110,7 +112,7 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
-first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts"
+first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
 rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=the shape of it,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
 claude="git-mr-claude $iid $range"
 set --
@@ -147,6 +149,7 @@ out=$(git-fzf "!$iid " "$keys" --header-from-state \
   --bind "p:execute-silent(git-symbols --peeks $range {2} {4} {5} {6} {12})+refresh-preview" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "C:execute($claude)+$refresh+refresh-preview" \
+  --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
   --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "m:execute(gl $range)" \
   --bind "w:execute-silent(otis-open '$url')" \
