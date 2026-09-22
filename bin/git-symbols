@@ -1082,6 +1082,7 @@ fi
 # highlight: the signatures as code, in the theme the preview'"'"'s diff uses.
 # The rows awk wraps each one in \036 marks; one bat call colors them all
 # (a process a row would be a second on a big MR), and they go back in place.
+# A row for otis-symbols carries two, the fzf row's and its own label's.
 # Without bat they are plain. A removed symbol comes with no marks: it stays
 # dim, as its rows read everywhere.
 # The signatures colored as TypeScript, by one bat over a file a row: a
@@ -1099,14 +1100,14 @@ highlight() {
   if ! command -v bat >/dev/null 2>&1; then tr -d '\036'; return; fi
   rows=$st/rows.$$ heads=$st/heads.$$ hl=$st/hl
   : >> "$hl"
-  new=$(awk -F'\036' -v d="$heads" -v rows="$rows" 'FILENAME == ARGV[1] { have[$1] = 1; next } { print > rows } NF >= 3 && !($2 in have) && !($2 in seen) { seen[$2] = 1; f = d "." sprintf("%06d", ++n); print $2 > f; close(f) } END { print n + 0 }' "$hl" -)
+  new=$(awk -F'\036' -v d="$heads" -v rows="$rows" 'FILENAME == ARGV[1] { have[$1] = 1; next } { print > rows } { for (j = 2; j < NF; j += 2) if (!($j in have) && !($j in seen)) { seen[$j] = 1; f = d "." sprintf("%06d", ++n); print $j > f; close(f) } } END { print n + 0 }' "$hl" -)
   if [ "$new" -gt 0 ]; then
     cat "$heads".* > "$heads.txt"
     BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=plain --paging=never --wrap=never -l ts "$heads".* > "$heads.col" 2>/dev/null
     paste -d "$(printf '\036')" "$heads.txt" "$heads.col" >> "$hl"
     rm -f "$heads".* "$heads.txt" "$heads.col"
   fi
-  awk -F'\036' 'FILENAME == ARGV[1] { col[$1] = $2; next } NF >= 3 { print $1 col[$2] $3; next } { print }' "$hl" "$rows"
+  awk -F'\036' 'FILENAME == ARGV[1] { col[$1] = $2; next } NF >= 3 { o = $1; for (j = 2; j < NF; j += 2) o = o col[$j] $(j + 1); print o; next } { print }' "$hl" "$rows"
   rm -f "$rows"
 }
 
@@ -1273,7 +1274,19 @@ if [ "$mode" = --rows ]; then
   # rows: the cursor never lands on it, and enter has nothing to open.
   header=
   [ -n "$GIT_FZF_STATE" ] && header=$st/header && : > "$header"
-  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+  # Drawn by otis-symbols (OTIS_SYMBOLS_WIDTH, its list's width), each row
+  # carries its parts after the twelve fzf reads, for it to lay out: 13
+  # what the row is (sym, callers, package, caller, file), 14 its depth,
+  # 15 its fold (open, closed, quiet: closed and dim, for a row open above
+  # or all viewed), 16 how many are under it, 17 what the change did, 18
+  # and 19 the lines it gained and lost, 20 viewed (all, or n/m of what is
+  # under a closed row), 21 and 22 its open threads and drafts, 23 a call
+  # new to the change, 24 dim, 25 its label (the signature cut to the width
+  # left it, marked for highlight), 26 a caller's type errors (x, or fixed).
+  # The widths it cut them to go in the state (layout), and how much of the
+  # change is viewed (progress), for the bar over the list.
+  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
+    -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$st/layout" -v progress="$st/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
@@ -1353,6 +1366,17 @@ if [ "$mode" = --rows ]; then
       # last one clearing do not move every row.
       budget = gk_list_width(cols) - (wa + wd + 7) - (wt ? 3 : 0) - (mr ? 6 : 0) - 5
       if (budget < 30) budget = 30
+      # The row otis-symbols draws: the cursor, ga'"'"'s cells, the fold and the
+      # change'"'"'s glyph on the left; on the right the threads, viewed and
+      # the lines, each a fixed cell. Its label has what is left, less the
+      # tree'"'"'s three columns a level.
+      if (draw) {
+        droom = draw - 2 - (wt ? 3 : 0) - 4 - 1 - (wa + wd + 4) - 6 - (mr ? 8 : 0)
+        if (droom < 20) droom = 20
+        print (wa < 1 ? 1 : wa), (wd < 1 ? 1 : wd), wt + 0, mr + 0 > layout
+        for (i = 1; i <= m; i++) { k = vkey(i); if (!(k in vseen)) { vseen[k] = 1; vall++; if (k in vd) vgot++ } }
+        print vgot + 0, vall + 0 > progress
+      }
       # The threads some symbol'"'"'s lines hold; a file row counts the rest.
       for (k = 1; k <= nmarks; k++) for (i = 1; i <= m; i++) if (row[i, 2] != "file" && on(k, row[i, 1], row[i, 7], row[i, 8], row[i, 9], row[i, 14], row[i, 15])) { claimed[k] = 1; break }
       # Rows by symbol id, and each class'"'"'s members, for the walk.
@@ -1433,7 +1457,8 @@ if [ "$mode" = --rows ]; then
         fv = p in vd
         print (wt ? "   " : "") "  " (fv ? dimmed(gk_stat(add, del, wa, wd)) : gk_stat(add, del, wa, wd)) "      " th (fv ? GK_GOOD "\342\234\223" GK_R "    " : "     ") \
           gk_path(p, budget - 4, (ch == "removed" || fv) ? GK_CONTEXT : GK_TEXT) \
-          "\t" p "\t1\tnew\t\t\t\t\t\t\t\t" p
+          "\t" p "\t1\tnew\t\t\t\t\t\t\t\t" p \
+          (draw ? "\tfile\t0\t\t\t" ch "\t" add "\t" del "\t" (fv ? "all" : "") "\t" (mr ? tally("open") : "") "\t" (mr ? tally("draft") : "") "\t\t" (fv || ch == "removed" ? 1 : "") "\t" p "\t" : "")
       }
       print syms + 0, length(files), roots + 0 > counts
     }
@@ -1481,17 +1506,23 @@ if [ "$mode" = --rows ]; then
       fold = kids ? ((again || done) && !(rid in open) ? GK_CONTEXT : GK_ATTENTION) ((rid in open) ? "\342\226\276" : "\342\226\270") GK_R GK_CONTEXT gk_padl(kids, 2) GK_R " " : "    "
       room = budget - 3 * depth - 4
       if (kind == "class") head = gk_elide_rest(head)
+      lab = ""
+      # A closed row has how much is under it after its label.
+      if (draw) { lab = gk_sig((ex ? "export " : "") head, droom - 3 * depth - (kids && !(rid in open) ? 1 + length(kids) : 0)); lab = (ch == "removed" || dim) ? lab : "\036" lab "\036" }
       head = gk_sig((ex ? "export " : "") head, room)
       # The signature, marked for highlight; a removed or viewed one plain and dim.
       head = (ch == "removed" || dim) ? GK_CONTEXT head GK_R : "\036" head "\036"
-      th = ""
+      th = ""; to = ""; td = ""
       if (mr) {
         split("", hit); split("", walked); walk(i, kids && !(rid in open))
-        th = threads(tally("open"), tally("draft"))
+        to = tally("open"); td = tally("draft")
+        th = threads(to, td)
       }
       stat = glyph(ch) gk_stat(add, del, wa, wd); if (dim) stat = dimmed(stat)
       print (wt ? cells(ch, stg, un) : "") stat "  " th vc indent fold head \
-        "\t" p "\t" at "\t" side "\t" s "\t" e "\t" os "\t" oe "\t" stg "\t" un "\t" kind "\t" rid
+        "\t" p "\t" at "\t" side "\t" s "\t" e "\t" os "\t" oe "\t" stg "\t" un "\t" kind "\t" rid \
+        (draw ? "\tsym\t" depth "\t" (kids ? ((rid in open) ? "open" : (again || done) ? "quiet" : "closed") : "") "\t" kids "\t" ch "\t" add "\t" del \
+          "\t" (dim ? "all" : (kids && !(rid in open) && vdone) ? vdone "/" vtot : "") "\t" to "\t" td "\t" (newedge(parent, i) ? 1 : "") "\t" (dim ? 1 : "") "\t" lab "\t" : "")
       if (!(rid in open)) return
       for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, 0)
       for (x = 1; x <= nc; x++) {
@@ -1525,19 +1556,23 @@ if [ "$mode" = --rows ]; then
         (ne ? " \302\267 " GK_BAD ne " with type errors" GK_R GK_CONTEXT : "")
       if (nfx) text = text " \302\267 " GK_GOOD nfx " fixed in your checkout" GK_R GK_CONTEXT
       fold = GK_CONTEXT ((crid in open) ? "\342\226\276" : "\342\226\270") GK_R "   "
-      print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent fold GK_CONTEXT text GK_R "\t\t\t\t\t\t\t\t\t\tcallers\t" crid
+      print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent fold GK_CONTEXT text GK_R "\t\t\t\t\t\t\t\t\t\tcallers\t" crid \
+        (draw ? "\tcallers\t" depth "\t" ((crid in open) ? "open" : "closed") "\t" n "\t\t\t\t\t\t\t\t\t" GK_CONTEXT text GK_R "\t" : "")
       if (!(crid in open)) return
       pk = ""
       for (x = 1; x <= n; x++) {
         if (cpk[id, x] != pk) {
           pk = cpk[id, x]
-          print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " GK_CONTEXT pk GK_R "\t\t\t\t\t\t\t\t\t\tpackage\t" crid ">" pk
+          print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " GK_CONTEXT pk GK_R "\t\t\t\t\t\t\t\t\t\tpackage\t" crid ">" pk \
+            (draw ? "\tpackage\t" (depth + 1) "\t\t\t\t\t\t\t\t\t\t\t" pk "\t" : "")
         }
         head = chead[id, x]
         if (head ~ /^(export )?(abstract )?class /) head = gk_elide_rest(head)
+        lab = draw ? gk_sig(head, droom - 3 * (depth + 2)) : ""
         head = gk_sig(head, budget - 3 * (depth + 2) - 4)
         print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " (cerr[id, x] ? ((cp[id, x] in fixedp) ? " " GK_GOOD "\342\234\223" GK_R " " : " " GK_BAD "\342\234\227" GK_R " ") : "   ") GK_CONTEXT head GK_R \
-          "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x]
+          "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
+          (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
     }' "$table" "$order" "$marks" "$callers" "$vw" | highlight | git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
@@ -1621,7 +1656,8 @@ else
     --bind "f:$files" \
     --bind "u:reload($list)+refresh-preview"
 fi
-git-fzf "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
+# Drawn by hand (otis-symbols), from the same keys and bindings fzf took.
+otis-symbols "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "l:execute-silent(git-symbols --open {12})+reload($fold)" \

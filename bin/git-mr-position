@@ -2,7 +2,9 @@
 # git-mr-position <base> <start> <head> <path> <side> <first> <last>
 # Where a comment on lines first..last of <path> goes in an MR's diff, as the
 # JSON position GitLab's API wants, from the MR's diff_refs (start may be
-# empty). side is new, or old for removed lines. Run in any checkout of the
+# empty). side is new, or old for removed lines, or the two ends' sides
+# apart, "old,new": a range from a removed line down to an added one, as
+# GitLab's inline diff has them, each end in its own numbers. Run in any checkout of the
 # repo: only commits are read. The one place this is worked out, for a
 # comment typed at a prompt (git-mr-say), in nvim (share/mr-comments.lua) and
 # for Claude's drafts (git-mr-claude-drafts).
@@ -21,14 +23,14 @@ base=$1 start=$2 head=$3 path=$4 side=$5 first=$6 last=$7
 # shasum on macOS, sha1sum on most Linux.
 if command -v shasum >/dev/null 2>&1; then sha=$(printf '%s' "$path" | shasum | cut -c1-40)
 else sha=$(printf '%s' "$path" | sha1sum | cut -c1-40); fi
-ends=$(git diff -U0 --no-color --no-ext-diff "$base" "$head" -- "$path" | awk -v side="$side" -v first="$first" -v last="$last" '
+ends=$(git diff -U0 --no-color --no-ext-diff "$base" "$head" -- "$path" | awk -v fside="${side%,*}" -v lside="${side#*,}" -v first="$first" -v last="$last" '
   /^@@ / {
     split($2, o, ","); split($3, n, ",")
     k++; os[k] = substr(o[1], 2) + 0; oc[k] = (2 in o) ? o[2] + 0 : 1
     ns[k] = substr(n[1], 2) + 0; nc[k] = (2 in n) ? n[2] + 0 : 1
   }
-  # locate: type, old and new of line l, space separated ("-" for no type).
-  function locate(l,   i, s, c, shift) {
+  # locate: type, old and new of line l on side, space separated ("-" for no type).
+  function locate(l, side,   i, s, c, shift) {
     shift = 0
     for (i = 1; i <= k; i++) {
       s = side == "new" ? ns[i] : os[i]; c = side == "new" ? nc[i] : oc[i]
@@ -42,7 +44,7 @@ ends=$(git diff -U0 --no-color --no-ext-diff "$base" "$head" -- "$path" | awk -v
     }
     return side == "new" ? "- " (l - shift) " " l : "- " l " " (l + shift)
   }
-  END { print locate(first); print locate(last) }')
+  END { print locate(first, fside); print locate(last, lside) }')
 printf '%s\n' "$ends" | jq -Rn --arg sha "$sha" --arg path "$path" --arg base "$base" --arg start "$start" --arg head "$head" '
   [inputs | split(" ") | {type: (if .[0] == "-" then "" else .[0] end), old: (.[1] | tonumber), new: (.[2] | tonumber)}] as [$s, $e]
   | def endpoint: {type, line_code: "\($sha)_\(.old)_\(.new)",

@@ -961,22 +961,20 @@ expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n'
 expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
 
 printf 'a4\n' > a.ts && printf 'new\n' > d.ts
-# ga opens by symbol; these two files have none, so they list under a
-# heading, and j steps off it.
-if picker_open "ga"; then
-  expect ga/rows "$(picker_rows)" "3"
-  picker_key j
-  first=$(picker_state | jq -r .current.text | cut -f2)
-  picker_key space
-  expect ga/space-stages "$(git diff --cached --name-only)" "$first"
-  # fzf drops a key typed while it reloads; give the reload after space its time.
-  sleep 1
-  picker_key U
-  expect ga/U-unstages "$(git diff --cached --name-only)" ""
-  picker_close
-else
-  expect ga/opens "no picker on port $port" "opened"
-fi
+# ga opens by symbol (otis-symbols), in a pty: these two files have none, so
+# they list under a heading, and the cursor starts on the first of them, not
+# on the heading; space stages it and U unstages it.
+TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b g "stty rows 40 cols 140; source $1/share/otis.zsh; ga"; out=
+  for _ in {1..50}; do while zpty -rt g buf; do out+=$buf; done; [[ $out == *d.ts* ]] && break; sleep 0.1; done
+  print -r -- $out > $2.screen
+  zpty -wn g " "; sleep 1.5; while zpty -rt g buf; do :; done
+  git diff --cached --name-only > $2.staged
+  zpty -wn g U; sleep 1.5; while zpty -rt g buf; do :; done
+  git diff --cached --name-only > $2.unstaged
+  zpty -wn g q; sleep 0.3; zpty -d g 2>/dev/null' - "$root" "$tmp/ga"
+expect ga/rows "$(sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$tmp/ga.screen" | grep -c 'FILES, AND WHAT NO SYMBOL CLAIMS')" "1"
+expect ga/space-stages "$(cat "$tmp/ga.staged")" "d.ts"
+expect ga/U-unstages "$(cat "$tmp/ga.unstaged")" ""
 git checkout -q -- a.ts && rm -f d.ts
 
 # --- gb's n: an MR in one key, drafted from the branch's commits as gp's
@@ -1330,6 +1328,8 @@ fi
 expect mr-position/removed "$(git-mr-position "$b" "" "$h" f.ts old 2 2 | jq -c '[.old_line, .new_line, .line_range.end.type, .line_range.end.new_line]')" '[2,null,"old",0]'
 expect mr-position/kept "$(git-mr-position "$b" "" "$h" f.ts new 5 5 | jq -c '[.old_line, .new_line, .line_range.end.type, has("start_sha")]')" '[5,5,"",false]'
 expect mr-position/range "$(git-mr-position "$b" "$b" "$h" f.ts new 2 4 | jq -c '[.line_range.start.type, .line_range.start.old_line, .new_line, .start_sha == "'"$b"'"]')" '["new",0,4,true]'
+# A range from a removed line to the line added for it: each end on its own side.
+expect mr-position/mixed "$(git-mr-position "$b" "" "$h" f.ts old,new 2 2 | jq -c '[.line_range.start.type, .line_range.start.old_line, .line_range.end.type, .line_range.end.new_line, .new_line]')" '["old",2,"new",2,2]'
 # Typed at the prompt, enter: a draft on the added line, placed as nvim would.
 rm -f "$tmp/glab.posted"
 if picker_open "GMR_KIND=review git-mr-say --new 7 $b..$h f.ts new 2 2"; then

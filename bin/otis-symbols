@@ -1,0 +1,1075 @@
+#!/usr/bin/env -S zsh -f
+# otis-symbols <prompt> <keys> [fzf options...]
+# A change by symbol, drawn by hand rather than as an fzf list: git-symbols'
+# picker and a review's (git-mr-files) open here. It takes what git-fzf takes,
+# the keys as "key=label" pairs and fzf's --bind, --preview and
+# --header-from-state, and does what those bindings say: execute,
+# execute-silent, reload, transform, refresh-preview, pos, first, abort,
+# accept and print, with a row's fields for {n}. So every key of the two
+# pickers works as it did, from the same bindings, and the pickers stay the
+# ones that say what a key does.
+#
+# The screen is laid out for reading a change: Claude's one sentence on it
+# first, then how much of it is viewed, as a bar, and what is still coming
+# in (the gloss, tsgo's callers); then the tree, drawn as one, with guides
+# from each row to what it opens to, what the change did to a symbol as a
+# glyph before its signature (~ its signature changed, + added, - removed,
+# · its body alone), and on the right a row's threads, viewed and lines in
+# columns of their own. The row under the cursor is the only one lit. The
+# rows' parts come from git-symbols --rows, which lays them out for this
+# list's width (OTIS_SYMBOLS_WIDTH); a row with none (a review read by file)
+# is drawn as fzf would have drawn it.
+#
+# On a wide terminal the row's preview sits to the right, under a line
+# saying where the row is (its file and line, and the rows it is under); on
+# a narrow one, under the list. Previews are drawn in the background, the
+# cursor's first and then the rows around it, and kept per row and width,
+# so moving onto a row finds its preview drawn; a preview being drawn again
+# shows the one before until it lands, never a blank pane. Each row keeps
+# where its preview was scrolled, in the files git-fzf keeps them in
+# (off.<row>), so enter opens where you are reading, as it did.
+#
+# Background work lands by itself: Claude's gloss, tsgo's callers, Claude's
+# fixes for them and a review's threads each leave a file in the cache, and
+# a change in one reloads the rows (under fzf they posted a reload to its
+# port, which this has none of).
+#
+# / searches the rows, as fzf did: each word of it in a row's name or path.
+# ? puts the keys and what the glyphs mean in the pane. The mouse is this
+# screen's: a click picks a row, the wheel scrolls the preview or moves
+# through the rows, and a drag in the preview selects its text and copies
+# it. Each frame's timing goes to ~/.cache/otis/symbols.log (OTIS_SYMBOLS_TRACE).
+setopt extendedglob no_nomatch
+zmodload zsh/system zsh/datetime zsh/zselect zsh/stat zsh/files zsh/mathfunc
+
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+. ${0:A:h:h}/share/in-root.sh
+in_root || eval "$(otis-config --env)"
+export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
+wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
+# Not under a picker: a script that would post to one must not find the one
+# this was opened from.
+unset FZF_PORT FZF_API_KEY
+export GIT_FZF_STATE=${TMPDIR:-/tmp}/git-fzf.$$.$RANDOM$RANDOM
+mkdir -m 700 $GIT_FZF_STATE || exit 1
+st=$GIT_FZF_STATE
+: > $st/lock; : > $st/by-id
+mkdir $st/pv
+trace=${OTIS_SYMBOLS_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/symbols.log}
+mkdir -p ${trace:h} 2>/dev/null; : > $trace
+
+# --- what it was asked to be -------------------------------------------------
+# The keys: labels for the footer and ?, those after a lone | for ? alone.
+title=${1% } spec=$2; shift 2
+typeset -a hk hv hm
+typeset -A bind
+integer more=0
+for pair in ${(s:,:)spec}; do
+  [[ -z $pair ]] && continue
+  [[ $pair == '|' ]] && { more=1; continue }
+  [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
+done
+preview= startacts= hdr=0 searching=0
+while (( $# )); do
+  case $1 in
+    --bind) if [[ $2 == start:* ]]; then startacts+=${startacts:++}${2#start:}; else bind[${2%%:*}]=${2#*:}; fi; shift 2 ;;
+    --preview) preview=$2; shift 2 ;;
+    --header-from-state) hdr=1; shift ;;
+    --search) searching=1; shift ;;
+    *) shift ;;
+  esac
+done
+
+e=$'\e'
+R=$e'[0m' B=$e'[1m' UB=$e'[22m' IT=$e'[3m' UIT=$e'[23m'
+A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
+EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
+C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
+BG=$e"[${OTIS_T_CODEBG:-48;5;236}m"
+CODEBG=$e"[${OTIS_T_CODEBG}m"
+
+exec {tty}<>/dev/tty
+# Keys are read from $tty alone, and a program given the screen (execute)
+# is given it by name; what the rest says goes to a file.
+exec 2>>$st/err </dev/null
+saved=$(stty -g <&$tty)
+# No line wrap while it is up, and the mouse as SGR reports: press, drag and
+# release. Shift held gives the terminal's own selection back, in most.
+# ctrl-c and ctrl-z come in as keys (-isig), not signals: a zsh script holds
+# its traps until the loop they land in ends, so a ctrl-c killed the scripts
+# that opened this and left it running, raw, under your shell's prompt.
+screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
+screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
+typeset -a outq
+quit() { (( screen )) && screen_off; rm -rf -- $st; (( $#outq )) && print -rl -- $outq; exit ${1:-0}; }
+trap 'quit 1' HUP TERM INT
+screen=0
+trap '(( screen )) && screen_off; rm -rf -- $st' EXIT
+size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
+# A resize wakes the loop at once: perl takes the signal and writes a line,
+# since a zsh script holds its traps until a loop that never ends ends (as
+# otis-dash). Without perl the size is asked once a second.
+winch=
+command -v perl >/dev/null 2>&1 &&
+  exec {winch}< <(perl -e 'my $p = getppid(); $| = 1; $SIG{WINCH} = sub { print "\n" }; sleep 1 while getppid() == $p' </dev/null 2>/dev/null)
+
+# --- the layout ------------------------------------------------------------------
+# Side by side from 120 columns, as git-fzf had them (the preview's 55% at 66
+# or more), the list 42% of it; under that the preview under the list. lw
+# the list's width, lh its height; the pane at column px, row py, pw wide
+# and ph high, its first two rows where the row is (phd).
+integer lw lh px py pw ph side phd=2
+layout() {
+  if (( W >= 120 )); then
+    side=1; (( lw = W * 42 / 100, lw < 48 ? (lw = 48) : 0 ))
+    (( lh = H - 2, px = lw + 6, py = 1, pw = W - px, ph = H - 2 ))
+  else
+    side=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
+  fi
+  # What the rows and the previews are drawn for, for every command run
+  # from here: --rows fits the signatures to the list, and a preview's
+  # position (git-symbols --at, --peeks) is worked out at the pane's width.
+  export OTIS_SYMBOLS_WIDTH=$lw FZF_COLUMNS=$W FZF_LINES=$H FZF_PREVIEW_COLUMNS=$pw FZF_PREVIEW_LINES=$(( ph - phd ))
+  print -rn -- $pw > $st/cols; print -rn -- $(( ph - phd )) > $st/plines
+}
+float settle=0
+resize() {
+  local oh=$H ow=$W olw=$lw
+  size
+  (( H != oh || W != ow )) || return 1
+  print -r -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H" >> $trace
+  layout; dirty=1 shown_rows=(); draw
+  # The rows are cut to the list's width by --rows, so a new width reloads
+  # them, once the size has held for 0.3s: a drag reloads once, not at
+  # every width it passes through. The previews at the new width with them.
+  (( settle = EPOCHREALTIME + 0.3 ))
+  (( lw != olw )) && rewidth=1
+}
+
+# --- the rows --------------------------------------------------------------------
+# raw: each row as the list printed it; rid its id (field 12, or a heading's
+# last field); typ what it is (sym, callers, package, caller, file from
+# --rows' parts; head for a heading; plain for a row with no parts); the
+# parts, dep through err; hay what / searches in.
+typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err hay gd
+integer loaded=0 wa=1 wd=1 wt=0 mr=0
+load() {
+  local line i
+  local -a f
+  raw=() rid=() typ=() dep=() fold=() kids=() chg=() add=() del=() vwd=() nop=() ndr=() nedge=() dim=() lab=() err=() hay=()
+  for line in ${(f)"$(<$1)"}; do
+    f=("${(@ps:\t:)line}")
+    raw+=("$line")
+    rid+=("${f[12]:-$f[-1]}")
+    if [[ -n $f[13] ]]; then typ+=("$f[13]")
+    elif [[ -z $f[2] && ( -z $f[12] || $f[12] == gk-* ) ]]; then typ+=(head)
+    else typ+=(plain); fi
+    dep+=("${f[14]:-0}") fold+=("$f[15]") kids+=("$f[16]") chg+=("$f[17]") add+=("$f[18]") del+=("$f[19]")
+    vwd+=("$f[20]") nop+=("$f[21]") ndr+=("$f[22]") nedge+=("$f[23]") dim+=("$f[24]") lab+=("$f[25]") err+=("$f[26]")
+    plain "${f[25]:-$f[1]}"; hay+=("${(L)REPLY} ${(L)f[2]}")
+  done
+  [[ -s $st/layout ]] && read -r wa wd wt mr < $st/layout
+  guides
+  loaded=1 dirty=1 rlw=0
+}
+# The row's fields as fzf numbers them, for {n}.
+typeset -a fld
+fields() { fld=("${(@ps:\t:)raw[${1:-$cur}]}"); }
+
+# guides: the tree's lines, for each row at a depth, from the rows after it:
+# whether a sibling comes after it (├ or └), and for each level above, whether
+# the row it is under at that level has one (│ or nothing).
+guides() {
+  local -A seen
+  local i d k s
+  gd=()
+  for (( i = $#raw; i >= 1; i-- )); do
+    if [[ $typ[i] == (head|plain|file) ]]; then seen=(); gd[i]=; continue; fi
+    d=$dep[i] s=
+    for (( k = 1; k < d; k++ )); do [[ -n $seen[$k] ]] && s+="│  " || s+="   "; done
+    if (( d > 0 )); then
+      if [[ -n $seen[$d] ]]; then s+="├"; else s+="└"; fi
+      # A call new to the change: ⇢ where the branch meets the row.
+      if [[ -n $nedge[i] ]]; then s+=$A"⇢"$R$F" "; else s+="─ "; fi
+    fi
+    gd[i]=$s
+    seen[$d]=1
+    for k in ${(k)seen}; do (( k > d )) && unset "seen[$k]"; done
+  done
+}
+
+# --- text -----------------------------------------------------------------------
+plain() { REPLY=${(S)1//$e\[[0-9;:?]#[a-zA-Z]/}; REPLY=${(S)REPLY//$e\][^$'\a'$e]#($'\a'|$e\\)/}; }
+# vw <text>: its width on the screen, its colors aside.
+vw() { plain "$1"; REPLY=${(m)#REPLY}; }
+# cut <text> <width>: cut to that many columns with an ellipsis, its colors
+# kept, a character at a time; only a row too wide for its list is.
+cut() {
+  local s=$1 out= c
+  integer w=$2 n=0
+  vw "$s"; (( REPLY <= w )) && { REPLY=$s; return }
+  while [[ -n $s ]]; do
+    if [[ $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then out+=$match[1]; s=${s:${#match[1]}}; continue; fi
+    c=${s[1]}
+    (( n + ${(m)#c} > w - 1 )) && break
+    out+=$c; (( n += ${(m)#c} )); s=${s:1}
+  done
+  REPLY=$out$R…
+}
+line= used=0
+put() { line+=$1$2; (( used += ${(m)#2} )); }
+pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
+
+# --- a row ---------------------------------------------------------------------
+# RL: each row's line as drawn without the cursor, RU its width, both for
+# the list's width; built once a load (or a resize), since a frame is then
+# the lines in view and the cursor's lit.
+typeset -a RL RU
+cells() {
+  local x=M
+  [[ $chg[$1] == added ]] && x=A; [[ $chg[$1] == removed ]] && x=D
+  fields $1
+  if [[ $fld[9] == 1 ]]; then put "$G" $x; else put "$F" .; fi
+  if [[ $fld[10] == 1 ]]; then [[ $fld[9] == 1 ]] && put "$A" $x || put "$X" $x; else put "$F" .; fi
+  put "" " "
+}
+rowline() {
+  local i=$1 t lc
+  integer w=$(( lw - 2 )) rz
+  line= used=0
+  case $typ[i] in
+    head)
+      # A heading of the list's own, or git-test-files': its words, the rule
+      # it was drawn in dropped, the count first and what t does after it.
+      fields $i; plain "$fld[1]"; t=${${REPLY//─/}## #}; t=${t%% #}
+      if [[ $t == *' · '* ]]; then put "$C" "${(U)${t%% · *}}"; put "$F" "  ${t#* · }"
+      else put "$C" "${(U)t}"; fi
+      ;;
+    plain)
+      fields $i; cut "$fld[1]" $w; line=$REPLY; vw "$line"; used=$REPLY
+      ;;
+    *)
+      (( wt )) && { [[ $typ[i] == sym ]] && cells $i || put "" "   "; }
+      put "$F" "$gd[i]"
+      case $fold[i] in
+        open) put "$A" "▾ " ;; closed) put "$A" "▸ " ;; quiet) put "$C" "▸ " ;; *) put "" "  " ;;
+      esac
+      # What the change did to it, a glyph; a caller, whether it breaks.
+      case $typ[i]:$chg[i]:$err[i] in
+        caller:*:x) put "$X" "✗ " ;; caller:*:fixed) put "$G" "✓ " ;;
+        *:signature:*) put "$B$A" "~ "; line+=$UB ;; *:added:*) put "$G" "+ " ;; *:removed:*) put "$X" "- " ;;
+        sym:*|file:*) put "$F" "· " ;; *) put "" "  " ;;
+      esac
+      (( rz = 1 + (wa + wd + 4) + 6 + (mr ? 8 : 0) ))
+      # Callers elsewhere have none of the right's cells: their words run on.
+      [[ $typ[i] == (callers|package|caller) ]] && rz=0
+      lc=$lab[i]
+      case $typ[i] in
+        sym) if [[ -n $dim[i] || $chg[i] == removed ]]; then put "$C" "$lc"; else line+=$lc; vw "$lc"; (( used += REPLY )); fi ;;
+        file) t=${lc:h}/; [[ $lc == */* ]] || t=; put "$C" "$t"; put "${${dim[i]:+$C}:-$T}" "${lc:t}" ;;
+        callers) line+=$lc; vw "$lc"; (( used += REPLY )) ;;
+        package) put "$EL" "$lc" ;;
+        caller) put "$C" "$lc" ;;
+      esac
+      # How much is under a closed row, after its name.
+      [[ $fold[i] == (closed|quiet) && -n $kids[i] && $typ[i] == sym ]] && put "$F" " ${kids[i]}"
+      # The width so far as the screen has it, measured rather than added
+      # up, so the right's columns stand where every other row has them.
+      vw "$line"; used=$REPLY
+      (( used > w - rz )) && { cut "$line" $(( w - rz )); line=$REPLY; vw "$line"; used=$REPLY; }
+      pad $(( w - rz ))
+      (( rz )) || { pad $w; RL[i]=$line$R RU[i]=$used; return; }
+      # The right: threads, viewed, the lines. Each a cell, so they stay in
+      # their columns down the list.
+      if (( mr )); then
+        put "" "  "
+        if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-$'\uE73F'${nop[i]}}}"; else put "" "   "; fi
+        if (( ndr[i] > 0 )); then put "$Y" "✎${(r:2:: :)ndr[i]}"; else put "" "   "; fi
+      fi
+      case $vwd[i] in
+        all) put "" "    "; put "$G" "✓ " ;;
+        */*) put "$C" "${(l:6:: :)vwd[i]}" ;;
+        *) put "" "      " ;;
+      esac
+      put "" " "
+      local dm=${dim[i]:+$C}
+      if (( add[i] > 0 )); then put "${dm:-$G}" "+${(l:wa:: :)add[i]}"; else put "" "${(l:wa+1:: :)}"; fi
+      put "" " "
+      if (( del[i] > 0 )); then put "${dm:-$X}" "-${(l:wd:: :)del[i]}"; else put "" "${(l:wd+1:: :)}"; fi
+      ;;
+  esac
+  pad $w
+  RL[i]=$line$R RU[i]=$used
+}
+
+# --- the list --------------------------------------------------------------------
+# L: its lines, LI the row each is (0 for none); vis the rows the cursor
+# may land on, in order, the search applied.
+typeset -a L LI vis
+integer dirty=1 cur=0 top=0 rlw=0
+query=
+matches() {
+  local w
+  [[ -z $query ]] && return 0
+  [[ $typ[$1] == head ]] && return 1
+  for w in ${=${(L)query}}; do [[ $hay[$1] == *$w* ]] || return 1; done
+  return 0
+}
+# The headline: what this is, Claude's sentence on the change, how much of
+# it is viewed, and what the rows' list said (the counts, what is still
+# coming in).
+headline() {
+  local w=$1 t s
+  local -a words segs
+  integer d=0 n=0 k bw
+  L+=("") LI+=(0)
+  line= used=0; put "" "  "
+  # The MR, and how it is read: by symbol, or (a review's f) by file.
+  t=$title
+  if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
+  [[ -e $st/by-file || -e $st/since ]] && t="by file"
+  put "$B$T" "${t:-by symbol}"; line+=$UB
+  (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
+  L+=("$line") LI+=(0)
+  L+=("") LI+=(0)
+  if (( ! loaded )); then L+=("  ${C}reading the change…$R") LI+=(0); return; fi
+  # Claude's sentence, the list's header, wrapped to the list.
+  if (( hdr )) && [[ -s $st/header ]]; then
+    plain "$(<$st/header)"; words=(${=REPLY}); s=
+    for t in $words; do
+      if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > w - 4 )); then L+=("  $T$s$R") LI+=(0); s=; fi
+      s+=${s:+ }$t
+    done
+    [[ -n $s ]] && L+=("  $T$s$R") LI+=(0)
+    L+=("") LI+=(0)
+  fi
+  # Viewed, as a bar, when there is something to view.
+  [[ -s $st/progress ]] && read -r d n < $st/progress
+  if (( n > 0 )); then
+    (( bw = w / 3, bw > 30 ? (bw = 30) : 0, k = d * bw / n ))
+    line="  "$G${(l:k::━:)}$F${(l:bw-k::─:)}$R"  "
+    if (( d == n )); then line+=$G"all $n viewed"$R; else line+=$T"$d"$C" of $n viewed"$R; fi
+    L+=("$line") LI+=(0)
+  fi
+  # What the list said, a piece a line as they fit.
+  if [[ -s $st/footer ]]; then
+    segs=("${(@s: · :)${(j: · :)${(f)$(<$st/footer)}}}") s=
+    for t in $segs; do
+      vw "$s · $t"
+      if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); s=; fi
+      s+=${s:+$C · $R}$t
+    done
+    [[ -n $s ]] && { cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); }
+  fi
+  local stale=($st/stale.*(N))
+  (( $#stale )) && L+=("  ${X}could not refresh from GitLab: this is what it said last$R") LI+=(0)
+  L+=("") LI+=(0)
+}
+list() {
+  local i first=1
+  if (( rlw != lw )); then
+    RL=() RU=()
+    for (( i = 1; i <= $#raw; i++ )); do rowline $i; done
+    rlw=$lw
+  fi
+  L=() LI=() vis=()
+  headline $lw
+  (( loaded )) || return
+  if [[ -n $query ]] || (( searching )); then
+    line="  "$A"/"$R" "$T$query$R
+    (( searching )) && line+=$A"▏"$R
+    L+=("$line") LI+=(0) L+=("") LI+=(0)
+  fi
+  for (( i = 1; i <= $#raw; i++ )); do
+    matches $i || continue
+    # The tree's own heading, over its first root: where to start, or,
+    # turned over (b), the sinks.
+    if (( first )) && [[ $typ[i] != (head|plain|file) ]]; then
+      if [[ -e $st/up ]]; then L+=("  ${C}SINKS FIRST$R  ${F}what uses them under each · b turns it back$R")
+      else L+=("  ${C}START HERE$R  ${F}in reading order · b for the sinks first$R"); fi
+      LI+=(0); first=0
+    fi
+    if [[ $typ[i] == head ]]; then
+      (( $#L > 0 )) && [[ -n $L[-1] ]] && { L+=("") LI+=(0); }
+      L+=("  ${RL[i]}") LI+=(0)
+      continue
+    fi
+    L+=("$i") LI+=($i)
+    vis+=($i)
+  done
+  (( $#raw )) || L+=("  ${C}nothing in it to read by symbol$R") LI+=(0)
+  dirty=0
+}
+# The cursor onto a row it may land on: the one it was on if it still can,
+# else the nearest after it.
+settle_cur() {
+  local i
+  (( $#vis )) || return
+  (( ${vis[(Ie)$cur]} )) && return
+  for i in $vis; do (( i >= cur )) && { cur=$i; return; }; done
+  cur=$vis[-1]
+}
+step() {
+  local at=${vis[(Ie)$cur]}
+  (( $#vis )) || return
+  (( at += $1, at < 1 ? (at = 1) : 0, at > $#vis ? (at = $#vis) : 0 ))
+  go $vis[at]
+}
+# go <row>: the cursor there, the preview's scroll put aside for the row it
+# leaves and taken up for the one it lands on.
+typeset -A offs
+go() {
+  (( $1 == cur )) && return
+  (( pwant >= 0 )) && { poff=$pwant; pwant=-1; }
+  (( cur )) && { offs[$rid[cur]]=$poff; }
+  cur=$1 sel=0
+  poff=${offs[$rid[cur]]:-0}
+}
+
+# --- the preview ------------------------------------------------------------------
+# Drawn per row and width in the background and kept; a render is running
+# while its .tmp is there. gen goes up whenever what a preview is drawn from
+# may have changed (refresh-preview, rows landing, background work landing);
+# the pane shows the newest there is for the row until this gen's lands.
+integer gen=0
+lastpv= pfile= crumbfor= crumbline=
+key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
+pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
+shown() {
+  pvname "$rid[cur]" $pw
+  local -a have=($REPLY.<->(Nom))
+  (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
+  REPLY=${have[1]}
+}
+# subst <text> <row>: fzf's {n} as the row's nth field, quoted; {q} the query.
+subst() {
+  local s=$1 n
+  local -a f
+  (( $2 )) && f=("${(@ps:\t:)raw[$2]}")
+  while [[ $s == (#b)(*)\{([0-9]##|q)\}(*) ]]; do
+    n=$match[2]
+    if [[ $n == q ]]; then s=$match[1]${(qq)query}$match[3]; else s=$match[1]${(qq)f[n]}$match[3]; fi
+  done
+  REPLY=$s
+}
+render() {
+  local w=$1 file=$2 i=$3
+  subst "$preview" $i
+  FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null |
+    LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" > $file.tmp
+  mv -f $file.cont.tmp $file.cont 2>/dev/null
+  mv -f $file.tmp $file
+}
+# want: the row you are on, drawn if it is not kept yet. One at a time: a
+# row changed under you again and again (a key held) waits for the render
+# out to finish, then draws the newest, rather than starting one each time.
+integer wpid=0
+want() {
+  local f
+  (( cur && pw > 0 )) && [[ -n $preview && $typ[cur] != head ]] || return 1
+  (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
+  pvname "$rid[cur]" $pw; f=$REPLY.$gen
+  [[ -e $f || -e $f.tmp ]] && return 1
+  : > $f.tmp
+  render $pw $f $cur &!
+  wpid=$!
+}
+# warm: the rows around the cursor, a few either side, one after another,
+# so j and k find them drawn. It stops at a gen or a width that is not the
+# one it was started for.
+warm() {
+  (( pw > 0 && $#vis )) && [[ -n $preview ]] || return
+  print -r -- "$gen $pw" > $st/pv/gen
+  local -a near
+  local at=${vis[(Ie)$cur]} j
+  for (( j = 1; j <= 6; j++ )); do
+    (( at + j <= $#vis )) && near+=($vis[at+j])
+    (( at - j >= 1 )) && near+=($vis[at-j])
+  done
+  {
+    local i f g="$gen $pw"
+    for i in $near; do
+      [[ $(<$st/pv/gen) == $g ]] || break
+      pvname "$rid[i]" $pw; f=$REPLY.$gen
+      [[ -e $f || -e $f.tmp ]] && continue
+      : > $f.tmp
+      render $pw $f $i
+    done
+  } &!
+}
+# Where the row is, over its preview: its file and line, and the rows it is
+# under, by name.
+crumb() {
+  local i=$cur p s n
+  local -a steps names
+  (( cur )) || { REPLY=; return }
+  fields $i
+  line= used=0
+  case $typ[i] in
+    sym|caller|file|plain)
+      p=$fld[2]
+      if [[ -n $p ]]; then
+        [[ $p == */* ]] && put "$C" "${p:h}/"
+        put "$T" "${p:t}"; [[ -n $fld[3] && $fld[3] != 1 || $typ[i] == sym ]] && put "$C" ":$fld[3]"
+      fi
+      case $chg[i] in
+        signature) put "$C" "  ·  "; put "$A" "signature changed" ;;
+        added) put "$C" "  ·  "; put "$G" "added" ;;
+        removed) put "$C" "  ·  "; put "$X" "removed" ;;
+        body) [[ $typ[i] == sym ]] && { put "$C" "  ·  "; put "$C" "body changed"; } ;;
+      esac
+      [[ $typ[i] == caller ]] && { put "$C" "  ·  "; put "$C" "not in the change"; }
+      ;;
+    callers) put "$C" "callers elsewhere, which the change did not touch" ;;
+    package) put "$C" "package "; put "$EL" "$lab[i]" ;;
+  esac
+  # The way down to it: each step's name, a member's with its class.
+  steps=("${(@s:>:)rid[i]}")
+  if (( $#steps > 1 )); then
+    for s in $steps[1,-2]; do
+      [[ $s == callers ]] && { names+=("callers"); continue; }
+      n=${s#*\#}; n=${n#type }; n=${n//+/.}
+      names+=("$n")
+    done
+    put "$C" "  ·  under "; put "$T" "${(j: › :)names}"
+  fi
+  cut "$line" $(( pw - 1 )); REPLY=$REPLY
+}
+
+# --- the frame -------------------------------------------------------------------
+integer help=0 poff=0 plen=0
+flash=
+typeset -a shown_rows shown_pane P
+# scroll <lines>: the preview moved, in one frame. A glide sent a frame of
+# the whole pane every 10ms, which under a multiplexer stuttered and lagged
+# rather than glided.
+scroll() {
+  local max
+  (( max = plen - (ph - phd), max < 0 ? (max = 0) : 0 ))
+  (( poff += $1, poff > max ? (poff = max) : 0, poff < 0 ? (poff = 0) : 0 ))
+}
+helplines() {
+  local k v n
+  P=()
+  for (( n = 1; n <= $#hk; n++ )); do P+=("  ${A}${(r:9:: :)hk[n]}$R ${C}$hv[n]$R"); done
+  P+=("")
+  for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
+    ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" \
+    drag "in the preview: lines of the diff, copied without the gutter; in a review, c comments on them" \
+    "?" "this, and back" "q/esc" "back"; do
+    P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
+  done
+  P+=("" "  ${B}${T}a row$R" ""
+    "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $X-$R$C removed   $F·$R$C its body alone$R"
+    "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: open above already, or all viewed$R"
+    "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R")
+  [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
+}
+draw() {
+  local t0=$EPOCHREALTIME
+  local y i f s lo=0 hi=0 body foot rows
+  (( dirty )) && list
+  settle_cur
+  # The cursor's row in view, the headline kept when it fits.
+  (( rows = lh ))
+  for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
+  (( hi > top + rows )) && (( top = hi - rows ))
+  (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
+  (( lo > 0 && hi <= rows )) && top=0
+  # The pane: the preview, or ? its keys.
+  local head=
+  if (( help )); then helplines; pfile=; head="  ${B}${T}keys, and what the glyphs say$R"
+  elif (( cur )) && [[ -n $preview ]]; then
+    # The preview read and split once when it lands, not every frame: a
+    # frame of a scroll is then the lines it shows and nothing else.
+    shown; lastpv=$REPLY
+    if [[ $REPLY != $pfile || -z $pfile ]]; then
+      pfile=$REPLY
+      if [[ -n $REPLY ]]; then P=("${(@f)$(<$REPLY)}"); else P=("${F}…$R"); fi
+    fi
+    # The preview a key asked for has landed: its scroll with it.
+    (( pwant >= 0 )) && [[ -n $pfile ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
+    if [[ $rid[cur] != $crumbfor ]]; then crumb; crumbline=$REPLY crumbfor=$rid[cur]; fi
+    head=$crumbline
+  else P=() pfile=
+  fi
+  plen=$#P
+  local -a fr pr
+  for (( y = 1; y <= rows; y++ )); do
+    i=$(( y + top ))
+    s=
+    if (( i <= $#L )); then
+      if (( LI[i] )); then
+        f=$LI[i]
+        if (( f == cur )); then s=$A"▌ "$R$BG${RL[f]//$R/$R$BG}$R
+        else s="  "$RL[f]; fi
+      else s=$L[i]$R; fi
+    fi
+    # Beside the pane, the list's side cleared first (ECH, which leaves the
+    # pane be), then the rule between them.
+    (( side )) && s=$e"[${lw}X"$s$e"[$(( lw + 1 ))G"$R"  "$F"│"$R
+    fr+=("$s")
+  done
+  if (( ! side )); then
+    fr+=("$F${(l:W::─:)}$R")
+  fi
+  for (( y = 1; y <= ph; y++ )); do
+    if (( y == 1 )); then pr+=("$head")
+    elif (( y < phd + 1 )); then pr+=("")
+    else
+      f=$(( y - phd + poff )) s=
+      if (( f <= $#P )); then
+        if (( sel && f >= s1 && f <= s2 )); then selected $f; s=$REPLY; else s=$P[f]; fi
+      fi
+      pr+=("$s")
+    fi
+  done
+  # The footer: a note a key left, or what enter does and the keys to reach
+  # for first, as many as fit.
+  fr+=("$F${(l:W::─:)}$R")
+  foot="  "
+  if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
+  elif [[ -n $flash ]]; then
+    foot+=$A$flash$R; flash=
+    (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]] && foot+=$C"   ·   "$R$A"c"$R$C" comments on them"$R
+  elif (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]]; then
+    local sd=${selr%% *} sw=${selr#* }
+    if [[ $sd == *,* ]]; then sw="lines ${${sd%,*}/old/-}${${sd%,*}/new/+}${sw% *}–${${sd#*,}/old/-}${${sd#*,}/new/+}${sw#* }"
+    elif [[ ${sw% *} == ${sw#* } ]]; then sw="line ${sw% *}"; else sw="lines ${sw/ /–}"; fi
+    [[ $sd == old ]] && sw+=" (removed)"
+    foot+=$B$A"c"$R$B$T" comment on $sw"$UB$R$C"   ·   esc lets go"$R
+  elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
+  else
+    local n k used_=2 room
+    (( room = W - 14 ))
+    for (( n = 1; n <= $#hk; n++ )); do
+      [[ $hk[n] == enter ]] && { foot+=$B$A"⏎ "$hv[n]$UB$R$C"   ·   "$R; (( used_ += ${(m)#hv[n]} + 8 )); }
+    done
+    for (( n = 1; n <= $#hk; n++ )); do
+      [[ $hk[n] == enter ]] && continue
+      (( hm[n] )) && break
+      k="$hk[n] $hv[n]"
+      (( used_ + ${(m)#k} + 2 > room )) && break
+      foot+=$A$hk[n]$R$C" $hv[n]  "$R; (( used_ += ${(m)#k} + 2 ))
+    done
+    foot+=$A"?"$R$C" keys"$R
+  fi
+  fr+=("$foot")
+  # Only the rows that changed go out, the list's and the pane's apart, so
+  # a move sends the two rows it lit and unlit and the pane.
+  body=
+  (( $#shown_rows )) || { body+=$e'[2J'; shown_pane=(); }
+  local srow
+  for (( y = 1; y <= $#fr; y++ )); do
+    [[ $fr[y] == "$shown_rows[y]" ]] && continue
+    (( y <= rows )) && srow=$y || { (( side )) && srow=$y || srow=$(( y <= rows + 1 ? y : y + ph )); }
+    body+=$e"[$srow;1H"$fr[y]$R
+    (( ! side || y > rows )) && body+=$e'[K'
+  done
+  for (( y = 1; y <= $#pr; y++ )); do
+    [[ $pr[y] == "$shown_pane[y]" ]] && continue
+    if (( side )); then body+=$e"[$(( py + y - 1 ));$(( px - 2 ))H  "$pr[y]$R$e'[K'
+    else body+=$e"[$(( py + y - 1 ));1H "$pr[y]$R$e'[K'; fi
+  done
+  shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
+  local t1=$EPOCHREALTIME
+  print -rnu $tty -- $body
+  print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk" >> $trace
+  kt= nk=0
+}
+
+# --- what the keys do ----------------------------------------------------------------
+# The list, reloaded in the background: the newest asked for wins, and the
+# keys keep working on the rows there are meanwhile. lastlist is the last
+# one asked for, the list a resize and a landing reload with.
+typeset -a rpid
+integer rgen=0 rgot=0
+lastlist= fulllist=
+reload() {
+  local cmd=$1
+  lastlist=$cmd
+  (( rgen++ ))
+  { zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } &!
+  rpid+=($!)
+}
+landed() {
+  local p f
+  integer n newest=0
+  for p in $rpid; do kill -0 $p 2>/dev/null || rpid=(${rpid:#$p}); done
+  local -a got=($st/list.<->(N))
+  for f in $got; do n=${f##*.}; (( n > newest )) && newest=n; done
+  (( newest > rgot )) || return 1
+  rgot=$newest
+  for f in $got; do (( ${f##*.} < newest )) && rm -f $f; done
+  local was=$rid[cur] old=${(j:\n:)raw} i
+  load $st/list.$newest
+  rm -f $st/list.$newest
+  # The cursor stays on the row it was on, by its id (fzf's --track).
+  cur=0
+  if [[ -n $was ]]; then for (( i = 1; i <= $#rid; i++ )); do [[ $rid[i] == $was ]] && { cur=$i; break; }; done; fi
+  (( cur )) || cur=$pcur
+  (( cur > $#raw )) && cur=$#raw
+  list; settle_cur
+  (( cur )) && poff=${offs[$rid[cur]]:-0}
+  # The previews again once the rows are not the rows they were drawn for.
+  [[ ${(j:\n:)raw} != $old ]] && { (( gen++ )); warm; }
+  return 0
+}
+integer pcur=1
+# Before a command runs: the scroll of the row it is about where git-symbols
+# reads it (off.<row>, git-fzf-scroll's). After: read back, since --peeks and
+# --uses move it.
+offout() {
+  (( cur )) || return
+  key "$rid[cur]"
+  if (( poff > 0 )); then print -r -- $(( poff + 1 )) > $st/off.$REPLY; else rm -f $st/off.$REPLY; fi
+}
+offin() {
+  (( cur )) || return
+  key "$rid[cur]"
+  local o=1
+  [[ -r $st/off.$REPLY ]] && o=$(<$st/off.$REPLY)
+  (( poff = o - 1, poff < 0 ? (poff = 0) : 0 ))
+  offs[$rid[cur]]=$poff
+}
+# run <actions> <row>: fzf's actions, as a binding or a transform gives them.
+run() {
+  local s=$1 name arg i c q depth open close out
+  integer row=$2
+  while [[ -n $s ]]; do
+    if [[ $s == (#b)([a-z-]##)([\(\[])* ]]; then
+      name=$match[1] open=$match[2] s=${s#$name$open} depth=1 q=0
+      [[ $open == '(' ]] && close=')' || close=']'
+      for (( i = 1; i <= $#s; i++ )); do
+        c=$s[i]
+        if (( q )); then [[ $c == "'" ]] && q=0; continue; fi
+        if [[ $c == "'" ]]; then q=1
+        elif [[ $c == $open ]]; then (( depth++ ))
+        elif [[ $c == $close ]]; then (( --depth == 0 )) && break; fi
+      done
+      arg=${s[1,i-1]} s=${s[i+1,-1]}
+    elif [[ $s == (#b)([a-z-]##):(*) ]]; then name=$match[1] arg=$match[2] s=
+    else name=${s%%+*} arg= s=${s#$name}; fi
+    s=${s#+}
+    subst "$arg" $row; arg=$REPLY
+    case $name in
+      execute)
+        offout; screen_off; zsh -fc "$arg" <&$tty >&$tty 2>&1; screen_on; offin; resize ;;
+      execute-silent)
+        offout; zsh -fc "$arg" </dev/null >/dev/null 2>&1; offin ;;
+      transform)
+        offout; out=$(zsh -fc "$arg" </dev/null 2>/dev/null); offin
+        [[ -n $out ]] && run "$out" $row ;;
+      reload|reload-sync) pcur=$cur; reload "$arg" ;;
+      refresh-preview) (( gen++ )) ;;
+      pos) (( arg > 0 && arg <= $#raw )) && go $arg ;;
+      first|top) (( $#vis )) && go $vis[1] ;;
+      last) (( $#vis )) && go $vis[-1] ;;
+      abort) quit 130 ;;
+      accept) (( cur )) && outq+=("$raw[cur]"); quit 0 ;;
+      print) outq+=("$arg") ;;
+      # The footer, the prompt, binding and unbinding: this screen's own.
+    esac
+  done
+}
+# act <key>: its binding, for the row under the cursor. The footer says it
+# is on it first, since some (p's peeks, i) take a moment. A binding that
+# redraws the preview and moves its scroll (p keeps the line at the top
+# where it is, with notes above it now) holds the scroll it had until the
+# new preview lands, then takes both in one frame, rather than the old
+# preview jumping to the new place and then changing under it.
+integer pwant=-1 pgen=0
+typeset -A held
+act() {
+  local was=$poff g=$gen
+  flash="…"; draw
+  run "$bind[$1]" $cur
+  if (( gen != g && poff != was )); then pwant=$poff pgen=$gen poff=$was; fi
+  dirty=1
+}
+readkey() {
+  local k c seq=
+  sysread -s 1 -i $tty k || quit
+  if [[ $k == $e ]] && zselect -t 2 -r $tty; then
+    sysread -s 1 -i $tty seq
+    if [[ $seq == [\[O] ]]; then
+      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
+    fi
+  elif [[ $k == [$'\xc0'-$'\xff'] ]]; then
+    # A character in more than one byte (typed into a search): the rest.
+    while zselect -t 0 -r $tty && sysread -s 1 -i $tty c; do k+=$c; [[ $c == [$'\x80'-$'\xbf'] ]] || break; done
+  fi
+  REPLY=$k$seq
+}
+# The key's fzf name, for the bindings.
+keyname() {
+  case $1 in
+    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $e) REPLY=esc ;;
+    $e'[A'|$e'OA') REPLY=up ;; $e'[B'|$e'OB') REPLY=down ;;
+    $'\x7f'|$'\b') REPLY=bspace ;;
+    $'\x03') REPLY=ctrl-c ;; $'\x04') REPLY=ctrl-d ;; $'\x05') REPLY=ctrl-e ;; $'\x0b') REPLY=ctrl-k ;;
+    $'\x0e') REPLY=ctrl-n ;; $'\x10') REPLY=ctrl-p ;; $'\x15') REPLY=ctrl-u ;; $'\x19') REPLY=ctrl-y ;;
+    *) REPLY=$1 ;;
+  esac
+}
+
+# --- the mouse -------------------------------------------------------------------
+# A selection in the preview, from line sa, column ca to line sb, column cb
+# of P; s1..s2 the same in reading order.
+integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
+ends() {
+  if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
+  else s1=$sb c1=$cb s2=$sa c2=$ca; fi
+}
+# gut <plain line>: where a diff's line has its code, after delta's gutter
+# ("old ⋮ new │"), in REPLY; 0 for a line that is not one, -1 for a row
+# on the gutter with no number (a peek's note, a thread), which is lit with
+# the lines around it and copied with none of them.
+gut() {
+  local g=${1%%│*}
+  if [[ $1 != *│* || $g != [[:space:]0-9⋮]# ]]; then REPLY=0
+  elif [[ $g == *[0-9]* ]]; then REPLY=$(( ${#g} + 2 ))
+  else REPLY=-1; fi
+}
+# selected <line>: the line with what is selected on it lit, its colors
+# dropped for the moment it is. A diff's line is selected whole, gutter and
+# all, as lines are picked to comment on.
+selected() {
+  local from=1 to t
+  plain "$P[$1]"; t=$REPLY
+  to=$#t
+  gut "$t"
+  if (( ! REPLY )); then
+    (( $1 == s1 )) && from=$c1
+    (( $1 == s2 )) && to=$c2
+  fi
+  REPLY=${t[1,from-1]}$e'[7m'${t[from,to]}$e'[27m'${t[to+1,-1]}
+}
+# selrange: the file lines the selection covers, as "side first last" for
+# git-mr-say, in selr. Its ends are the first and the last line of the
+# diff in it, each on its own side: a line the change kept or added by its
+# new number, one it removed by its old, and "old,new" when the two ends
+# differ, as GitLab numbers a range that starts on a removed line. Nothing
+# in i's view, whose diffs are other symbols', some in other files.
+selr=
+selrange() {
+  local n t g o nw one fs ls fl ll
+  selr=
+  [[ -r $st/uses-for && $(<$st/uses-for) == $rid[cur] ]] && return
+  for (( n = s1; n <= s2; n++ )); do
+    plain "$P[n]"; t=$REPLY; g=${t%%│*}
+    [[ $t == *│* && $g == *⋮* ]] || continue
+    o=${${g%%⋮*}// /} nw=${${g#*⋮}// /}
+    if [[ $nw == <-> ]]; then one="new $nw"
+    elif [[ $o == <-> ]]; then one="old $o"
+    else continue; fi
+    [[ -z $fs ]] && { fs=${one% *} fl=${one#* }; }
+    ls=${one% *} ll=${one#* }
+  done
+  [[ -n $fs ]] || return
+  if [[ $fs == $ls ]]; then selr="$fs $fl $ll"; else selr="$fs,$ls $fl $ll"; fi
+}
+# copy: the selection onto the clipboard, a line the pane broke (.cont) as
+# the one line it was.
+copy() {
+  local -A piece
+  local l n out= t
+  shown
+  [[ -s $REPLY.cont ]] && for l in ${(f)"$(<$REPLY.cont)"}; do piece[${l% *}]=${l#* }; done
+  for (( n = s1; n <= s2; n++ )); do
+    plain "$P[n]"; t=$REPLY
+    # A diff's line is its code, whole, without the gutter.
+    gut "$t"
+    (( REPLY < 0 )) && continue
+    if (( REPLY )); then t=${t[REPLY,-1]}
+    else
+      (( n == s2 )) && t=${t[1,c2]}
+      (( n == s1 )) && t=${t[c1,-1]}
+    fi
+    t=${t%%[[:space:]]#}
+    if (( n > s1 )) && [[ -n ${piece[$n]} ]]; then out+=" "${t[piece[$n]+1,-1]}
+    else out+=${out:+$'\n'}$t; fi
+  done
+  [[ -n $out ]] || return
+  local -a got=("${(@f)out}")
+  if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
+  else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
+  selrange
+}
+inpane() { (( y >= py + phd && y < py + ph && (side ? x >= px : 1) )); }
+mouse() {
+  local r=${1#$e\[<} b up
+  integer x y l c
+  [[ ${r[-1]} == m ]] && up=1
+  r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
+  (( y > H - 2 )) && return
+  (( l = y - py - phd + 1 + poff, c = x - (side ? px : 2) + 1, c < 1 ? (c = 1) : 0 ))
+  if (( b == 64 || b == 65 )); then
+    if inpane || (( ! side && y >= py )); then scroll $(( b == 64 ? -3 : 3 ))
+    else step $(( b == 64 ? -1 : 1 )); fi
+    return
+  fi
+  if inpane || (( sel == 2 )); then
+    if (( b == 0 && ! up )); then sel=2 sa=$l ca=$c sb=$l cb=$c
+    elif (( b == 32 && sel )); then sb=$l cb=$c
+    elif (( up && sel == 2 )); then
+      sb=$l cb=$c sel=1
+      if (( sa == sb && ca == cb )); then sel=0; else ends; copy; fi
+    fi
+    (( sel )) && ends
+    return
+  fi
+  if (( b == 0 && ! up && y <= lh )) && (( side ? x < lw : 1 )); then
+    local at=$(( y + top ))
+    (( at <= $#LI && LI[at] > 0 )) && go $LI[at]
+  fi
+}
+# ]/[: the next or the last change in the preview, a run of lines on a diff's
+# background (the peeks' code background aside), put in the pane's middle.
+hunk() {
+  local -a runs
+  integer i on=0 s want=-1 mid
+  for (( i = 1; i <= $#P; i++ )); do
+    if [[ $P[i] == *$e'[48;'* && ( $CODEBG == $e'[m' || $P[i] != *$CODEBG* ) ]]; then
+      (( on )) || { s=$i; on=1; }
+    elif (( on )); then runs+=("$s $(( i - 1 ))"); on=0; fi
+  done
+  (( on )) && runs+=("$s $#P")
+  local r a z
+  if (( $1 > 0 )); then
+    for r in $runs; do a=${r% *} z=${r#* }; (( mid = (a + z) / 2 - (ph - phd) / 2, (z - a) > ph - phd ? (mid = a - 3) : 0 )); (( mid > poff )) && { want=$mid; break; }; done
+  else
+    for r in ${(Oa)runs}; do a=${r% *} z=${r#* }; (( mid = (a + z) / 2 - (ph - phd) / 2, (z - a) > ph - phd ? (mid = a - 3) : 0 )); (( mid < poff )) && { want=$mid; break; }; done
+  fi
+  (( want >= 0 )) || return
+  scroll $(( want - poff ))
+}
+
+# handle <key>: one key. The picker's bindings come first, then this
+# screen's own, as git-fzf's came under a caller's.
+handle() {
+  [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
+  local k=$1
+  keyname "$k"; local n=$REPLY
+  if (( searching )); then
+    case $n in
+      enter) searching=0 dirty=1; [[ -n $bind[enter] ]] && act enter; return ;;
+      esc) searching=0 dirty=1; return ;;
+      bspace) query=${query[1,-2]} dirty=1; return ;;
+      up|ctrl-k|ctrl-p) step -1; return ;;
+      down|ctrl-j|ctrl-n) step 1; return ;;
+      ctrl-u) query= dirty=1; return ;;
+    esac
+    [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
+    return
+  fi
+  # Lines selected in a review's diff: c comments on them, esc lets go.
+  if (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]]; then
+    case $n in
+      c) local side first last; read -r side first last <<< $selr
+         sel=0 selr=
+         run "execute(git-mr-say --new $GMR_IID $GMR_RANGE {2} $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+         dirty=1; return ;;
+      esc) sel=0 selr=; return ;;
+    esac
+  fi
+  sel=0 selr=
+  # A picker's key held down is one press: its repeats, arriving while it
+  # runs or within 0.3s of the last of them, are dropped. p held ran the
+  # peeks and a preview for every repeat, and the renders piled up.
+  if [[ -n $bind[$n] ]]; then
+    if (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
+    act $n; held[$n]=$EPOCHREALTIME
+    return
+  fi
+  case $n in
+    j|down) step 1 ;;
+    k|up) step -1 ;;
+    g) (( $#vis )) && go $vis[1] ;;
+    G) (( $#vis )) && go $vis[-1] ;;
+    q) quit 130 ;;
+    esc) if [[ -n $query ]]; then query= dirty=1; else quit 130; fi ;;
+    /) searching=1 dirty=1 ;;
+    '?') help=$(( !help )) poff=0 ;;
+    ctrl-d) scroll $(( (ph - phd) / 2 )) ;;
+    ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
+    ctrl-e) scroll 1 ;;
+    ctrl-y) scroll -1 ;;
+    ']') hunk 1 ;;
+    '[') hunk -1 ;;
+    ctrl-c) quit 130 ;;
+  esac
+}
+
+# --- landings --------------------------------------------------------------------
+# What background work leaves in the cache: Claude's gloss, tsgo's callers,
+# Claude's fixes for them, the checkout's rechecked callers, and a review's
+# threads. A change in any reloads the rows, and the previews with them.
+wsig=
+watched() {
+  local croot sig= f
+  local -a tm
+  [[ -s $st/cache-root ]] || return 1
+  croot=$(<$st/cache-root)
+  local -a watch=($croot/{symbols-gloss,callers,callers-fix}(N/) $st/fixed(N))
+  [[ -n $GMR_IID ]] && watch+=($croot/mr-$GMR_IID-{threads,drafts}.json(N))
+  for f in $watch; do
+    zstat -A tm +mtime -- $f 2>/dev/null && sig+=$f$tm[1]
+  done
+  [[ $sig == $wsig ]] && return 1
+  local was=$wsig; wsig=$sig
+  [[ -n $was ]]
+}
+
+# --- the loop ----------------------------------------------------------------------
+screen_on
+size
+layout
+draw
+# The list's first rows, from the start binding (its reload is the list the
+# landings reload with).
+[[ $startacts == (#b)*reload\((*)\)* ]] && fulllist=$match[1]
+run "$startacts" 0
+integer tmo=5 stick=0 wtick=0 rewidth=0
+while :; do
+  reply=()
+  zselect -t $tmo -r $tty ${winch:+-r} $winch
+  if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
+    sysread -s 64 -i $winch _
+    resize
+  fi
+  if (( ${reply[(I)$tty]} )); then
+    kt=$EPOCHREALTIME nk=1
+    readkey; handle $REPLY
+    while zselect -t 0 -r $tty; do readkey; handle $REPLY; (( nk++ )); done
+    draw
+  else
+    float ti=$EPOCHREALTIME
+    changed=0
+    # Once a second: whatever opened this is still there (else it goes,
+    # rather than read keys under a shell's prompt), and, without perl, the size.
+    if (( EPOCHSECONDS != stick )); then
+      stick=$EPOCHSECONDS
+      kill -0 $PPID 2>/dev/null || quit 1
+      [[ -z $winch ]] && resize
+    fi
+    landed && changed=1
+    (( cur && ! help )) && [[ -n $preview ]] && { shown; [[ $REPLY != $lastpv ]] && changed=1; }
+    # The size has held: the rows cut to it, and the previews drawn at it.
+    if (( settle && EPOCHREALTIME >= settle )); then
+      settle=0
+      (( rewidth )) && [[ -n $lastlist ]] && { rewidth=0; reload "$lastlist"; }
+      (( gen++ )); warm
+    fi
+    # Background work landing, looked for twice a second, and not while a
+    # reload is out.
+    if (( EPOCHREALTIME * 2 > wtick )) && (( ! $#rpid )); then
+      (( wtick = int(EPOCHREALTIME * 2) + 1 ))
+      # What landed is in the previews too, whether or not the rows change.
+      watched && [[ -n $fulllist ]] && { reload "$fulllist"; (( gen++ )); changed=1; }
+    fi
+    (( changed )) && draw
+    (( ! help && ! settle )) && want
+    (( EPOCHREALTIME - ti > 0.02 )) && print -r -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed" >> $trace
+  fi
+done

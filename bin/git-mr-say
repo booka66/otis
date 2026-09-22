@@ -1,5 +1,6 @@
 #!/bin/sh
 # git-mr-say --new <iid> <range> <path> <side> <first> <last>   a new thread on lines first..last
+#                                    (side new, old, or the ends' apart, old,new: git-mr-position)
 # git-mr-say --reply <iid> <range> <thread id>                   a reply in a thread
 # git-mr-say --edit <iid> <range> <thread id>                    your latest comment in a thread, rewritten
 # git-mr-say --delete <iid> <range> <thread id>                  your latest comment in a thread, gone (asks)
@@ -44,9 +45,23 @@ case $mode in
     path=$1 side=$2 first=$3 last=$4
     rev=${range#*..}; [ "$side" = old ] && rev=${range%%..*}
     where=$first; [ "$first" != "$last" ] && where="$first-$last"
-    context=$(printf "${GK_ELSEWHERE}%s:%s${GK_R}\n" "$path" "$where"
-      git show "$rev:$path" 2>/dev/null | sed -n "${first},${last}p" | head -6 | clip |
-        sed "s/^/$(printf "${GK_CONTEXT}│${GK_R}") /")
+    bar=$(printf "${GK_CONTEXT}│${GK_R}")
+    case $side in
+      *,*)
+        # Its ends on two sides: each end's line from its own, a removed
+        # one marked -, an added one +.
+        fs=${side%,*} ls=${side#*,}
+        frev=${range#*..}; [ "$fs" = old ] && frev=${range%%..*}
+        lrev=${range#*..}; [ "$ls" = old ] && lrev=${range%%..*}
+        sign() { [ "$1" = old ] && echo - || echo +; }
+        context=$(printf "${GK_ELSEWHERE}%s:%s%s-%s%s${GK_R}\n" "$path" "$(sign "$fs")" "$first" "$(sign "$ls")" "$last"
+          git show "$frev:$path" 2>/dev/null | sed -n "${first}p" | clip | sed "s/^/$bar $(sign "$fs") /"
+          echo "$bar …"
+          git show "$lrev:$path" 2>/dev/null | sed -n "${last}p" | clip | sed "s/^/$bar $(sign "$ls") /") ;;
+      *)
+        context=$(printf "${GK_ELSEWHERE}%s:%s${GK_R}\n" "$path" "$where"
+          git show "$rev:$path" 2>/dev/null | sed -n "${first},${last}p" | head -6 | clip | sed "s/^/$bar /") ;;
+    esac
     ;;
   --reply)
     id=$1
@@ -138,7 +153,7 @@ case $mode in
   --new)
     [ "$(git rev-parse "${range#*..}")" = "$head" ] ||
       fail "the MR has moved on since this review opened, so these line numbers are not its own; u catches up"
-    [ "$side" = new ] || [ "$(git rev-parse "${range%%..*}")" = "$base" ] ||
+    case $side in *old*) ;; *) false ;; esac && [ "$(git rev-parse "${range%%..*}")" != "$base" ] &&
       fail "this review diffs against another base than GitLab's ($(printf %.8s "$base")), so a removed line cannot be placed; comment on it in the browser (w)"
     pos=$(git-mr-position "$base" "$start" "$head" "$path" "$side" "$first" "$last" 2>&1) ||
       fail "could not place the comment: $pos"

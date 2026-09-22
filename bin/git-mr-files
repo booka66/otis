@@ -128,7 +128,8 @@ else
   set -- --bind "u:$refresh+refresh-preview"
 fi
 keys="$first,|,$rest"
-out=$(git-fzf "!$iid " "$keys" --header-from-state \
+# Drawn by hand (otis-symbols), by symbol or by file.
+out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
