@@ -79,7 +79,7 @@ classify='
 toplevel() {
   top=
   if [ -n "$OTIS_C_ROOT" ]; then
-    case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) top=$OTIS_C_ROOT ;; esac
+    . "$share/in-root.sh"; in_root && top=$OTIS_C_ROOT
   fi
   [ -n "$top" ] || top=$(git rev-parse --show-toplevel 2>/dev/null)
 }

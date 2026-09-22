@@ -993,6 +993,11 @@ goto() { zsh -fc "source '$root/share/otis.zsh'; _g_goto_branch $* >/dev/null 2>
 git branch -q away main
 git-worktree-add away away >/dev/null 2>&1
 expect goto/away-in-worktree "$(git-worktree-path of away)" "$tmp/repo/.claude/worktrees/away"
+# A worktree nested in the checkout is not the checkout (share/in-root.sh):
+# the main checkout's top and HEAD are not its own.
+inroot() { (cd "$1" && OTIS_C_ROOT=$tmp/repo sh -c ". '$share/in-root.sh'; in_root && echo in || echo not"); }
+expect root/nested-worktree "$(inroot "$tmp/repo/.claude/worktrees/away")" "not"
+expect root/checkout "$(mkdir -p "$tmp/repo/sub" && inroot "$tmp/repo/sub")" "in"
 printf 'w\n' > "$tmp/repo/.claude/worktrees/away/w.ts"
 expect goto/dirty-refused "$(goto away)$(git branch --show-current)" "main"
 rm "$tmp/repo/.claude/worktrees/away/w.ts"

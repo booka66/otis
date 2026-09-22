@@ -33,7 +33,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # runs inside the checkout it was worked out for, as share/repo.sh takes the
 # git dir; asked otherwise.
 top=
-if [ -n "$OTIS_C_ROOT" ]; then case $PWD in "$OTIS_C_ROOT" | "$OTIS_C_ROOT"/*) top=$OTIS_C_ROOT ;; esac; fi
+. "$share/in-root.sh"; in_root && top=$OTIS_C_ROOT
 cd "${top:-$(git rev-parse --show-toplevel)}" || exit 1
 keep() { if [ -n "$allfiles" ]; then cat; else git-test-files filter 1; fi; }
 

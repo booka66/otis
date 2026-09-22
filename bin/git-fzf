@@ -24,8 +24,10 @@ prompt=$1 spec=$2; shift 2
 # from the environment by the list, every preview and every binding, each of
 # which used to ask git for them again. Only while this is still the checkout
 # they were worked out for: a picker opened in another repo from a shell that
-# carries one's settings must not draw with them (share/repo.sh's rule).
-[[ -n $OTIS_C_ROOT && $PWD == $OTIS_C_ROOT(|/*) ]] || eval "$(otis-config --env)"
+# carries one's settings must not draw with them, nor a worktree nested in
+# that checkout (share/in-root.sh).
+. ${0:A:h:h}/share/in-root.sh
+in_root || eval "$(otis-config --env)"
 # The row library (share/rowfmt.awk), the same way: every list, preview and
 # footer under this picker pastes it into its awk, and each used to cat it.
 export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
