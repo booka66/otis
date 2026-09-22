@@ -163,10 +163,12 @@ criteria() {
 # whole: opened its file (a Read of it, at its lines when the read starts
 # somewhere), searched for its name, drafted on it.
 typeset -a sid sname smark sdraft
+# (fp, never path: zsh ties path to PATH, and a local one empties it here,
+# so awk and jq are not found and nothing is marked.)
 symbols() {
   sid=() sname=() smark=() sdraft=()
   [[ -s $d/order.txt && -s $d/symbols.tsv ]] || return
-  local line p n s e i j t path from
+  local line p n s e i j t fp from
   local -a f
   local -A ss se dr
   for line in ${(f)"$(<$d/order.txt)"}; do sid+=("$line"); sname+=("${${line#*\#}#type }"); done
@@ -180,9 +182,9 @@ symbols() {
       [[ $ek[j] == tool ]] || continue
       case $et[j] in
         *"read  "*)
-          path=${et[j]#*read  } from=
-          [[ $path == *" from line "* ]] && { from=${path##* from line }; path=${path% from line *}; }
-          [[ $path == "$p" || $path == *"/$p" ]] || continue
+          fp=${et[j]#*read  } from=
+          [[ $fp == *" from line "* ]] && { from=${fp##* from line }; fp=${fp% from line *}; }
+          [[ $fp == "$p" || $fp == *"/$p" ]] || continue
           if [[ -n $from ]]; then (( from <= ${se[$sid[i]]:-0} && from + 2000 >= ${ss[$sid[i]]:-0} )) || continue; fi
           t=read; break ;;
         *"grep  "*) [[ $et[j] == *$n* ]] && [[ $t != read ]] && t=grep ;;
@@ -293,6 +295,11 @@ left() {
       case $smark[i] in read) g="●" gc=$G ;; grep) g="◐" gc=$EL ;; *) g="○" gc=$F ;; esac
       line= used=0; put "" "  "; put "$gc" "$g "
       fit "${sname[i]//+/.}" $(( w - 12 )); put "${${smark[i]:+$T}:-$C}" "$REPLY"
+      # A name two symbols share says which, by the folder its file is in.
+      if (( ${sname[(i)$sname[i]]} != i || ${sname[(I)$sname[i]]} != i )); then
+        local dir=${${sid[i]%%\#*}:h}; dir=${dir:h:t}/${dir:t}
+        (( used + 2 + ${#dir} < w - 6 )) && put "$F" "  $dir"
+      fi
       [[ -n $sdraft[i] ]] && { pad $(( w - 5 )); put "$Y" "✎ $sdraft[i]"; }
       L+=("$line")
     done
