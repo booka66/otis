@@ -1,0 +1,151 @@
+#!/usr/bin/env -S zsh -f
+# otis-ask <prompt> [--header <lines>] [--footer <text>] [--query <text>]
+#          [--delimiter <d>] [--with-nth <n>]
+# A line typed at a prompt, drawn by hand like the rest of otis's screens: a
+# comment on an MR (git-mr-say), a question for Claude (git-symbols-ask).
+# The header sits above it, saying what the line is about (the lines of code
+# a comment is on, the thread it answers); rows piped in (git-symbols-ask's
+# starters) sit between, one under the cursor, up and down moving it; the
+# footer says what the keys do. Editing is a line's: the arrows, home and
+# end move, backspace deletes, ctrl-a and ctrl-u and ctrl-w as in a shell.
+#
+# enter, or ctrl-e (a caller's editor), ends it, and it prints three lines:
+# the key, the row under the cursor (as it was piped, whole) and the text
+# typed. esc prints nothing and exits 130. It listens on a port as the
+# pickers do (share/screen.zsh), which is how otis-test opens it.
+setopt extendedglob no_nomatch
+
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+st=${TMPDIR:-/tmp}/otis-ask.$$.$RANDOM$RANDOM
+mkdir -m 700 $st || exit 1
+
+title=${1% }; shift
+header= footer= text= delim=$'\t'
+integer nth=0
+while (( $# )); do
+  case $1 in
+    --header) header=$2; shift 2 ;;
+    --footer) footer=$2; shift 2 ;;
+    --query) text=$2; shift 2 ;;
+    --delimiter) delim=$2; shift 2 ;;
+    --with-nth) nth=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ $delim == '\t' ]] && delim=$'\t'
+typeset -a raw shw
+[[ -t 0 ]] || { raw=("${(@f)$(cat)}"); [[ -z $raw ]] && raw=(); }
+local -a f
+for r in $raw; do
+  if (( nth )); then f=("${(@ps:$delim:)r}"); shw+=("$f[nth]"); else shw+=("$r"); fi
+done
+
+. ${0:A:h:h}/share/screen.zsh
+port_open
+screen_start
+integer cur=1 at=0 code=130
+key=
+(( $#raw )) || cur=0
+(( at = $#text ))
+at_quit() { [[ -n $key ]] && print -rl -- $key "${raw[cur]}" "$text"; exit $code; }
+
+# --- the frame -------------------------------------------------------------------
+# The header's lines, the rows, the prompt with the text and the cursor in
+# it, then the footer at the bottom. The cursor is the terminal's own,
+# shown after each frame where the text's is.
+integer prow=0 pcol=0
+draw() {
+  local -a fr
+  local l s i
+  fr+=("")
+  for l in ${(f)header}; do cut "$l" $(( W - 4 )); fr+=("  $REPLY"); done
+  [[ -n $header ]] && fr+=("")
+  for (( i = 1; i <= $#shw; i++ )); do
+    cut "$shw[i]" $(( W - 4 ))
+    if (( i == cur )); then fr+=("$A▌$R$BG${REPLY//$R/$R$BG}$R"); else fr+=(" $REPLY"); fi
+  done
+  (( $#shw )) && fr+=("")
+  prow=$(( $#fr + 1 ))
+  s="  $A$title$R "
+  pcol=$(( 4 + ${(m)#title} + ${(m)#${text[1,at]}} ))
+  fr+=("$s$T$text$R")
+  local body= y
+  (( $#shown_rows )) || body+=$e'[2J'
+  for (( y = 1; y <= $#fr; y++ )); do
+    [[ $fr[y] == "$shown_rows[y]" ]] && continue
+    body+=$e"[$y;1H"$fr[y]$R$e'[K'
+  done
+  for (( y = $#fr + 1; y <= $#shown_rows; y++ )); do body+=$e"[$y;1H"$e'[K'; done
+  if (( ! $#shown_rows )) || [[ $footer != $shown_foot ]]; then
+    body+=$e"[$(( H - 1 ));1H"$F${(l:W::─:)}$R$e"[$H;1H  "$C$footer$R$e'[K'
+    shown_foot=$footer
+  fi
+  body+=$e"[$prow;${pcol}H"$e'[?25h'
+  shown_rows=("${fr[@]}")
+  print -rnu $tty -- $body
+}
+shown_foot=
+
+# --- the keys --------------------------------------------------------------------
+finish() { key=$1 code=0; quit 0; }
+handle() {
+  [[ $1 == $e'[<'* ]] && return
+  local k=$1 n
+  keyname "$k"; n=$REPLY
+  case $k in
+    $'\t') n=tab ;; $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
+    $e'[H'|$e'[1~'|$'\x01') n=home ;; $e'[F'|$e'[4~') n=end ;;
+    $'\x17') n=ctrl-w ;;
+  esac
+  case $n in
+    enter) finish enter ;;
+    ctrl-e) finish ctrl-e ;;
+    esc|ctrl-c) quit 130 ;;
+    up|ctrl-p) (( cur > 1 )) && (( cur-- )) ;;
+    down|ctrl-n|tab) (( cur < $#raw )) && (( cur++ )) ;;
+    left) (( at > 0 )) && (( at-- )) ;;
+    right) (( at < $#text )) && (( at++ )) ;;
+    home) at=0 ;;
+    end) at=$#text ;;
+    bspace) (( at > 0 )) && { text=${text[1,at-1]}${text[at+1,-1]}; (( at-- )); } ;;
+    ctrl-u) text=${text[at+1,-1]} at=0 ;;
+    ctrl-w)
+      local head=${text[1,at]}
+      head=${head%%[[:space:]]#}; head=${head%%[^[:space:]]#}
+      text=$head${text[at+1,-1]} at=$#head ;;
+    *) [[ $k == [[:print:]]* && $k != $e* ]] && { text=${text[1,at]}$k${text[at+1,-1]}; (( at += $#k )); } ;;
+  esac
+}
+
+# --- the port ----------------------------------------------------------------------
+port_state() {
+  local q r
+  json "$text"; q=$REPLY
+  json "${raw[cur]}"; r=$REPLY
+  REPLY="{\"reading\":false,\"query\":\"$q\",\"matchCount\":$#raw,\"totalCount\":$#raw,\"position\":$(( cur > 0 ? cur - 1 : 0 )),\"current\":{\"index\":$(( cur - 1 )),\"text\":\"$r\"}}"
+}
+port_post() { [[ $1 == *abort* ]] && quit 130; }
+
+# --- the loop ----------------------------------------------------------------------
+screen_on
+size
+draw
+integer stick=0
+while :; do
+  reply=()
+  zselect -t 50 -r $tty ${winch:+-r} $winch ${${lfd:#0}:+-r} ${lfd:#0}
+  if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
+    sysread -s 64 -i $winch _
+    size; shown_rows=(); draw
+  fi
+  (( lfd && ${reply[(I)$lfd]} )) && { port_serve; draw; }
+  if (( ${reply[(I)$tty]} )); then
+    readkey; handle $REPLY
+    while zselect -t 0 -r $tty; do readkey; handle $REPLY; done
+    draw
+  elif (( EPOCHSECONDS != stick )); then
+    stick=$EPOCHSECONDS
+    orphaned && quit 1
+    [[ -z $winch ]] && { local ow=$W oh=$H; size; (( W != ow || H != oh )) && { shown_rows=(); draw; }; }
+  fi
+done

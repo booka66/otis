@@ -1175,7 +1175,7 @@ case $1 in
 esac
 
 missing=()
-for c in git fzf delta ast-grep seam; do (( $+commands[$c] )) || missing+=($c); done
+for c in git delta ast-grep seam; do (( $+commands[$c] )) || missing+=($c); done
 if (( $#missing )); then
   print -u2 "otis-tour needs ${(j:, :)missing}. otis-setup offers to install them; seam is brew install booka66/seam/seam."
   exit 1

@@ -11,7 +11,7 @@
 #
 # A release: bump version and tag below, commit, then tag that commit the same.
 class Otis < Formula
-  desc "Git and GitLab from the terminal: a dashboard and fzf pickers"
+  desc "Git and GitLab from the terminal: a dashboard and pickers drawn in the terminal"
   homepage "https://github.com/booka66/otis"
   url "https://github.com/booka66/otis.git", using: :git, tag: "v0.3.1"
   version "0.3.1"
@@ -20,7 +20,6 @@ class Otis < Formula
   depends_on "ast-grep"
   depends_on "bat"
   depends_on "booka66/seam/seam"
-  depends_on "fzf"
   depends_on "git"
   depends_on "git-delta"
   depends_on "glab"

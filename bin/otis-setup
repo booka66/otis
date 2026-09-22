@@ -58,18 +58,6 @@ else
   fail git "$(install_hint git 'apt install git')"; need git
 fi
 
-if have fzf; then
-  v=$(fzf --version | cut -d' ' -f1)
-  # Probe what the pickers use rather than trust a version number.
-  if printf 'x\n' | fzf --filter x --footer x --id-nth 1 --with-shell 'zsh -fc' --bind 'every(30):ignore' --bind 'load:transform-footer(true)' >/dev/null 2>&1; then
-    pass fzf "$v"
-  else
-    fail fzf "$v is too old (needs --footer, every() and transform-footer). $(install_hint fzf 'distro packages lag; get a release from https://github.com/junegunn/fzf/releases')"; need fzf
-  fi
-else
-  fail fzf "$(install_hint fzf 'get a release from https://github.com/junegunn/fzf/releases')"; need fzf
-fi
-
 if have jq; then
   v=$(jq --version | sed -E 's/^jq-([0-9.]+).*/\1/')
   if at_least "$v" 1.7; then pass jq "$v"; else fail jq "$v is too old; needs 1.7. $(install_hint jq 'see https://jqlang.github.io/jq/download/')"; need jq; fi
@@ -259,7 +247,7 @@ elif [ -n "$check_only" ]; then
   note theme "unset, so otis uses your terminal's colors; otis-theme picks another (gruvbox, catppuccin, tokyo night, solarized)"
 else
   printf '  otis uses your terminal'"'"'s colors, so it matches whatever theme you run.\n  '
-  if have fzf && ask "see the other themes (gruvbox, catppuccin, tokyo night, solarized) and pick one?" &&
+  if ask "see the other themes (gruvbox, catppuccin, tokyo night, solarized) and pick one?" &&
     PATH="$root/bin:$PATH" otis-theme >/dev/null; then
     pass theme "$(git config --global --get otis.theme) (otis-theme picks another)"
   else

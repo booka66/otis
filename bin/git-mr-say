@@ -6,7 +6,7 @@
 # git-mr-say --delete <iid> <range> <thread id>                  your latest comment in a thread, gone (asks)
 #
 # Comment on an MR from a picker, without an editor: one line typed at a
-# prompt, with the lines or the thread above it. ctrl-e takes what you have
+# prompt (otis-ask), with the lines or the thread above it. ctrl-e takes what you have
 # typed into your git editor (git var GIT_EDITOR, the one that writes your
 # commit messages), for anything longer than a line. Reviewing, it is a draft
 # until S submits them all, as in nvim (share/mr-comments.lua); on your own MR
@@ -106,25 +106,17 @@ elif [ -n "$drafting" ]; then
 else
   verb="sends it now"; prompt="comment> "
 fi
-# The prompt is fzf with no list: its query is the comment. enter and ctrl-e
-# say which they were on the first line, since an empty query is a choice too.
-# otis-test types into it through its port, as into git-fzf's pickers.
-# An edit starts from what the comment says, and one of several lines goes
-# straight to the editor, since the prompt holds one.
-set --
-[ -n "$OTIS_FZF_LISTEN" ] && { export FZF_API_KEY=$OTIS_FZF_API_KEY; set -- --listen="$OTIS_FZF_LISTEN"; }
+# The prompt (otis-ask) is a line, with what it answers above it; it says
+# which key ended it, since an empty line is a choice too. An edit starts
+# from what the comment says, and one of several lines goes straight to the
+# editor, since the prompt holds one.
 case $was in
   *"
-"*) out=$(printf 'edit\n%s' "$was") ;;
-  *) out=$(fzf "$@" --disabled --no-info --reverse --height=~12 --prompt="$prompt" --ansi --query="$was" \
-    --with-shell 'sh -c' \
-    --header="$context" --header-first \
-    --footer="enter $verb · ctrl-e your editor · esc cancels" \
-    --bind "enter:become(printf 'send\n%s' {q})" \
-    --bind "ctrl-e:become(printf 'edit\n%s' {q})" </dev/null) || exit 0 ;;
+"*) how=edit text=$was ;;
+  *) out=$(otis-ask "$prompt" --header "$context" --footer "enter $verb · ctrl-e your editor · esc cancels" --query "$was") || exit 0
+     how=send; [ "$(printf '%s\n' "$out" | head -1)" = ctrl-e ] && how=edit
+     text=$(printf '%s\n' "$out" | sed 1,2d) ;;
 esac
-how=$(printf '%s\n' "$out" | head -1)
-text=$(printf '%s\n' "$out" | sed 1d)
 if [ "$how" = edit ]; then
   f=$(mktemp "${TMPDIR:-/tmp}/otis-comment.XXXXXX") || exit 1
   trap 'rm -f "$f"' EXIT

@@ -215,16 +215,12 @@ starters() {
 here=$(printf "${GK_TEXT}%s${GK_R}" "$label")
 if [ -n "$name" ]; then here="$here $(printf "${GK_CONTEXT}·${GK_R} ${GK_ATTENTION}%s${GK_R}${GK_CONTEXT}%s · %s${GK_R}" "$name" "${what:+ ($what)}" "$at")"
 elif [ -n "$path" ]; then here="$here $(printf "${GK_CONTEXT}· %s${GK_R}" "$path")"; fi
-set --
-[ -n "$OTIS_FZF_LISTEN" ] && { export FZF_API_KEY=$OTIS_FZF_API_KEY; set -- --listen="$OTIS_FZF_LISTEN"; }
-out=$(starters | fzf "$@" --disabled --no-info --reverse --height=~16 --prompt='ask> ' --ansi \
-  --delimiter='\t' --with-nth=2 --no-sort --pointer='▸' \
-  --header="$here" --header-first \
-  --footer='enter asks, or type your own · in Claude, ctrl-d comes back here · esc' \
-  --bind 'enter:become(printf "%s\t%s\t%s\n" {1} {q} {3})') || exit 0
-key=$(printf '%s' "$out" | cut -f1)
-typed=$(printf '%s' "$out" | cut -f2)
-question=$(printf '%s' "$out" | cut -f3)
+out=$(starters | otis-ask 'ask> ' --delimiter '\t' --with-nth 2 --header "$here" \
+  --footer 'enter asks, or type your own · in Claude, ctrl-d comes back here · esc') || exit 0
+row=$(printf '%s\n' "$out" | sed -n 2p)
+typed=$(printf '%s\n' "$out" | sed -n 3p)
+key=$(printf '%s' "$row" | cut -f1)
+question=$(printf '%s' "$row" | cut -f3)
 [ -n "$typed" ] && question=$typed key=ask
 [ "$key" = new ] && session=
 if [ -z "$session" ]; then
