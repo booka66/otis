@@ -22,6 +22,112 @@ show() {
   BAT_THEME=${OTIS_T_BAT:-ansi} bat --color=always --style=numbers --line-range=:400 "$@" 2>/dev/null || head -200
 }
 
+# summary: a changed file as the preview leads with it (share/pane.sh's
+# vocabulary): what wants you first (a conflict; a file staged in part),
+# then the file, what the change did to it and in which functions, a map of
+# where in the file the changes are, and its hunks, staged or not; then a
+# heading over the diff. The hunks are git's own for the index and the
+# worktree apart, as git add -p and p see them; the map is the diff against
+# HEAD, the one shown under it.
+summary() {
+  . "$share/pane.sh"
+  x=${st%?} y=${st#?}
+  staged= unstaged=
+  case $x in [MARTC]) staged=$(git diff-index --cached -p -M "$head" -- "$p" ${from:+"$from"} 2>/dev/null) ;; esac
+  case $y in [MTD]) unstaged=$(git diff-files -p -- "$p" 2>/dev/null) ;; esac
+  lines=0; [ -f "$p" ] && lines=$(wc -l < "$p" | tr -d ' ')
+  marks=0
+  case $st in DD|AU|UD|UA|DU|AA|UU) marks=$(grep -c '^<<<<<<<' "$p" 2>/dev/null) ;; esac
+  { printf '\001HEAD\n%s\n\001STAGED\n%s\n\001UNSTAGED\n%s\n' "$patch" "$staged" "$unstaged"; } |
+    LC_ALL=C awk -v w="$PANE_W" -v st="$st" -v path="$p" -v from="$from" -v flen="$lines" -v marks="$marks" \
+      -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v G="$(printf "$GK_GOOD")" \
+      -v X="$(printf "$GK_BAD")" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" -v E="$(printf "$GK_ELSEWHERE")" \
+      -v R="$(printf "$GK_R")" '
+    function len(s) { gsub(/[\200-\277]/, "", s); return length(s) }
+    function rep(c, n,   o) { o = ""; while (n-- > 0) o = o c; return o }
+    # The function a hunk is in, from its header: the name before a (, else
+    # the header'"'"'s first words.
+    function fn(ctx,   m) {
+      if (match(ctx, /[A-Za-z_$][A-Za-z0-9_$.]*[ \t]*\(/)) { m = substr(ctx, RSTART, RLENGTH); sub(/[ \t]*\($/, "", m); return m "()" }
+      sub(/^[ \t]+/, "", ctx); return substr(ctx, 1, 24)
+    }
+    /^\001/ { part = substr($0, 2); next }
+    part == "HEAD" && /^Binary files/ { binary = 1 }
+    /^@@ / {
+      ctx = $0; sub(/^@@ [^@]* @@ ?/, "", ctx)
+      split($3, nw, ","); ns = substr(nw[1], 2) + 0; nc = (nw[2] == "") ? 1 : nw[2] + 0
+      if (part == "HEAD") { nh++; hs[nh] = ns; hc[nh] = nc; hf[nh] = fn(ctx); ha[nh] = 0; hd[nh] = 0; cur = ns }
+      else { nl++; ls_[nl] = part; lf[nl] = fn(ctx); la[nl] = 0; ld[nl] = 0; lstart[nl] = ns }
+      next
+    }
+    /^\+\+\+ |^--- / { next }
+    # Each changed line where it is in the file, for the map: an added one
+    # at its own line, a removed one where it was taken from.
+    /^\+/ { if (part == "HEAD") { ta++; ha[nh]++; nm++; mline[nm] = cur; mkind[nm] = "add"; cur++ } else la[nl]++; next }
+    /^-/ { if (part == "HEAD") { td++; hd[nh]++; nm++; mline[nm] = cur; mkind[nm] = "del" } else ld[nl]++; next }
+    part == "HEAD" && /^ / { cur++ }
+    END {
+      ns_ = 0; nu_ = 0; for (i = 1; i <= nl; i++) if (ls_[i] == "STAGED") ns_++; else nu_++
+      # What wants you.
+      if (st ~ /^(DD|AU|UD|UA|DU|AA|UU)$/) {
+        print X "\342\226\214 \033[1mConflicted" (marks > 0 ? ": " marks " to settle" : "") R
+        print X "\342\226\214 " R T "Settle the markers, then space stages it." R
+        print ""
+      } else if (ns_ && nu_) {
+        print Y "\342\226\214 \033[1mStaged in part: " ns_ " of " ns_ + nu_ " hunks" R
+        print Y "\342\226\214 " R A "space" R C " stages the rest    " R A "p" R C " picks hunks" R
+        print ""
+      }
+      # What it is.
+      d = path; b = path; sub(/[^\/]*$/, "", d); sub(/.*\//, "", b)
+      if (len(d) > w - len(b) - 14) d = "\342\200\246" substr(d, length(d) - (w - len(b) - 16))
+      word = (st ~ /^(AU|UA|AA|UU)$/) ? "conflicted" : (from != "") ? "renamed" : (st ~ /T/) ? "type changed" : "modified"
+      where = ns_ && !nu_ ? "staged" : (nu_ && !ns_ ? "not staged" : "")
+      print C d R T "\033[1m" b R "   " A word R (where != "" ? C "  \302\267  " where R : "")
+      if (from != "") print C "from " from R
+      if (binary) { print C "a binary file" R; print ""; exit }
+      m = G "+" ta R X " \342\210\222" (td + 0) R C "  \302\267  " nh " hunk" (nh == 1 ? "" : "s")
+      fs = ""; nf = 0
+      for (i = 1; i <= nh; i++) if (!(hf[i] in seenf) && hf[i] != "") { seenf[hf[i]] = 1; fs = fs (nf++ ? ", " : "") hf[i] }
+      if (fs != "") { room = w - len(m) + len(G R X R C) - 12; if (len(fs) > room && room > 4) fs = substr(fs, 1, room - 1) "\342\200\246"; if (room > 4) m = m "  \302\267  in " fs }
+      print m R
+      if (!nh) { print ""; exit }
+      # Where in the file: one column per stretch of it.
+      if (flen > 0) {
+        mw = w - 4; if (mw > 80) mw = 80
+        for (c = 1; c <= mw; c++) on[c] = ""
+        for (i = 1; i <= nm; i++) {
+          c = int((mline[i] - 1) * mw / flen) + 1; if (c > mw) c = mw; if (c < 1) c = 1
+          if (mkind[i] == "add" || on[c] == "") on[c] = mkind[i]
+        }
+        print ""; print C "WHERE IN THE FILE" R; print ""
+        line = "  "
+        for (c = 1; c <= mw; c++) line = line (on[c] == "add" ? G "\342\226\210" : on[c] == "del" ? X "\342\226\204" : F "\342\226\201") R
+        print line
+        mid = int((flen + 1) / 2); lab = "1"; midc = int(mw / 2)
+        axis = "  1" rep(" ", midc - 1 - length(mid "") / 2) mid; axis = axis rep(" ", mw - length(axis) + 2 - length(flen "")) flen
+        print F axis R
+      }
+      # The hunks, staged or not, as git add -p counts them.
+      if (nl) {
+        print ""; print C "HUNKS" R (ns_ ? G "  " ns_ " staged" R : "") (nu_ ? C "  " nu_ " not" R : ""); print ""
+        fw = 0; for (i = 1; i <= nl && i <= 10; i++) if (len(lf[i]) > fw) fw = len(lf[i])
+        if (fw > int(w / 3)) fw = int(w / 3)
+        for (i = 1; i <= nl && i <= 10; i++) {
+          f = lf[i]; if (len(f) > fw) f = substr(f, 1, fw - 1) "\342\200\246"
+          g = (ls_[i] == "STAGED") ? G "\342\227\217" : F "\342\227\213"
+          nums = (la[i] ? G "+" la[i] R : "") (la[i] && ld[i] ? " " : "") (ld[i] ? X "\342\210\222" ld[i] R : "")
+          if (fw) printf "  %s%s  %s%-*s%s  %s:%-5s%s %s\n", g, R, T, fw, f, R, C, lstart[i], R, nums
+          else printf "  %s%s  %s:%-5s%s %s\n", g, R, C, lstart[i], R, nums
+        }
+        if (nl > 10) print F "  +" nl - 10 " more" R
+      }
+      print ""
+      print C "THE DIFF" R F "  ] next change  [ back" R
+      print ""
+    }'
+}
+
 case $st in
   *D*)
     # As the index has it (a deletion not yet staged), else as HEAD has it.
@@ -49,7 +155,12 @@ case $st in
     # index when it can take the lock, even under --no-optional-locks, and
     # this runs on every move, so an agent's git add or commit running
     # alongside would fail on that lock.
-    { git diff-index -p -M HEAD -- "$p" ${from:+"$from"} 2>/dev/null ||
-      git diff-index -p -M "$(git hash-object -t tree /dev/null)" -- "$p" ${from:+"$from"}; } | delta_file
+    head=HEAD
+    patch=$(git diff-index -p -M HEAD -- "$p" ${from:+"$from"} 2>/dev/null) || {
+      head=$(git hash-object -t tree /dev/null)
+      patch=$(git diff-index -p -M "$head" -- "$p" ${from:+"$from"})
+    }
+    summary
+    printf '%s\n' "$patch" | delta_file
     ;;
 esac

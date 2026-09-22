@@ -1,12 +1,18 @@
 #!/bin/sh
-# git-deploy-preview <deployment id>: one deploy, for gd's preview: what
-# happened and when, who set it off, the merge requests and commits it carried
-# (yours highlighted), and for a failed one the end of the job's log. A
-# rollback says which build it restored (the job's version input, as
-# git-ci-merged reads it). Logs and rollback lookups are kept in the cache
-# dir, since a finished job's log never changes.
+# git-deploy-preview <deployment id>: one deploy, for gd's preview, as every
+# preview speaks (share/pane.sh). What wants you: live and for how long, or
+# failed and what broke, or a rollback and the build it restored, or going.
+# What it is: the deploy, its commit, when, what set it off, how long it
+# took. Then how it went, its pipeline's stages on one timeline; what it
+# carried, the merge requests (yours starred) and commits since the last
+# deploy that went live; the last 40 deploys up to it, as a strip; and for
+# a failed one, what broke and the end of the job's log (share/joblog.sh).
+# Logs, stages and rollback lookups are kept in the cache dir, since a
+# finished job's never change.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/pane.sh"
+. "$share/joblog.sh"
 . "$share/repo.sh" || exit 0
 dir="$OTIS_GITDIR/git-alias-cache"
 nl='
@@ -39,72 +45,171 @@ once() {
       curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d refresh-preview >/dev/null 2>&1
     ) >/dev/null 2>&1 &
   fi
-  printf "\n${GK_CONTEXT}%s\342\200\246${GK_R}\n" "$doing"
+  printf "  ${GK_CONTEXT}%s\342\200\246${GK_R}\n" "$doing"
   return 1
 }
 cache=$dir/deploys.json
 [ -s "$cache" ] || exit 0
-# The deploy's header, and after it, on a line of its own, the fields the
-# rest of this needs, in one jq rather than one a field. | between them,
-# since read keeps an empty field between two of those and drops one
-# between two tabs.
-out=$(jq -r -L "$share" --arg id "$1" 'include "otis";
-  .deploys[] | select((.id | tostring) == $id) |
-  def took: "\(.duration / 60 | floor)m\(.duration % 60 | tostring | if length < 2 then "0" + . else . end)s";
-  (if .kind == "rollback" then bad + "↺ rollback" + r
-   elif .status == "success" then good + "✓ deployed" + r
-   elif .status == "failed" then (if .duration == 0 then bad + "✗ failed at once" + r + context + ", refused: production was already past this commit" + r else bad + "✗ failed" + r end)
-   elif .status == "running" then attention + "◐ deploying now" + r
-   elif .status == "canceled" then context + "⊘ canceled" + r
-   else attention + "○ waiting for the deploy lock" + r end)
-  + context + " · " + (.at | when) + (if .duration > 0 then " · took " + took else "" end) + " · by " + .user + r,
-  context + "pipeline " + .pipeline + " · " + .sha[0:8] + (if .prev != "" then " · since " + .prev[0:8] else "" end) + r,
-  context + .url + r,
-  ([.kind, .prev, .sha, .job, .status, .commits] | map(tostring) | join("|"))' "$cache")
+mine=$(jq -c '[.mrs[]?.iid | tostring]' "$dir/ci-merged.json" 2>/dev/null || echo '[]')
+# What the rest needs of the deploy, in one jq rather than one a field: | 
+# between them, since read keeps an empty field between two of those and
+# drops one between two tabs. After it, the strip of the last 40 up to it.
+out=$(jq -r -L "$share" --arg id "$1" --argjson mine "$mine" 'include "otis";
+  def took: floor | if . < 60 then "\(.)s" else "\(. / 60 | floor)m \(. % 60 | tostring | if length < 2 then "0" + . else . end)s" end;
+  def span: floor | if . < 3600 then "\(. / 60 | floor)m" elif . < 86400 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor)d" end;
+  .deploys as $all | ($all | map(.id | tostring) | index($id)) as $i |
+  if $i == null then empty else
+  $all[$i] as $d |
+  # Live now: the newest deploy that went live. Replaced: a later one did.
+  ([$all[0:$i][] | select(.status == "success")] | last) as $next |
+  ($all[$i:$i + 40] | reverse) as $strip |
+  ([$d.mrs[]? | select(IN($mine[]))] | map("!" + .) | join(", ")) as $yours |
+  [ $d.kind, $d.prev, $d.sha, ($d.job | tostring), $d.status, ($d.commits | tostring), ($d.iid // $d.id | tostring),
+    $d.pipeline, $d.user, ($d.at | when), (if $d.duration > 0 then $d.duration | took else "" end),
+    (if $d.status == "success" and $next == null then (now - ($d.at | epoch)) | span else "" end),
+    (if $next then "replaced " + ((($next.at | epoch) - ($d.at | epoch)) | span) + " later by deploy \($next.iid // $next.id)" else "" end),
+    $yours, ($d.mrs | length | tostring),
+    (($d.started // "") as $s | if $d.status == "running" and $s != "" then (now - ($s | epoch)) | took else "" end)
+  ] | join("|"),
+  (($strip[:-1] | map(deploy_glyph) | join("")) + r + yours + "\u001b[1m●" + r),
+  ([$strip[] | select(.status == "success" and .kind == "deploy")] | length | tostring) + "|"
+    + ([$strip[] | select(.status == "failed")] | length | tostring) + "|"
+    + ([$strip[] | select(.kind == "rollback")] | length | tostring) + "|" + ($strip | length | tostring)
+  end' "$cache")
 [ -n "$out" ] || exit 0
-printf '%s\n' "${out%"$nl"*}"
-IFS='|' read -r kind prev sha jobid status n <<EOF
-${out##*"$nl"}
+{ IFS='|' read -r kind prev sha jobid status n num pipeline user when took livefor replaced yours nmrs running
+  read -r strip
+  IFS='|' read -r s_ok s_bad s_rb s_n; } <<EOF
+$out
 EOF
 
+job_trace() {
+  glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | joblog_clean "$dir/job-trace-$jobid.sections"
+}
 rollback_inputs() {
   glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
     project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' 2>/dev/null |
     jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}'
 }
+pipeline_jobs() {
+  git-mr-pages "projects/:fullpath/pipelines/$pipeline/jobs?per_page=100" 2>/dev/null | jq -e 'if length > 0 then . else error end'
+}
+finished=
+case $status in success|failed|canceled) finished=1 ;; esac
+
+# --- what wants you -------------------------------------------------------------
 if [ "$kind" = rollback ]; then
   repo=$(otis-config project)
   f=$dir/rollback-$jobid.json
-  if once "$f" "asking GitLab which build it restored" rollback_inputs; then
-    v=$(jq -r .version "$f")
-    printf "\n${GK_TEXT}restored the build of pipeline %s${GK_R}\n" "$v"
+  restored="asking GitLab which build it restored…"
+  # Asked behind the pane, the callout saying so meanwhile.
+  if once "$f" "asking GitLab which build it restored" rollback_inputs >/dev/null; then
+    restored="It restored the build of pipeline $(jq -r .version "$f")."
   fi
-  exit 0
-fi
-
-if [ -n "$prev" ]; then
-  printf "\n${GK_TEXT}carried${GK_R} ${GK_CONTEXT}%s commits since the last deploy that went live${GK_R}\n" "$n"
-  # Main's own commits: a merge commit per MR, whose body GitLab writes as
-  # the MR's title, a blank line, then the "See merge request" trailer; or a
-  # commit pushed straight to main. One line each.
-  git log --first-parent --format='%h%x09%s%x09%b%x00' "$prev..$sha" 2>/dev/null | tr '\n\0' '\001\n' | head -60 |
-    awk -F'\t' -v mine="$(jq -r '[.mrs[]?.iid | tostring] | join(" ")' "$dir/ci-merged.json" 2>/dev/null)" -v Y="$GK_YOURS" -v T="$GK_TEXT" -v C="$GK_CONTEXT" -v R="$GK_R" '
-      BEGIN { n = split(mine, m, " "); for (i = 1; i <= n; i++) own[m[i]] = 1 }
-      { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
-        title = $3; sub(/\001.*/, "", title); if (title == "") title = $2
-        if (iid != "") printf "  %s!%-6s%s  %s%s%s\n", (iid in own ? Y : T), iid, R, T, title, R
-        else printf "  %s%s%s  %s%s%s\n", C, $1, R, C, $2, R }'
+  case $status in
+    success) pane_callout bad "Production was rolled back" "$restored" ;;
+    running) pane_callout attention "Rolling production back${running:+ · $running}" "$restored" ;;
+    *) pane_callout bad "A rollback that $status" "$restored" ;;
+  esac
+elif [ "$status" = success ]; then
+  if [ -n "$livefor" ]; then head="Live in production for $livefor"; else head="Went live, since replaced"; fi
+  if [ -n "$yours" ]; then why="It carried yours: $yours."
+  elif [ -n "$replaced" ]; then why="It was ${replaced}."
+  else why="$nmrs merge requests went out with it."; fi
+  pane_callout good "$head" "$(pane_fit "$why" $((PANE_W - 2)))"
+elif [ "$status" = failed ] && [ -z "$took" ]; then
+  pane_callout bad "Refused at once" "Production was already past this commit."
+elif [ "$status" = failed ]; then
+  pane_callout bad "The deploy failed after $took" "What broke and the end of its log are below." "keys:⏎ its jobs and logs · w opens the job"
+elif [ "$status" = running ]; then
+  pane_callout attention "Deploying now${running:+ · $running}" "$(pane_fit "${yours:+Yours in it: $yours}" $((PANE_W - 2)))"
+elif [ "$status" = canceled ]; then
+  pane_callout context "Canceled" "Nothing of it went out."
 else
-  printf "\n${GK_CONTEXT}what it carried is not known: no earlier deploy in the list went live${GK_R}\n"
+  pane_callout attention "Waiting for the deploy lock" "Another deploy holds production."
 fi
 
-job_trace() {
-  glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | tr -d '\r'
-}
+# --- what it is -------------------------------------------------------------------
+printf "${GK_TEXT}\033[1mdeploy %s${GK_R}   ${GK_ELSEWHERE}%s${GK_R}\n" "$num" "$(printf '%.8s' "$sha")"
+pane_meta "$when" "by $user" "${took:+took $took}" "pipeline $pipeline"
+
+# --- how it went: the pipeline's stages on one timeline ---------------------------
+if [ -n "$finished" ] && [ "$kind" = deploy ]; then
+  f=$dir/pipeline-jobs-$pipeline.json
+  # Drawn aside first, so a pipeline GitLab could not say leaves no heading.
+  went=$(if once "$f" "asking GitLab how the pipeline went" pipeline_jobs; then
+    jq -r --argjson w "$PANE_W" -L "$share" 'include "otis";
+      def took: floor | if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m" else "\(. / 3600 | floor)h \(. % 3600 / 60 | floor)m" end;
+      [.[] | select(.started_at and .finished_at)] as $j |
+      if ($j | length) == 0 then context + "  no job of it ran" + r else
+      ($j | group_by(.stage) | map({stage: .[0].stage, a: (map(.started_at | epoch) | min), z: (map(.finished_at | epoch) | max),
+        bad: any(.[]; .status == "failed" and (.allow_failure | not))}) | sort_by(.a)) as $s |
+      ($s | map(.a) | min) as $lo | ($s | map(.z) | max) as $hi | ([$hi - $lo, 1] | max) as $t |
+      ([$w - 2 - 2 - 11 - 7, 10] | max) as $bw |
+      $s[0:8][] |
+      (((.a - $lo) * $bw / $t) | floor) as $off | ([(((.z - .a) * $bw / $t) + 0.5 | floor), 1] | max) as $len |
+      ([$off, $bw - $len] | min) as $off |
+      "  " + (if .bad then bad + "✗ " else good + "✓ " end) + r + text + (.stage + "           ")[0:10] + r + " "
+        + (" " * $off) + (if .bad then bad else good end) + ("━" * $len) + r + (" " * ($bw - $off - $len))
+        + context + ((.z - .a) | took | padl(7)) + r
+      end' "$f"
+  fi)
+  [ -n "$went" ] && { pane_section "how it went"; printf '%s\n' "$went"; }
+fi
+
+# --- what it carried ----------------------------------------------------------------
+if [ "$kind" = deploy ]; then
+  if [ -n "$prev" ]; then
+    pane_section "carried" "$nmrs merge request$([ "$nmrs" = 1 ] || echo s)" text "$n commit$([ "$n" = 1 ] || echo s)"
+    # Main's own commits: a merge commit per MR, whose body GitLab writes
+    # as the MR's title, a blank line, then the "See merge request"
+    # trailer; or a commit pushed straight to main. One line each, yours
+    # first and starred.
+    git log --first-parent --format='%h%x09%s%x09%b%x00' "$prev..$sha" 2>/dev/null | tr '\n\0' '\001\n' | head -60 |
+      awk -F'\t' -v mine="$(printf '%s' "$mine" | tr -d '[]"' | tr ',' ' ')" -v w="$PANE_W" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" \
+          -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v R="$(printf "$GK_R")" '
+        function ulen(s,   t) { t = s; return length(s) - gsub(/[\200-\277]/, "", t) }
+        function fit(s, n,   out, i, c, k) { if (ulen(s) <= n) return s; k = 0; out = ""
+          for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c !~ /[\200-\277]/ && ++k > n - 1) break; out = out c }
+          return out "\342\200\246" }
+        BEGIN { k = split(mine, m, " "); for (i = 1; i <= k; i++) own[m[i]] = 1 }
+        { sub(/^\001+/, "") }
+        $2 == "" { next }
+        { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
+          title = $3; sub(/\001.*/, "", title); if (title == "") title = $2
+          if (iid != "" && (iid in own)) top[++nt] = "  " Y "\342\230\205 " A "!" iid R " " T "\033[1m" fit(title, w - 16 - length(iid)) R Y "  you" R
+          else if (iid != "") rest[++nr] = "    " A "!" iid R " " T fit(title, w - 6 - length(iid)) R
+          else rest[++nr] = "    " C $1 " " fit($2, w - 13) R }
+        END { shown = 0
+          for (i = 1; i <= nt; i++) { print top[i]; shown++ }
+          for (i = 1; i <= nr && shown < 10; i++) { print rest[i]; shown++ }
+          if (nt + nr > shown) print F "    + " (nt + nr - shown) " more" R }'
+  else
+    pane_section "carried"
+    printf "  ${GK_CONTEXT}not known: no earlier deploy in the list went live${GK_R}\n"
+  fi
+fi
+
+# --- the last 40 --------------------------------------------------------------------
+if [ "$s_n" -gt 1 ]; then
+  aside="$s_ok live"
+  [ "$s_bad" -gt 0 ] && aside="$aside · $s_bad failed"
+  [ "$s_rb" -gt 0 ] && aside="$aside · $s_rb rolled back"
+  pane_section "the last $s_n" "" "" "$aside"
+  printf '  %s\n' "$strip"
+  printf "  ${GK_FAINT}%-*s%s${GK_R}\n" $((s_n - 8 > 7 ? s_n - 8 : 7)) "oldest" "this one"
+fi
+
+# --- a failed one: what broke, and the end of its log ----------------------------------
 if [ "$status" = failed ] || [ "$status" = canceled ]; then
   f=$dir/job-trace-$jobid.log
+  pane_section "the end of its log" "" "" "errors lit"
   if once "$f" "reading the end of its log from GitLab" job_trace; then
-    printf "\n${GK_TEXT}the end of its log${GK_R}\n"
-    grep -v '^\s*$' "$f" | tail -25 | sed "s/^/  $(printf "${GK_CONTEXT}")/; s/\$/$(printf "${GK_R}")/"
+    broke=$(joblog_broke < "$f")
+    if [ "$(printf '%s\n' "$broke" | head -1)" -gt 0 ] 2>/dev/null; then
+      joblog_show_broke "$broke"
+      echo
+    fi
+    joblog_tail "$f" 14
   fi
 fi

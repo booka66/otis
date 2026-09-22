@@ -1,86 +1,146 @@
 #!/bin/sh
-# git-worktree-preview <path> <branch> <kind> [iid] [ahead] [behind]: gw's preview. First the verdict,
-# the thing you came to find out: whether it can go, and if not, what is in the
-# way. Then what is uncommitted, and the branch as gb shows it
-# (git-branch-preview): its MR and its commits not on the base.
-p=$1 b=$2 kind=$3 iid=$4 ahead=$5 behind=$6
-[ -n "$p" ] || exit 0
+# git-worktree-preview <path> <branch> <kind> [iid] [ahead] [behind]: gw's preview,
+# as every preview speaks (share/pane.sh). First the verdict, the thing you
+# came to find out: whether it can go, and if not, what is in the way (a
+# rebase or a merge half done, uncommitted work). Then the worktree, what
+# it is for, and what is uncommitted in it, as bars by kind and names by
+# directory; then the branch as gb shows it (git-branch-preview): its MR and
+# its commits not on the base.
+wtp=$1 b=$2 kind=$3 iid=$4 ahead=$5 behind=$6
+[ -n "$wtp" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/pane.sh"
+say() { printf "${GK_TEXT}%s${GK_R}" "$(pane_fit "$1" $((PANE_W - 2)))"; }
 
-short=$p; case $p in "$HOME"/*) short="~${p#"$HOME"}" ;; esac
-printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "${p##*/}" "$short"
-if [ ! -d "$p" ]; then
-  printf "${GK_BAD}the directory is gone${GK_R}; d clears git's record of it\n"
+short=$wtp; case $wtp in "$HOME"/*) short="~${wtp#"$HOME"}" ;; esac
+if [ ! -d "$wtp" ]; then
+  pane_callout bad "The directory is gone" "$(say "git still keeps a record of it.")" "keys:d clears the record"
+  pane_title "${wtp##*/}"
+  pane_meta "$short"
   exit 0
 fi
 
 # Its git dir, as git-worktree-list --status finds it: from its .git file,
 # or the directory itself.
-if [ -f "$p/.git" ]; then read -r _ g < "$p/.git"; else g=$p/.git; fi
+if [ -f "$wtp/.git" ]; then read -r _ g < "$wtp/.git"; else g=$wtp/.git; fi
 op=
-if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op="a rebase"
-elif [ -e "$g/MERGE_HEAD" ]; then op="a merge"
-elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op="a cherry-pick"
-elif [ -e "$g/REVERT_HEAD" ]; then op="a revert"
+if [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ]; then op="A rebase"
+elif [ -e "$g/MERGE_HEAD" ]; then op="A merge"
+elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op="A cherry-pick"
+elif [ -e "$g/REVERT_HEAD" ]; then op="A revert"
 fi
+# (pane.sh keeps its state in plain names, p and n among them, so this
+# script calls the worktree wtp and its count nd.)
 # --no-optional-locks, as in git-worktree-list: never hold up a write there.
-dirty=$(git -C "$p" --no-optional-locks status --porcelain)
-# Counted, and the first dozen kept for below, in the shell: this draws again
-# on every move, and wc, head and sed were three processes for one number.
-n=0 shown=
-if [ -n "$dirty" ]; then
-  while IFS= read -r line; do
-    n=$((n + 1))
-    [ "$n" -le 12 ] && shown="$shown  $line
-"
-  done <<EOF
-$dirty
-EOF
-fi
+dirty=$(git -C "$wtp" --no-optional-locks status --porcelain)
+nd=0
+[ -n "$dirty" ] && nd=$(printf '%s\n' "$dirty" | awk 'END { print NR }')
 
 # The three worktrees with a role, in one run (git-worktree-path).
 { read -r wt_main; read -r wt_review; read -r wt_mine; } <<EOF
 $(git-worktree-path roots)
 EOF
 role=
-if [ "$p" = "$wt_main" ]; then
+if [ "$wtp" = "$wt_main" ]; then
   role="the main checkout; every other worktree lives under it"
 else
-  case $p in
+  case $wtp in
     "$wt_review") role="gmr moves this checkout to each MR you review; removing it means the next review checks out the repo again" ;;
     "$wt_mine")   role="gmr switches this checkout to your MRs that are not checked out anywhere else" ;;
-    *) case ${p##*/} in
+    *) case ${wtp##*/} in
          claude-fix*)    role="one of Claude's, for fix runs (C in gmr or gb); a run moves it to the branch it works on" ;;
          claude-review*) role="one of Claude's, for reviews (C in gmr); a review moves it to the MR it reads" ;;
        esac ;;
   esac
 fi
-[ -n "$role" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$role"
 
+# --- what wants you -------------------------------------------------------------
 if [ -n "$op" ]; then
-  printf "${GK_BAD}%s is in progress here${GK_R}; finish or abort it there first\n" "$op"
-elif [ "$n" -gt 0 ]; then
-  printf "${GK_BAD}%s uncommitted${GK_R}, so d leaves it; commit, or gwip there\n" "$n"
-elif [ -n "$role" ]; then
-  :
-else
+  pane_callout bad "$op is in progress here" "$(say "Finish or abort it there first; d leaves it until then.")"
+elif [ "$nd" -gt 0 ]; then
+  pane_callout yours "$nd uncommitted: d won't remove it" "$(say "Commit them, or gwip there, and it can go.")"
+elif [ -z "$role" ]; then
   case $kind in
-    merged)   printf "${GK_GOOD}safe to remove${GK_R}: the MR merged and nothing here is uncommitted; d takes the branch too\n" ;;
-    closed)   printf "${GK_GOOD}safe to remove${GK_R}: the MR closed and nothing here is uncommitted; d takes the branch too\n" ;;
-    theirs)   printf "${GK_GOOD}safe to remove${GK_R}: someone else's MR, and GitLab has everything here; d takes the branch too\n" ;;
-    detached) printf "${GK_CONTEXT}clean, not on a branch${GK_R}\n" ;;
-    *)        printf "${GK_CONTEXT}clean; its commits stay on the branch if you remove it${GK_R}\n" ;;
+    merged) pane_callout good "Safe to remove" "$(say "The MR merged and nothing here is uncommitted.")" "keys:d removes it, and the branch" ;;
+    closed) pane_callout good "Safe to remove" "$(say "The MR closed and nothing here is uncommitted.")" "keys:d removes it, and the branch" ;;
+    theirs) pane_callout good "Safe to remove" "$(say "Someone else's MR, and GitLab has everything here.")" "keys:d removes it, and the branch" ;;
   esac
 fi
 
-if [ "$n" -gt 0 ]; then
-  printf '\n%s' "$shown"
-  [ "$n" -gt 12 ] && printf "  ${GK_CONTEXT}... %s more${GK_R}\n" "$((n - 12))"
+# --- what it is -----------------------------------------------------------------
+printf "${GK_TEXT}\033[1m%s${GK_R}   ${GK_CONTEXT}%s${GK_R}\n" "${wtp##*/}" "$(name=${wtp##*/}; pane_fit "$short" $((PANE_W - ${#name} - 3)))"
+state=
+if [ -z "$op" ] && [ "$nd" -eq 0 ]; then
+  case $kind in detached) state="clean, not on a branch" ;; *) state="clean" ;; esac
+  [ -z "$role" ] && [ "$kind" != merged ] && [ "$kind" != closed ] && [ "$kind" != theirs ] && [ "$kind" != detached ] &&
+    state="clean; its commits stay on the branch if you remove it"
 fi
-printf '\n'
+pane_meta "${b:+on $b}" "$state"
+[ -n "$role" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$role")"
+
+# --- how it stands --------------------------------------------------------------
+# What is uncommitted: a bar for each kind (changed, new, gone, in conflict),
+# then the names by the directory they are in, as many as a line holds.
+if [ "$nd" -gt 0 ]; then
+  pane_section uncommitted "$nd" yours
+  printf '%s\n' "$dirty" | awk -v w="$PANE_W" -v y="$(printf "$GK_ATTENTION")" -v g="$(printf "$GK_GOOD")" -v x="$(printf "$GK_BAD")" \
+    -v yo="$(printf "$GK_YOURS")" -v c="$(printf "$GK_CONTEXT")" -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" '
+    {
+      xy = substr($0, 1, 2); path = substr($0, 4)
+      if (index(path, " -> ")) path = substr(path, index(path, " -> ") + 4)
+      sub(/^"/, "", path); sub(/"$/, "", path); sub(/\/$/, "", path)
+      if (xy ~ /U/ || xy == "AA" || xy == "DD") k = "U"
+      else if (xy == "??" || xy ~ /A/) k = "A"
+      else if (xy ~ /D/) k = "D"
+      else k = "M"
+      cnt[k]++
+      if (k == "D") { gone[++ng] = path; next }
+      d = path; nm = path
+      if (index(path, "/")) { i = length(path); while (substr(path, i, 1) != "/") i--; d = substr(path, 1, i); nm = substr(path, i + 1) } else d = "./"
+      if (!(d in names)) { dirs[++nd] = d; names[d] = "" }
+      names[d] = names[d] (names[d] == "" ? "" : "  ") nm; many[d]++
+    }
+    END {
+      split("M A D U", order, " ")
+      label["M"] = "changed"; label["A"] = "new"; label["D"] = "gone"; label["U"] = "in conflict"
+      col["M"] = y; col["A"] = g; col["D"] = x; col["U"] = yo
+      top = 0; for (i = 1; i <= 4; i++) if (cnt[order[i]] > top) top = cnt[order[i]]
+      bw = w - 22; if (bw > 28) bw = 28
+      for (i = 1; i <= 4; i++) { k = order[i]; if (!cnt[k]) continue
+        b = int(cnt[k] * bw / top + 0.5); if (b < 1) b = 1
+        bar = ""; for (j = 0; j < b; j++) bar = bar "━"; pad = ""; for (j = b; j < bw; j++) pad = pad " "
+        printf "  %s%s %s%s%s  %s%d %s%s\n", col[k], k, bar, r, pad, c, cnt[k], label[k], r }
+      print ""
+      dw = 0; for (i = 1; i <= nd && i <= 6; i++) if (length(dirs[i]) > dw) dw = length(dirs[i])
+      if (ng && dw < 5) dw = 5; if (dw > 24) dw = 24
+      for (i = 1; i <= nd && i <= 6; i++) row(dirs[i], names[dirs[i]], many[dirs[i]], t)
+      if (nd > 6) printf "  %s+ %d more directories%s\n", f, nd - 6, r
+      if (ng) { s = ""; for (i = 1; i <= ng; i++) { nm = gone[i]; sub(/.*\//, "", nm); s = s (s == "" ? "" : "  ") nm }; row("gone", s, ng, x) }
+    }
+    function row(label, list, count,   col, room, s, shown, n2, parts, i, out) {
+      room = w - dw - 12
+      n2 = split(list, parts, "  "); out = ""; shown = 0
+      for (i = 1; i <= n2; i++) {
+        if (length(out) + 2 + length(parts[i]) > room && shown) break
+        s = parts[i]; if (length(s) > room) s = substr(s, 1, room - 1) "…"
+        out = out (out == "" ? "" : "  ") s; shown++ }
+      printf "  %s%-" dw "s%s  %s%s%s", (label == "gone" ? x : t), label, r, c, out, r
+      if (shown < n2) printf "%s  +%d%s", f, n2 - shown, r
+      printf "\n"
+    }'
+fi
+
 if [ -n "$b" ]; then
+  printf '\n'
   exec git-branch-preview "$b" "$kind" "" "" "$iid" "$ahead" "$behind"
 fi
-printf "${GK_CONTEXT}detached at${GK_R}\n"
-git -C "$p" log --color=always --format='%C(yellow)%h%C(reset) %s %C(dim)%cr%C(reset)' -8
+pane_section "detached at"
+git -C "$wtp" log --format='%h%x09%ct%x09%s' -8 | awk -F'\t' -v now="$(date +%s)" -v w="$PANE_W" -v e="$(printf "$GK_ELSEWHERE")" \
+  -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v a="$(printf "$GK_ATTENTION")" -v r="$(printf "$GK_R")" '
+  function ago(ts,   s) { s = now - ts
+    if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
+    if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }
+  { g = ago($2); col = (g == was) ? "" : g; was = g
+    room = w - 18; s = $3; if (length(s) > room) s = substr(s, 1, room - 1) "…"
+    printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, s, r }'

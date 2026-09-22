@@ -17,14 +17,16 @@
 # scroll back, F resumes, q closes.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/pane.sh"
+. "$share/joblog.sh"
 mode=$1 id=$2 status=$3
 [ -n "$id" ] || exit 0
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
+# fetch [sections file]: the log, cleaned (share/joblog.sh), its steps'
+# times to the file.
 fetch() {
-  glab api "projects/:fullpath/jobs/$id/trace" 2> "$st/log.$id.err" |
-    perl -0pe 's/\n[^\n]*?Z [0-9a-f]{2}[OE]\+//g; s/^\d{4}-\d\d-\d\dT[\d:.]+Z [0-9a-f]{2}[OE] ?//mg;
-      s/section_(start|end):\d+:[^\r\n]*\r?//g; s/\e\[0K//g; s/\r//g'
+  glab api "projects/:fullpath/jobs/$id/trace" 2> "$st/log.$id.err" | joblog_clean "${1:-/dev/null}"
 }
 
 # Still going: statuses a job moves on from by itself (as in git-ci-jobs).
@@ -59,35 +61,77 @@ if [ "$mode" = --page ]; then
   exit 0
 fi
 
+# --tail: the job at a glance, for the preview. What wants you (it broke,
+# it runs, it waits on P), what it is, what broke (share/joblog.sh reads the
+# tests and errors out of the log), where the time went, and the end of the
+# log with the errors lit, as much of it as the pane has room for.
 cache="$st/log.$id"
 if [ -n "$live" ]; then
   cache="$st/log.$id.running"
-  fetch > "$cache"
+  fetch "$cache.sections" > "$cache"
 elif [ ! -s "$cache" ]; then
-  fetch > "$cache"
+  fetch "$cache.sections" > "$cache"
 fi
 
+# The job itself, from the list's JSON (git-ci-jobs): its name, stage,
+# pipeline and how long it took or has run. | between the fields, as read
+# keeps an empty one.
+IFS='|' read -r name stage pipeline took runner allowed <<EOF
+$(jq -r --argjson id "$id" '.[] | select(.id == $id) |
+  def t: floor | if . < 60 then "\(.)s" else "\(. / 60 | floor)m \(. % 60 | tostring | if length < 2 then "0" + . else . end)s" end;
+  [.name, .stage, (.pipeline.id // "" | tostring),
+   (if .duration then .duration | t elif .started_at then (now - (.started_at | sub("\\.[0-9]+"; "") | fromdateiso8601)) | t else "" end),
+   (.runner.description // ""), (.allow_failure // false | tostring)] | join("|")' "$st/jobs.json" 2>/dev/null)
+EOF
+[ -n "$name" ] || name="job $id"
+
+broke=0
+[ -s "$cache" ] && [ "$status" = failed ] && broke=$(joblog_broke < "$cache")
+case $status in
+  failed)
+    if [ "$allowed" = true ]; then pane_callout context "$name failed${took:+ after $took}, and is allowed to" "The pipeline goes on without it." "keys:r retries · ⏎ the full log"
+    else pane_callout bad "$name failed${took:+ after $took}" "$(pane_fit "$(joblog_said "$broke")" $((PANE_W - 2)))" "keys:r retries · ⏎ the full log · w opens it"; fi ;;
+  running|canceling)
+    last=
+    [ -s "$cache" ] && last=$(joblog_tail "$cache" 1 | sed -E 's/\x1b\[[0-9;]*m//g; s/^ *[0-9]+ │ //')
+    pane_callout attention "$name is running${took:+ · $took}" "$(pane_fit "${last:-starting}" $((PANE_W - 2)))" "keys:⏎ follows the log · X stops it" ;;
+  manual) pane_callout attention "Manual: it waits for you" "keys:P plays it" ;;
+  waiting_for_resource) pane_callout attention "Waiting to start" "Queued on a resource lock, behind another job." ;;
+  created|pending|preparing|scheduled) pane_callout attention "Waiting to start" "No runner has taken it yet." ;;
+  canceled) pane_callout context "Canceled${took:+ after $took}" "keys:r runs it again" ;;
+esac
+
+passed=
+[ "$status" = success ] && [ -n "$took" ] && passed="passed in $took"
+pane_title "$name"
+pane_meta "${stage:+stage $stage}" "${pipeline:+pipeline $pipeline}" "$passed" "$runner"
+
 if [ ! -s "$cache" ]; then
+  echo
   if [ -s "$st/log.$id.err" ]; then
-    printf "${GK_BAD}could not get the log from GitLab:${GK_R} %s\n" "$(head -1 "$st/log.$id.err")"
+    printf "${GK_BAD}could not get the log from GitLab:${GK_R} %s\n" "$(pane_fit "$(head -1 "$st/log.$id.err")" $((PANE_W - 34)))"
   else
     printf "${GK_CONTEXT}no log for this job yet (%s)${GK_R}\n" "$status"
   fi
   exit 0
 fi
-# The last screenful by rows, not lines: long lines wrap, and a plain tail of
-# N lines would overflow the preview and leave its top, not the end, in view.
-perl -e '
-  my ($rows, $cols) = @ARGV[0, 1];
-  my @lines = <STDIN>;
-  my ($used, $start) = (0, scalar @lines);
-  while ($start > 0) {
-    (my $plain = $lines[$start - 1]) =~ s/\e\[[0-9;]*[A-Za-z]//g;
-    chomp $plain;
-    my $need = length($plain) ? int((length($plain) + $cols - 1) / $cols) : 1;
-    last if $used + $need > $rows;
-    $used += $need;
-    $start--;
-  }
-  print @lines[$start .. $#lines];
-' "${FZF_PREVIEW_LINES:-40}" "$(( ${FZF_PREVIEW_COLUMNS:-100} - 1 ))" < "$cache"
+
+# Everything above the log's end, drawn first, so the end has the rest.
+case $status in failed) oc=bad ;; success) oc=good ;; *) oc=attention ;; esac
+top=$(
+  n=$(printf '%s\n' "$broke" | head -1)
+  if [ "${n:-0}" -gt 0 ]; then
+    pane_section "what broke" "$n" bad
+    joblog_show_broke "$broke"
+  fi
+  times=$(joblog_times "$cache.sections" "$oc")
+  if [ -n "$times" ]; then pane_section "where the time went"; printf '%s\n' "$times"; fi
+)
+[ -n "$top" ] && printf '%s\n' "$top"
+used=$(( $(printf '%s\n' "$top" | wc -l) + 12 ))
+rows=$(( ${FZF_PREVIEW_LINES:-40} - used ))
+[ "$rows" -lt 6 ] && rows=6
+lit=
+[ "$status" = failed ] && lit="errors lit"
+pane_section "the end of the log" "" "" "$lit"
+joblog_tail "$cache" "$rows"

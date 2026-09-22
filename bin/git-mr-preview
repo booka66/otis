@@ -23,91 +23,128 @@ if [ "$kind" = sep ]; then
   [ -s "$src" ] || exit 0
   # Claude's marks and the gate jobs, as git-mr-list worked them out for this draw.
   [ -s "$st/marks.json" ] || echo '{"gates": [], "watch": {}, "claude": {}, "fixes": {}, "verify": {}}' > "$st/marks.json"
-  jq -r -L "$share" --arg row "$row" --slurpfile marks "$st/marks.json" '
+  # In the previews' three parts (share/pane.sh), drawn here in jq: what
+  # the section holds, split into bars by how each stands, oldest first
+  # with a word on each, and what Claude is doing and has left on them.
+  jq -r -L "$share" --arg row "$row" --argjson w "${FZF_PREVIEW_COLUMNS:-80}" --slurpfile marks "$st/marks.json" '
     include "otis";
     $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
     def days: (now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) / 86400 | floor;
-    def line($n; $what; $color): if $n > 0 then "  " + $color + ($n | tostring) + r + " " + $what else empty end;
-    def title($text; $n; $noun):
-      attention + $text + r + context + "  \($n) \(plural($n; $noun; $noun + "s"))" + r, "";
-    # Verifications in Cursor Cloud (git-verify): going, and verdicts at the head of the MR.
-    def verifying($these):
-      ([$these[] | select($verify[.iid].verifying)] as $g |
-       if ($g | length) > 0 then "", attention + "  verifying " + ($g | map("!" + .iid) | join(", ")) + " in Cursor Cloud" + r else empty end),
-      ([$these[] | select(($verify[.iid] // {}) | .status == "done" and .verdict != "") | select($verify[.iid].head == .diffRefs.headSha)
-        | "!\(.iid) \($verify[.iid].verdict)"] as $v |
-       if ($v | length) > 0 then "", context + "  verified: " + ($v | join(", ")) + r else empty end);
+    def age: (now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) as $s |
+      if $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
+    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+    def rep($n): if $n > 0 then [range($n)] | map("━") | join("") else "" end;
+    def spaces($n): if $n > 0 then [range($n)] | map(" ") | join("") else "" end;
+    def cap: ascii_upcase;
+    ([$w - 1, 20] | max) as $pw |
+    def section($name): "", context + ($name | cap) + r, "";
+    def head($name; $n; $noun; $color):
+      context + ($name | cap) + r + "  " + $color + "\($n) \(plural($n; $noun; $noun + "s"))" + r, "";
+    # A category as a bar of the whole: its label, the bar, the count.
+    def split($rows; $total):
+      ([$pw - 30, 36] | min) as $bw |
+      $rows[] | select(.n > 0) |
+      (if $total > 0 then ([(.n * $bw / $total + 0.5 | floor), 1] | max) else 0 end) as $k |
+      "  " + context + (.what | cut(22)) + spaces(22 - (.what | cut(22) | length)) + r + " "
+        + .color + rep($k) + r + spaces($bw - $k) + "  " + .color + (.n | tostring) + r;
+    # A merge request a line: its glyph, id, title, and a word, the word right.
+    def mr_line($glyph; $word; $wcolor):
+      ($word | length) as $wl |
+      ($pw - 12 - $wl) as $tw |
+      "  " + $glyph + " " + attention + "!\(.iid)" + r + " "
+        + text + ((.title // "") | cut($tw)) + r
+        + spaces($tw - ((.title // "") | cut($tw) | length) + 1) + $wcolor + $word + r;
+    def oldest($these; $when; glyph; word):
+      if ($these | length) > 0 then
+        section("oldest first"),
+        ($these | sort_by(.[$when] // "") | .[0:8][] | (glyph) as $g | (word) as $wd | mr_line($g; $wd[0]; $wd[1])),
+        (if ($these | length) > 8 then "  " + faint + "+ \(($these | length) - 8) more" + r else empty end)
+      else empty end;
+    def ids($xs): $xs | map("!" + .iid) | join(", ");
+    # Claude on them: each thing a line, only the ones there are.
+    def claude_lines($these; $kind):
+      [ ([$these[] | select($claude[.iid].reviewing)] as $g | if ($g | length) > 0 then "  " + attention + "◐ " + r + context + "reviewing " + r + attention + ids($g) + r else empty end),
+        ([$these[] | select(($claude[.iid].drafts // 0) > 0)] as $d | if ($d | length) > 0 then "  " + yours + "✎ " + r + context + "drafts to read before you submit on " + r + attention + ids($d) + r else empty end),
+        ([$these[] | select($claude[.iid].clean != null and $claude[.iid].clean == .diffRefs.headSha)] as $c | if ($c | length) > 0 then "  " + good + "⇢ " + r + context + "nothing to comment on in " + r + attention + ids($c) + r else empty end),
+        ([$these[] | select($fixes[.iid].fixing)] as $g | if $kind == "mine" and ($g | length) > 0 then "  " + attention + "◐ " + r + context + "fixing " + r + attention + ids($g) + r else empty end),
+        ([$these[] | select(($fixes[.iid].fixes // 0) > 0)] as $f | if $kind == "mine" and ($f | length) > 0 then "  " + yours + "✎ " + r + context + "fixes to fold in on " + r + attention + ids($f) + r else empty end),
+        ([$these[] | select($verify[.iid].verifying)] as $g | if ($g | length) > 0 then "  " + attention + "◎ " + r + context + "verifying " + r + attention + ids($g) + r + context + " in Cursor Cloud" + r else empty end),
+        ($these[] | select(($verify[.iid] // {}) | .status == "done" and .verdict != "") | select($verify[.iid].head == .diffRefs.headSha)
+          | $verify[.iid].verdict as $v
+          | "  " + (if $v == "pass" then good elif $v == "fail" then bad else context end) + "● " + r
+            + attention + "!\(.iid)" + r + context + " verified: " + r
+            + (if $v == "pass" then good + "passed" elif $v == "fail" then bad + "failed" else context + $v end) + r + context + ", at its head" + r)
+      ] as $l |
+      if ($l | length) > 0 then section("claude"), $l[] else empty end;
+    def threads($these): ([$these[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0);
 
     (.data.currentUser.username // "") as $me |
     if $row == "sep-merged-this-week" then
-      (.mrs // []) as $all |
-      title("merged this week"; ($all | length); "merge request"),
-      line([$all[] | select(.state == "live")] | length; "live in production"; good),
-      line([$all[] | select(.state == "deploying")] | length; "deploying now"; attention),
-      line([$all[] | select(.state == "queued")] | length; "queued behind the running deploy"; attention),
-      line([$all[] | select(.state == "rolledback")] | length; "rolled back"; bad),
-      line([$all[] | select(.state == "merged")] | length; "merged, not out yet"; elsewhere),
+      (.mrs // []) as $all | ($all | length) as $n |
+      head("merged this week"; $n; "merge request"; text),
+      split([
+        {what: "live in production", n: ([$all[] | select(.state == "live")] | length), color: good},
+        {what: "deploying now", n: ([$all[] | select(.state == "deploying")] | length), color: attention},
+        {what: "queued behind a deploy", n: ([$all[] | select(.state == "queued")] | length), color: attention},
+        {what: "rolled back", n: ([$all[] | select(.state == "rolledback")] | length), color: bad},
+        {what: "merged, not out yet", n: ([$all[] | select(.state == "merged")] | length), color: elsewhere}]; $n),
+      oldest($all; "mergedAt";
+        (if .state == "live" then good + "▲" elif .state == "rolledback" then bad + "▼" elif .state | IN("deploying", "queued") then attention + "◐" else elsewhere + "·" end) + r;
+        (if .state == "live" then ["live", good] elif .state == "rolledback" then ["rolled back", bad]
+         elif .state == "deploying" then ["deploying", attention] elif .state == "queued" then ["queued", attention]
+         else ["not out yet", elsewhere] end)),
       ([$all[] | select($watch[.iid].verdict | IN("likely", "possible"))] as $bad |
-       if ($bad | length) > 0 then
-         "", yours + "  the production watch flagged "
-           + ($bad | map("!" + .iid) | join(", ")) + r
-       else empty end),
-      ([$all[] | select($watch[.iid].watching)] | length) as $w |
-      (if $w > 0 then "", context + "  Claude is watching production for \($w) of them" + r else empty end)
+       ([$all[] | select($watch[.iid].watching)] | length) as $wn |
+       if ($bad | length) > 0 or $wn > 0 then
+         section("claude"),
+         (if ($bad | length) > 0 then "  " + yours + "⚠ " + r + context + "the production watch flagged " + r + attention + ids($bad) + r else empty end),
+         (if $wn > 0 then "  " + attention + "◐ " + r + context + "watching production for \($wn) of them" + r else empty end)
+       else empty end)
 
     elif $row == "sep-yours" then
-      (.data.currentUser.authoredMergeRequests.nodes // []) as $all |
-      title("yours"; ($all | length); "open merge request"),
-      line([$all[] | select(.approved)] | length; "approved"; good),
-      line([$all[] | select((.approved | not) and ((.approvalsLeft // 0) > 0))] | length; "still need approvals"; context),
-      line([$all[] | select((.draft | not) and (.reviewers.nodes | length) == 0)] | length; "with nobody asked to review"; attention),
-      line([$all[] | select((.headPipeline | effective($gates)) == "FAILED")] | length; "with a failing pipeline"; bad),
-      line([$all[] | select((.headPipeline | effective($gates)) == "APPROVAL")] | length; "waiting only on approval gates"; elsewhere),
-      line([$all[] | select(.draft)] | length; "still a draft"; context),
-      line([$all[] | select(.autoMergeEnabled)] | length; "set to merge when the pipeline succeeds"; good),
-      ([$all[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0) as $t |
-      (if $t > 0 then "  " + yours + ($t | tostring) + r + " unresolved "
-         + plural($t; "thread"; "threads") + " across them" else empty end),
-      ([$all[] | select(($fixes[.iid].fixes // 0) > 0)] as $f |
-       if ($f | length) > 0 then
-         "", yours + "  fixes from Claude to fold in on "
-           + ($f | map("!" + .iid) | join(", ")) + r
-       else empty end),
-      ([$all[] | select($fixes[.iid].fixing)] as $g |
-       if ($g | length) > 0 then "", attention + "  Claude is fixing " + ($g | map("!" + .iid) | join(", ")) + r else empty end),
-      verifying($all)
+      (.data.currentUser.authoredMergeRequests.nodes // []) as $all | ($all | length) as $n |
+      def waits: (.headPipeline | effective($gates)) == "FAILED" or ((.draft | not) and (.reviewers.nodes | length) == 0) or (($fixes[.iid].fixes // 0) > 0);
+      head("yours"; $n; "open merge request"; (if ([$all[] | select(waits)] | length) > 0 then yours else text end)),
+      split([
+        {what: "approved", n: ([$all[] | select(.approved)] | length), color: good},
+        {what: "need approvals", n: ([$all[] | select((.approved | not) and ((.approvalsLeft // 0) > 0))] | length), color: context},
+        {what: "nobody asked to review", n: ([$all[] | select((.draft | not) and (.reviewers.nodes | length) == 0)] | length), color: attention},
+        {what: "failing pipeline", n: ([$all[] | select((.headPipeline | effective($gates)) == "FAILED")] | length), color: bad},
+        {what: "only approval gates", n: ([$all[] | select((.headPipeline | effective($gates)) == "APPROVAL")] | length), color: elsewhere},
+        {what: "still a draft", n: ([$all[] | select(.draft)] | length), color: context},
+        {what: "merge when green", n: ([$all[] | select(.autoMergeEnabled)] | length), color: good}]; $n),
+      (threads($all) as $t | if $t > 0 then "", "  " + yours + "\($t) unresolved " + plural($t; "thread"; "threads") + r + context + " across them" + r else empty end),
+      oldest($all; "updatedAt";
+        (if (.headPipeline | effective($gates)) == "FAILED" then bad + "✗" elif .approved then good + "✓" elif waits then yours + "!" else faint + "·" end) + r;
+        (if (.headPipeline | effective($gates)) == "FAILED" then ["pipeline failed", bad]
+         elif .autoMergeEnabled then ["merges when green", good]
+         elif .approved then ["approved", good]
+         elif .draft then ["draft", context]
+         elif (.reviewers.nodes | length) == 0 then ["nobody asked", attention]
+         else [(.updatedAt | age) + " quiet", context] end)),
+      claude_lines($all; "mine")
 
     else
       (.data.currentUser.reviewRequestedMergeRequests.nodes // []) as $all |
       def mine_state: [.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED";
       ($all | map(select(mine_state | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES") | not))) as $todo |
       ($all | map(select(mine_state | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES")))) as $done |
-      (if $row == "sep-to-review" then $todo else $done end) as $these |
-      title(if $row == "sep-to-review" then "to review" else "reviewed, waiting on them" end;
-            ($these | length); "merge request"),
-      line([$these[] | select(.headPipeline.status == "FAILED")] | length; "with a failing pipeline"; bad),
-      line([$these[] | select(.headPipeline.status == null)] | length; "with no pipeline yet"; context),
-      ([$these[] | (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)] | add // 0) as $t |
-      (if $t > 0 then "  " + yours + ($t | tostring) + r + " unresolved "
-         + plural($t; "thread"; "threads") + " across them" else empty end),
-      ([$these[] | .updatedAt | days] | max) as $old |
-      (if $old != null and $old > 0 then
-         "  " + context + "the quietest has not moved in \($old) " + plural($old; "day"; "days") + r
-       else empty end),
-      ([$these[] | select(($claude[.iid].drafts // 0) > 0)] as $d |
-       if ($d | length) > 0 then
-         "", yours + "  drafts from Claude waiting on "
-           + ($d | map("!" + .iid) | join(", ")) + r
-       else empty end),
-      ([$these[] | select($claude[.iid].clean != null and $claude[.iid].clean == .diffRefs.headSha)] as $c |
-       if ($c | length) > 0 then
-         "", good + "  Claude found nothing to comment on in " + ($c | map("!" + .iid) | join(", ")) + r
-       else empty end),
-      ([$these[] | select($claude[.iid].reviewing)] as $g |
-       if ($g | length) > 0 then
-         "", attention + "  Claude is reviewing " + ($g | map("!" + .iid) | join(", ")) + r
-       else empty end),
-      verifying($these)
+      ($row == "sep-to-review") as $to |
+      (if $to then $todo else $done end) as $these | ($these | length) as $n |
+      head(if $to then "to review" else "reviewed, waiting on them" end; $n; "merge request"; (if $to and $n > 0 then yours else text end)),
+      split([
+        {what: "waiting on you", n: ($todo | length), color: yours},
+        {what: "reviewed", n: ($done | length), color: faint}]; ($all | length)),
+      (if ([$these[] | select(.headPipeline.status == "FAILED")] | length) as $f | $f > 0 then "  " + context + "of these, " + r + bad + "\([$these[] | select(.headPipeline.status == "FAILED")] | length) with a failing pipeline" + r else empty end),
+      (if ([$these[] | select(.headPipeline.status == null)] | length) as $f | $f > 0 then "  " + context + "of these, \([$these[] | select(.headPipeline.status == null)] | length) with no pipeline yet" + r else empty end),
+      (threads($these) as $t | if $t > 0 then "  " + context + "of these, " + r + yours + "\($t) unresolved " + plural($t; "thread"; "threads") + r else empty end),
+      oldest($these; "updatedAt";
+        (if .headPipeline.status == "FAILED" then bad + "✗" elif $to then yours + "!" else faint + "·" end) + r;
+        (.updatedAt | days) as $d |
+        (if .headPipeline.status == "FAILED" then ["pipeline failed", bad]
+         elif $to then [(.updatedAt | age) + " waiting", (if $d > 0 then yours else context end)]
+         else [(.updatedAt | age) + " quiet", context] end)),
+      claude_lines($these; "review")
     end' "$src" 2>/dev/null
   exit 0
 fi

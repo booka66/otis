@@ -1,63 +1,94 @@
 #!/bin/sh
 # git-branch-preview <branch> <kind> [place] [worktree] [iid] [ahead] [behind] [claude]
-# A branch at a glance, for gb and gw: its MR, where it is checked out,
-# and its commits that the base does not have (for a merged MR those still
-# show, because GitLab lands MRs as new commits). Everything but the commits
-# comes in from the row (git-branch-list, git-worktree-list), which already
-# worked it out, so a cursor move costs the log and the diff, nothing else.
-# claude is what git-mr-fix has here: "fixing", a count of fixes waiting, or
-# nothing.
+# A branch at a glance, for gb and gw, as every preview speaks (share/pane.sh):
+# first what wants you, if anything does (Claude's fixes waiting, commits
+# since its MR merged or closed, a history that shares nothing with the
+# base, or a merged branch safe to delete); then the branch, its MR, where
+# it is checked out and when it last moved; then how it stands against the
+# base as two bars, its commits by age, what they touch by directory, and
+# the diff below that, for scrolling into. Everything but the commits comes
+# in from the row (git-branch-list, git-worktree-list), which already worked
+# it out, so a cursor move costs the log and the diff, nothing else. claude
+# is what git-mr-fix has here: "fixing", a count of fixes waiting, or nothing.
 b=$1 kind=$2 place=$3 wt=$4 iid=$5 ahead=$6 behind=$7 claude=$8
 [ -n "$b" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/pane.sh"
 . "$share/repo.sh"
-# The base from the picker's environment (otis-config --env, loaded by
-# git-fzf), as git-delta takes its setting: a process for it on every move
-# was a tenth of the preview. The lookup is for a run from anywhere else.
+# The base from the picker's environment (otis-config --env), as git-delta
+# takes its setting: a process for it on every move was a tenth of the
+# preview. The lookup is for a run from anywhere else.
 if [ -n "$OTIS_C_ROOT" ] && [ -n "$OTIS_C_base" ]; then base=$OTIS_C_base; else base=$(otis-config base); fi
 tab='	'
 nl='
 '
+# ago <epoch>: how long ago, as a column has room for: now, 5m, 3h, 2d, 3w, 4mo.
+now=$(date +%s)
+ago() {
+  s=$((now - $1))
+  if [ "$s" -lt 60 ]; then echo now
+  elif [ "$s" -lt 3600 ]; then echo "$((s / 60))m"
+  elif [ "$s" -lt 86400 ]; then echo "$((s / 3600))h"
+  elif [ "$s" -lt 1209600 ]; then echo "$((s / 86400))d"
+  elif [ "$s" -lt 5184000 ]; then echo "$((s / 604800))w"
+  else echo "$((s / 2592000))mo"; fi
+}
 
 # One log for both the last commit's age and the commits themselves: the
-# tip of the branch is the first of them whenever there are any, so the
-# second git process is only for a branch with nothing past the base.
-n=${ahead:-$(git rev-list --count "$base..$b")}
-if [ "$n" -eq 0 ]; then
-  log=
-  last=$(git log -1 --format='%cr' "$b")
+# tip of the branch is the first of them whenever there are any.
+nc=${ahead:-$(git rev-list --count "$base..$b" 2>/dev/null)}
+nc=${nc:-0}
+if [ "$nc" -eq 0 ]; then
+  log= last=$(git log -1 --format='%ct' "$b" 2>/dev/null)
 else
-  log=$(git log --format='%h%x09%cr%x09%s' -40 "$base..$b")
+  log=$(git log --format='%h%x09%ct%x09%s' -40 "$base..$b")
   last=${log%%"$nl"*}; last=${last#*"$tab"}; last=${last%%"$tab"*}
 fi
+# A branch that shares no commit with the base: its diff is all of it.
+unrelated=
+[ "$kind" != main ] && [ "$nc" -gt 0 ] && ! git merge-base "$base" "$b" >/dev/null 2>&1 && unrelated=1
 
+# --- what wants you -------------------------------------------------------------
+# say <text>: a callout's line of why, cut to the pane.
+say() { printf "${GK_TEXT}%s${GK_R}" "$(pane_fit "$1" $((PANE_W - 2)))"; }
+plural() { [ "$1" -eq 1 ] && printf '%s' "$2" || printf '%s' "$3"; }
+case $claude in
+  fixing) pane_callout attention "Claude is working on fixes here" "$(say "It proposes them as it goes; they wait for you to take them.")" "keys:C how far it has got" ;;
+  ?*)     pane_callout yours "$claude $(plural "$claude" fix fixes) from Claude waiting" "$(say "Each is a change you accept or leave.")" "keys:C shows them · space accepts · a applies" ;;
+esac
+case $kind in
+  merged-diff) pane_callout bad "Commits since its MR merged" "$(say "GitLab never got them: !$iid is already in.")" "keys:n opens a new MR for them" ;;
+  closed-diff) pane_callout bad "Commits GitLab never got" "$(say "!$iid closed with this branch behind it.")" "keys:n opens an MR for them" ;;
+  merged|closed)
+    [ -z "$place" ] && pane_callout good "Safe to delete" "$(say "!$iid $kind, and nothing here is missing from GitLab.")" "keys:d deletes it · M marks every one like it" ;;
+esac
+[ -n "$unrelated" ] && pane_callout yours "Shares no history with $base" \
+  "$(say "Its $nc $(plural "$nc" commit commits) start from nothing: an MR would carry all of it.")" "keys:⏎ switch to it · c its commits"
+
+# --- what it is -----------------------------------------------------------------
 case $kind in
   open)                mr="!$iid open" ;;
-  theirs)              mr="!$iid their open MR" ;;
+  theirs)              mr="!$iid, someone else's" ;;
   merged|merged-diff)  mr="!$iid merged" ;;
   closed|closed-diff)  mr="!$iid closed" ;;
+  main)                mr= ;;
   *)                   mr="no MR" ;;
 esac
-printf "${GK_ATTENTION}%s${GK_R}  ${GK_CONTEXT}%s${GK_R}\n" "$b" "$mr"
 case $place in
-  here)     printf "${GK_CONTEXT}checked out here${GK_R}\n" ;;
-  worktree) printf "${GK_CONTEXT}checked out in %s${GK_R}\n" "$wt" ;;
+  here)     where="checked out here" ;;
+  worktree) where="in $wt" ;;
+  *)        where= ;;
 esac
-case $kind in
-  main)        printf "${GK_CONTEXT}%s commits behind %s${GK_R}\n" "${behind:-0}" "$base" ;;
-  merged-diff) printf "${GK_BAD}the MR merged, but this branch has commits since then${GK_R}\n" ;;
-  closed-diff) printf "${GK_BAD}the MR closed, but this branch has commits GitLab never got${GK_R}\n" ;;
-esac
-printf "${GK_CONTEXT}last commit %s${GK_R}\n" "$last"
-case $claude in
-  fixing) printf "${GK_ATTENTION}Claude is working on fixes here${GK_R}; C shows how far it has got\n" ;;
-  ?*)     printf "${GK_YOURS}%s fix%s waiting${GK_R}; C shows them: space accepts, a applies to your checkout\n" "$claude" "$([ "$claude" -eq 1 ] || echo es)" ;;
-esac
+pane_title "$b"
+lastago=; [ -n "$last" ] && lastago="last commit $(ago "$last") ago"
+[ "$lastago" = "last commit now ago" ] && lastago="last commit just now"
+if [ "$kind" = main ]; then pane_meta "$where" "${behind:-0} behind $base" "$lastago"
+else pane_meta "$mr" "$where" "$lastago"; fi
+
 # Its verification, only where there is one to show: git-verify keeps a run
 # under the MR's iid, or under the branch with each / as %, and finding no
-# directory there is the whole answer for nearly every branch. Its own
-# shell, on every move, said the same for a third of the preview's time.
+# directory there is the whole answer for nearly every branch.
 if [ -n "$iid" ]; then vd=$OTIS_GITDIR/otis-verify/$iid
 else
   k= r=$b
@@ -65,16 +96,75 @@ else
   vd=$OTIS_GITDIR/otis-verify/b-$k
 fi
 [ -d "$vd" ] && git-verify --preview "$iid" "$b"
-printf '\n'
-if [ "$n" -eq 0 ]; then
-  printf "${GK_CONTEXT}nothing here that %s does not have${GK_R}\n" "$base"
-else
-  printf "${GK_CONTEXT}%s commits not on %s:${GK_R}\n" "$n" "$base"
-  # In the palette, as gl shows them, rather than git's own yellow and dim.
-  printf '%s\n' "$log" | while IFS="$tab" read -r h when subject; do
-    printf "${GK_ATTENTION}%s${GK_R} %s ${GK_CONTEXT}%s${GK_R}\n" "$h" "$subject" "$when"
-  done
-  # Three dots: the branch's own changes since it left the base, not the base's since.
-  printf '\n'
-  git-preview-commit --tests-toggle "$base...$b"
+
+# --- how it stands --------------------------------------------------------------
+# Ahead and behind as two bars on one scale, so the lopsided one shows.
+if [ "$kind" != main ] && [ -n "$behind" ]; then
+  pane_section "against $base"
+  # (pane.sh's helpers keep their state in plain names: n, w, p and the like
+  # are theirs, so nothing of this script's is called that.)
+  big=$nc; [ "${behind:-0}" -gt "$big" ] && big=$behind
+  bw=$((PANE_W - 20)); [ "$bw" -gt 40 ] && bw=40
+  printf "  ${GK_CONTEXT}ahead   ${GK_R}"; pane_bar "$nc" "$big" "$bw" attention " "; printf "  ${GK_ATTENTION}%s${GK_R}\n" "$nc"
+  printf "  ${GK_CONTEXT}behind  ${GK_R}"; pane_bar "$behind" "$big" "$bw" context " "; printf "  ${GK_CONTEXT}%s${GK_R}\n" "$behind"
 fi
+
+if [ "$nc" -eq 0 ]; then
+  printf "\n  ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "nothing here that $base does not have" $((PANE_W - 2)))"
+  exit 0
+fi
+
+# The commits, newest first, their age once for each run of the same age.
+pane_section commits "$nc" attention "newest first"
+printf '%s\n' "$log" | awk -F'\t' -v now="$now" -v w="$PANE_W" -v a="$(printf "$GK_ATTENTION")" -v e="$(printf "$GK_ELSEWHERE")" \
+  -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" -v total="$nc" '
+  function ago(ts,   s) { s = now - ts
+    if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
+    if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }
+  NR <= 8 {
+    g = ago($2); col = (g == was) ? "" : g; was = g
+    room = w - 18; s = $3; if (length(s) > room) s = substr(s, 1, room - 1) "…"
+    printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, s, r
+    oldest = g; next }
+  { oldest = ago($2) }
+  END { if (total > 8) printf "        %s+ %d more, back to %s ago%s\n", f, total - 8, oldest, r }'
+
+# What they touch, by the top of each path: a directory's share of the lines
+# as a bar. Three dots, the branch's own changes since it left the base;
+# unrelated, the commits' own, since there is no since.
+if [ -n "$unrelated" ]; then numstat=$(git log --numstat --format= "$base..$b" 2>/dev/null)
+else numstat=$(git diff --numstat --no-renames "$base...$b" 2>/dev/null); fi
+if [ -n "$numstat" ]; then
+  printf '%s\n' "$numstat" | awk -F'\t' -v w="$PANE_W" -v c="$(printf "$GK_CONTEXT")" -v t="$(printf "$GK_TEXT")" \
+    -v g="$(printf "$GK_GOOD")" -v x="$(printf "$GK_BAD")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" '
+    function num(v,   s) { v = v ""; s = ""; while (length(v) > 3) { s = " " substr(v, length(v) - 2) s; v = substr(v, 1, length(v) - 3) }; return v s }
+    NF == 3 { d = $3; if (index(d, "/")) d = substr(d, 1, index(d, "/")); else d = "(root)"
+      a = ($1 == "-") ? 0 : $1; m = ($2 == "-") ? 0 : $2
+      if (!(d in add)) { ds[++nd] = d }
+      add[d] += a; del[d] += m; if (!seen[$3]++) { files[d]++; nf++ }
+      ta += a; tm += m }
+    END {
+      if (!nd) exit
+      printf "\n%sWHAT IT TOUCHES%s  %s%d file%s  %s+%s%s %s−%s%s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), g, num(ta), r, x, num(tm), r
+      # biggest first, by lines either way
+      for (i = 1; i <= nd; i++) for (j = i + 1; j <= nd; j++)
+        if (add[ds[j]] + del[ds[j]] > add[ds[i]] + del[ds[i]]) { s = ds[i]; ds[i] = ds[j]; ds[j] = s }
+      top = add[ds[1]] + del[ds[1]]; if (top < 1) top = 1
+      nw = 0; for (i = 1; i <= nd && i <= 6; i++) if (length(ds[i]) > nw) nw = length(ds[i]); if (nw > 18) nw = 18
+      bw = w - nw - 34; if (bw > 30) bw = 30; if (bw < 6) bw = 6
+      for (i = 1; i <= nd && i <= 6; i++) {
+        d = ds[i]; nm = d; if (length(nm) > nw) nm = substr(nm, 1, nw - 1) "…"
+        k = int((add[d] + del[d]) * bw / top + 0.5); if (k < 1) k = 1
+        ka = int(k * add[d] / (add[d] + del[d] > 0 ? add[d] + del[d] : 1) + 0.5); kd = k - ka
+        bar = g; for (j = 0; j < ka; j++) bar = bar "━"; bar = bar x; for (j = 0; j < kd; j++) bar = bar "━"
+        pad = ""; for (j = k; j < bw; j++) pad = pad " "
+        printf "  %s%-" nw "s%s  %s%s%s%s  %s%3d file%s%s  %s+%s%s", t, nm, r, bar, r, pad, "", c, files[d], (files[d] == 1 ? " " : "s"), r, g, num(add[d]), r
+        if (del[d]) printf " %s−%s%s", x, num(del[d]), r
+        printf "\n" }
+      if (nd > 6) printf "  %s+ %d more%s\n", f, nd - 6, r }'
+fi
+
+# The diff itself, for scrolling into.
+pane_section "the diff" "" "" "ctrl-d scrolls into it"
+if [ -n "$unrelated" ]; then git-preview-commit --tests-toggle "$base..$b"
+else git-preview-commit --tests-toggle "$base...$b"; fi
