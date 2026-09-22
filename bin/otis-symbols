@@ -38,7 +38,9 @@
 # ? puts the keys and what the glyphs mean in the pane. The mouse is this
 # screen's: a click picks a row, the wheel scrolls the preview or moves
 # through the rows, and a drag in the preview selects its text and copies
-# it. Each frame's timing goes to ~/.cache/otis/symbols.log (OTIS_SYMBOLS_TRACE).
+# it; a then asks Claude about the lines, and c in a review comments on
+# them. Each frame's timing goes to ~/.cache/otis/symbols.log
+# (OTIS_SYMBOLS_TRACE).
 setopt extendedglob no_nomatch
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
@@ -601,7 +603,7 @@ helplines() {
   P+=("")
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
-    drag "in the preview: lines of the diff, copied without the gutter; in a review, c comments on them" \
+    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
@@ -932,13 +934,23 @@ handle() {
     [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
     return
   fi
-  # Lines selected in a review's diff: c comments on them, esc lets go.
-  if (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]]; then
+  # Lines selected in a diff: a asks Claude about them (git-symbols-ask
+  # finds them in OTIS_ASK_LINES), c comments on them in a review, esc lets go.
+  if (( sel == 1 )) && [[ -n $selr ]]; then
     case $n in
-      c) local side first last; read -r side first last <<< $selr
-         sel=0 selr=
-         run "execute(git-mr-say --new $GMR_IID $GMR_RANGE {2} $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
-         dirty=1; return ;;
+      a) if [[ -n $bind[a] ]]; then
+           export OTIS_ASK_LINES=$selr
+           sel=0 selr=
+           act a
+           unset OTIS_ASK_LINES
+           return
+         fi ;;
+      c) if [[ -n $GMR_IID ]]; then
+           local side first last; read -r side first last <<< $selr
+           sel=0 selr=
+           run "execute(git-mr-say --new $GMR_IID $GMR_RANGE {2} $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+           dirty=1; return
+         fi ;;
       esc) sel=0 selr=; return ;;
     esac
   fi

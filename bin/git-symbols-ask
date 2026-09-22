@@ -11,7 +11,9 @@
 # description, threads and the drafts Claude's review left (git-mr-claude)
 # with its reasons, in a review (git-mr-files exports GMR_IID); a branch's or
 # a commit's messages in gdm and gl. And where you are: the row under the
-# cursor goes with every launch, so "this" means the symbol you are on.
+# cursor goes with every launch, so "this" means the symbol you are on, or
+# the lines you selected in its preview (otis-symbols passes them as
+# OTIS_ASK_LINES, "side first last" as git-mr-say takes them).
 #
 # One conversation an MR, one a branch (gdm's base...HEAD is kept by the
 # branch's name, so it carries on as the branch grows), one a commit.
@@ -138,6 +140,22 @@ if [ -n "$name" ]; then
 fi
 at=$path
 [ -n "$start" ] && [ -n "$path" ] && at="$path:$start$([ -n "$end" ] && [ "$end" != "$start" ] && printf -- '-%s' "$end")"
+# The lines selected in the preview: each end on its own side, the change's
+# new numbers for a line it kept or added, the base's for one it removed.
+lines=
+if [ -n "$OTIS_ASK_LINES" ] && [ -n "$path" ]; then
+  read -r lside lfirst llast <<LINES
+$OTIS_ASK_LINES
+LINES
+  span=$lfirst
+  [ "$llast" != "$lfirst" ] && span="$lfirst-$llast"
+  case $lside in
+    new) lines="$path:$span" ;;
+    old) lines="$path:$span (lines the change removes, numbered as the base has them)" ;;
+    old,new) lines="$path, from the base's line $lfirst (removed) to the head's line $llast" ;;
+    new,old) lines="$path, from the head's line $lfirst to the base's line $llast (removed)" ;;
+  esac
+fi
 
 # What Claude is given, gathered while you choose what to ask.
 gather() {
@@ -187,7 +205,15 @@ starters() {
     printf 'open\t%s\t\n' "$(printf "${GK_ATTENTION}↩${GK_R}  open a conversation about %s ${GK_CONTEXT}· sends nothing${GK_R}" "$label")"
   fi
   q() { printf 'ask\t   %s\t%s\n' "$1" "$1"; }
-  if [ -n "$caller" ]; then
+  if [ -n "$lines" ]; then
+    q "What do these lines do, and why did the change make them this way?"
+    case $kind in
+      mine) q "Are these lines right? Fix them if they are not." ;;
+      review) q "What could go wrong in these lines? Draft a comment if something does." ;;
+      *) q "What could go wrong in these lines?" ;;
+    esac
+    q "How are these lines tested, and what case is missing?"
+  elif [ -n "$caller" ]; then
     q "Does $name still do the right thing with this change, even though it type checks?"
   elif [ -n "$name" ]; then
     case $what in
@@ -213,7 +239,8 @@ starters() {
 }
 
 here=$(printf "${GK_TEXT}%s${GK_R}" "$label")
-if [ -n "$name" ]; then here="$here $(printf "${GK_CONTEXT}·${GK_R} ${GK_ATTENTION}%s${GK_R}${GK_CONTEXT}%s · %s${GK_R}" "$name" "${what:+ ($what)}" "$at")"
+if [ -n "$lines" ]; then here="$here $(printf "${GK_CONTEXT}·${GK_R} ${GK_ATTENTION}%s${GK_R}" "$lines")"
+elif [ -n "$name" ]; then here="$here $(printf "${GK_CONTEXT}·${GK_R} ${GK_ATTENTION}%s${GK_R}${GK_CONTEXT}%s · %s${GK_R}" "$name" "${what:+ ($what)}" "$at")"
 elif [ -n "$path" ]; then here="$here $(printf "${GK_CONTEXT}· %s${GK_R}" "$path")"; fi
 out=$(starters | otis-ask 'ask> ' --delimiter '\t' --with-nth 2 --header "$here" \
   --footer 'enter asks, or type your own · in Claude, ctrl-d comes back here · esc') || exit 0
@@ -233,9 +260,15 @@ else
 fi
 # A question about the row says which row, in the transcript too, since the
 # cursor below is only this launch's.
-[ -n "$question" ] && [ -n "$name" ] && question="$question
+within=
+[ -n "$name" ] && within=", in $name"
+if [ -n "$question" ] && [ -n "$lines" ]; then question="$question
+
+(I've selected $lines$within.)"
+elif [ -n "$question" ] && [ -n "$name" ]; then question="$question
 
 (I'm on $name, $at.)"
+fi
 
 printf "${GK_CONTEXT}reading %s ...${GK_R}\n" "$label"
 wait "$gathering"
@@ -250,7 +283,8 @@ files=$(have about.md "$about"
   have callers.md "The callers elsewhere, code the change did not touch that uses a changed export, type checked before and after: ✗ is an error the change brings"
   have threads.md "The comment threads on the MR, their unsubmitted drafts included"
   have review.md "Your own earlier review of it, in the background: each comment you proposed, with why")
-if [ -n "$name" ]; then cursor="They are on $name$([ -n "$what" ] && printf ' (%s)' "$what"), at $at$([ "$side" = old ] && printf ', lines the change removes'). When they say \"this\", they mean it."
+if [ -n "$lines" ]; then cursor="They selected lines $lines$within. When they say \"this\" or \"these lines\", they mean those."
+elif [ -n "$name" ]; then cursor="They are on $name$([ -n "$what" ] && printf ' (%s)' "$what"), at $at$([ "$side" = old ] && printf ', lines the change removes'). When they say \"this\", they mean it."
 elif [ -n "$path" ]; then cursor="They are on the file $path. When they say \"this\", they mean it."
 else cursor="They are not on any one symbol or file just now."; fi
 began=$(cat "$d/head" 2>/dev/null)
