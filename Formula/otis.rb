@@ -13,8 +13,8 @@
 class Otis < Formula
   desc "Git and GitLab from the terminal: a dashboard and pickers drawn in the terminal"
   homepage "https://github.com/booka66/otis"
-  url "https://github.com/booka66/otis.git", using: :git, tag: "v0.3.1"
-  version "0.3.1"
+  url "https://github.com/booka66/otis.git", using: :git, tag: "v0.4.0"
+  version "0.4.0"
   head "https://github.com/booka66/otis.git", using: :git, branch: "main"
 
   depends_on "ast-grep"
