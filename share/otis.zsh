@@ -778,20 +778,29 @@ gundo() {
 otis() {
   _g_repo || return 1
   local out at on
-  while :; do
-    out=$(otis-dash) || return 0
-    at=$PWD on=$(git branch --show-current 2>/dev/null)
-    case $out in
-      gmr) gmr ;;
-      gb)  gb ;;
-      gag) gag ;;
-      gd)  gd ;;
-      gw)  gw ;;
-      otis-config) otis-config ;;
-      *)   return 0 ;;
-    esac
-    [[ $PWD == $at && $(git branch --show-current 2>/dev/null) == $on ]] || return 0
-  done
+  # The screens hand the alternate screen to each other (share/screen.zsh),
+  # so going from one to the next never shows the terminal between; left
+  # up by the last, it is left here.
+  export OTIS_ALT=${TMPDIR:-/tmp}/otis-alt.$$
+  {
+    while :; do
+      out=$(otis-dash) || return 0
+      at=$PWD on=$(git branch --show-current 2>/dev/null)
+      case $out in
+        gmr) gmr ;;
+        gb)  gb ;;
+        gag) gag ;;
+        gd)  gd ;;
+        gw)  gw ;;
+        otis-config) otis-config ;;
+        *)   return 0 ;;
+      esac
+      [[ $PWD == $at && $(git branch --show-current 2>/dev/null) == $on ]] || return 0
+    done
+  } always {
+    [[ -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; print -n $'\e[?25h\e[?1049l' > /dev/tty; }
+    unset OTIS_ALT
+  }
 }
 
 gag() {

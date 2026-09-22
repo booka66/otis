@@ -47,10 +47,33 @@ screen_start() {
 # ctrl-c and ctrl-z come in as keys (-isig), not signals: a signal's trap
 # would never run (above), and a ctrl-c killed the scripts that opened the
 # screen and left it running, raw, under the shell's prompt.
-screen_on() { stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $e'[?1049h'$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1; }
-screen_off() { print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'; stty $saved <&$tty; screen=0; }
+#
+# Screens hand over without the terminal under them showing between: under
+# the otis function (OTIS_ALT, a file it names), a screen that goes back (q,
+# esc: quit 130) or hands over (the dashboard's m, b, ...) leaves the
+# alternate screen up with its last frame on it, and says so in that file.
+# The next screen, the dashboard again or the picker whose execute opened
+# this one, takes it over rather than entering it again, and draws over it
+# whole. The otis function leaves it when it is done. An accept leaves as
+# ever, since what it hands back may print.
+screen_on() {
+  local alt=$e'[?1049h'
+  [[ -n $OTIS_ALT && -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; alt=; }
+  stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $alt$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1
+}
+# screen_off [keep]: keep, the alternate screen left up (above).
+screen_off() {
+  if [[ -n $1 && -n $OTIS_ALT ]]; then
+    print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'; : > $OTIS_ALT
+  else
+    print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'
+  fi
+  stty $saved <&$tty; screen=0
+}
 quit() {
-  (( screen )) && screen_off
+  if (( screen )); then
+    if (( ${1:-0} == 130 )); then screen_off keep; else screen_off; fi
+  fi
   (( $+functions[at_leave] )) && at_leave
   rm -rf -- $st
   (( $+functions[at_quit] )) && at_quit

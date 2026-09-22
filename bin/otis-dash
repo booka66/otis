@@ -630,7 +630,7 @@ handle() {
     o) (( $#id )) && { fields; ask git-mr-do web "$reply[2]"; } ;;
     u) refresh --refresh; flash="refreshing from GitLab…" ;;
     m|b|a|d|w|c)
-      screen_off
+      screen_off keep
       case $1 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac
       at_leave; rm -rf -- $st; exit 0 ;;
     '?') help=$(( !help )) poff=0 ;;
