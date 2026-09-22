@@ -296,7 +296,10 @@ left() {
       [[ -n $sdraft[i] ]] && { pad $(( w - 5 )); put "$Y" "✎ $sdraft[i]"; }
       L+=("$line")
     done
-    local nd=0; [[ -s $d/drafts.jsonl ]] && nd=${#${(f)"$(<$d/drafts.jsonl)"}}
+    # A draft a line, counted as lines: one line alone would be a string,
+    # and its length the count.
+    local nd=0; local -a dl
+    [[ -s $d/drafts.jsonl ]] && { dl=("${(@f)$(<$d/drafts.jsonl)}"); dl=(${dl:#}); nd=$#dl; }
     (( nd > 0 )) && L+=("" "  ${Y}✎ $nd draft${${nd:#1}:+s}$R$C, yours to read in the review$R")
   else
     line= used=0; put "$C" "WHAT IT SAYS OF ITSELF"; L+=("$line" "")
