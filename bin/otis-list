@@ -10,14 +10,14 @@
 #                     1  prod: likely this      production is unhappy
 #                     2  rolled back            yours went out and came back
 #                     3  prod: possibly this
+#                     3½ review it              a colleague is blocked on you,
+#                        N drafts to submit     where the rest below block only you
 #                     4  verified: failed       the change does not work
 #                     4½ verify failed          one of Claude's runs broke, until
 #                                               you have seen it (d)
 #                     5  pipeline failed        it cannot go out as it is
 #                     6  N threads to address   a reviewer is waiting on you
-#                     7  review it              a colleague is waiting on you
 #                     8  fold in N fixes        Claude has left you work
-#                     9  N drafts to submit
 #                    10  verified: passed       news, not a blockage
 #                    11  merge it               finish it
 #                    12  ask for a review       start it
@@ -348,9 +348,9 @@ out=$(jq -nr -L "$share" \
     ($claude[.iid] // {}) as $cl |
     (if reviewed then empty
      elif ($cl.drafts // 0) > 0 and ($cl.reviewing | not) then
-       { rank: 9, g: "✎\($cl.drafts)", gc: yours,
+       { rank: 3.6, g: "✎\($cl.drafts)", gc: yours,
          verb: "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit", verb_key: "mr" }
-     else { rank: 7, g: " ", gc: context, verb: "review it", verb_key: "mr" } end)
+     else { rank: 3.5, g: "!", gc: yours, verb: "review it", verb_key: "mr" } end)
     + mr_fields("review")
     + { tail: (context + (.title | clean) + r + faint + "  " + (.author.username // "") + r),
         title: .title, who: (.author.username // ""), when: (if .updatedAt then since(.updatedAt | at) else "" end) };
