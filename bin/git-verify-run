@@ -714,6 +714,8 @@ retro
 # The same for a reviewer, in a browser, with the evidence in it (h in the view).
 git-verify-html "$d" || say "could not write report.html"
 count=$(find "$d/artifacts" -type f | wc -l | tr -d ' ')
-finish done "$(jq -r .verdict "$d/verdict.json"): $(jq -r .summary "$d/verdict.json") ($count artifacts in $d/artifacts)"
+fixed=
+[ "$(jq -r .accept "$d/verdict-fix.json" 2>/dev/null)" = true ] && fixed=" A fix is proposed: $(jq -r .title "$d/verdict-fix.json"); f shows it."
+finish done "$(jq -r .verdict "$d/verdict.json"): $(jq -r .summary "$d/verdict.json")$fixed ($count artifacts in $d/artifacts)"
 exit
 }

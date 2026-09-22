@@ -48,12 +48,17 @@ if [ "$what" = copy ]; then
     [ -s "$d/head" ] && printf ' at %s' "$(cut -c1-8 "$d/head")"
     v=$(jq -r '.verdict // empty' "$d/verdict.json" 2>/dev/null)
     [ -n "$v" ] && printf ', verdict: %s' "$v"
+    # A fix the judge accepted (git-verify-run's fix) is the news of a fail.
+    fixd=${d%/otis-verify/*}/gmr-fix/f-${d##*/}
+    [ -s "$fixd/01.patch" ] && printf '; a fix is proposed, %s' "$(jq -r '.items[0].title' "$fixd/items.json" 2>/dev/null)"
     printf '.\nEverything it kept is in %s:\n' "$d"
     has report.md "the report: the verdict claim by claim, with the evidence for each"
     has verdict.json "the verdict as JSON"
     [ -d "$d/artifacts" ] && printf '  %-22s %s\n' artifacts/ "what the tester brought back, $(find "$d/artifacts" -type f | wc -l | tr -d ' ') files: logs, API responses, screenshots, recordings"
     has context/ "what the run read and wrote: the change, the plan, the tester's report each round (report-<n>.md), check-ins"
     has plan.json "what it set out to check"
+    has verdict-fix.json "the judge's ruling on the fix the tester tried after the verdict"
+    [ -s "$fixd/01.patch" ] && printf '  %-22s %s\n' "$fixd/01.patch" "the fix itself, not yet in the branch"
     has events.jsonl "every step, as it happened"
   } | otis-copy && exec git-fzf-note "copied the run's folder and what is in it, for Claude"
   exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $d"
