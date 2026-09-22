@@ -358,12 +358,14 @@ out=$(jq -nr -L "$share" \
         title: .title, who: (.author.username // ""), when: (if .updatedAt then since(.updatedAt | at) else "" end) };
 
   # Fixes Claude proposed where there is no MR to hang them on: a branch of
-  # your own (gb'"'"'s C), or a verification'"'"'s retrospective.
+  # your own (gb'"'"'s C), a verification'"'"'s retrospective, or the fix a
+  # failed verification'"'"'s judge accepted.
   def loose_fix_rows:
-    $fixes | to_entries[] | select(.key | test("^[bv]-")) |
+    $fixes | to_entries[] | select(.key | test("^[bvf]-")) |
     . as $e | ($e.value.fixes // 0) as $n |
     select($n > 0 and ($e.value.fixing | not)) |
     (if ($e.key | startswith("v-")) then "what !\($e.key[2:])'"'"'s verification asked for"
+     elif ($e.key | startswith("f-")) then "the fix from verifying " + ($e.key[2:] | if startswith("b-") then .[2:] | gsub("%"; "/") else "!" + . end)
      else ($e.key[2:] | gsub("%"; "/")) end) as $about |
     { rank: 8, g: "✎\($n)", gc: yours, verb: "fold in \($n) \(plural($n; "fix"; "fixes"))",
       kind: "run", extra: "\($common)/gmr-fix/\($e.key)", verb_key: "run",

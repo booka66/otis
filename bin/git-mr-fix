@@ -553,6 +553,12 @@ fi
 command -v claude >/dev/null || { printf 'this needs Claude Code (claude). press enter\n'; read -r _; exit 0; }
 
 start() {
+  # No Claude run here makes a verification's fix, so none makes it again.
+  if [ "$kind" = verified ]; then
+    printf '%s came from its tester; V verifies again, and tries a fix again if one is needed. press enter\n' "$label"
+    read -r _
+    return 1
+  fi
   if [ "$kind" = mr ]; then
     note=$(git-confirm --note "Claude works through $label's threads and proposes fixes for you to accept?") || return 1
   elif [ "$kind" = retro ]; then

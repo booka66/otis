@@ -21,6 +21,8 @@
 #   cursorEnv    the Cursor Cloud environment V's tester runs in, by its dashboard name: otis.cursorEnv, else the repo's own
 #   verifyRetro  exit 0 when a verification ends with a retrospective by a fresh Claude on what slowed
 #                either agent and what to change (git config otis.verifyRetro false turns it off); on by default
+#   verifyFix    exit 0 when a failed verification whose judge found the cause has the tester try the fix,
+#                a proposal if the judge accepts it (git config otis.verifyFix false turns it off); on by default
 #   checkInModel  the model the judge's looks in run on (a claude --model value, e.g. sonnet), for cost: otis.checkInModel, else the judge's own
 #   verifyCheckIn  minutes between the judge's looks at what V's tester is doing, 0 for never: otis.verifyCheckIn, else 5
 #   cursorModel  the model V's Cursor Cloud tester runs, an id from Cursor's GET /v1/models with its parameters after a colon
@@ -44,7 +46,7 @@
 #
 # Several keys at once print one value a line, in the order asked, which is one
 # process where a list script used to spend five: otis-config project url base.
-# Only keys that answer with a value; gitlab, lessons and verifyRetro answer
+# Only keys that answer with a value; gitlab, lessons, verifyRetro and verifyFix answer
 # with an exit status, so they are asked on their own.
 #
 # A team keeps what is true of its repo for everyone (its CI's gate and deploy
@@ -58,8 +60,8 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommand sideBySide worktrees install editor lessons'
-sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro'
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommand sideBySide worktrees install editor lessons'
+sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix'
 nl='
 '
 shared() {
@@ -152,7 +154,7 @@ cfg_bool() {
   esac
 }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro claudeCommands sideBySide worktrees editor lessons gitlab'
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommands sideBySide worktrees editor lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -213,6 +215,7 @@ one() {
     verifyCheckIn) cfg verifyCheckIn || echo 5 ;;
     checkInModel) cfg checkInModel ;;
     verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
+    verifyFix) [ "$(cfg_bool verifyFix || echo true)" = true ] ;;
     claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
     sideBySide) cfg sideBySide ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
@@ -258,8 +261,8 @@ one() {
 # that differs between branches checked out there is the one thing this would
 # miss. A worktree asked on its own, with no environment from above, reads its
 # own .otis into its own cache (repo_facts).
-envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro sideBySide worktrees lessons gitlab'
-boolkeys='verifyRetro lessons gitlab'
+envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix sideBySide worktrees lessons gitlab'
+boolkeys='verifyRetro verifyFix lessons gitlab'
 cachename=otis-config-cache
 tab='	'
 
@@ -306,7 +309,7 @@ build_cache() {
   main >/dev/null
   unset_keys=
   for key in $envkeys; do
-    # gitlab, lessons and verifyRetro answer with a status alone and end the
+    # gitlab, lessons, verifyRetro and verifyFix answer with a status alone and end the
     # run they are in, so those are asked in a subshell; the rest are asked
     # here, where what they work out is kept for the ones after.
     case " $boolkeys " in
@@ -428,7 +431,7 @@ case $1 in
     . "$(dirname "$0")/../share/palette.sh"
     for key in $keys; do
       case $key in
-        verifyRetro | lessons | gitlab) (one "$key") && v=yes || v=no ;;
+        verifyRetro | verifyFix | lessons | gitlab) (one "$key") && v=yes || v=no ;;
         *) v=$(one "$key" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }') ;;
       esac
       s=$(source_of "$key")

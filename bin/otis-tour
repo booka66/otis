@@ -916,7 +916,8 @@ part_verify_how() {
   look 2 "The tester, a Cursor Cloud agent in a VM with the repo's .cursor environment, starts the sandbox, uses the app in a real browser, records a video per claim, runs what needs running, and reports."
   look 3 "The judge looks at the evidence itself: screenshots, frames from the videos, command output. Then it sends the tester back with what is still unproven, or gives a verdict, pass, fail or inconclusive, claim by claim. Up to three rounds."
   look 4 "Every five minutes the judge looks in. A tester that is merely slow is left alone; one stuck on the same error, off doing what no claim needs, or about to give up on a claim it could check is interrupted with a note, and carries on in the same VM."
-  look 5 "After the verdict, a fresh Claude looks the whole exchange over as an outside eye: what cost either agent time or a round, and what to change, in the repo's verify-env brief, the sandbox or the criteria."
+  look 5 "A fail whose cause the judge can point to in the change gets one round more: the tester makes the change the judge names, checks the failed claims again and brings back the patch. The judge accepts it only if it mends the cause, not the symptom, and the evidence shows it; then it is a proposal for you, never a push."
+  look 6 "After the verdict, a fresh Claude looks the whole exchange over as an outside eye: what cost either agent time or a round, and what to change, in the repo's verify-env brief, the sandbox or the criteria."
   say "It takes 15 to 30 minutes, mostly the VM's boot and the sandbox's, billed by Cursor. Verifying again while the last VM is up sends it the new commit instead of booting another."
   pause
 }
@@ -932,6 +933,7 @@ part_verify_run() {
   key h "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
   key p "after a confirm, upload the report to the MR and link it at the end of its description"
   key i "act on the retrospective: a fix run whose proposals edit the verify-env brief; B puts them on a branch of their own"
+  key f "the fix the judge accepted, in the proposals picker: space accepts, F folds it into your commits and pushes"
   print
   say "Nothing else is posted to GitLab. The tester is told not to commit or push; that is a prompt, not a guarantee."
   say "What the tester knows about your repo, how to run the environment, how to get into the app and where secrets come from, is the repo's .agents/skills/verify-env/SKILL.md. Whatever else the tester may use there, a real phone standing in for the customer among them, the brief is where it says so."
@@ -952,7 +954,7 @@ part_verify_setup() {
     else
       status note verify-env "no .agents/skills/verify-env/SKILL.md here, so the tester has only AGENTS.md or the README"
     fi
-    for v in cursorEnv cursorModel checkInModel verifyCheckIn verifyRetro; do
+    for v in cursorEnv cursorModel checkInModel verifyCheckIn verifyRetro verifyFix; do
       status note otis.$v "${$(cd $here && git config --get otis.$v):-not set}"
     done
   else

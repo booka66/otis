@@ -142,8 +142,10 @@ awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     what = key
     retro = 0
     if (what ~ /^v-/) { retro = 1; what = substr(what, 3) }
+    if (what ~ /^f-/) { retro = 2; what = substr(what, 3) }
     if (what ~ /^b-/) { what = substr(what, 3); gsub(/%/, "/", what) } else what = "!" what
-    if (retro) what = "retro " what
+    if (retro == 1) what = "retro " what
+    if (retro == 2) what = "fix " what
     if (state == "running")      g = GK_YOURS "◌"
     else if (state == "done")    g = GK_GOOD "✓"
     else if (state == "stopped") g = GK_CONTEXT "■"

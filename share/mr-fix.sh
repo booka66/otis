@@ -6,12 +6,16 @@
 # collide with an iid and which --marks skips, since only MRs have rows in gmr.
 # A third kind, v-<verification key>, is a run on your checkout from a
 # verification's retrospective (git-verify-run): what it recommended changing
-# in the repo, as proposals. Its label names the verification.
-label_of() { case $1 in v-*) printf 'the retrospective of %s' "$(label_of "${1#v-}")" ;; b-*) printf '%s' "${1#b-}" | tr '%' '/' ;; *) printf '!%s' "$1" ;; esac; }
+# in the repo, as proposals. Its label names the verification. A fourth,
+# f-<verification key>, is the fix a failed verification's tester tried and
+# its judge accepted (git-verify-run's fix): one proposal, on the MR or
+# branch that was verified, which no Claude run here made and none remakes.
+label_of() { case $1 in v-*) printf 'the retrospective of %s' "$(label_of "${1#v-}")" ;; f-*) printf 'the fix from verifying %s' "$(label_of "${1#f-}")" ;; b-*) printf '%s' "${1#b-}" | tr '%' '/' ;; *) printf '!%s' "$1" ;; esac; }
 . "$share/repo.sh"
 common=$OTIS_GITDIR
 case $key in
   v-*) kind=retro;  label=$(label_of "$key"); iid=; retro_of=$common/otis-verify/${key#v-} ;;
+  f-*) kind=verified; label=$(label_of "$key"); iid= ;;
   b-*) kind=branch; label=$(printf '%s' "${key#b-}" | tr '%' '/'); iid= ;;
   *)   kind=mr;     label="!$key"; iid=$key ;;
 esac

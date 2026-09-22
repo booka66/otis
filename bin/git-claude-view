@@ -241,6 +241,13 @@ case $1 in
     d=$2
     [ -s "$d/retro.json" ] || exec git-fzf-note "no retrospective here to act on"
     echo "execute(git-mr-fix 'v-${d##*/}' \"\$(otis-config base)..HEAD\")" ;;
+  # --fix <dir>: f, the fix a failed verification's judge accepted
+  # (git-verify-run's fix), in the proposals picker.
+  --fix)
+    d=$2
+    [ -s "$d/verdict-fix.json" ] || exec git-fzf-note "no fix tried here: only a failed verification whose judge found the cause tries one"
+    [ "$(jq -r .accept "$d/verdict-fix.json")" = true ] || exec git-fzf-note "the judge turned the tester's fix down: $(jq -r .summary "$d/verdict-fix.json")"
+    echo "execute(git-mr-fix 'f-${d##*/}' '')" ;;
   --less)
     d=$2
     { printf 'keys\traw logs, in full: %s\nkeys\t\n' "$(cd "$d" && ls claude.jsonl tester.sse 2>/dev/null | sed "s#^#$d/#" | tr '\n' ' ')"
