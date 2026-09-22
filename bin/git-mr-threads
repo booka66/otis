@@ -1,7 +1,9 @@
 #!/bin/sh
 # git-mr-threads <iid> <range>                    picker of the threads no line shows
 # git-mr-threads --list <iid> <range>             its rows
-# git-mr-threads --show <id>                      one thread in full, its preview
+# git-mr-threads --drafts <iid> <range>           picker of your unpublished drafts, Claude's first
+# git-mr-threads --drafts-list <iid> <range>      its rows
+# git-mr-threads --show <id> [range]              one thread in full, its preview
 # git-mr-threads --overview <iid>                 unresolved threads on the MR, for gmr
 # git-mr-threads --open <id>                      reply in nvim, edit or delete there
 # git-mr-threads --resolve <iid> <range> <id> <resolvable> <resolved>
@@ -168,18 +170,65 @@ case $mode in
         .id, (.resolvable | tostring), (.resolved | tostring), ($n.id | tostring)
       ] | join("\t")' "$st/threads.json"
     ;;
+  --drafts-list)
+    if ! git-mr-threads --json "$iid" "$range" "reload(git-mr-threads --drafts-list $iid $range)" > "$st/threads.json"; then
+      printf "${GK_CONTEXT}loading the drafts ...${GK_R}\n" > "$st/footer"
+      exit 0
+    fi
+    # Every draft, where it sits: a new thread that is one, or a reply
+    # waiting at the end of a thread. Claude's first, in the order of the
+    # file and line they are on.
+    jq -r -L "$share" '
+      include "otis";
+      [ .[] | . as $t | .notes[] | select(.draft) | {t: $t, n: .} ]
+      | (map(select(.n.claude)) | length) as $c | (length) as $all
+      | ("\($all) \(if $all == 1 then "draft" else "drafts" end), \($c) of them Claude" + (if $c == 1 then "\u0027s" else "\u0027s" end) + ": none is published until you submit") as $foot
+      | $foot, (sort_by([(if .n.claude then 0 else 1 end), .t.where.path // "", .t.where.line // 0])[]
+        | .t.where as $w |
+        [ (if .n.claude then yours + "✎ Claude  " else attention + "✎ yours   " end) + r
+            + (if $w.state == "line" then elsewhere + "\($w.path | split("/") | .[-1]):\(if ($w.from // $w.line) != $w.line then "\($w.from)-" else "" end)\($w.line)"
+               elif $w.state == "file" then elsewhere + $w.path elif $w.state == "overview" then context + "on the MR"
+               else attention + "outdated " + elsewhere + "\($w.path):\($w.line)" end) + r + "  "
+            + text + (.n.body | gsub("[\t\n]+"; " ") | .[0:120]) + r,
+          .t.id, ($w.path // ""), (($w.line // "") | tostring), ($w.side // ""), (.n.id | tostring)
+        ] | join("\t"))' "$st/threads.json" | { IFS= read -r foot; printf '%s\n' "$foot" > "$st/footer"; cat; }
+    ;;
   --show)
+    range=${2:-$GMR_RANGE}
     jq -r -L "$share" --arg id "$1" '
       include "otis";
       .[] | select(.id == $id) |
       context + (if .where.state == "overview" then "on the MR"
         elif .where.state == "file" then "on the file " + .where.path
+        elif .where.state == "line" then
+          (if (.where.from // .where.line) != .where.line then "lines \(.where.from)–\(.where.line)" else "line \(.where.line)" end)
+          + (if .where.side == "old" then ", removed," else "" end) + " of "
+          + (.where.path | split("/") | if length > 2 then "…/" + (.[-2:] | join("/")) else join("/") end)
         else "outdated: was \(if .where.side == "old" then "removed line" else "line" end) \(.where.line) of \(.where.path)" end)
         + (if .draft then " · draft, published when you submit"
            elif .resolved then " · resolved" elif .resolvable then " · unresolved" else "" end) + r,
       (.notes[] | "", attention + .author.username + r
         + context + (if .draft then " · draft" else " · " + .created_at[0:10] end) + r,
         (.body | split("\n")[] | "\u0001" + .))' "$st/threads.json" | wrap
+    # The code it is on, a few lines either side, the line itself lit.
+    jq -r --arg id "$1" '.[] | select(.id == $id) | select(.where.state == "line") | "\(.where.side) \(.where.from // .where.line) \(.where.line) \(.where.path)"' "$st/threads.json" |
+      while read -r side from line path; do
+        [ -n "$range" ] || break
+        rev=${range#*..}; [ "$side" = old ] && rev=${range%%..*}
+        printf "\n${GK_CONTEXT}THE CODE${GK_R}\n\n"
+        git show "$rev:$path" 2>/dev/null | awk -v from="$from" -v at="$line" -v lit="$(printf "$GK_ATTENTION")" -v dim="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" '
+          NR >= from - 3 && NR <= at + 3 { gsub(/\t/, "  "); printf "%s%5d%s %s%s%s\n", dim, NR, r, (NR >= from && NR <= at ? lit "▌" r : " "), $0, r }'
+      done
+    # Why Claude wrote it, its gist: the first paragraph that says it, past
+    # the heading line and before the lessons, to about five lines; the
+    # rest is in the review.
+    jq -r -L "$share" --arg id "$1" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-100} - 4 ))" '
+      include "otis";
+      .[] | select(.id == $id) | [.notes[] | select(.why)][0] // empty | .why |
+      (split("\n\n") | map(select(test("\\S") and (test("^\\s*(\\*\\*|##)") | not)))) as $ps |
+      "", yours + "WHY CLAUDE WROTE IT" + context + "  for you alone, never posted" + r, "",
+      ($ps[0] // "" | wrapl($w; 5)[] | "  " + text + . + r),
+      (if ($ps | length) > 1 then "  " + faint + "+ \($ps | length - 1) more in the review" + r else empty end)' "$st/threads.json"
     ;;
   --overview)
     # gmr's preview of an MR: its unresolved threads on the MR itself, which
@@ -212,6 +261,24 @@ case $mode in
       git-fzf-error "resolve the thread" "$response"
     fi
     echo "reload(git-mr-threads --list $iid $range)"
+    ;;
+  --drafts)
+    # Your drafts, Claude's among them, to go through before you submit:
+    # each with the code it is on and, for Claude's, why it wrote it. e
+    # rewrites one, d drops it, enter opens its line in your editor, S
+    # publishes them all as your review.
+    list="git-mr-threads --drafts-list $iid $range"
+    GMR_RANGE=$range git-fzf "!$iid drafts " 'e=edit it,d=drop it,enter=open its line in your editor,S=submit them all as your review,|,w=web,u=refresh' \
+      --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
+      --bind "start:reload($list)" \
+      --bind "e:execute(git-mr-say --edit $iid $range {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --bind "d:execute(git-mr-say --delete $iid $range {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --bind "enter:execute(if [ -n {3} ]; then git-commit-open $range {3} {4}; fi)" \
+      --bind "S:execute(git-mr-submit $iid $range ${GMR_KIND:-review})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\")" \
+      --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
+      --preview "git-mr-threads --show {2} $range" </dev/null >/dev/null
+    exit 0
     ;;
   *)
     list="git-mr-threads --list $iid $range"

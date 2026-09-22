@@ -348,8 +348,10 @@ out=$(jq -nr -L "$share" \
     ($claude[.iid] // {}) as $cl |
     (if reviewed then empty
      elif ($cl.drafts // 0) > 0 and ($cl.reviewing | not) then
+       # Enter opens the review Claude ran; d there goes through the drafts.
        { rank: 3.6, g: "✎\($cl.drafts)", gc: yours,
-         verb: "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit", verb_key: "mr" }
+         verb: "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit", verb_key: "run",
+         extra: "\($common)/gmr-claude/\(.iid)", does: "read the review and its drafts" }
      else { rank: 3.5, g: "!", gc: yours, verb: "review it", verb_key: "mr" } end)
     + mr_fields("review")
     + { tail: (context + (.title | clean) + r + faint + "  " + (.author.username // "") + r),
