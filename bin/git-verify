@@ -82,54 +82,59 @@ case $mode in
     [ -d "$d" ] || exit 0
     . "$share/palette.sh"
     n=$(find "$d/artifacts" -type f 2>/dev/null | wc -l | tr -d ' ')
-    printf "\n${GK_ATTENTION}verification${GK_R}"
-    if running "$d"; then
-      printf "${GK_CONTEXT} · going · V shows progress${GK_R}\n"
-    else
-      printf "${GK_CONTEXT} · %s · V shows how it went%s%s${GK_R}\n" "$(cat "$d/status" 2>/dev/null || echo "stopped")" \
-        "$([ "$n" -gt 0 ] && echo ", a there lists its $n artifacts")" "$([ -s "$d/verdict.json" ] && echo ", h the report")"
-    fi
-    # The verdict once there is one, else the last thing the run said.
     # Cursor's side, once, for a run that ended before it kept usage.json.
     if [ ! -s "$d/usage.json" ] && [ -s "$d/agent" ] && [ -s "$d/status" ] && [ -n "$CURSOR_API_KEY" ]; then
       printf 'user = "%s:"\n' "$CURSOR_API_KEY" | curl -sS -m 5 -K - "https://api.cursor.com/v1/agents/$(cat "$d/agent")/usage" 2>/dev/null |
         jq -e 'select(.cost)' > "$d/usage.json.new" 2>/dev/null && mv "$d/usage.json.new" "$d/usage.json" || rm -f "$d/usage.json.new"
     fi
+    # What it found, a line a thing, each cut to the pane: the verdict and
+    # its gist, each criterion as a glyph and its claim, the concerns, how
+    # much looking back has to say. What any of it says in full is behind
+    # a key (h the report, V how it went), never here.
     spent=$(costs "$d")
-    [ -n "$spent" ] && printf "${GK_CONTEXT}cost%s${GK_R}\n" "$spent"
+    # Under a run's preview, whose own line says what it cost.
+    [ -n "$OTIS_REPORT_NO_COST" ] && spent=
     if [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ -s "$d/verdict.json" ]; then
-      # Each claim's artifacts are links (OSC 8; fzf passes them through, and
-      # Ghostty opens a file: one on click), and a shows them all.
-      { jq -r -L "$share" --slurpfile plan "$d/plan.json" --arg dir "$d/artifacts" --arg frames "$d/context/frames" '
+      retro=0; [ -s "$d/retro.json" ] && retro=$(jq '(.recommendations // []) | length' "$d/retro.json" 2>/dev/null)
+      jq -r -L "$share" --slurpfile plan "$d/plan.json" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" \
+        --arg spent "$spent" --argjson arts "$n" --argjson retro "${retro:-0}" '
         include "otis";
-        def md: "\u0001" + gsub("\n"; "\u001f");
-        def link: (if startswith("frames/") then $frames + "/" + .[7:] else $dir + "/" + . end) as $f
-          | "\u001b]8;;file://" + $f + "\u001b\\" + . + "\u001b]8;;\u001b\\";
-        ($plan[0].criteria | map({(.id): .claim}) | add // {}) as $claims
-        | (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else context + "inconclusive" end) + r,
-          (.summary | md),
-          (.criteria[] | "", (if .result == "verified" then good + "✓ verified" elif .result == "failed" then bad + "✗ failed" else context + "? unverified" end)
-            + r + "  " + attention + .id + r,
-            (($claims[.id] // "") | md),
-            ("_" + .evidence + "_" | md),
-            (if ((.artifacts // []) | length) > 0 then "  " + elsewhere + ((.artifacts // []) | map(link) | join(" · ")) + r else empty end)),
-          (if (.concerns | length) > 0 then "", yours + "concerns" + r, (.concerns[] | "- " + . | md) else empty end)
+        def one: gsub("[\\s]+"; " ") | gsub("`|\\*\\*|_"; "") | ltrimstr(" ");
+        def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+        ($plan[0].criteria | map({(.id): .claim}) | add // {}) as $claims |
+        (.criteria | length) as $total |
+        ([.criteria[] | select(.result == "verified")] | length) as $ok |
+        ([.criteria[] | select(.result == "failed")] | length) as $bad |
+        (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else yours + "inconclusive" end) as $v |
+        "", context + "VERIFICATION" + r + "  " + $v + r + (if $spent != "" then faint + "  " + ($spent | ltrimstr(" · ") | ltrimstr("  ")) + r else "" end),
+        "",
+        "  " + text + ((.summary // "") | one | split(". ")[0] | rtrimstr(".") | cut($w - 2)) + r,
+        "",
+        "  " + (reduce .criteria[] as $c (""; . + (if $c.result == "verified" then good + "━━━" elif $c.result == "failed" then bad + "━━━" else faint + "───" end) + r + " "))
+          + context + " \($ok) of \($total) verified" + (if $bad > 0 then ", " + bad + "\($bad) failed" + context else "" end) + r,
+        "",
+        (.criteria[] |
+          (if .result == "verified" then good + "✓" elif .result == "failed" then bad + "✗" else yours + "?" end) as $g |
+          "  " + $g + r + " " + attention + .id + r + "  " + text + (($claims[.id] // .evidence // "") | one | cut($w - 8)) + r,
+          (if .result != "verified" and (.evidence // "") != "" then
+             "       " + (if .result == "failed" then bad else context end) + (.evidence | one | cut($w - 8)) + r else empty end)),
+        (if ((.concerns // []) | length) > 0 then
+           "", context + "CONCERNS" + r + "  " + yours + "\(.concerns | length)" + r,
+           (.concerns[0:3][] | "  " + yours + "!" + r + " " + text + (one | cut($w - 5)) + r),
+           (if (.concerns | length) > 3 then "  " + faint + "+ \(.concerns | length - 3) more in the report" + r else empty end)
+         else empty end),
+        "",
+        "  " + faint + ([(if $arts > 0 then "a \($arts) artifacts" else empty end), "h the report",
+          (if $retro > 0 then "i \($retro) to change" else empty end), "V how it went"] | join("  ·  ") | cut($w - 2)) + r
       ' "$d/verdict.json"
-      # The retrospective: what slowed either agent, and what to change where.
-      [ -s "$d/retro.json" ] && jq -r -L "$share" 'include "otis";
-        def md: "\u0001" + gsub("\n"; "\u001f");
-        "", attention + "looking back" + r, (.summary | md),
-        (if (.blockers | length) > 0 then "", context + "what got in the way" + r,
-          (.blockers[] | "- " + .who + ": " + .what + " (" + .cost + ")" | md) else empty end),
-        (if (.recommendations | length) > 0 then "", context + "what to change" + r,
-          (.recommendations[] | "- **" + .where + "** (" + .effort + "): " + .change | md) else empty end)
-      ' "$d/retro.json"
-      } | LC_ALL=C awk -v width="${FZF_PREVIEW_COLUMNS:-100}" "$(cat "$share/markdown.awk")"'
-        /^\001/ { md(substr($0, 2), width - 2, ""); next }
-        { print }'
     else
+      printf "\n${GK_CONTEXT}VERIFICATION${GK_R}  "
+      if running "$d"; then printf "${GK_ATTENTION}going${GK_R}"; else printf "${GK_CONTEXT}%s${GK_R}" "$(cat "$d/status" 2>/dev/null || echo stopped)"; fi
+      [ -n "$spent" ] && printf "${GK_FAINT}  %s${GK_R}" "${spent# · }"
+      printf '\n'
       last=$(jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -1)
-      [ -n "$last" ] && printf "${GK_CONTEXT}%s${GK_R}\n" "$last"
+      [ -n "$last" ] && printf "\n  ${GK_TEXT}%s${GK_R}\n" "$(printf '%s' "$last" | tr '\n' ' ' | awk -v w=$(( ${FZF_PREVIEW_COLUMNS:-80} - 3 )) '{ if (length($0) > w) $0 = substr($0, 1, w - 1) "…"; print }')"
+      printf "\n  ${GK_FAINT}V how it is going${GK_R}\n"
     fi
     exit 0
     ;;

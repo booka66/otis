@@ -81,10 +81,14 @@ case $state in
       *) pane_callout attention "$verb${title:+: $title} · $took" "${GK_TEXT}$(pane_fit "$now_doing" $((PANE_W - 2)))${GK_R}" ;;
     esac ;;
   done)
+    # The one fact: how many held, and which did not.
+    held=$(jq -r '(.criteria | length) as $n | [.criteria[] | select(.result == "verified")] as $ok |
+      [.criteria[] | select(.result != "verified") | .id] as $not |
+      "\($ok | length) of \($n) verified" + (if ($not | length) > 0 then "; not " + ($not | join(", ")) else "" end)' "$d/verdict.json" 2>/dev/null)
     case $verdict in
-      pass) pane_callout good "Verified: it passed" "${GK_TEXT}$(pane_fit "$(jq -r '.summary // ""' "$d/verdict.json")" $((PANE_W - 2)))${GK_R}" ;;
-      fail) pane_callout bad "Verified: it failed" "${GK_TEXT}$(pane_fit "$(jq -r '.summary // ""' "$d/verdict.json")" $((PANE_W - 2)))${GK_R}" ;;
-      inconclusive) pane_callout yours "Inconclusive: yours to judge" "${GK_TEXT}$(pane_fit "$(jq -r '.summary // ""' "$d/verdict.json")" $((PANE_W - 2)))${GK_R}" ;;
+      pass) pane_callout good "Verified: it passed" "${GK_TEXT}${held}${GK_R}" ;;
+      fail) pane_callout bad "Verified: it failed" "${GK_TEXT}${held}${GK_R}" ;;
+      inconclusive) pane_callout yours "Inconclusive: yours to judge" "${GK_TEXT}${held}${GK_R}" ;;
       *)
         if [ "$drafts" -gt 0 ]; then
           pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}gmr's review of it shows them, where they go${GK_R}"
@@ -104,11 +108,18 @@ when=
 [ -n "$ended" ] && when="$when, over $(at "$ended" '+%a %H:%M')"
 pane_meta "$kind" "$state" "$when" "${head:+at $head}"
 [ -s "$d/agent-url" ] && printf "${GK_FAINT}tester  ${GK_ELSEWHERE}%s${GK_R}\n" "$(pane_fit "$(cat "$d/agent-url")" $((PANE_W - 8)))"
+# What it has cost, and how long.
+spent=$(costs "$d")
+steps=$(grep -c '"type":"tool"' "$d/events.jsonl" 2>/dev/null)
+if [ -n "$spent$took" ]; then
+  pane_meta "${took:+$took}" "$( [ "${steps:-0}" -gt 0 ] && { [ "$steps" -eq 1 ] && echo "1 step" || echo "$steps steps"; })" "${spent# · }"
+fi
 
 # --- how it stands ----------------------------------------------------------------------
 # A verification's criteria: verified or failed by the verdict, the one the
 # tester is on now, one whose artifact is in, or planned (otis-agent's).
-if [ -s "$d/plan.json" ]; then
+# Once it has a verdict, the report below says each, so they are not here twice.
+if [ -s "$d/plan.json" ] && [ ! -s "$d/verdict.json" ]; then
   on=
   [ "$state" = running ] && on=$(tail -n 300 "$d/events.jsonl" 2>/dev/null | jq -rs '[.[] | select(.who == "tester") | (.input.detail // .text // "") | capture("(^|[^a-zA-Z0-9_])(?<c>c[0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c] | last // ""' 2>/dev/null)
   arts=$(ls "$d/artifacts" 2>/dev/null | sed -n 's/^\(c[0-9]*\).*/\1/p' | sort -u | tr '\n' ' ')
@@ -148,7 +159,7 @@ if [ -s "$d/plan.json" ]; then
     ago=$(span $(( now - $(stat -f %m "$ck" 2>/dev/null || stat -c %Y "$ck") )))
     if [ "$ok" = false ]; then pane_section "the judge" "not happy" bad "$ago ago"
     else pane_section "the judge" "" "" "$ago ago"; fi
-    printf '%s\n' "$note" | fold -s -w $((PANE_W - 4)) | head -4 | sed "s/^/  $(printf "$GK_CONTEXT")/;s/$/$(printf "$GK_R")/"
+    printf "  ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$(printf '%s' "$note" | tr '\n' ' ')" $((PANE_W - 2)))"
   fi
 fi
 
@@ -164,23 +175,17 @@ if [ "$kind" = review ]; then
   fi
 fi
 
-# What it has cost, and how long.
-spent=$(costs "$d")
-steps=$(grep -c '"type":"tool"' "$d/events.jsonl" 2>/dev/null)
-if [ -n "$spent$took" ]; then
-  pane_section "so far"
-  printf '  '; pane_meta "${took:+$took}" "$( [ "${steps:-0}" -gt 0 ] && { [ "$steps" -eq 1 ] && echo "1 step" || echo "$steps steps"; })" "${spent# · }"
-fi
 
 # A verification's verdict and a production watch's, as their own pickers
 # show them.
 case ${d%/*} in
   */otis-verify)
     case $key in
-      b-*) report=$(git-verify --preview "" "$(printf '%s' "${key#b-}" | tr '%' '/')") ;;
-      *) report=$(git-verify --preview "$key") ;;
+      b-*) report=$(OTIS_REPORT_NO_COST=1 git-verify --preview "" "$(printf '%s' "${key#b-}" | tr '%' '/')") ;;
+      *) report=$(OTIS_REPORT_NO_COST=1 git-verify --preview "$key") ;;
     esac
-    [ -n "$(printf '%s' "$report" | tr -d ' \n')" ] && { pane_section "the report"; printf '%s\n' "$report" | sed '/./,$!d'; } ;;
+    # It brings its own heading.
+    [ -s "$d/verdict.json" ] && [ -n "$(printf '%s' "$report" | tr -d ' \n')" ] && printf '%s\n' "$report" ;;
   */gmr-watch)
     report=$(git-mr-watch --preview "$key")
     [ -n "$(printf '%s' "$report" | tr -d ' \n')" ] && { pane_section "the watch"; printf '%s\n' "$report" | sed '/./,$!d'; } ;;
@@ -188,7 +193,8 @@ esac
 
 # The run's own account of itself, newest last, a line each.
 said=$(jq -r 'select(.type == "otis") | .text | gsub("[\t\n]"; " ")' "$d/events.jsonl" 2>/dev/null | tail -12)
-if [ -n "$said" ]; then
+if [ -n "$said" ] && [ ! -s "$d/verdict.json" ]; then
+  said=$(printf '%s\n' "$said" | tail -6)
   pane_section "what it said" "" "" "as it went, newest last"
   printf '%s\n' "$said" | while IFS= read -r l; do printf "  ${GK_CONTEXT}%s${GK_R}\n" "$(pane_fit "$l" $((PANE_W - 2)))"; done
 fi

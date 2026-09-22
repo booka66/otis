@@ -143,6 +143,22 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
   ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
   (($mr.resolvableDiscussionsCount // 0) - ($mr.resolvedDiscussionsCount // 0)) as $threads |
   ($claude[$iid] // {}) as $cl | ($fixes[$iid] // {}) as $fx | ($verify[$iid] // {}) as $vf |
+  ($mr.headPipeline | if . then effective($gates) else null end) as $eff0 |
+  # Opened from gmr rather than the dashboard, there is no row to say what
+  # the MR wants of you: worked out here, the same way.
+  (if $verb != "" then $verb
+   elif ($failed | length) > 0 or $eff0 == "FAILED" then "pipeline failed"
+   elif $threads > 0 then "\($threads) \(plural($threads; "thread"; "threads")) to address"
+   elif ($cl.drafts // 0) > 0 then "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit"
+   elif ($fx.fixes // 0) > 0 and ($fx.fixing | not) then "fold in \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes"))"
+   elif ($running | length) > 0 or $eff0 == "RUNNING" then "pipeline running"
+   elif $m and $mr.approved and $eff0 == "SUCCESS" then "merge it"
+   elif $m and (($mr.reviewers.nodes // []) | length) == 0 and ($mr.draft | not) then "ask for a review"
+   else "" end) as $verb |
+  (if $gc != "" then $gc elif $verb == "pipeline failed" then bad elif $verb == "merge it" then good
+   elif $verb == "pipeline running" then attention else yours end) as $gc |
+  (if $does != "" then $does elif ($verb | test("to address$")) then "address them"
+   elif $verb == "pipeline failed" then "review / address comments  ·  c the jobs and logs" else "" end) as $does |
 
   # Why the row wants you, in a sentence, from what it says.
   (if $verb == "pipeline failed" then
@@ -189,8 +205,10 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
        "  " + yours + "┃" + r + " " + elsewhere + $where + r + context + "  ·  " + ($n.author.username | who)
          + "  ·  " + ($n.created_at | ago) + " ago" + r,
        (($n.body // "") | gsub("<!--[^>]*-->"; "") | gsub("!?\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; "\(.t)") | gsub("\\*\\*"; "")
-         | split("\n") | map(select(test("\\S"))) | .[0:3] | join("\n")
-         | if length > 280 then .[0:279] + "…" else . end | split("\n")[] | "  " + yours + "┃" + r + " " + text + . + r),
+         # One line of what it says, past a heading a review bot puts first
+         # ("AI review (medium)"): the rest is behind enter.
+         | split("\n") | map(select(test("\\S")) | gsub("^[#>\\s]+"; "")) | (if length > 1 and (.[0] | test("^[^.]{0,30}$")) then .[1:] else . end) | .[0] // ""
+         | if length > ($w - 6) then .[0:$w - 7] + "…" else . end | "  " + yours + "┃" + r + " " + text + . + r),
        (if (.notes | length) > 1 then
           "  " + yours + "┃" + r + " " + context + "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
           + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) + r
@@ -262,7 +280,11 @@ if [ "$kind" = review ]; then
   desc=$(jq -r --arg iid "$iid" '.data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid) | .description // ""' "$st/mrs.json" 2>/dev/null)
   if [ -n "$desc" ]; then
     printf '\n'; heading "description"
-    printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null
+    # Its opening lines, not the whole of it: the rest is in the MR.
+    out=$(printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | grep -v '^[[:space:]]*$')
+    printf '%s\n' "$out" | head -5
+    more=$(printf '%s\n' "$out" | sed 1,5d | grep -c .)
+    [ "$more" -gt 0 ] && printf "${GK_FAINT}  + %s more lines: w opens the MR${GK_R}\n" "$more"
   fi
 fi
 exit 0

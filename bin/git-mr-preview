@@ -150,6 +150,17 @@ if [ "$kind" = sep ]; then
 fi
 
 [ -n "$iid" ] || exit 0
+# An open one is drawn as the dashboard draws it (otis-preview): the
+# pipeline as a bar a stage, the threads, where the review stands. Only
+# when it is in the JSON that preview reads; one listed from every open MR
+# (f) may not be.
+case $kind in
+  mine|review)
+    if jq -e --arg iid "$iid" '[.data.currentUser.authoredMergeRequests.nodes[]?, .data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid)] | length > 0' \
+        "$st/ci.json" "$st/mrs.json" 2>/dev/null | grep -q true; then
+      exec otis-preview "$kind" "$iid" "" ""
+    fi ;;
+esac
 case $kind in
   merged)
     exec git-ci-preview --merged "$iid" ;;
