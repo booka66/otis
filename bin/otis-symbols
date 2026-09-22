@@ -500,6 +500,46 @@ crumb() {
   cut "$line" $(( pw - 1 )); REPLY=$REPLY
 }
 
+# --- what the keys mean on this row ------------------------------------------------------
+# symkeys: for the row under the cursor, what a key does there, in rkl (key
+# → label; an empty label is a key that does nothing on it, which the footer
+# leaves out). A key not named keeps its label. From what the row already
+# says, so it costs the footer nothing.
+typeset -A rkl
+symkeys() {
+  local i=$cur
+  rkl=()
+  (( i )) || return
+  case $typ[i] in
+    head|plain) rkl=(l "" h "" v "" i "" c "" F "" space "" y "") ; return ;;
+  esac
+  case $fold[i] in
+    closed|quiet) rkl[l]="open it${kids[i]:+, ${kids[i]} under it}"; rkl[h]="" ;;
+    open) rkl[l]=""; rkl[h]="close it" ;;
+    *) rkl[l]=""; rkl[h]="" ;;
+  esac
+  if [[ $typ[i] == (sym|file) ]]; then
+    if [[ $vwd[i] == all ]]; then rkl[v]="mark it not viewed"
+    elif [[ -n $kids[i] ]]; then rkl[v]="mark it and all under it viewed"
+    else rkl[v]="mark it viewed"; fi
+  else rkl[v]=""; fi
+  [[ $typ[i] == sym ]] || rkl[i]=""
+  # c comments on a row's lines in a review; in ga it commits, whatever the row.
+  [[ -n $GMR_IID && $typ[i] != (sym|file) ]] && rkl[c]=""
+  # A caller the change breaks: Claude's fix is the thing to do.
+  if [[ $typ[i] == caller && $err[i] == x ]]; then rkl[F]="make Claude's fix"; rkl[enter]="open the broken call"
+  else rkl[F]=""; fi
+  [[ $typ[i] == (callers|package) ]] && rkl[y]=""
+  # The worktree's: staged, not staged, or some of each.
+  if [[ -n ${bind[space]} ]]; then
+    fields $i
+    if [[ $fld[9] == 1 && $fld[10] != 1 ]]; then rkl[space]="unstage it"
+    elif [[ $fld[9] == 1 ]]; then rkl[space]="stage the rest of it"
+    elif [[ $typ[i] == (sym|file) ]]; then rkl[space]="stage it"
+    else rkl[space]=""; fi
+  fi
+}
+
 # --- the frame -------------------------------------------------------------------
 integer help=0 poff=0 plen=0
 flash=
@@ -605,17 +645,22 @@ draw() {
     foot+=$B$A"c"$R$B$T" comment on $sw"$UB$R$C"   ·   esc lets go"$R
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   else
-    local n k used_=2 room
+    local n k v used_=2 room
     (( room = W - 14 ))
+    symkeys
     for (( n = 1; n <= $#hk; n++ )); do
-      [[ $hk[n] == enter ]] && { foot+=$B$A"⏎ "$hv[n]$UB$R$C"   ·   "$R; (( used_ += ${(m)#hv[n]} + 8 )); }
+      [[ $hk[n] == enter ]] || continue
+      v=$hv[n]; (( ${+rkl[enter]} )) && v=$rkl[enter]
+      [[ -n $v ]] && { foot+=$B$A"⏎ "$v$UB$R$C"   ·   "$R; (( used_ += ${(m)#v} + 8 )); }
     done
     for (( n = 1; n <= $#hk; n++ )); do
       [[ $hk[n] == enter ]] && continue
-      (( hm[n] )) && break
-      k="$hk[n] $hv[n]"
+      (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
+      v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
+      [[ -n $v ]] || continue
+      k="$hk[n] $v"
       (( used_ + ${(m)#k} + 2 > room )) && break
-      foot+=$A$hk[n]$R$C" $hv[n]  "$R; (( used_ += ${(m)#k} + 2 ))
+      foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
     done
     foot+=$A"?"$R$C" keys"$R
   fi

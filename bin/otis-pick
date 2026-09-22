@@ -47,7 +47,7 @@ export GIT_FZF_STATE=${TMPDIR:-/tmp}/git-fzf.$$.$RANDOM$RANDOM
 mkdir -m 700 $GIT_FZF_STATE || exit 1
 st=$GIT_FZF_STATE
 : > $st/lock
-mkdir $st/pv
+mkdir $st/pv $st/rk
 trace=${OTIS_PICK_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/pick.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 
@@ -62,7 +62,7 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
-preview= startacts= header= query= delim= idnth=0
+preview= startacts= header= query= delim= idnth=0 keysfrom=
 integer hdr=0 searching=0 multi=0 disabled=0 lent=0
 typeset -a withnth ticks
 typeset -A tevery tnext
@@ -106,6 +106,7 @@ while (( $# )); do
     --with-nth=*) withnth=(${(s:,:)${1#--with-nth=}}); shift ;;
     --id-nth) idnth=$2; shift 2 ;;
     --id-nth=*) idnth=${1#--id-nth=}; shift ;;
+    --keys-from) keysfrom=$2; shift 2 ;;
     --multi) multi=1; shift ;;
     --search) searching=1; shift ;;
     --disabled) disabled=1; shift ;;
@@ -481,6 +482,36 @@ warm() {
   } &!
 }
 
+# --- what the keys mean on this row ----------------------------------------------------
+# --keys-from names a command that says, for the row under the cursor, what
+# each key does there: a line "key<TAB>label" each, an empty label for a key
+# that does nothing on it (the footer then leaves it out). Asked for in the
+# background like a preview, and kept per row until the rows change; the
+# footer shows the keys as declared until it has answered.
+keysfor() { key "$rid[cur]"; REPLY=$st/rk/${REPLY:-none}.$gen; }
+typeset -A rkl
+rkfor=
+wantkeys() {
+  local f
+  (( cur )) && [[ -n $keysfrom ]] || return 1
+  keysfor; f=$REPLY
+  [[ -e $f || -e $f.tmp ]] && return 1
+  : > $f.tmp
+  subst "$keysfrom" $cur
+  tell
+  { unlisten; zsh -fc "$REPLY" > $f.tmp 2>/dev/null </dev/null; mv -f $f.tmp $f } &!
+}
+# rowkeys: the answer for this row, if there is one, in rkl (key → label).
+rowkeys() {
+  local f l
+  keysfor; f=$REPLY
+  [[ $f == $rkfor ]] && return
+  rkl=()
+  [[ -e $f ]] || return
+  rkfor=$f
+  for l in "${(@f)$(<$f)}"; do [[ $l == *$'\t'* ]] && rkl[${l%%$'\t'*}]=${l#*$'\t'}; done
+}
+
 # --- the frame -------------------------------------------------------------------
 integer help=0 poff=0 plen=0
 flash=
@@ -563,18 +594,24 @@ draw() {
   elif [[ -n $flash ]]; then foot+=$A$flash$R; flash=
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   else
-    local n k used_=2 room
+    local n k v used_=2 room
     (( room = W - 14 ))
+    # What each key means on this row, where the picker says (--keys-from).
+    rowkeys
     (( nm )) && { foot+=$G"$nm marked"$R$C"   ·   "$R; (( used_ += 12 )); }
     for (( n = 1; n <= $#hk; n++ )); do
-      [[ $hk[n] == enter ]] && { foot+=$B$A"⏎ "$hv[n]$UB$R$C"   ·   "$R; (( used_ += ${(m)#hv[n]} + 8 )); }
+      [[ $hk[n] == enter ]] || continue
+      v=$hv[n]; (( ${+rkl[enter]} )) && v=$rkl[enter]
+      [[ -n $v ]] && { foot+=$B$A"⏎ "$v$UB$R$C"   ·   "$R; (( used_ += ${(m)#v} + 8 )); }
     done
     for (( n = 1; n <= $#hk; n++ )); do
       [[ $hk[n] == enter ]] && continue
-      (( hm[n] )) && break
-      k="$hk[n] $hv[n]"
+      (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
+      v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
+      [[ -n $v ]] || continue
+      k="$hk[n] $v"
       (( used_ + ${(m)#k} + 2 > room )) && break
-      foot+=$A$hk[n]$R$C" $hv[n]  "$R; (( used_ += ${(m)#k} + 2 ))
+      foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
     done
     foot+=$A"?"$R$C" keys"$R
   fi
@@ -918,6 +955,7 @@ while :; do
       [[ -z $winch ]] && resize
     fi
     landed && changed=1
+    [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
     (( cur && ! help && pshow )) && [[ -n $preview ]] && { shown; [[ $REPLY != $lastpv ]] && changed=1; }
     if (( settle && EPOCHREALTIME >= settle )); then
       settle=0

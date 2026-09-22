@@ -1,0 +1,93 @@
+#!/bin/sh
+# otis-keys <picker> <row's fields...>: what each key does on this row, for
+# a picker's footer (otis-pick --keys-from). A line "key<TAB>label" each; an
+# empty label is a key that does nothing on this row, which the footer then
+# leaves out. A key not named keeps the label the picker declared.
+#
+# The footer is the one place that says what a key does, so it says it for
+# the row you are on: enter on your own MR addresses its threads, on a merged
+# one opens its deploy; A approves only what you review; w and y need an MR.
+# Only what the row and the picker's state already hold is read: this runs
+# on every move, behind the picker.
+st=$GIT_FZF_STATE
+k() { printf '%s\t%s\n' "$1" "$2"; }
+none() { for x in "$@"; do k "$x" ""; done; }
+picker=$1; shift
+case $picker in
+  # gmr: kind, iid, pipeline id.
+  mr)
+    kind=$1 iid=$2 pipe=$3
+    [ -n "$pipe" ] || none c R N p v
+    case $kind in
+      review)
+        k enter "review it"; k A "approve it"; k C "Claude reviews it"
+        none d D ;;
+      mine)
+        mr=$(jq -c --arg iid "$iid" '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid == $iid)' "$st/ci.json" 2>/dev/null)
+        threads=$(printf '%s' "$mr" | jq '(.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)' 2>/dev/null)
+        if [ "${threads:-0}" -gt 0 ]; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
+        else k enter "read it by symbol"; fi
+        if [ "$(printf '%s' "$mr" | jq -r '.draft' 2>/dev/null)" = true ]; then k d "mark it ready"; else k d "mark it draft"; fi
+        k C "Claude proposes fixes"
+        none A D ;;
+      merged)
+        k enter "its deploy"; k D "Claude watches production"
+        none A d C V m r R N s W l a G ;;
+      *) none enter c m r A d l a s W C D V R N w G y p v ;;
+    esac ;;
+
+  # gb: branch, kind, worktree, MR iid, place.
+  branch)
+    b=$1 kind=$2 wt=$3 mr=$4 place=$5
+    case $place in
+      here) none enter W; k d "" ;;
+      worktree) k enter "switch to it (brings it from its worktree)"; k W "go to its worktree" ;;
+    esac
+    case $kind in
+      main) none d C n ;;
+      merged|merged-diff|closed|closed-diff) [ "$place" = here ] || k d "delete it: it is $kind" ;;
+    esac
+    if [ -n "$mr" ]; then none n; k w "open !$mr"; k y "copy !$mr's link"
+    else none w y l a; fi ;;
+
+  # gw: path, branch, kind, safe.
+  worktree)
+    p=$1 b=$2 kind=$3 safe=$4
+    [ -n "$p" ] || { none enter space d M; exit 0; }
+    [ "$p" = "$GW_HERE" ] && k enter ""
+    if [ "$safe" = safe ]; then k d "remove it: nothing would be lost"
+    elif [ "$p" = "$(git-worktree-path main 2>/dev/null)" ]; then none d space
+    else k d "remove it"; fi ;;
+
+  # gag: the run's folder.
+  run)
+    d=$1
+    if [ ! -s "$d/status" ]; then k enter "watch it"; none d
+    else
+      case ${d%/*} in */gmr-fix) k enter "its proposals" ;; *) k enter "every step" ;; esac
+      k d "forget it"
+    fi ;;
+
+  # ga's file panel: path, status (XY, . for blank).
+  file)
+    st2=$2 x=$(printf '%s' "$2" | cut -c1) y=$(printf '%s' "$2" | cut -c2)
+    if [ "$st2" = '??' ]; then k space "stage it (new)"; none p; k d "delete it"
+    elif [ "$y" = . ]; then k space "unstage it"; none p
+    elif [ "$x" != . ]; then k space "stage the rest of it"
+    else k space "stage it"; fi ;;
+
+  # A review's lines (git-mr-lines): kind, resolvable, resolved.
+  lines)
+    case $1 in
+      thread)
+        k enter "open the thread"; k c "reply"
+        if [ "$2" = true ]; then if [ "$3" = true ]; then k r "open it again"; else k r "resolve it"; fi; else none r; fi ;;
+      line) k c "comment on it"; none r e d ;;
+      *) none enter c r e d J K ;;
+    esac ;;
+
+  # The threads picker: resolvable, resolved.
+  threads)
+    if [ "$1" = true ]; then if [ "$2" = true ]; then k r "open it again"; else k r "resolve it"; fi; else none r; fi ;;
+esac
+exit 0

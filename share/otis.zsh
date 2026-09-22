@@ -129,7 +129,7 @@ gb() {
   _g_repo || return 1
   local sel
   sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=Claude proposes fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
-      --delimiter=$'\t' --with-nth=1 --id-nth=2 \
+      --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 'W:print(worktree)+accept' \
@@ -239,7 +239,7 @@ gw() {
   _g_repo || return 1
   local main=$(git-worktree-path main) here=$(git rev-parse --show-toplevel) sel
   sel=$(cd "$main" && GW_HERE=$here git-fzf 'worktree ' 'enter=go there,space=mark,d=remove,M=mark safe to remove,u=refresh' \
-      --multi --ansi --track --delimiter=$'\t' --with-nth=1 --id-nth=2 \
+      --multi --ansi --track --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys worktree {2} {3} {4} {5}' \
       --bind 'start:reload(git-worktree-list | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-worktree-list --refresh)' \
       --bind 'space:toggle' \
@@ -407,7 +407,7 @@ _ga_files() {
   local _s='execute(OTIS_UNDER=files git-symbols worktree)+reload(git-file-list)'
   [[ $OTIS_UNDER == symbols ]] && _s=abort
   _picked=$(cd "$top" && git-fzf 'files ' 'enter=open in editor,s=by symbol,space=stage it,p=stage hunks,c=commit,d=discard it,a=stage all,U=unstage all,y=copy path,u=refresh,t=tests/config/generated,x=clear lock' --ansi \
-      --delimiter=$'\t' --with-nth=1 --track --id-nth=6 \
+      --delimiter=$'\t' --with-nth=1 --track --id-nth=6 --keys-from 'otis-keys file {2} {3}' \
       --bind 'enter:execute(git-file-open {3} {2} {4})+reload(git-file-list)' \
       --bind 'start:reload(git-file-list)' \
       --bind 't:execute-silent(git-test-files toggle)+reload(git-file-list --cached)' \
@@ -797,7 +797,7 @@ otis() {
 gag() {
   _g_repo || return 1
   git-fzf 'agents ' 'enter=every step (a fix run: its proposals),y=copy its folder for Claude,d=forget a finished run,u=refresh' --ansi --no-sort \
-    --delimiter=$'\t' --with-nth=1 --track --id-nth=5 \
+    --delimiter=$'\t' --with-nth=1 --track --id-nth=5 --keys-from 'otis-keys run {2}' \
     --bind 'start:reload(git-agent-list | tee "$GIT_FZF_STATE/bg.shown")' \
     --bind 'every(2):execute-silent(git-fzf-bg --tick git-agent-list)' \
     --bind 'u:execute-silent(git-fzf-bg git-agent-list)' \
@@ -857,6 +857,7 @@ _gmr() {
   local out
   out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=Claude reviews / proposes fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
+    --keys-from 'otis-keys mr {6} {2} {9}' \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
     --bind 'every(30):execute-silent(git-fzf-bg --tick git-mr-list)' \
     --bind 'f:execute-silent(git-fzf-bg git-mr-list toggle)' \

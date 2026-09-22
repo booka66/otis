@@ -193,6 +193,7 @@ set --
 [ -n "$line" ] && set -- --bind "result:transform(git-mr-lines --start $line)"
 git-fzf "!$iid $path " 'enter=open in your editor,c=comment or reply,J=mark lines,r=resolve,S=submit drafts,|,e=edit yours,d=delete yours,K=mark lines upward,tab=mark or unmark one,w=web,u=refresh' \
   --ansi --delimiter='\t' --with-nth=1 --multi --track --id-nth=8 --no-sort \
+  --keys-from 'otis-keys lines {2} {6} {7}' \
   --bind "start:reload($list)" "$@" \
   --bind "]:transform(git-mr-lines --hunk 1 {n})" --bind "[:transform(git-mr-lines --hunk -1 {n})" \
   --bind "enter:execute(if [ {2} = thread ]; then git-mr-threads --open {5}; else git-commit-open $range \"\$GMR_LINES_PATH\" \$([ {3} = old ] && echo {9} || echo {4}); fi)+reload($list)" \

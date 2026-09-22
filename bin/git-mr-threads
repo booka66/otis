@@ -218,6 +218,7 @@ case $mode in
     git-fzf "!$iid threads " 'c=reply,e=edit yours,d=delete yours,r=resolve or unresolve,|,enter=open in nvim,w=web,u=refresh' \
       --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
       --bind "start:reload($list)" \
+      --keys-from 'otis-keys threads {3} {4}' \
       --bind "enter:execute(git-mr-threads --open {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
       --bind "c:execute(git-mr-say --reply $iid $range {2})+reload($list)" \
       --bind "e:execute(git-mr-say --edit $iid $range {2})+reload($list)" \
