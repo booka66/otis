@@ -5,19 +5,18 @@ Git and GitLab from the terminal. `otis` is a dashboard of everything that wants
 ## Install
 
 ```sh
-brew tap booka66/otis https://github.com/booka66/otis
-brew trust --formula booka66/otis/otis booka66/seam/seam
-brew install booka66/otis/otis
-otis-setup
+curl -fsSL https://raw.githubusercontent.com/booka66/otis/main/install.sh | sh
 ```
 
-Homebrew 7 won't load a formula from someone else's tap until you trust it, and seam comes in as a dependency from its own tap, so trust both first. Older Homebrew has no `brew trust`; skip that line.
+That puts the newest release in `~/.local/share/otis` and runs `otis-setup` from there. `otis-update` brings it up to the next release.
 
 Or clone it and run setup from the clone:
 
 ```sh
 git clone https://github.com/booka66/otis.git ~/otis && ~/otis/bin/otis-setup
 ```
+
+Installed through Homebrew before? `brew uninstall otis`, then the line above; `otis-setup` finds the old line in your shell config and says what to put instead.
 
 `otis-setup` checks what's missing and offers to install it, asks a few questions (branch prefix, editor, theme), and adds one line to your shell config. It won't change anything without asking, and you can rerun it whenever you like. Open a new terminal when it's done.
 
@@ -41,7 +40,7 @@ Claude's background runs have no shell unless you allow specific commands with `
 
 ## Uninstall
 
-Remove the line `otis-setup` added to your shell config. Caches are in `~/.cache/git-alias` and each repo's `.git/git-alias-cache`. Claude's run records are under `.git/gmr-claude`, `gmr-fix`, `gmr-watch` and `otis-verify`, and otis's worktrees are under `.claude/worktrees`.
+Remove the line `otis-setup` added to your shell config, and `~/.local/share/otis`. Caches are in `~/.cache/git-alias` and each repo's `.git/git-alias-cache`. Claude's run records are under `.git/gmr-claude`, `gmr-fix`, `gmr-watch` and `otis-verify`, and otis's worktrees are under `.claude/worktrees`.
 
 ## Hacking on it
 

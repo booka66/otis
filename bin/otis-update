@@ -1,0 +1,19 @@
+#!/bin/sh
+# otis-update: otis brought up to its newest release, where install.sh put
+# it (the curl install; its VERSION says so), and seam with it where its own
+# curl install put it. Installed another way, it says how that one updates
+# instead.
+root=$(cd "$(dirname "$0")/.." && pwd)
+if [ ! -f "$root/VERSION" ]; then
+  case $root in
+    */Cellar/* | */opt/otis/*)
+      printf 'otis came from Homebrew here: brew upgrade otis. Or move to the curl install:\n  brew uninstall otis\n  curl -fsSL https://raw.githubusercontent.com/booka66/otis/main/install.sh | sh\n' ;;
+    *) printf 'otis runs from a clone here: git -C %s pull\n' "$root" ;;
+  esac
+  exit 1
+fi
+curl -fsSL https://raw.githubusercontent.com/booka66/otis/main/install.sh | OTIS_DIR=$root sh -s -- --update
+# And seam, where its own curl install put it.
+seam=${XDG_DATA_HOME:-$HOME/.local/share}/seam
+[ -f "$seam/VERSION" ] && curl -fsSL https://raw.githubusercontent.com/booka66/seam/main/install.sh | sh
+exit 0

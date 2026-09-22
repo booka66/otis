@@ -40,6 +40,7 @@ other	gg	gg			every command there is, on one screen
 other	otis-config	otis-config			otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default	
 other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
 other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
+other	otis-update	otis-update			bring otis, and seam, up to their newest releases (the curl install)	
 other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, Claude, V, deploys, history	
 other	gi	gi		<tags>	fetch a .gitignore	gi node macos >> .gitignore; gi lists the tags
 other	gi	fixterm			reset a garbled terminal	

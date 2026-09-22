@@ -39,9 +39,10 @@ class Otis < Formula
 
   def caveats
     <<~EOS
-      Finish with:
-        otis-setup
-      It logs you in to GitLab, adds otis to your shell, and offers the font.
+      otis installs with curl now, and this formula goes in a later release:
+        brew uninstall otis
+        curl -fsSL https://raw.githubusercontent.com/booka66/otis/main/install.sh | sh
+      Staying on this one for now? Finish with: otis-setup
     EOS
   end
 

@@ -113,7 +113,16 @@ else
   note nvim "enter in a review opens your editor; with nvim it shows the comments inline beside the diff. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; nice neovim
 fi
 if have ast-grep; then pass ast-grep "s in a review reads the MR by symbol"; else note ast-grep "reading a change by symbol needs it; without it only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')"; nice ast-grep; fi
-if have seam; then pass seam "s reads the change seam works out, by symbol"; else note seam "the symbol view is a renderer of seam's table; without it only files are listed. $(install_hint booka66/seam/seam 'git clone https://github.com/booka66/seam and put its bin on your PATH')"; nice booka66/seam/seam; fi
+# seam installs with its own curl line, as otis does: into ~/.local/share/seam,
+# with a seam in ~/.local/bin that runs it.
+seam_install='curl -fsSL https://raw.githubusercontent.com/booka66/seam/main/install.sh | sh'
+if have seam; then pass seam "s reads the change seam works out, by symbol"
+elif [ -z "$check_only" ] && printf '  seam: the symbol view is a renderer of its table; without it only files are listed.\n  ' &&
+  ask "install it ($seam_install)?" && sh -c "$seam_install"; then
+  if have seam; then pass seam "installed"; else note seam "installed; put ~/.local/bin on your PATH"; fi
+else
+  note seam "the symbol view is a renderer of seam's table; without it only files are listed: $seam_install"
+fi
 # otis.engine dagger reads the change through dagger instead, and seam scores and splits what it reads.
 if [ "$(otis-config engine 2>/dev/null)" = dagger ]; then
   if have dagger; then pass dagger "otis.engine dagger: the symbol view reads the change through dagger"; else note dagger "otis.engine is dagger, and without it only files are listed: curl -fsSL https://github.com/joshmoody24/dagger/releases/latest/download/dagger-installer.sh | sh"; fi
@@ -302,10 +311,17 @@ case $rc in "$HOME"/*) rcname="~/${rc#"$HOME"/}" ;; *) rcname=$rc ;; esac
 rel=${root#"$HOME"/}
 if [ -f "$rc" ] && { grep -qF "$root/$file" "$rc" || grep -qF "\$HOME/$rel/$file" "$rc" || grep -qF "~/$rel/$file" "$rc"; }; then
   pass "$rcname" "sources $file"
-elif old=$(grep -oE "[^ \"]*(git-alias|gkit|otis)/$file" "$rc" 2>/dev/null | head -1) && [ -n "$old" ]; then
+elif old=$(grep -oE "[^ \"]*(git-alias|gkit|otis|otis/libexec)/$file" "$rc" 2>/dev/null | head -1) && [ -n "$old" ]; then
+  said=$old
   case $old in "~/"*) old=$HOME/${old#\~/} ;; '$HOME/'*) old=$HOME/${old#\$HOME/} ;; esac
   if [ -f "$old" ]; then
     note "$rcname" "sources $old rather than this one; to use this one: $line"
+  elif [ -z "$check_only" ] && printf '  %s sources %s, which is gone (a Homebrew otis uninstalled).\n  ' "$rcname" "$old" &&
+    ask "put this one's line there instead?"; then
+    # Written through, not moved over: the file may be a link into your dotfiles.
+    awk -v old="$said" -v line="$line" 'index($0, old) { print line; next } { print }' "$rc" > "$rc.otis.$$" &&
+      cat "$rc.otis.$$" > "$rc" && rm -f "$rc.otis.$$"
+    pass "$rcname" "now sources $file from here; open a new terminal"
   else
     fail "$rcname" "sources $old, which is gone; replace that line with: $line"
   fi
@@ -325,7 +341,7 @@ fi
 # sourced last wins, and otis's line has to be the later one.
 if [ "$file" = git.zsh ] && [ -f "$rc" ] && grep -qE '^plugins=.*[( ]git[ )]' "$rc" && grep -q oh-my-zsh.sh "$rc"; then
   omz=$(grep -n oh-my-zsh.sh "$rc" | head -1 | cut -d: -f1)
-  gk=$({ grep -nF "$root/git.zsh" "$rc" || grep -nE '(git-alias|gkit|otis)/git\.zsh' "$rc"; } | head -1 | cut -d: -f1)
+  gk=$({ grep -nF "$root/git.zsh" "$rc" || grep -nE '(git-alias|gkit|otis|otis/libexec)/git\.zsh' "$rc"; } | head -1 | cut -d: -f1)
   if [ -n "$gk" ] && [ "$gk" -lt "$omz" ]; then
     fail "oh-my-zsh" "its git plugin defines gb, gl, ga, gcm and more, and is sourced after otis, so its aliases win; move the otis line below the oh-my-zsh.sh line"
   else
