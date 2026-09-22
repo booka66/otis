@@ -168,7 +168,7 @@ case $kind in
 esac
 [ "$kind" = merged ] && exec git-ci-preview --merged "$iid"
 # One from every open MR (f), not in the JSON the dashboard's preview reads:
-# the MR, a line a fact, its description's opening lines, its threads.
+# the MR, a line a fact, its threads, its description.
 mr='first((.data.currentUser.reviewRequestedMergeRequests, .data.project.mergeRequests) | .nodes[]? | select(.iid == $iid))'
 jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
   include "otis";
@@ -181,11 +181,9 @@ jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} -
 git-verify --preview "$iid"
 desc=$(jq -r --arg iid "$iid" "$mr"' | .description // ""' "$st/mrs.json" |
   glow -s "${OTIS_T_GLOW:-dark}" -w "${FZF_PREVIEW_COLUMNS:-100}" - 2>/dev/null | perl -ne 'my $p = $_; $p =~ s/\e\[[0-9;]*m//g; print if $p =~ /\S/')
-if [ -n "$desc" ]; then
-  # Its opening lines, not the whole of it: the rest is in the MR.
-  printf "\n${GK_CONTEXT}DESCRIPTION${GK_R}\n\n"
-  printf '%s\n' "$desc" | head -5
-  more=$(printf '%s\n' "$desc" | sed 1,5d | grep -c .)
-  [ "$more" -gt 0 ] && printf "${GK_FAINT}  + %s more lines: w opens the MR${GK_R}\n" "$more"
-fi
 git-mr-threads --overview "$iid"
+if [ -n "$desc" ]; then
+  # All of it, after the threads so a long one buries nothing: the preview scrolls.
+  printf "\n${GK_CONTEXT}DESCRIPTION${GK_R}\n\n"
+  printf '%s\n' "$desc"
+fi

@@ -232,17 +232,15 @@ case $mode in
           awk -v n="$lo" -v from="$from" -v at="$line" -v lit="$(printf "$GK_ATTENTION")" -v dim="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" '
             { printf "%s%5d%s %s%s%s\n", dim, n, r, (n >= from && n <= at ? lit "▌" r : " "), $0, r; n++ }'
       done
-    # Why Claude wrote it, its gist: the first paragraph that says it, past
-    # the heading line and before the lessons, to about five lines; the
-    # rest is in the review.
-    jq -r -L "$share" --arg id "$1" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-100} - 4 ))" '
+    # Why Claude wrote it, all of it: every paragraph past the heading line
+    # and up to the lessons, which are in the review.
+    jq -r -L "$share" --arg id "$1" '
       include "otis";
       .[] | select(.id == $id) | [.notes[] | select(.why)][0] // empty | .why |
-      (split("\n\n") | map(select(test("\\S") and (test("^\\s*(\\*\\*|##)") | not)))) as $ps |
-      "", yours + "WHY CLAUDE WROTE IT" + context + "  for you alone, never posted" + r, "",
-      # About five lines of it, ended on a word.
-      ($ps[0] // "" | gsub("\n"; " ") | if length > ($w * 5) then .[0:$w * 5] | sub(" [^ ]*$"; "") + " …" else . end | "\u0002" + .),
-      (if ($ps | length) > 1 then "  " + faint + "+ \($ps | length - 1) more in the review" + r else empty end)' "$st/threads.json" | markdown
+      (split("\n\n") | map(select(test("\\S"))) | (first(to_entries[] | select(.value | test("^\\s*##")) | .key) // length) as $end
+        | .[:$end] | map(select(test("^\\s*\\*\\*") | not))) as $ps |
+      "", yours + "WHY CLAUDE WROTE IT" + context + "  for you alone, never posted" + r,
+      ($ps[] | "", "\u0002" + gsub("\n"; " "))' "$st/threads.json" | markdown
     ;;
   --overview)
     # gmr's preview of an MR: its unresolved threads on the MR itself, which

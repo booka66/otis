@@ -310,11 +310,8 @@ if [ "$kind" = review ]; then
   desc=$(jq -r --arg iid "$iid" '.data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid) | .description // ""' "$st/mrs.json" 2>/dev/null)
   if [ -n "$desc" ]; then
     printf '\n'; heading "description"
-    # Its opening lines, not the whole of it: the rest is in the MR.
-    out=$(printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | grep -v '^[[:space:]]*$')
-    printf '%s\n' "$out" | head -5
-    more=$(printf '%s\n' "$out" | sed 1,5d | grep -c .)
-    [ "$more" -gt 0 ] && printf "${GK_FAINT}  + %s more lines: w opens the MR${GK_R}\n" "$more"
+    # All of it: it comes last, and the preview scrolls.
+    printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | grep -v '^[[:space:]]*$'
   fi
 fi
 exit 0
