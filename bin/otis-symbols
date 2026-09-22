@@ -254,7 +254,7 @@ rowline() {
         # What Claude's review did with it, beyond the diff: opened its file, searched for it.
         case $cm[i] in read) put "$G" "● " ;; grep) put "$EL" "◐ " ;; *) put "" "  " ;; esac
         put "" "  "
-        if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-$'\uE73F'${nop[i]}}}"; else put "" "   "; fi
+        if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-${nop[i]}}}"; else put "" "   "; fi
         if (( ndr[i] > 0 )); then put "$Y" "✎${(r:2:: :)ndr[i]}"; else put "" "   "; fi
       fi
       case $vwd[i] in

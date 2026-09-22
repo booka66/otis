@@ -106,7 +106,7 @@ EOF
       if (budget < 22) budget = 22
       for (i = 1; i <= files; i++) {
         p = path[i]
-        th = (p in count)  ? GK_ELSEWHERE "\356\234\277" count[p] GK_R : "  "
+        th = (p in count)  ? GK_ELSEWHERE "\357\201\265" count[p] GK_R : "  "
         dr = (p in drafts) ? GK_YOURS "\342\234\216" drafts[p] GK_R : "  "
         print ((p in seen) ? GK_GOOD "\342\234\223" GK_R : " ") " " \
           gk_stat(add[p], del[p], wa, wd) " " gk_bar(add[p], del[p]) " " th " " dr "  " \

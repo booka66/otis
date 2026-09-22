@@ -106,7 +106,7 @@ fetch() {
   printf "\n${GK_CONTEXT}review${GK_R}\n"
   printf "  ${GK_GOOD}\342\234\223${GK_R} approved   ${GK_BAD}\342\234\227${GK_R} changes asked for   ${GK_CONTEXT}\302\267${GK_R} you reviewed it\n"
   printf "  ${GK_CONTEXT}2${GK_R} approvals still needed   ${GK_ATTENTION}!${GK_R} nobody asked yet   ${GK_CONTEXT}~${GK_R} draft\n"
-  printf "  ${GK_YOURS}\356\234\265 3${GK_R} unresolved threads\n"
+  printf "  ${GK_YOURS}\357\201\265 3${GK_R} unresolved threads\n"
   printf "\n${GK_CONTEXT}merged${GK_R}\n"
   printf "  ${GK_GOOD}\342\226\262${GK_R} live   ${GK_ATTENTION}\342\227\220${GK_R} deploying   ${GK_ATTENTION}\342\227\213${GK_R} queued   ${GK_BAD}\342\226\274${GK_R} rolled back   ${GK_ELSEWHERE}\302\267${GK_R} not out yet\n"
   printf "  production watch: ${GK_GOOD}\342\234\223${GK_R} not this MR   ${GK_YOURS}\342\232\240${GK_R} possibly   ${GK_BAD}\342\234\227${GK_R} likely   ${GK_CONTEXT}?${GK_R} unknown\n"

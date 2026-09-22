@@ -137,7 +137,7 @@ EOF
   printf "  ${GK_YOURS}\342\234\2163${GK_R}      Claude has left you three of something: fixes to fold in, drafts to submit\n"
   printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_ATTENTION}\342\227\216${GK_R}      Claude is working \302\267 verifying in Cursor Cloud\n"
   printf "  ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R}    verified: passed, failed, inconclusive\n"
-  printf "  ${GK_YOURS}\356\234\265${GK_R}        unresolved threads on your MR\n"
+  printf "  ${GK_YOURS}\357\201\265${GK_R}        unresolved threads on your MR\n"
   printf "  ${GK_BAD}\342\234\227${GK_R} ${GK_YOURS}\342\232\240${GK_R}      failed \302\267 production may be unhappy about it\n"
   printf "  ${GK_GOOD}\342\234\223${GK_R} ${GK_ATTENTION}!${GK_R}      approved and green \302\267 nobody is reviewing it yet\n"
   printf "  ${GK_ATTENTION}\342\227\220${GK_R} ${GK_ATTENTION}\342\227\213${GK_R}      running \302\267 queued: a pipeline of yours, or a merged MR on its way out\n"

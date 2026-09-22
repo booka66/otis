@@ -1247,7 +1247,7 @@ if [ "$mode" = --rows ]; then
       fi
       if [ -n "$GMR_IID" ]; then
         printf "${GK_CONTEXT}threads on its lines${GK_R}\n"
-        printf "  ${GK_ELSEWHERE}\356\234\277 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or Claude's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
+        printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or Claude's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
       printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body   ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
@@ -1357,7 +1357,7 @@ if [ "$mode" = --rows ]; then
     # A viewed row reads dim: its counts lose their color too.
     function dimmed(t) { gsub(/\033\[[0-9;]*m/, "", t); return GK_CONTEXT t GK_R }
     function tally(kind,   k, c) { c = 0; for (k in hit) if (mkind[k] == kind) c++; return c }
-    function threads(o, d) { return (o ? GK_ELSEWHERE "\356\234\277" o GK_R : "  ") " " (d ? GK_YOURS "\342\234\216" d GK_R : "  ") " " }
+    function threads(o, d) { return (o ? GK_ELSEWHERE "\357\201\265" o GK_R : "  ") " " (d ? GK_YOURS "\342\234\216" d GK_R : "  ") " " }
     function rule(text,   s) {
       s = "\342\224\200\342\224\200 " text " "
       while (length(s) < 62) s = s "\342\224\200"
