@@ -298,7 +298,7 @@ out=$(jq -nr -L "$share" \
     (unresolved) as $th |
     (seen("otis-verify"; .iid; ($v.head // ""))) as $vseen |
     (if $fresh and $v.status == "done" and $v.verdict == "fail" and ($vseen | not) then
-       { rank: 4, g: "●", gc: bad, verb: "verified: failed",
+       { rank: 4, g: "●", gc: bad, verb: "verified: failed\(if $v.fixed then ", fix verified" else "" end)",
          extra: "\($common)/otis-verify/\(.iid)", verb_key: "run" }
      elif $pipe == "FAILED" then
        { rank: 5, g: "✗", gc: bad, verb: "pipeline failed", verb_key: "pipeline" }
@@ -378,7 +378,7 @@ out=$(jq -nr -L "$share" \
     $verify | to_entries[] | select(.key | startswith("b-")) |
     .key as $key | .value as $v | ($key[2:] | gsub("%"; "/")) as $branch |
     select($v.status == "done" and (seen("otis-verify"; $key; ($v.head // "")) | not)) |
-    (if $v.verdict == "fail" then { rank: 4, gc: bad, verb: "verified: failed" }
+    (if $v.verdict == "fail" then { rank: 4, gc: bad, verb: "verified: failed\(if $v.fixed then ", fix verified" else "" end)" }
      elif ($v.verdict | IN("pass", "inconclusive")) and fresh_run("otis-verify"; $key) then
        { rank: 10, gc: (if $v.verdict == "pass" then good else context end),
          verb: "verified: \(if $v.verdict == "pass" then "passed" else "unclear" end)" }

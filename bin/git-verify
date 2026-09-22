@@ -21,10 +21,13 @@
 # is the tester: a VM with the repo's environment (its .cursor/), where it
 # can start the sandbox, click through the app and record it, and run tests.
 # otis carries what each says to the other, up to three rounds. When the
-# verdict is a fail and the judge can say what in the change caused it, the
-# tester gets one round more to make that change and check again; a fix the
-# judge then accepts is a proposal to take in (f in its progress view,
-# git-mr-fix f-<key>), and one it does not is only a line in the report.
+# verdict is a fail the judge puts down to the change, the tester tries a fix:
+# the change the judge names, or, when it only has a lead, the cause found in
+# the VM first; then it checks again. A fix the judge turns down with a way to
+# do better gets one attempt more. A fix comes with the smallest test that
+# would have caught it. One the judge accepts is verified, and a proposal to
+# take in (f in its progress view, git-mr-fix f-<key>); one it does not is
+# only a line in the report.
 #
 # The tester works from what is on origin, so the branch must be pushed. From
 # gb, V on a branch origin does not have as it is here asks once to push it
@@ -74,14 +77,15 @@ case $mode in
     rows=$(for dir in "$top"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
-      verifying=false verdict=
+      verifying=false verdict= fixed=false
       running "$dir" && verifying=true
       status=$(cat "$dir/status" 2>/dev/null)
       [ "$status" = done ] && verdict=$(jq -r '.verdict // empty' "$dir/verdict.json" 2>/dev/null)
-      printf '%s\t%s\t%s\t%s\t%s\n' "${dir##*/}" "$verifying" "$status" "$verdict" "$(cat "$dir/head" 2>/dev/null)"
+      [ "$(jq -r .accept "$dir/verdict-fix.json" 2>/dev/null)" = true ] && fixed=true
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${dir##*/}" "$verifying" "$status" "$verdict" "$(cat "$dir/head" 2>/dev/null)" "$fixed"
     done)
     [ -n "$rows" ] || { echo '{}'; exit 0; }
-    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4]}}] | add // {}'
+    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4], fixed: (.[5] == "true")}}] | add // {}'
     exit 0
     ;;
   --preview)
@@ -105,7 +109,7 @@ case $mode in
     [ -n "$OTIS_REPORT_NO_COST" ] && spent=
     if [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ -s "$d/verdict.json" ]; then
       retro=0; [ -s "$d/retro.json" ] && retro=$(jq '(.recommendations // []) | length' "$d/retro.json" 2>/dev/null)
-      fix=$(jq -r 'if .accept then "a fix proposed" else "a fix turned down" end' "$d/verdict-fix.json" 2>/dev/null)
+      fix=$(jq -r 'if .accept then "a verified fix" else "a fix turned down" end' "$d/verdict-fix.json" 2>/dev/null)
       # A run with no plan (one that stopped early) has only the verdict's own words.
       plan=$d/plan.json; [ -s "$plan" ] || plan=/dev/null
       jq -r -L "$share" --slurpfile plan "$plan" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" \
@@ -118,7 +122,7 @@ case $mode in
         ([.criteria[] | select(.result == "verified")] | length) as $ok |
         ([.criteria[] | select(.result == "failed")] | length) as $bad |
         (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else yours + "inconclusive" end) as $v |
-        "", context + "VERIFICATION" + r + "  " + $v + r + (if $spent != "" then faint + "  " + ($spent | ltrimstr(" · ") | ltrimstr("  ")) + r else "" end),
+        "", context + "VERIFICATION" + r + "  " + $v + r + (if $fix == "a verified fix" then context + ", " + good + "fix verified" + r else "" end) + (if $spent != "" then faint + "  " + ($spent | ltrimstr(" · ") | ltrimstr("  ")) + r else "" end),
         "",
         ((.summary // "") | one | wrapl($w - 2; 3)[] | "  " + text + . + r),
         "",
@@ -340,6 +344,23 @@ unpushed() {
   ask="$ask then a Cursor Cloud agent tests it while Claude judges (about 15-30 minutes, billed by Cursor)?"
 }
 
+# lessons <dir>: what the verification in <dir> ran into, for the next one:
+# its verdict and concerns, and from its retro what cost time and what to do
+# differently (otis's own mechanics aside), then the two sections before it
+# that it carried, so a workaround the last run never needed, because it was
+# told, is not lost. Newest first.
+lessons() {
+  if [ -s "$1/verdict.json" ] || [ -s "$1/retro.json" ]; then
+    printf '## The verification of %s\n' "$(cut -c1-8 "$1/head" 2>/dev/null)"
+    jq -r '"", "Verdict: \(.verdict). \(.summary)",
+      (if (.concerns | length) > 0 then "", "Concerns:", (.concerns[] | "- " + .) else empty end)' "$1/verdict.json" 2>/dev/null
+    jq -r '(if (.blockers | length) > 0 then "", "What cost time:", (.blockers[] | "- \(.who): \(.what) (\(.cost))") else empty end),
+      ([.recommendations[] | select(.where != "otis")] | if length > 0 then "", "What to do differently:", (.[] | "- " + .change) else empty end)' "$1/retro.json" 2>/dev/null
+    echo
+  fi
+  awk '/^## / { n++ } n >= 1 && n <= 2' "$1/lessons.md" 2>/dev/null
+}
+
 start() {
   if [ -n "$b" ] && unpushed; then
     note=$(git-confirm --note "$ask") || return 1
@@ -360,8 +381,10 @@ start() {
   # The last run's tester, whose VM may still be up with everything set up:
   # git-verify-run sends it the new commit instead of booting another.
   prev=$(cat "$d/agent" 2>/dev/null)
+  learned=$(lessons "$d")
   rm -rf "$d"
   mkdir -p "$d/context" || return 1
+  [ -n "$learned" ] && printf '%s\n' "$learned" > "$d/lessons.md"
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
   [ -n "$prev" ] && printf '%s\n' "$prev" > "$d/agent-prev"
   date +%s > "$d/started"

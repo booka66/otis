@@ -245,7 +245,7 @@ case $1 in
   # (git-verify-run's fix), in the proposals picker.
   --fix)
     d=$2
-    [ -s "$d/verdict-fix.json" ] || exec git-fzf-note "no fix tried here: only a failed verification whose judge found the cause tries one"
+    [ -s "$d/verdict-fix.json" ] || exec git-fzf-note "no fix tried here: only a failed verification whose judge puts the cause in the change tries one"
     [ "$(jq -r .accept "$d/verdict-fix.json")" = true ] || exec git-fzf-note "the judge turned the tester's fix down: $(jq -r .summary "$d/verdict-fix.json")"
     echo "execute(git-mr-fix 'f-${d##*/}' '')" ;;
   --less)

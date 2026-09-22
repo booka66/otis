@@ -48,15 +48,18 @@ if [ "$what" = copy ]; then
     [ -s "$d/head" ] && printf ' at %s' "$(cut -c1-8 "$d/head")"
     v=$(jq -r '.verdict // empty' "$d/verdict.json" 2>/dev/null)
     [ -n "$v" ] && printf ', verdict: %s' "$v"
-    # A fix the judge accepted (git-verify-run's fix) is the news of a fail.
+    # A fix the judge accepted (git-verify-run's fix) is the news of a fail,
+    # only while it is this run's: a later verification leaves it behind.
     fixd=${d%/otis-verify/*}/gmr-fix/f-${d##*/}
-    [ -s "$fixd/01.patch" ] && printf '; a fix is proposed, %s' "$(jq -r '.items[0].title' "$fixd/items.json" 2>/dev/null)"
+    [ "$(cat "$fixd/head" 2>/dev/null)" = "$(cat "$d/head" 2>/dev/null)" ] || fixd=/nonexistent
+    [ -s "$fixd/01.patch" ] && printf '; the tester fixed it and the fix verifies, not yet in the branch: %s' "$(jq -r '.items[0].title' "$fixd/items.json" 2>/dev/null)"
     printf '.\nEverything it kept is in %s:\n' "$d"
     has report.md "the report: the verdict claim by claim, with the evidence for each"
     has verdict.json "the verdict as JSON"
     [ -d "$d/artifacts" ] && printf '  %-22s %s\n' artifacts/ "what the tester brought back, $(find "$d/artifacts" -type f | wc -l | tr -d ' ') files: logs, API responses, screenshots, recordings"
     has context/ "what the run read and wrote: the change, the plan, the tester's report each round (report-<n>.md), check-ins"
     has plan.json "what it set out to check"
+    has lessons.md "what earlier verifications of this ran into, which it was told"
     has verdict-fix.json "the judge's ruling on the fix the tester tried after the verdict"
     [ -s "$fixd/01.patch" ] && printf '  %-22s %s\n' "$fixd/01.patch" "the fix itself, not yet in the branch"
     has events.jsonl "every step, as it happened"

@@ -21,7 +21,7 @@
 #   cursorEnv    the Cursor Cloud environment V's tester runs in, by its dashboard name: otis.cursorEnv, else the repo's own
 #   verifyRetro  exit 0 when a verification ends with a retrospective by a fresh Claude on what slowed
 #                either agent and what to change (git config otis.verifyRetro false turns it off); on by default
-#   verifyFix    exit 0 when a failed verification whose judge found the cause has the tester try the fix,
+#   verifyFix    exit 0 when a failed verification whose judge puts the cause in the change has the tester try a fix,
 #                a proposal if the judge accepts it (git config otis.verifyFix false turns it off); on by default
 #   checkInModel  the model the judge's looks in run on (a claude --model value, e.g. sonnet), for cost: otis.checkInModel, else the judge's own
 #   verifyCheckIn  minutes between the judge's looks at what V's tester is doing, 0 for never: otis.verifyCheckIn, else 5
