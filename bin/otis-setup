@@ -26,6 +26,19 @@ fail() { printf "  ${bad}need${r}  %s ${dim}%s${r}\n" "$1" "$2"; problems=$((pro
 note() { printf "  ${warn}note${r}  %s ${dim}%s${r}\n" "$1" "$2"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 os=$(uname)
+# How to run this again: by name once the line it adds is loaded, by path
+# before (the curl install runs it from where it put it).
+again=otis-setup
+[ "$(command -v otis-setup 2>/dev/null)" = "$root/bin/otis-setup" ] || again=$root/bin/otis-setup
+case $again in "$HOME"/*) again="~/${again#"$HOME"/}" ;; esac
+# Homebrew where its installer puts it, and on PATH for this run when it is
+# not yet (its "Next steps" not done): the line that keeps it there is
+# offered below, with otis's own.
+brew_bin=
+for b in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/bin/brew "$HOME/.linuxbrew/bin/brew"; do
+  [ -x "$b" ] && { brew_bin=$b; break; }
+done
+[ -n "$brew_bin" ] && ! have brew && { PATH=${brew_bin%/*}:${brew_bin%/bin/brew}/sbin:$PATH; export PATH; }
 # What brew would install, collected as the checks go: required formulae,
 # optional ones, and casks (macOS only).
 want= want_opt= want_cask=
@@ -184,8 +197,10 @@ if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_op
     printf '  Homebrew installs all of the above on macOS and Linux:\n    %s\n  ' "$brew_install"
     if ask "install Homebrew now?"; then
       if sh -c "$brew_install"; then
-        printf '\n  Homebrew is in. Do what its "Next steps" say to put brew on your PATH, then run otis-setup again.\n'
-        exit 1
+        # Its "Next steps" are done here: on PATH now, and the line for your
+        # shell offered below. Then the checks again, which can use it.
+        printf '\n  Homebrew is in; otis-setup puts it on your PATH, so skip its "Next steps".\n\n'
+        exec "$0" "$@"
       fi
     fi
   fi
@@ -306,6 +321,21 @@ case ${SHELL##*/} in
   *)    file=git.zsh; rc=${ZDOTDIR:-$HOME}/.zshrc ;;
 esac
 line="source \"$root/$file\""
+# brew's own line, where no startup file of yours has one: its installer
+# leaves adding it to you, and without it a new terminal has no brew.
+if [ -n "$brew_bin" ] && ! grep -qsE 'shellenv|homebrew|linuxbrew' "$rc" "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; then
+  if [ "$file" = otis.fish ]; then bline="$brew_bin shellenv | source"; else bline="eval \"\$($brew_bin shellenv)\""; fi
+  case $rc in "$HOME"/*) brc="~/${rc#"$HOME"/}" ;; *) brc=$rc ;; esac
+  if [ -n "$check_only" ]; then
+    fail "brew on PATH" "no startup file of yours puts it there; add to $brc: $bline"
+  elif printf '  a new terminal has no brew until %s says: %s\n  ' "$brc" "$bline" && ask "add it?"; then
+    mkdir -p "$(dirname "$rc")"
+    printf '\n# Homebrew\n%s\n' "$bline" >> "$rc"
+    pass "brew on PATH" "added to $brc"
+  else
+    fail "brew on PATH" "not added; add to $brc yourself: $bline"
+  fi
+fi
 case $rc in "$HOME"/*) rcname="~/${rc#"$HOME"/}" ;; *) rcname=$rc ;; esac
 # Written out, or through $HOME or ~.
 rel=${root#"$HOME"/}
@@ -384,6 +414,6 @@ printf '\n'
 if [ "$problems" -eq 0 ]; then
   printf "${ok}ready.${r} Open a new terminal, then in a repo: otis is the dashboard and the place to start, and gg lists every command.\n"
 else
-  printf "${warn}%s thing(s) to fix above,${r} then run otis-setup again.\n" "$problems"
+  printf "${warn}%s thing(s) to fix above,${r} then run %s again.\n" "$problems" "$again"
   exit 1
 fi
