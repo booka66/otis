@@ -70,11 +70,14 @@ if [ "$(printf '%s' "$latest" | jq -r .job)" = "$rollback_job" ]; then
   latest=$rollback
 fi
 
+# The ancestry checks, here and below, need main's recent commits.
+git fetch --quiet --no-tags origin "$main"
+
 # iid, when it reached main, the commit that brought it there (empty while its
-# stack has not), and the MR it went in with if it was stacked. Empty fields go
-# last, since read collapses adjacent tabs.
-targets=$(printf '%s' "$mrs" | jq -r '.[] | [.iid, .targetBranch, .mergedAt, .mergeCommitSha] | @tsv' |
-  while IFS="$(printf '\t')" read -r iid target merged sha; do
+# stack has not), and the MR it went in with if it was stacked or superseded.
+# Empty fields go last, since read collapses adjacent tabs.
+targets=$(printf '%s' "$mrs" | jq -r '.[] | [.iid, .targetBranch, .mergedAt, .sourceBranch, .mergeCommitSha] | @tsv' |
+  while IFS="$(printf '\t')" read -r iid target merged source sha; do
     via=
     while [ "$target" != "$main" ]; do
       base=$(glab api graphql -f repo="$repo" -f branch="$target" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $after: Time!) {
@@ -86,13 +89,24 @@ targets=$(printf '%s' "$mrs" | jq -r '.[] | [.iid, .targetBranch, .mergedAt, .me
 $next
 EOF
     done
+    # GitLab can retarget an MR to main after it merged into a stack branch,
+    # so it reads as merged to main with a merge commit main never gets. When
+    # its branch went to main again in a later MR, that MR brings it.
+    if [ -n "$sha" ] && ! git merge-base --is-ancestor "$sha" "refs/remotes/origin/$main" 2>/dev/null; then
+      next=$(glab api graphql -f repo="$repo" -f branch="$source" -f main="$main" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $main: String!, $after: Time!) {
+        project(fullPath: $repo) { mergeRequests(state: merged, sourceBranches: [$branch], targetBranches: [$main], mergedAfter: $after, sort: MERGED_AT_ASC, first: 2) {
+          nodes { iid mergedAt mergeCommitSha } } } }' |
+        jq -r --arg iid "$iid" '[.data.project.mergeRequests.nodes[] | select(.iid != $iid)][0] // empty | [.iid, .mergedAt, .mergeCommitSha] | @tsv') || exit 1
+      [ -z "$next" ] || IFS="$(printf '\t')" read -r via merged sha <<EOF
+$next
+EOF
+    fi
     printf '%s\t%s\t%s\t%s\n' "$iid" "$merged" "$sha" "$via"
   done) || exit 1
 
-# The ancestry checks need main's recent commits here. Without them every check
-# fails and live MRs would read as waiting, so a fetch that leaves any missing
-# fails the run instead, which keeps the last good data and shows why.
-git fetch --quiet --no-tags origin "$main"
+# Without main's recent commits every check fails and live MRs would read as
+# waiting, so a fetch that left any missing fails the run instead, which keeps
+# the last good data and shows why.
 missing=$({ printf '%s' "$targets" | cut -f3; printf '%s' "$prod" | jq -r '.deploys[].sha'
   printf '%s %s' "$latest" "$rollback" | jq -r '.sha // empty, .on // empty'; } |
   grep . | git cat-file --batch-check | awk '$2 == "missing" { print $1 }')
