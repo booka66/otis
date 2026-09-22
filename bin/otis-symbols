@@ -41,6 +41,11 @@
 # it; a then asks Claude about the lines, and c in a review comments on
 # them. Each frame's timing goes to ~/.cache/otis/symbols.log
 # (OTIS_SYMBOLS_TRACE).
+#
+# Where the picker's a asks Claude (git-symbols-ask), a opens a panel over
+# the lower part of the list rather than leaving the screen: the row you are
+# on and the diff stay in sight, and Claude's answers stream into the panel
+# as they come.
 setopt extendedglob no_nomatch
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
@@ -604,6 +609,7 @@ helplines() {
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them" \
+    ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
@@ -616,15 +622,23 @@ helplines() {
 }
 draw() {
   local t0=$EPOCHREALTIME
-  local y i f s lo=0 hi=0 body foot rows
+  local y i f s lo=0 hi=0 body foot rows lrows
   (( dirty )) && list
   settle_cur
+  # The panel, over the list's lower part, the rows above it, the diff
+  # left in full.
+  chh=0
+  if (( chat )); then
+    (( chh = lh * 55 / 100, chh < 9 ? (chh = 9) : 0, chh > lh - 3 ? (chh = lh - 3) : 0 ))
+    (( lw != ccw )) && chat_load
+    chat_frame
+  fi
   # The cursor's row in view, the headline kept when it fits.
-  (( rows = lh ))
+  (( rows = lh, lrows = lh - chh ))
   for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
-  (( hi > top + rows )) && (( top = hi - rows ))
+  (( hi > top + lrows )) && (( top = hi - lrows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
-  (( lo > 0 && hi <= rows )) && top=0
+  (( lo > 0 && hi <= lrows )) && top=0
   # The pane: the preview, or ? its keys.
   local head=
   if (( help )); then helplines; pfile=; head="  ${B}${T}keys, and what the glyphs say$R"
@@ -647,7 +661,8 @@ draw() {
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     s=
-    if (( i <= $#L )); then
+    if (( y > lrows )); then s="  ${CF[y - lrows]}"
+    elif (( i <= $#L )); then
       if (( LI[i] )); then
         f=$LI[i]
         if (( f == cur )); then s=$A"▌ "$R$BG${RL[f]//$R/$R$BG}$R
@@ -688,9 +703,14 @@ draw() {
     [[ $sd == old ]] && sw+=" (removed)"
     foot+=$B$A"c"$R$B$T" comment on $sw"$UB$R$C"   ·   esc lets go"$R
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
+  elif (( cfocus )); then
+    chat_busy && foot+=$B$A"ctrl-c"$R$B$T" stops it"$UB$R$C"   ·   "$R
+    foot+=$A"⏎"$R$C" asks  "$A"tab"$R$C" an idea  "$A"↑↓"$R$C" scroll  "$A"ctrl-f"$R$C" in Claude Code  "$A"/new"$R$C" starts over  "$A"esc"$R$C" back to the rows  "$R$A"ctrl-a"$R$C" hides it"$R
+    cut "$foot" $(( W - 1 )); foot=$REPLY
   else
     local n k v used_=2 room
     (( room = W - 14 ))
+    (( chat )) && { foot+=$A"a"$R$C" asks Claude  "$A"ctrl-a"$R$C" hides it   ·   "$R; (( used_ += 34 )); }
     symkeys
     for (( n = 1; n <= $#hk; n++ )); do
       [[ $hk[n] == enter ]] || continue
@@ -875,6 +895,13 @@ mouse() {
   r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
   (( y > H - 2 )) && return
   (( l = y - py - phd + 1 + poff, c = x - (side ? px : 2) + 1, c < 1 ? (c = 1) : 0 ))
+  # The panel's: the wheel scrolls what Claude said, a click types in it.
+  if (( chat && y > lh - chh && y <= lh && (side ? x < lw : 1) )); then
+    if (( b == 64 )); then (( coff += 3 ))
+    elif (( b == 65 )); then (( coff -= 3, coff < 0 ? (coff = 0) : 0 ))
+    elif (( b == 0 && ! up )); then cfocus=1; fi
+    return
+  fi
   if (( b == 64 || b == 65 )); then
     if inpane || (( ! side && y >= py )); then scroll $(( b == 64 ? -3 : 3 ))
     else step $(( b == 64 ? -1 : 1 )); fi
@@ -916,10 +943,227 @@ hunk() {
   scroll $(( want - poff ))
 }
 
+# --- Claude, beside it -------------------------------------------------------------
+# a types into the panel; enter sends the question in the background
+# (git-symbols-ask --send), with the row you are on then, or the lines
+# selected in the preview, and the answer streams into the conversation's
+# chat file, which the panel draws, over the lower part of the list. esc
+# gives the keys back to the tree, the panel still up, so you move about
+# between questions; a types in it again, and esc once more closes it.
+# ctrl-a shows or hides it from anywhere, the conversation kept. tab puts in a question that fits the row
+# (--starters), ctrl-c stops an answer, /new starts over, and ctrl-f opens
+# the conversation in Claude Code, full screen, for what the panel's Claude
+# cannot do: edit, or ask a permission. ctpl is the picker's a, the row's
+# fields still {n}; cafter what the binding does after it (a reload), run
+# when Claude has drafted a comment.
+integer chat=0 cfocus=0 cat_=0 coff=0 cstn=0 chh=0 ccw=0 cwas=0 cdrafted=0
+float csent=0
+ctext= cdir= caskl= ctpl= cafter= csig=
+typeset -a CL cst CF
+[[ ${bind[a]} == (#b)execute\((git-symbols-ask [^\)]##)\)(*) ]] && ctpl=$match[1] cafter=${match[2]#+}
+# askcmd <mode>: the picker's git-symbols-ask in that mode, for the row.
+askcmd() { subst "${ctpl/git-symbols-ask/git-symbols-ask $1}" $cur; }
+chat_open() {
+  if [[ -z $cdir ]]; then askcmd --dir; cdir=$(zsh -fc "$REPLY" 2>/dev/null </dev/null); fi
+  [[ -n $cdir ]] || { flash="could not work out where this change's conversation goes"; return }
+  chat=1 cfocus=1 caskl=$1 cstn=0
+  askcmd --starters
+  cst=("${(@f)$(OTIS_ASK_LINES=$1 zsh -fc "$REPLY" 2>/dev/null </dev/null)}")
+  cst=(${cst:#})
+}
+# chat_busy: an answer is coming (or was just asked for, and its script has
+# not said so yet).
+chat_busy() {
+  local p
+  (( EPOCHREALTIME - csent < 2 )) && return 0
+  [[ -r $cdir/busy ]] || return 1
+  p=$(<$cdir/busy)
+  kill -0 ${p:-0} 2>/dev/null
+}
+# chat_where: what the next question is about, for the panel's top line.
+chat_where() {
+  local n
+  REPLY=
+  (( cur )) || return
+  fields $cur
+  if [[ -n $caskl ]]; then
+    n=${caskl#* }
+    REPLY=${fld[2]:t}:${n% *}
+    [[ ${n% *} != ${n#* } ]] && REPLY+=-${n#* }
+    return
+  fi
+  case $typ[cur] in
+    sym|caller) n=${rid[cur]##*>}; n=${n#*\#}; n=${n#type }; REPLY=${n//+/.} ;;
+    file) REPLY=$fld[2] ;;
+  esac
+}
+chat_send() {
+  local q=${${ctext##[[:space:]]#}%%[[:space:]]#}
+  [[ -n $q ]] || return
+  if [[ $q == /(new|clear) ]]; then
+    chat_busy && { flash="Claude is still answering: ctrl-c stops it first"; return }
+    rm -f $cdir/{session,head,chat}
+    ctext= cat_=0 coff=0 csig= CL=()
+    flash="a new conversation"
+    return
+  fi
+  chat_busy && { flash="Claude is still answering: ctrl-c stops it"; return }
+  askcmd --send
+  OTIS_ASK_QUESTION=$q OTIS_ASK_LINES=$caskl zsh -fc "$REPLY" </dev/null >/dev/null 2>&1 &!
+  csent=$EPOCHREALTIME ctext= cat_=0 coff=0 caskl= cstn=0 cwas=1
+}
+chat_stop() {
+  local p
+  [[ -r $cdir/busy ]] && p=$(<$cdir/busy)
+  [[ -n $p ]] && kill $p 2>/dev/null
+  csent=0
+}
+chat_full() {
+  chat_busy && { flash="Claude is still answering: wait, or ctrl-c stops it"; return }
+  run "execute($ctpl)${cafter:++$cafter}" $cur
+  csig=
+}
+chat_key() {
+  local k=$1 n h
+  keyname "$k"; n=$REPLY
+  case $k in
+    $'\t') n=tab ;; $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
+    $e'[H'|$e'[1~') n=home ;; $e'[F'|$e'[4~') n=end ;;
+    $'\x17') n=ctrl-w ;; $'\x06') n=ctrl-f ;; $'\x01') n=ctrl-a ;;
+  esac
+  case $n in
+    enter) chat_send ;;
+    esc) cfocus=0 ;;
+    ctrl-a) chat=0 cfocus=0 ;;
+    ctrl-c) if chat_busy; then chat_stop; else cfocus=0; fi ;;
+    ctrl-f) chat_full ;;
+    tab)
+      # The next idea, while what is typed is none of your own.
+      (( $#cst )) && [[ -z $ctext || $ctext == $cst[cstn] ]] && { (( cstn = cstn % $#cst + 1 )); ctext=$cst[cstn] cat_=$#cst[cstn]; } ;;
+    up) (( coff += 3 )) ;;
+    down) (( coff -= 3, coff < 0 ? (coff = 0) : 0 )) ;;
+    page-up) (( coff += chh / 2 )) ;;
+    page-down) (( coff -= chh / 2, coff < 0 ? (coff = 0) : 0 )) ;;
+    left) (( cat_ > 0 )) && (( cat_-- )) ;;
+    right) (( cat_ < $#ctext )) && (( cat_++ )) ;;
+    home) cat_=0 ;;
+    end|ctrl-e) cat_=$#ctext ;;
+    bspace) (( cat_ > 0 )) && { ctext=${ctext[1,cat_-1]}${ctext[cat_+1,-1]}; (( cat_-- )); } ;;
+    ctrl-u) ctext=${ctext[cat_+1,-1]} cat_=0 ;;
+    ctrl-w)
+      h=${ctext[1,cat_]}; h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}
+      ctext=$h${ctext[cat_+1,-1]} cat_=$#h ;;
+    *) [[ $k == [[:print:]]* && $k != $e* ]] && { ctext=${ctext[1,cat_]}$k${ctext[cat_+1,-1]}; (( cat_ += $#k )); } ;;
+  esac
+}
+# inline <line>: a line of Claude's markdown as the panel shows it, **bold**
+# and `code` lit; a pair the wrap broke in two loses its marks.
+inline() {
+  local s=$1
+  [[ $s == *'**'* ]] && { s=${(S)s//(#b)\*\*(*)\*\*/$B$match[1]$UB}; s=${s//\*\*/}; }
+  [[ $s == *'`'* ]] && s=${(S)s//(#b)\`([^\`]##)\`/$A$match[1]$T}
+  REPLY=$s
+}
+# chat_load: the chat file (git-symbols-ask's: Claude's words, and lines of
+# its own after \001 and a letter) as the panel's lines, wrapped to it, in CL.
+chat_load() {
+  local l t pre ind lk= f=$cdir/chat
+  integer w=$(( lw - 5 )) code=0
+  CL=() cdrafted=0 ccw=$lw
+  [[ -s $f ]] || return
+  local -a src=("${(@f)$(<$f)}")
+  (( $#src > 800 )) && src=($src[-800,-1])
+  for l in "${src[@]}"; do
+    case $l in
+      $'\x01U '*)
+        code=0 cdrafted=0 pre="$A› $R" lk=U
+        [[ -n $CL[-1] ]] && CL+=("")
+        wrap "${l:3}" $(( w - 2 ))
+        for t in $reply; do CL+=("$pre$B$T$t$R"); pre="  "; done ;;
+      $'\x01O '*) fit "${l:3}" $(( w - 2 )); CL+=("  $F$REPLY$R" ""); lk=O ;;
+      $'\x01T '*)
+        [[ $l == *'drafting a comment' ]] && cdrafted=1
+        # A note says what Claude does next, so it sits on what came before.
+        [[ $lk != O && -z $CL[-1] ]] && (( $#CL )) && CL[-1]=()
+        lk=T
+        fit "${l:3}" $(( w - 2 )); CL+=("$F· $REPLY$R") ;;
+      $'\x01E '*) wrap "${l:3}" $w; for t in $reply; do CL+=("$X$t$R"); done ;;
+      $'\x01S '*) CL+=("$F${l:3}$R") ;;
+      '```'*) code=$(( !code )) ;;
+      *)
+        if (( code )); then fit "$l" $(( w - 2 )); CL+=("  $C$REPLY$R"); continue; fi
+        if [[ -z ${l//[[:space:]]/} ]]; then [[ -n $CL[-1] ]] && CL+=(""); continue; fi
+        pre= ind= lk=x
+        if [[ $l == (#b)([[:space:]]#)([-*]|[0-9]##.)[[:space:]]##(*) ]]; then
+          pre="$match[1]$match[2] " l=$match[3]; ind=${(l:${#pre}:: :)}
+          pre=${pre/[-*] /• }
+        elif [[ $l == (#b)\#\##[[:space:]]##(*) ]]; then l="**$match[1]**"; fi
+        wrap "$l" $(( w - ${#pre} ))
+        for t in $reply; do inline "$t"; CL+=("$T$pre$REPLY$R"); pre=$ind; done ;;
+    esac
+  done
+  while (( $#CL )) && [[ -z $CL[1] ]]; do shift CL; done
+}
+# chat_tick: the chat file grew, or the answer ended; true when the panel
+# wants drawing again. Once an answer that drafted a comment ends, the
+# picker's reload after a runs, so the draft shows on its row.
+chat_tick() {
+  local sig= r=1
+  local -a cs
+  zstat -A cs +size -- $cdir/chat 2>/dev/null && sig=$cs[1]
+  zstat -A cs +mtime -- $cdir/chat 2>/dev/null && sig+=.$cs[1]
+  [[ $sig != $csig ]] && { csig=$sig; chat_load; r=0; }
+  if (( cwas )) && ! chat_busy; then
+    cwas=0 r=0
+    (( cdrafted )) && [[ -n $cafter ]] && run "$cafter" $cur
+  fi
+  return $r
+}
+# chat_frame: the panel's chh lines, in CF: its top line (whether Claude is
+# answering, and what a question now would be about), what was said, the
+# newest at the bottom unless scrolled, and the line you type on.
+chat_frame() {
+  local s where before ch after
+  integer rows=$(( chh - 2 )) last first room from max
+  CF=()
+  chat_where; where=$REPLY
+  line= used=0
+  put "$F" "── "; put "$B$A" "Claude"; line+=$UB
+  if chat_busy; then put "$A" "  ✦ answering"; (( csent > 0 )) && put "$C" " $(( int(EPOCHREALTIME - csent) ))s"; fi
+  [[ -n $where ]] && { put "$C" "  · asking about "; put "$T" "$where"; }
+  put "" " "
+  cut "$line" $(( lw - 4 )); line=$REPLY; vw "$line"
+  CF+=("$line$F${(l:lw - 2 - REPLY::─:)}$R")
+  if (( ! $#CL )) && (( cfocus )); then
+    CF+=("" "${C}Each question goes with the row you are on when you send it.$R" "" "${C}tab puts in one of these:$R")
+    for s in $cst; do fit "$s" $(( lw - 6 )); CF+=("  $T$REPLY$R"); done
+    [[ -s $cdir/session ]] && CF+=("" "${F}the conversation so far is in Claude Code: ctrl-f$R")
+  else
+    (( max = $#CL - rows, max < 0 ? (max = 0) : 0, coff > max ? (coff = max) : 0 ))
+    (( last = $#CL - coff, first = last - rows + 1, first < 1 ? (first = 1) : 0 ))
+    (( $#CL )) && CF+=("${(@)CL[first,last]}")
+  fi
+  while (( $#CF < chh - 1 )); do CF+=(""); done
+  CF=("${(@)CF[1,chh-1]}")
+  # The line you type on: the cursor a lit cell, the text scrolled to keep it in sight.
+  if (( cfocus )); then
+    (( room = lw - 6, from = 1 ))
+    while (( ${(m)#${ctext[from,cat_]}} > room - 1 )); do (( from++ )); done
+    before=${ctext[from,cat_]} ch=${ctext[cat_+1]:- } after=${ctext[cat_+2,-1]}
+    fit "$after" $(( room - ${(m)#before} - 1 )); after=$REPLY
+    s="$A› $R$T$before${e}[7m$ch${e}[27m$after$R"
+    [[ -z $ctext ]] && s+=$F" ask Claude"${cst:+ · tab for ideas}$R
+  else
+    s="$F› a to ask$R"
+  fi
+  CF+=("$s")
+}
+
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
+  (( cfocus )) && { chat_key "$1"; return; }
   local k=$1
   keyname "$k"; local n=$REPLY
   if (( searching )); then
@@ -934,15 +1178,14 @@ handle() {
     [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
     return
   fi
-  # Lines selected in a diff: a asks Claude about them (git-symbols-ask
-  # finds them in OTIS_ASK_LINES), c comments on them in a review, esc lets go.
+  # Lines selected in a diff: a asks Claude about them, c comments on them
+  # in a review, esc lets go.
   if (( sel == 1 )) && [[ -n $selr ]]; then
     case $n in
-      a) if [[ -n $bind[a] ]]; then
-           export OTIS_ASK_LINES=$selr
+      a) if [[ -n $ctpl ]]; then
+           local l=$selr
            sel=0 selr=
-           act a
-           unset OTIS_ASK_LINES
+           chat_open "$l"
            return
          fi ;;
       c) if [[ -n $GMR_IID ]]; then
@@ -955,6 +1198,10 @@ handle() {
     esac
   fi
   sel=0 selr=
+  [[ $n == a && -n $ctpl ]] && { chat_open ""; return; }
+  # ctrl-a shows or hides it, the conversation kept either way.
+  [[ $k == $'\x01' && -n $ctpl ]] && { if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }
+  [[ $n == esc ]] && (( chat )) && { chat=0; return; }
   # A picker's key held down is one press: its repeats, arriving while it
   # runs or within 0.3s of the last of them, are dropped. p held ran the
   # peeks and a preview for every repeat, and the renders piled up.
@@ -1035,7 +1282,10 @@ while :; do
       stick=$EPOCHSECONDS
       orphaned && quit 1
       [[ -z $winch ]] && resize
+      # The panel's clock, while Claude answers.
+      (( chat )) && chat_busy && changed=1
     fi
+    (( chat )) && chat_tick && changed=1
     landed && changed=1
     # The row's preview landing: one test for the file this gen and width
     # draw, and none once it shows. A glob of every kept preview, twenty
