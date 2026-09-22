@@ -128,7 +128,7 @@ integer loaded=0 wa=1 wd=1 wt=0 mr=0
 load() {
   local line i
   local -a f
-  raw=() rid=() typ=() dep=() fold=() kids=() chg=() add=() del=() vwd=() nop=() ndr=() nedge=() dim=() lab=() err=() hay=()
+  raw=() rid=() typ=() dep=() fold=() kids=() chg=() add=() del=() vwd=() nop=() ndr=() nedge=() dim=() lab=() err=() cm=() hay=()
   for line in ${(f)"$(<$1)"}; do
     f=("${(@ps:\t:)line}")
     raw+=("$line")
@@ -137,7 +137,7 @@ load() {
     elif [[ -z $f[2] && ( -z $f[12] || $f[12] == gk-* ) ]]; then typ+=(head)
     else typ+=(plain); fi
     dep+=("${f[14]:-0}") fold+=("$f[15]") kids+=("$f[16]") chg+=("$f[17]") add+=("$f[18]") del+=("$f[19]")
-    vwd+=("$f[20]") nop+=("$f[21]") ndr+=("$f[22]") nedge+=("$f[23]") dim+=("$f[24]") lab+=("$f[25]") err+=("$f[26]")
+    vwd+=("$f[20]") nop+=("$f[21]") ndr+=("$f[22]") nedge+=("$f[23]") dim+=("$f[24]") lab+=("$f[25]") err+=("$f[26]") cm+=("$f[27]")
     plain "${f[25]:-$f[1]}"; hay+=("${(L)REPLY} ${(L)f[2]}")
   done
   [[ -s $st/layout ]] && read -r wa wd wt mr < $st/layout
@@ -232,6 +232,8 @@ rowline() {
       # The right: threads, viewed, the lines. Each a cell, so they stay in
       # their columns down the list.
       if (( mr )); then
+        # What Claude's review did with it, beyond the diff: opened its file, searched for it.
+        case $cm[i] in read) put "$G" "● " ;; grep) put "$EL" "◐ " ;; *) put "" "  " ;; esac
         put "" "  "
         if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-$'\uE73F'${nop[i]}}}"; else put "" "   "; fi
         if (( ndr[i] > 0 )); then put "$Y" "✎${(r:2:: :)ndr[i]}"; else put "" "   "; fi
@@ -358,6 +360,18 @@ settle_cur() {
   (( ${vis[(Ie)$cur]} )) && return
   for i in $vis; do (( i >= cur )) && { cur=$i; return; }; done
   cur=$vis[-1]
+}
+# unviewed <1|-1>: the next or the previous symbol not yet viewed, from the
+# cursor; none left, the footer says so.
+unviewed() {
+  local at=${vis[(Ie)$cur]} i n
+  (( $#vis )) || return
+  for (( n = 1; n < $#vis; n++ )); do
+    (( i = ((at - 1 + $1 * n) % $#vis + $#vis) % $#vis + 1 ))
+    i=$vis[i]
+    [[ $typ[i] == sym && $vwd[i] != all ]] && { go $i; return; }
+  done
+  flash="every symbol is viewed"
 }
 step() {
   local at=${vis[(Ie)$cur]}
@@ -504,7 +518,7 @@ helplines() {
   for (( n = 1; n <= $#hk; n++ )); do P+=("  ${A}${(r:9:: :)hk[n]}$R ${C}$hv[n]$R"); done
   P+=("")
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
-    ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" \
+    ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: lines of the diff, copied without the gutter; in a review, c comments on them" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
@@ -512,7 +526,8 @@ helplines() {
   P+=("" "  ${B}${T}a row$R" ""
     "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $X-$R$C removed   $F·$R$C its body alone$R"
     "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: open above already, or all viewed$R"
-    "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R")
+    "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
+    "  ${G}●$R$C in a review, Claude's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
 }
 draw() {
@@ -864,6 +879,8 @@ handle() {
     ctrl-y) scroll -1 ;;
     ']') hunk 1 ;;
     '[') hunk -1 ;;
+    '.') unviewed 1 ;;
+    ',') unviewed -1 ;;
     ctrl-c) quit 130 ;;
   esac
 }

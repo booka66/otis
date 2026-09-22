@@ -1263,6 +1263,30 @@ if [ "$mode" = --rows ]; then
       printf "  ${GK_YOURS}\342\234\246${GK_R} under an error in its preview, Claude's fix for it, whether it belongs in the caller or the change, and its edits; F makes them and saves them, uncommitted\n"
     } > "$st/legend"
   fi
+  # In a review, what Claude's review of the MR (git-mr-claude) did with each
+  # symbol beyond reading the diff it is given whole: opened its file (a
+  # Read at its lines) or searched for its name, for the rows' ● and ◐.
+  # Worked out once per state of the run's events, kept in the state.
+  cmarks=/dev/null
+  ev=${vstore%/otis-viewed}/gmr-claude/$GMR_IID/events.jsonl
+  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ -s "$ev" ]; then
+    cmarks=$st/claude-marks
+    ckey=$(mtimes "$ev")
+    if [ "$(cat "$cmarks.key" 2>/dev/null)" != "$ckey" ]; then
+      jq -r 'select(.type == "tool") | if .name == "Read" then "read\t\(.input.file_path // "")\t\(.input.offset // 0)" elif .name == "Grep" then "grep\t\(.input.pattern // "")" else empty end' "$ev" 2>/dev/null > "$cmarks.ev"
+      awk -F'\t' 'FILENAME == ARGV[1] { if ($1 == "read") { nr++; rp[nr] = $2; ro[nr] = $3 + 0 } else { ng++; gp[ng] = $2 }; next }
+        $2 != "file" && $4 == "" {
+          m = ""
+          for (i = 1; i <= nr && m != "read"; i++) {
+            p = rp[i]
+            if (p == $1 || substr(p, length(p) - length($1)) == "/" $1) { if (ro[i] == 0 || (ro[i] <= $9 && ro[i] + 2000 >= $8)) m = "read" }
+          }
+          if (m == "") { n = $3; sub(/^type /, "", n); for (i = 1; i <= ng; i++) if (index(gp[i], n)) { m = "grep"; break } }
+          if (m != "") print $1 "#" $3 "\t" m
+        }' "$cmarks.ev" "$table" > "$cmarks.new" && mv "$cmarks.new" "$cmarks"
+      printf '%s\n' "$ckey" > "$cmarks.key"
+    fi
+  fi
   cols=${FZF_COLUMNS:-0}
   [ "$cols" -gt 0 ] || cols=$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)
   [ -n "$cols" ] || cols=100
@@ -1282,7 +1306,8 @@ if [ "$mode" = --rows ]; then
   # and 19 the lines it gained and lost, 20 viewed (all, or n/m of what is
   # under a closed row), 21 and 22 its open threads and drafts, 23 a call
   # new to the change, 24 dim, 25 its label (the signature cut to the width
-  # left it, marked for highlight), 26 a caller's type errors (x, or fixed).
+  # left it, marked for highlight), 26 a caller's type errors (x, or fixed),
+  # 27 in a review what Claude's review did with it (read, grep).
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
   FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
@@ -1291,6 +1316,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
     FILENAME == ARGV[5] { vd[$1] = 1; next }
+    FILENAME == ARGV[6] { cm[$1] = $2; next }
     FILENAME == ARGV[4] { x = ++ncall[$1]; cp[$1, x] = $2; cl[$1, x] = $3; cid[$1, x] = $4; chead[$1, x] = $5; cs[$1, x] = $6; ce[$1, x] = $7; cerr[$1, x] = $9 + 0; cpk[$1, x] = $11; next }
     # The open threads and drafts on a symbol: on its lines on its side, and
     # on its base lines for the threads that sit on removed ones.
@@ -1371,7 +1397,7 @@ if [ "$mode" = --rows ]; then
       # the lines, each a fixed cell. Its label has what is left, less the
       # tree'"'"'s three columns a level.
       if (draw) {
-        droom = draw - 2 - (wt ? 3 : 0) - 4 - 1 - (wa + wd + 4) - 6 - (mr ? 8 : 0)
+        droom = draw - 2 - (wt ? 3 : 0) - 4 - 1 - (wa + wd + 4) - 6 - (mr ? 10 : 0)
         if (droom < 20) droom = 20
         print (wa < 1 ? 1 : wa), (wd < 1 ? 1 : wd), wt + 0, mr + 0 > layout
         for (i = 1; i <= m; i++) { k = vkey(i); if (!(k in vseen)) { vseen[k] = 1; vall++; if (k in vd) vgot++ } }
@@ -1522,7 +1548,7 @@ if [ "$mode" = --rows ]; then
       print (wt ? cells(ch, stg, un) : "") stat "  " th vc indent fold head \
         "\t" p "\t" at "\t" side "\t" s "\t" e "\t" os "\t" oe "\t" stg "\t" un "\t" kind "\t" rid \
         (draw ? "\tsym\t" depth "\t" (kids ? ((rid in open) ? "open" : (again || done) ? "quiet" : "closed") : "") "\t" kids "\t" ch "\t" add "\t" del \
-          "\t" (dim ? "all" : (kids && !(rid in open) && vdone) ? vdone "/" vtot : "") "\t" to "\t" td "\t" (newedge(parent, i) ? 1 : "") "\t" (dim ? 1 : "") "\t" lab "\t" : "")
+          "\t" (dim ? "all" : (kids && !(rid in open) && vdone) ? vdone "/" vtot : "") "\t" to "\t" td "\t" (newedge(parent, i) ? 1 : "") "\t" (dim ? 1 : "") "\t" lab "\t\t" cm[p "#" (par != "" ? par : name)] : "")
       if (!(rid in open)) return
       for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, 0)
       for (x = 1; x <= nc; x++) {
@@ -1574,7 +1600,7 @@ if [ "$mode" = --rows ]; then
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
           (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
-    }' "$table" "$order" "$marks" "$callers" "$vw" | highlight | git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
+    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" | highlight | git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
   rm -f "$counts" "$order" "$vw"
   [ -n "$GIT_FZF_STATE" ] || exit 0
