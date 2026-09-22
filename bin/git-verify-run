@@ -122,9 +122,34 @@ else
       printf '%s' "$mr" | jq -r '"# !\(.iid) \(.title)\n\nby \(.author.username), \(.source_branch) into \(.target_branch)\n\n\(.description // "")"' > "$ctx/change.md"
       ;;
   esac
-  git diff --no-color --no-ext-diff -U10 "$base" "$head" > "$ctx/diff.patch" 2>/dev/null ||
+  git diff --no-color --no-ext-diff -U10 "$base" "$head" > "$ctx/diff.raw" 2>/dev/null ||
     finish failed "could not diff $(printf '%.8s' "$base")..$(printf '%.8s' "$head"): the commits are not here"
+  # A generated file can hold its whole content on one line, a schema
+  # checkpoint or a bundle or a snapshot, and that one line is then most of
+  # the patch: a megabyte the judge reads through to find the change. Nothing
+  # here applies the patch, it is only ever read, so a line past 2000
+  # characters is cut with what it had left said at its end.
+  awk '{ if (length > 2000) print substr($0, 1, 2000) "… [" length - 2000 " more characters on this line: a generated or minified file]"; else print }' \
+    "$ctx/diff.raw" > "$ctx/diff.patch"
+  rm -f "$ctx/diff.raw"
   git log --format='- %h %s%n%w(0,2,2)%b' "$base..$head" > "$ctx/commits.md"
+  # A big change's patch is most of the judge's first turns when the patch is
+  # all it has: it reads a megabyte through to find the few files that matter.
+  # So, beside it, the files biggest first, each with the line its section
+  # starts at in the patch, to read straight to one.
+  git diff --no-color --no-ext-diff --numstat "$base" "$head" > "$ctx/numstat" 2>/dev/null
+  {
+    printf '# The change, file by file\n\n'
+    awk '{ if ($1 != "-") { a += $1; d += $2 } n++ } END { printf "%d files, +%d -%d.\n\n", n, a, d }' "$ctx/numstat"
+    printf 'The patch itself is %s. The line each file starts at there is in brackets, so you can read to a file rather than through the whole patch. Biggest first.\n\n' "$ctx/diff.patch"
+    awk '
+      FNR == NR { if (/^diff --git /) { p = $NF; sub(/^b\//, "", p); at[p] = FNR } next }
+      { where = ($3 in at) ? "[line " at[$3] "]" : ""
+        if ($1 == "-") printf "%d\t- %s  binary  %s\n", 0, $3, where
+        else printf "%d\t- %s  +%s -%s  %s\n", $1 + $2, $3, $1, $2, where }
+    ' "$ctx/diff.patch" "$ctx/numstat" | sort -rn | cut -f2-
+  } > "$ctx/files.md"
+  rm -f "$ctx/numstat"
   printf '%s\n' "$base" > "$d/base"
   printf '%s\n' "$branch" > "$d/branch"
   printf '%s\n' "$head" > "$d/head"
@@ -248,6 +273,21 @@ else
   rm -f "$ctx/verify-env.md"
   brief_line="- The repository has no verify-env skill, so the tester knows only what its AGENTS.md or README says about running it."
 fi
+# What the pipeline already runs on this change, so the judge does not spend a
+# round on it: the job names from GitLab when it has a pipeline, else the CI
+# config in the working directory, which the judge can read for itself. The
+# MR's own pipelines, not the head commit's: where the project runs merged
+# results, the pipeline is on a merge commit and the head sha has none.
+ci_line="- The repository's CI configuration is in the working directory (.gitlab-ci.yml and whatever it includes): whatever runs there, the pipeline already covers."
+case $key in
+  b-*) pipes="projects/:fullpath/pipelines?ref=$(printf '%s' "$branch" | sed 's|/|%2F|g')&per_page=1" ;;
+  *) pipes="projects/:fullpath/merge_requests/$key/pipelines?per_page=1" ;;
+esac
+pid=$(glab api "$pipes" 2>/dev/null | jq -r '.[0].id // empty')
+if [ -n "$pid" ] && jobs=$(git-mr-pages "projects/:fullpath/pipelines/$pid/jobs?per_page=100" 2>/dev/null | jq -r '.[].name' | sort -u) && [ -n "$jobs" ]; then
+  { printf 'Pipeline %s, on this very commit:\n\n' "$pid"; printf '%s\n' "$jobs" | sed 's/^/- /'; } > "$ctx/ci-jobs.md"
+  ci_line="- What CI already runs on this commit, job by job: $ctx/ci-jobs.md"
+fi
 plan_schema='{"type":"object","additionalProperties":false,"required":["verifiable","summary","brief","criteria"],"properties":{
   "verifiable":{"type":"boolean"},
   "summary":{"type":"string"},
@@ -277,14 +317,18 @@ You are the judge in a verification of a change to this repository. A tester, a 
 
 - The change's title and description: $ctx/change.md
 - Its commits: $ctx/commits.md
+- What it touches, the files biggest first, each with the line it starts at in the patch: $ctx/files.md
 - Its diff, base $base to head $head: $ctx/diff.patch
 - The repository at the head is the working directory.
 $brief_line
+$ci_line
 
-Read the diff and the code around it until you know what the change is meant to do, for whom, and where it shows. Then write:
+Start from the file list, not the patch: it tells you in one read where the change is and what is only generated or moved alongside it. Then read those files' sections of the patch, and the code around them in the working directory, until you know what the change is meant to do, for whom, and where it shows.
 
-- criteria: the few claims that, if all true, mean the change works, each one observable: what a user does and sees, what an endpoint returns, what a test run shows. Include the case most likely to be broken (the edge the diff handles, or forgets), and that nothing next to it regressed. Each has a short id (c1, c2, ...), the claim, the runtime it needs, and how to check it in that VM: which app and page, which data, which command. Prefer checking what a user would see over running unit tests the pipeline runs anyway.
-- runtime, for each criterion: which of the environment's runtimes the check needs, as the verify-env brief describes them. sandbox for anything its seeded data can show; store only when the claim itself needs a real merchant, a webhook or a text; none for a test run or a command that needs no services. The store may be empty in the VM, so a change that only shows against one must still have at least one criterion that does not need it: a test, or a check at the database or endpoint. Every criterion of one change should need the same runtime where at all possible; the boot is most of a round.
+What CI already runs is not worth a criterion. The pipeline gives the author that answer within the hour for free, types and lint with it, and a round spent re-running a suite it runs proves nothing this verification is for. What the tester's VM has and CI has not is real state: it can drive the change the way it happens in production, against running services, and read back what it left behind. That is where the criteria go. So at least one of them must follow the change's value to its far end, not to the boundary the author's own tests stop at: the row that is written, the event that carries it, the page that shows it, the thing downstream that reads it. And at most one may be a test run, only for a suite the pipeline does not run on this commit. Then write:
+
+- criteria: the few claims that, if all true, mean the change works, each one observable: what a user does and sees, what an endpoint returns, what state the change leaves behind. Include the case most likely to be broken, the edge the diff handles, or forgets. Each has a short id (c1, c2, ...), the claim, the runtime it needs, and how to check it in that VM: which app and page, which data, which command.
+- runtime, for each criterion: which of the environment's runtimes the check needs, as the verify-env brief describes them. sandbox for anything its seeded data can show; store only when the claim itself needs a real merchant, a webhook or a text; none only for a check that needs no services at all. The store may be empty in the VM, so a change that only shows against one must still have at least one criterion that does not need it: a check at the database or the endpoint, against the sandbox. Every criterion of one change should need the same runtime where at all possible; the boot is most of a round.
 - brief: for the tester, a few sentences on what the change does and where to look, with the setup it needs (which apps, which scenario data, logins).
 - verifiable: false only when nothing about the change can be observed running (docs, comments, config the VM cannot exercise); then criteria is empty and summary says why.
 - summary: one sentence, what you will have the tester check.
@@ -335,7 +379,8 @@ EOF
 ## How
 
 - For anything a user sees, start what the check needs, open the app in the desktop browser, and use it as a user would; the environment section says how, and how to get in. Give the page a desktop's room before you start: maximize the browser window to fill the display, or with the Playwright tools resize the viewport to at least 1440x900. A page squeezed into a small window hides what it lays out for desktop, and that is not a finding. One app's dev server failing to build is not the app being unavailable: a UI check is blocked only once the way in has been tried.
-- Tests are evidence only when the output names what ran: run them so every test's name and result is printed (the runner's verbose flag) and save that; a bare PASSED for a filtered or sharded target shows nothing.
+- Tests are evidence only when the output names what ran: run them so every test's name and result is printed (the runner's verbose flag) and save that; a bare PASSED for a filtered or sharded target shows nothing. The pipeline runs the suites anyway, so run one only where a criterion asks for it, and never in place of a criterion you could check by running the thing.
+- For anything the change writes, the evidence is the state itself, read back after it was produced the way it is produced in production: the row, the event, the record the next thing along reads. Go through the app or the service as a user or a caller would; writing the row by hand proves nothing. Then query it, and save the query and its output as the artifact. A test that asserts the write is not this evidence: it covers the code the author already tested, not that the value survives the rest of the path.
 - Record a video of each UI check, one file per criterion named after its id (c1.mp4, ...), with ffmpeg -f x11grab on the desktop's display or the browser tool's own recording. Take screenshots of the states that matter. Save everything, including the output of any command you run for a criterion, in /opt/cursor/artifacts/ (create it).
 - Do not change source files to make something pass, do not commit and do not push. Something broken is the finding: record it.
 - When a criterion cannot be checked here, say exactly what stopped you, and mark it blocked. Something that failed the same way twice will fail a third time: mark the criterion blocked with the error as its evidence and go on. Nobody answers a request for the environment to be changed during a run.

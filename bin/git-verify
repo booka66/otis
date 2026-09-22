@@ -13,7 +13,11 @@
 # Two agents, one of which never grades its own work. Claude, here and
 # read-only, is the judge: it reads the change and writes what would prove it
 # works, then reads the tester's report and evidence and either sends it back
-# ("you never tried the empty state") or gives a verdict. A Cursor Cloud agent
+# ("you never tried the empty state") or gives a verdict. It is told what the
+# pipeline already runs on the commit and to leave that to it: a verification
+# is worth its half hour for the states CI cannot produce, so one criterion at
+# least follows the change's value to its far end, through the real path, with
+# the row or the event it left read back. A Cursor Cloud agent
 # is the tester: a VM with the repo's environment (its .cursor/), where it
 # can start the sandbox, click through the app and record it, and run tests.
 # otis carries what each says to the other, up to three rounds. When the
