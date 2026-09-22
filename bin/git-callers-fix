@@ -149,7 +149,7 @@ if [ "$mode" = --apply ]; then
   paths=$(printf '%s\n' "$list" | jq -r .path | sort -u)
   n=$(printf '%s\n' "$paths" | wc -l | tr -d ' ')
   printf '%s\n' "made Claude's fix in $(printf '%s\n' "$paths" | head -1 | sed 's|.*/||')$([ "$n" -gt 1 ] && echo " and $((n - 1)) more") · uncommitted, git diff shows it" > "$GIT_FZF_STATE/note"
-  echo "${after:+$after+}rebind(focus)+transform-footer:git-fzf-footer"
+  echo "${after:-ignore}"
   exit 0
 fi
 [ -n "$rev" ] && [ -s "$table" ] || exit 0

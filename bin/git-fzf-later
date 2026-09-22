@@ -41,7 +41,7 @@ post() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$
 lock=$st/later.$(printf '%s' "$*" | cksum | cut -d' ' -f1)
 if ! mkdir "$lock" 2>/dev/null; then
   printf '%s\342\200\246 (already asking)\n' "$doing" > "$st/note"
-  echo "rebind(focus)+transform-footer:git-fzf-footer"
+  echo ignore
   exit 0
 fi
 
@@ -56,7 +56,7 @@ printf '%s\342\200\246\n' "$doing" > "$st/note"
       i=$((i + 1))
       [ -d "$lock" ] || break
       printf '%s\342\200\246 %ss\n' "$doing" "$i" > "$st/note"
-      post "transform-footer(git-fzf-footer)"
+      post ignore
     done
   ) &
   ticker=$!
@@ -68,6 +68,6 @@ printf '%s\342\200\246\n' "$doing" > "$st/note"
   case "$(cat "$st/note" 2>/dev/null)" in
     "$doing"*) rm -f "$st/note" ;;
   esac
-  if [ -n "$out" ]; then post "$out"; else post "transform-footer(git-fzf-footer)"; fi
+  if [ -n "$out" ]; then post "$out"; else post ignore; fi
 ) >/dev/null 2>&1 &
-echo "rebind(focus)+transform-footer:git-fzf-footer"
+echo ignore

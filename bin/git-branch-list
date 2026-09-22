@@ -197,7 +197,7 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
     for (i = 1; i <= n; i++) if (!stacked[i]) emit(i, 0)
   }' "$f.facts"
 
-# What the row's columns mean, for the ? help view (git-fzf-help), as gmr does
+# What the row's columns mean, for the ? help view (otis-pick), as gmr does
 # it. A column may be a glyph wide only because this is a keypress away.
 {
   printf "${GK_CONTEXT}columns${GK_R}\n"

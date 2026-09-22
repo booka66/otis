@@ -190,3 +190,78 @@ copy() {
   if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
   else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi
 }
+
+# --- a port ------------------------------------------------------------------------
+# What fzf listened on, kept: anything that reaches it can send actions, so
+# each screen has a key of its own that every request must carry (FZF_PORT
+# and FZF_API_KEY, exported for what the screen runs: git-fzf-bg reloads a
+# picker with rows built behind it, git-fzf-later hands it what GitLab
+# said, git-cached-json says what it is waiting on). otis-test names the
+# port and the key (OTIS_FZF_LISTEN, OTIS_FZF_API_KEY); nothing else should.
+# port_open listens ($lfd, 0 when it could not); port_serve answers one
+# request, which fzf hung up after: GET with what port_state puts in REPLY,
+# as JSON; POST by handing port_post the body.
+zmodload zsh/net/tcp
+integer lfd=0
+port_open() {
+  local bytes c
+  sysread -s 16 bytes </dev/urandom
+  FZF_API_KEY=
+  for c in ${(s::)bytes}; do FZF_API_KEY+=${(l:2::0:)$(( [##16] #c ))}; done
+  [[ -n $OTIS_FZF_API_KEY ]] && FZF_API_KEY=$OTIS_FZF_API_KEY
+  export FZF_API_KEY
+  if [[ -n $OTIS_FZF_LISTEN ]]; then
+    ztcp -l $OTIS_FZF_LISTEN 2>/dev/null && lfd=$REPLY FZF_PORT=$OTIS_FZF_LISTEN
+  else
+    repeat 20; do
+      FZF_PORT=$(( 40000 + RANDOM % 20000 ))
+      ztcp -l $FZF_PORT 2>/dev/null && { lfd=$REPLY; break }
+    done
+  fi
+  if (( lfd )); then export FZF_PORT; else unset FZF_PORT; fi
+}
+# json <text>: as a JSON string's inside.
+json() {
+  local s=$1 c
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}
+  s=${s//$'\t'/\\t}; s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$e/\\u001b}
+  for c in $'\x01' $'\x02' $'\x03' $'\x04' $'\x05' $'\x06' $'\x07' $'\x08' $'\x0b' $'\x0c' $'\x0e' $'\x0f' $'\x10' $'\x11' $'\x12' $'\x13' $'\x14' $'\x15' $'\x16' $'\x17' $'\x18' $'\x19' $'\x1a' $'\x1c' $'\x1d' $'\x1e' $'\x1f'; do
+    [[ $s == *$c* ]] && s=${s//$c/\\u00${(l:2::0:)$(( [##16] #c ))}}
+  done
+  REPLY=$s
+}
+port_serve() {
+  setopt localoptions nomultibyte
+  local cfd req= chunk hdr= body= answer='200 OK' out=
+  integer len=-1 told=0
+  float till
+  ztcp -a -t $lfd 2>/dev/null || return; cfd=$REPLY
+  (( till = EPOCHREALTIME + 2 ))
+  while (( EPOCHREALTIME < till )); do
+    zselect -t 20 -r $cfd || continue
+    sysread -s 65536 -i $cfd chunk || break
+    req+=$chunk
+    [[ $req == *$'\r\n\r\n'* ]] || continue
+    hdr=${req%%$'\r\n\r\n'*} body=${req#*$'\r\n\r\n'}
+    (( len < 0 )) && { len=0; [[ $hdr == (#bi)*content-length:[[:space:]]#([0-9]##)* ]] && len=$match[1]; }
+    (( ! told )) && [[ $hdr == (#i)*expect:[[:space:]]#100-continue* ]] && { print -rnu $cfd -- $'HTTP/1.1 100 Continue\r\n\r\n'; told=1; }
+    (( ${#body} >= len )) && break
+  done
+  if [[ -z $hdr ]]; then answer='400 Bad Request'
+  elif [[ $hdr != (#i)*x-api-key:[[:space:]]#$FZF_API_KEY* ]]; then answer='401 Unauthorized'
+  elif [[ ${hdr%% *} == GET ]]; then port_state; out=$REPLY
+  fi
+  print -rnu $cfd -- "HTTP/1.1 $answer"$'\r\n'"Content-Type: application/json"$'\r\n'"Connection: close"$'\r\n'"Content-Length: ${#out}"$'\r\n\r\n'"$out"
+  # The client hangs up first, so its end of the connection is the one left
+  # waiting out TCP's TIME_WAIT: ztcp cannot reuse a port that has one, and
+  # a screen opened next on the same port (otis-test's) could not listen.
+  (( till = EPOCHREALTIME + 0.3 ))
+  while (( EPOCHREALTIME < till )) && zselect -t 5 -r $cfd; do sysread -s 4096 -i $cfd chunk || break; done
+  ztcp -c $cfd 2>/dev/null
+  # A POST's actions after its answer: an abort ends the screen, and with it
+  # a connection still open on this end.
+  if [[ $answer == 200* && ${hdr%% *} == POST ]]; then
+    setopt localoptions multibyte
+    port_post "$body"
+  fi
+}

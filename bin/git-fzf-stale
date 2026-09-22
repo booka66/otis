@@ -1,7 +1,7 @@
 #!/bin/sh
 # git-fzf-stale <cache>: tell the open picker whether <cache> is stale, meaning
 # its last fetch failed (<cache>.err, which git-cached-json and git-branch-facts
-# keep until a fetch works). git-fzf-footer then says the list is from the last
+# keep until a fetch works). The picker then says the list is from the last
 # fetch that worked, and ? shows the error. Outside a picker it does nothing.
 st=$GIT_FZF_STATE
 [ -n "$st" ] && [ -d "$st" ] || exit 0

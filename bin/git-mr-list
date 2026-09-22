@@ -91,7 +91,7 @@ fetch() {
   fi
 }
 
-# What the row's glyph columns mean, for the ? help view (git-fzf-help). A
+# What the row's glyph columns mean, for the ? help view (otis-pick). A
 # column is allowed to be one glyph wide only because this is a keypress away.
 {
   printf "${GK_CONTEXT}columns${GK_R}\n"

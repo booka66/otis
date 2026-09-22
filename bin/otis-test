@@ -565,7 +565,7 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
     expect callers/at-error "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' 3)" "5"
     # F makes the edit and saves it, staying in the picker; the preview then
     # marks it made, and a second F says it is made already.
-    expect callers/fix-apply "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)'):$(sed -n 5p app.ts)" "reload(x)+rebind(focus)+transform-footer:git-fzf-footer:  return run({ a: 1 }, false);"
+    expect callers/fix-apply "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)'):$(sed -n 5p app.ts)" "reload(x):  return run({ a: 1 }, false);"
     expect callers/fix-apply-note "$(cat "$tmp/symst/note")" "made Claude's fix in app.ts · uncommitted, git diff shows it"
     expect callers/fix-made "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -c 'app.ts:5 · made, uncommitted')" "1"
     GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)' >/dev/null
@@ -859,43 +859,20 @@ OTIS_CACHE_ROOT=$nmc otis-node-modules --wait "$tmp/nm"
 expect nm/failed "$(OTIS_CACHE_ROOT=$nmc otis-node-modules --state "$tmp/nm")" "failed: error: no network"
 git -C "$tmp/nm" worktree remove --force "$tmp/nm-wt" >/dev/null 2>&1
 
-# --- git-fzf-scroll: an id longer than a filename keeps its last 200 characters
-mkdir -p "$tmp/scroll" && : > "$tmp/scroll/lock"
-GIT_FZF_STATE=$tmp/scroll git-fzf-scroll note "$(printf 'a/%.0s' $(seq 1 150))x" 1
-expect scroll/long-key "$(ls "$tmp/scroll" | grep '^off\.' | awk '{ print length($0) }')" "204"
-# reset forgets every position in a picker keyed by {n}, and none in one keyed
-# by --id-nth, whose ids survive the reload (t in the symbol picker).
-: > "$tmp/scroll/by-id"
+# --- git-fzf-scroll reset forgets every position in a picker keyed by its
+# rows' places, and none in one keyed by --id-nth, whose ids survive the
+# reload (t in the symbol picker).
+mkdir -p "$tmp/scroll" && : > "$tmp/scroll/off.x" && : > "$tmp/scroll/by-id"
 GIT_FZF_STATE=$tmp/scroll git-fzf-scroll reset
 expect scroll/reset-by-id "$(ls "$tmp/scroll" | grep -c '^off\.')" "1"
 rm "$tmp/scroll/by-id"
 GIT_FZF_STATE=$tmp/scroll git-fzf-scroll reset
 expect scroll/reset-by-index "$(ls "$tmp/scroll" | grep -c '^off\.')" "0"
 
-# ] and [: the next change centered in a 20-row pane, a long one from just
-# above its top, none past the last; and back. The glide itself needs a
-# picker's port, which is not here, so the goal it set is what is checked.
-hs=$tmp/hunkscroll && mkdir -p "$hs" && : > "$hs/lock"
-printf '20 24\n60 61\n150 200\n' > "$hs/hunks.x"; echo 300 > "$hs/lines.x"; echo 1 > "$hs/off.x"
-goals=
-for _ in 1 2 3 4; do
-  GIT_FZF_STATE=$hs FZF_PREVIEW_LINES=20 FZF_PORT=9 git-fzf-scroll hunk x
-  goals="$goals$(cat "$hs/goal.x") "; cp "$hs/goal.x" "$hs/off.x"
-done
-expect scroll/next-change "$goals" "12 50 148 148 "
-GIT_FZF_STATE=$hs FZF_PREVIEW_LINES=20 FZF_PORT=9 git-fzf-scroll -hunk x
-expect scroll/previous-change "$(cat "$hs/goal.x")" "50"
-# The runs of changed rows, as git-fzf's preview notes them: a row with a
-# background is changed, a wrapped one too, but not a peek on the code one.
-hunk_awk=$(sed -n "s/^hunk_awk='\(.*\)'$/\1/p" "$root/bin/git-fzf")
-printf 'ctx\n\342\224\202\033[48;2;1;2;3mminus\n  \033[48;2;1;2;3mwrapped\n\033[%smpeek\nctx\n\342\224\202\033[48;2;4;5;6mplus\n' "$OTIS_T_CODEBG" |
-  awk -v f="$hs/l" -v h="$hs/h" "$hunk_awk" >/dev/null
-expect scroll/change-runs "$(tr '\n' ' ' < "$hs/h")" "2 3 6 6 "
-
-# --- the pickers themselves, headless: fzf runs on a pty (zsh's zpty) and
-# the test drives it through fzf's port (git-fzf takes OTIS_FZF_LISTEN and
+# --- the pickers themselves, headless: otis-pick runs on a pty (zsh's zpty)
+# and the test drives it through its port (it takes OTIS_FZF_LISTEN and
 # OTIS_FZF_API_KEY for exactly this) and by typing into the pty.
-#   picker_open <zsh command>   start it; picker_state prints fzf's state JSON
+#   picker_open <zsh command>   start it; picker_state prints the picker's state JSON
 #   picker_key <keys>           type into it   picker_act <action>  an fzf action
 #   picker_close                end it, and wait for it to go
 port=$((40000 + $$ % 20000)) drive=$tmp/drive
@@ -1206,7 +1183,7 @@ expect later/usage "$(git-fzf-later 2>/dev/null; echo $?)" "2"
 # nothing is told; what it writes is the same.
 lst=$tmp/later-state && mkdir -p "$lst"
 out=$(GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"')
-expect later/returns-at-once "$out" "rebind(focus)+transform-footer:git-fzf-footer"
+expect later/returns-at-once "$out" "ignore"
 expect later/says-what-it-is-doing "$(cat "$lst/note")" "asking GitLab…"
 GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"' >/dev/null
 expect later/one-at-a-time "$(cat "$lst/note")" "asking GitLab… (already asking)"
@@ -1264,21 +1241,6 @@ expect help/unknown "$(otis-help nope 2>/dev/null; echo $?)" "2"
 expect help/through-a-command "$(gp --help | strip | sed -n 1p)" "gp"
 expect help/gg-is-the-table "$(gg | strip | grep -c '^  gup  *rebase onto a fresh origin/main')" "1"
 expect help/gg-sections "$(gg | strip | grep -c '^\(look\|change\|branch and push\|clean up and undo\|other\)$')" "5"
-
-# --- git-fzf-footer: a status line past the list's width is broken at its
-# " · " into lines that fit, measured without colors; the keys after it.
-mkdir -p "$tmp/foot" && printf 'j/k\tmove\n' > "$tmp/foot/hints" &&
-  printf '\033[33m12 symbols in 3 files, 2 to start from\033[0m · \033[35mtsgo is finding callers elsewhere\033[0m · \033[35minstalling node_modules\033[0m · \033[35mcallers not type-checked: 300 packages import the change\033[0m\n' > "$tmp/foot/footer"
-# The separator is three characters, whatever awk's locale counts · as.
-expect footer/wrapped "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed 's/ · /---/g' | awk '{ print length($0) }' | tr '\n' ' ')" "38 59 56 17 "
-expect footer/wrapped-text "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=64 git-fzf-footer | strip | sed -n 2p)" "tsgo is finding callers elsewhere · installing node_modules"
-expect footer/one-line-when-it-fits "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=200 git-fzf-footer | strip | wc -l | tr -d ' ')" "2"
-
-# A key after "|" in a picker's list is for ? alone: the footer leaves it
-# out and says there are more.
-printf 'enter\topen\nc\tcomment\nw\tweb\tmore\n--\nj/k\tmove\n' > "$tmp/foot/hints" && : > "$tmp/foot/footer"
-expect footer/more-keys-left-out "$(GIT_FZF_STATE=$tmp/foot FZF_COLUMNS=200 git-fzf-footer | strip)" "enter open · c comment · j/k move · ? more keys"
-expect footer/more-keys-in-help "$(GIT_FZF_STATE=$tmp/foot git-fzf-help show | strip | grep -c '^  w  *web$')" "1"
 
 # --- git-mr-lines, git-mr-say: comment on an MR from a picker, without nvim.
 # GitLab is a stub answering from fixtures and keeping what it was sent.

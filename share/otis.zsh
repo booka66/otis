@@ -111,7 +111,7 @@ stack-push() {
   return $rc
 }
 
-# ------------------------------------------------------------- git, fzf-driven
+# ---------------------------------------------------------- git, picker-driven
 # gs is a plain alias in git.zsh. These are the ones that replace reaching
 # for lazygit: each one is a picker, so you never load a TUI.
 
@@ -140,7 +140,7 @@ gb() {
       --bind 'c:execute(git-branch-log {2})' \
       --bind 'C:execute(git-branch-fix {2} {5})' \
       --bind 'V:execute(git-verify --branch {2} {5})+refresh-preview' \
-      --bind 't:execute-silent(git-test-files toggle; git-test-files state > "$GIT_FZF_STATE/footer")+refresh-preview+transform-footer(git-fzf-footer)' \
+      --bind 't:execute-silent(git-test-files toggle; git-test-files state > "$GIT_FZF_STATE/footer")+refresh-preview' \
       --bind 'n:transform(git-mr-new --check {2} {5})' \
       --bind 'w:transform(git-mr-do web {5})' \
       --bind 'y:transform(git-mr-do copy {5})' \
@@ -376,8 +376,8 @@ gst() {
 # and c commits what is staged (gcm's way) without leaving. Unstaging everything
 # is U, not u: u refreshes in every other picker, and the muscle memory used to
 # land here and throw away a careful round of hunk staging with no way back. git-stage-toggle
-# and git-file-list live in bin/ because fzf bindings run in sh and cannot see
-# functions. Like gdd, gpark and gah, the panel runs from the repo root, where
+# and git-file-list live in bin/ because a picker's bindings run in zsh -f and
+# cannot see functions. Like gdd, gpark and gah, the panel runs from the repo root, where
 # git status's paths start, so its keys act on the right file from any
 # subdirectory.
 ga() {

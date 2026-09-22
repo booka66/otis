@@ -63,7 +63,7 @@ if [ "$1" = draft ]; then
   [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
   [ "$2" = mine ] || exec git-fzf-note "d marks your own open MRs draft or ready, and !$3 is not one"
   printf '%s\n' "marking !$3 draft or ready…" > "$GIT_FZF_STATE/note"
-  echo "execute-silent(git-mr-do flip $3)+rebind(focus)+transform-footer:git-fzf-footer"
+  echo "execute-silent(git-mr-do flip $3)"
   exit 0
 fi
 if [ "$1" = flip ]; then
@@ -83,7 +83,7 @@ if [ "$1" = flip ]; then
       said="could not read !$iid from GitLab: $(printf '%s' "$mr" | head -1)"
     fi
     printf '%s\n' "$said" > "$GIT_FZF_STATE/note"
-    git-fzf-bg --then "rebind(focus)+transform-footer(git-fzf-footer)" git-mr-list --refresh
+    git-fzf-bg git-mr-list --refresh
   ) </dev/null >/dev/null 2>&1 &
   exit 0
 fi

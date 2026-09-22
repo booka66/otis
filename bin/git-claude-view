@@ -194,7 +194,7 @@ case $1 in
   --tick)
     d=$2
     state > "$GIT_FZF_STATE/footer"
-    printf 'transform-footer(git-fzf-footer)'
+    printf ignore
     [ -e "$GIT_FZF_STATE/follow" ] && printf '+last'
     echo ;;
   # --x <dir>: x, as fzf actions: the confirm needs the terminal, so it runs

@@ -129,7 +129,7 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 $(otis-config project base url gateJobs)
 EOF
 
-# What the glyphs mean, for the ? help view (git-fzf-help). A column is allowed
+# What the glyphs mean, for the ? help view (otis-pick). A column is allowed
 # to be one glyph wide only because this is a keypress away.
 {
   printf "${GK_CONTEXT}columns${GK_R}\n"

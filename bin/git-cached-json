@@ -52,7 +52,7 @@ cache="$dir/$name.json"
 
 # What git-fzf-stale does, without a process for it: tell the open picker
 # whether this cache's last fetch failed (<cache>.err, kept until a fetch
-# works), so git-fzf-footer says the list is from the last one that worked
+# works), so the picker says the list is from the last one that worked
 # and ? shows why. Outside a picker there is nobody to tell.
 mark_stale() {
   [ -n "$GIT_FZF_STATE" ] && [ -d "$GIT_FZF_STATE" ] || return 0
