@@ -9,7 +9,7 @@
 # ended (a pid alone can be some other process by now).
 running() { [ ! -s "$1/status" ] && [ -r "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
 # say <text>: a line in $d's progress.
-say() { jq -nc --arg t "$*" '{type: "otis", text: $t}' >> "$d/events.jsonl"; }
+say() { jq -nc --arg t "$*" '{type: "otis", text: $t, at: (now | floor)}' >> "$d/events.jsonl"; }
 oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
 # stopping: x in git-claude-view leaves $d/stopping; the run ends at its next look.
 stopping() { [ -e "$d/stopping" ] && finish stopped "stopped"; }

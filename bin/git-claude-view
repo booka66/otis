@@ -46,6 +46,7 @@ if [ "$1" = --events ]; then
     elif .type == "result" then {type: "result", is_error, subtype, session_id, total_cost_usd,
       result: ((.result // "") | tostring | .[0:500]), structured_output}
     else empty end)
+    | . + {at: (now | floor)}
     | if $who != "" then . + {who: $who} else . end'
 fi
 
@@ -67,10 +68,11 @@ stop_children() {
 # returned too. id is the event's line in events.jsonl, from + its line here,
 # which is what --show reads.
 lines() {
-  jq -r --arg ctx "$d/context/" --arg root "$(cat "$d/root" 2>/dev/null)/" --argjson detail "$1" --argjson from "${2:-0}" '
+  jq -r --arg ctx "$d/context/" --arg root "$(cat "$d/root" 2>/dev/null)/" --argjson detail "$1" --argjson from "${2:-0}" --argjson more "${3:-false}" '
     def rel: if startswith($ctx) then .[($ctx | length):] elif $root != "/" and startswith($root) then .[($root | length):] else . end;
     (if .who then "\(.who) › " else "" end) as $by |
     (input_line_number + $from) as $id |
+    (if $more then "\t\(.who // "")\t\(.at // "")" else "" end) as $tail |
     (if .type == "init" then "tool\t\($by)started, \(.model)"
     elif .type == "text" then
       # A message a row a line, but a fenced block is one row with its
@@ -111,7 +113,7 @@ lines() {
       elif .input.detail then "\(.name)  \(.input.detail)"
       else .name end)
     elif .type == "otis" then "otis\t" + .text
-    else empty end) | . + "\t\($id)"' 2>/dev/null
+    else empty end) | . + "\t\($id)" + $tail' 2>/dev/null
 }
 
 
@@ -151,6 +153,12 @@ state() {
 }
 
 case $1 in
+  # --rows <dir> <detail> <from>: the events from line <from> on as rows,
+  # kind, text, the event's line, who and when (epoch seconds), for
+  # otis-agent, which draws the run.
+  --rows)
+    d=$2
+    sed -n "$(( ${4:-0} + 1 )),\$p" "$d/events.jsonl" | lines "$3" "${4:-0}" true ;;
   # --stream <dir> <detail>: the rows, every event so far and then each new one
   # as it lands, until the run is over (and its last events are out) or the
   # picker is gone. fzf reads it as it comes.
@@ -250,6 +258,8 @@ case $1 in
     [ -s "$d/verdict.json" ] || exec git-fzf-note "only a verification with a verdict has a report to link"
     echo "execute(git-verify --attach '$d')" ;;
   *)
+    # The run, drawn by hand (otis-agent); 3 says r: run it again.
+    exec otis-agent "$1"
     d=$1
     out=$(git-fzf 'run ' 'enter=this step in full,v=more or less detail,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,l=all of it in less,o=tester in Cursor,a=artifacts,h=report in the browser,p=link the report from the MR,G=follow the newest' \
       --ansi --no-sort --tail=20000 --delimiter="$(printf '\t')" --with-nth=1 --id-nth=2 \
