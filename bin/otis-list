@@ -71,7 +71,7 @@ git-verify --marks    > "$st/m.verify" 2>/dev/null &
   if [ -n "$runs" ]; then
     printf '%s\n' "$runs" | jq -Rn '[inputs | split("\t") |
       {state: .[0], started: ((.[1] | tonumber?) // 0), ended: ((.[2] | tonumber?) // 0),
-       kind: .[3], dir: .[4], last: (.[5] // "")}]'
+       kind: .[3], dir: .[4], last: (.[5] // ""), doing: (.[6] // ""), dots: (.[7] // "")}]'
   else
     echo '[]'
   fi
@@ -253,7 +253,7 @@ out=$(jq -nr -L "$share" \
       $x.id, ($x.start // ""), ($x.extra // ""), ($x.verb_key // ""),
       ($x.g // ""), ($x.gc // ""), ($x.verb // ""), (($x.title // "") | clean), ($x.who // ""),
       ($x.when // ""), (($x.note // "") | clean), ($x.prog // ""), (if $x.mark then "1" else "" end),
-      ($x | does)
+      ($x | does), (($x.sub // "") | clean), ($x.dots // "")
     ] | join("\t");
 
   # A heading is a row with no merge request on it, so a key that acts on one
@@ -261,7 +261,7 @@ out=$(jq -nr -L "$share" \
   def sep($text; $id):
     ([ faint + "── " + $text + " "
          + (if (56 - ($text | length)) > 0 then "─" * (56 - ($text | length)) else "" end) + r,
-       "", "", "", "", "sep", "", "", "", "", $id, "", "", "", "", "", $text, "", "", "", "", "", "", "" ] | join("\t"));
+       "", "", "", "", "sep", "", "", "", "", $id, "", "", "", "", "", $text, "", "", "", "", "", "", "", "", "" ] | join("\t"));
 
   ($review[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) as $asked_all |
   ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
@@ -415,7 +415,8 @@ out=$(jq -nr -L "$share" \
               + (if ($key | startswith("b-")) then context + "  " + ($key[2:] | gsub("%"; "/")) + r else "" end)
               + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)),
         title: $run.last, when: since($run.started),
-        note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end) };
+        note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end),
+        sub: $run.doing, dots: $run.dots };
 
   # Your pipelines, while they run.
   def pipe_rows:

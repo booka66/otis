@@ -65,13 +65,13 @@ typeset -a kind iid id extra vkey glyph gc verb title who when note prog mark do
 loaded=0
 load() {
   local line f s=
-  kind=() iid=() id=() extra=() vkey=() glyph=() gc=() verb=() title=() who=() when=() note=() prog=() mark=() doing=() sec=() raw=()
+  kind=() iid=() id=() extra=() vkey=() glyph=() gc=() verb=() title=() who=() when=() note=() prog=() mark=() doing=() sub=() dots=() sec=() raw=()
   for line in ${(f)"$(<$st/rows)"}; do
     f=("${(@ps:\t:)line}")
     if [[ $f[6] == sep ]]; then s=${f[11]#sep-}; continue; fi
     raw+=("$line") sec+=($s) kind+=("$f[6]") iid+=("$f[2]") id+=("$f[11]") extra+=("$f[13]") vkey+=("$f[14]")
     glyph+=("$f[15]") gc+=("$f[16]") verb+=("$f[17]") title+=("$f[18]") who+=("$f[19]") when+=("$f[20]")
-    note+=("$f[21]") prog+=("$f[22]") mark+=("$f[23]") doing+=("$f[24]")
+    note+=("$f[21]") prog+=("$f[22]") mark+=("$f[23]") doing+=("$f[24]") sub+=("$f[25]") dots+=("$f[26]")
   done
   loaded=1
 }
@@ -155,7 +155,10 @@ row() {
     # pipeline's jobs and how long ago, both right-aligned to the edge.
     fit "$verb[i]" $vw; put "$vb$T" "${(r:vw:: :)REPLY}"; line+=$UB
     put "" "  "
-    if [[ -n $iid[i] ]]; then put "$A" "${(r:iw:: :)${:-!$iid[i]}}"; else put "" "${(l:iw:: :)}"; fi
+    # A verification's criteria as glyphs, where an MR's number goes.
+    if [[ -n $iid[i] ]]; then put "$A" "${(r:iw:: :)${:-!$iid[i]}}"
+    elif [[ -n $dots[i] ]]; then fit "$dots[i]" $iw; put "$Y" "${(r:iw:: :)REPLY}"
+    else put "" "${(l:iw:: :)}"; fi
     put "" "  "
     [[ -n $prog[i] ]] && (( rw += 18 ))
     [[ -n $when[i] ]] && (( rw += 5 ))
@@ -177,6 +180,16 @@ row() {
   (( on )) && line=$BG${line//$R/$R$BG}
   line+=$R
   emit $i
+  # A run of Claude's says what it is doing now, under its row.
+  if [[ $kind[i] == run && -n $sub[i] ]]; then
+    line= used=0
+    put "" "      "; put "$F" "› "
+    fit "$sub[i]" $(( w - used - 1 )); put "$T" "$REPLY"
+    pad $w
+    (( on )) && line=$BG${line//$R/$R$BG}
+    line+=$R
+    emit $i
+  fi
 }
 
 # The card: the first thing waiting on you, alone at the top, boxed in its

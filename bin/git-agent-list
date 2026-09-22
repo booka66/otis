@@ -58,9 +58,39 @@ if [ "$1" = --forget ]; then
 fi
 
 # scan: every run, one tab-separated line each, unsorted and unformatted:
-# state, started, ended, kind, directory, its last word. --data is this on its
-# own, for otis-list, which shows the running ones on the dashboard and has
-# no business knowing where a run keeps itself.
+# state, started, ended, kind, directory, its last word, then for one that
+# runs what it is doing now (Claude's last words to itself; a verification's
+# tester's last command, with the criterion it is for) and a verification's
+# criteria as glyphs (● verified, ✗ not, ◌ the tester on it, ● in, ○ to
+# come), for the dashboard's row. --data is this on its own, for otis-list,
+# which shows the running ones on the dashboard and has no business knowing
+# where a run keeps itself.
+doing() {
+  tail -n 300 "$1/events.jsonl" 2>/dev/null | jq -rs --arg kind "$2" '
+    def crit: capture("(^|[^a-zA-Z0-9_])(?<c>c[0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c;
+    if $kind == "otis-verify" then
+      ([.[] | select(.who == "tester" and .type == "tool")] | last) as $t
+      | ([.[] | select(.type == "otis")] | last | .text // "") as $last
+      | if $t and ($last | test("^(tester|judge steps|judge looked|got )")) then
+          ([.[] | select(.who == "tester") | (.input.detail // .text // "") | crit] | last // "") as $c
+          | ($c | if . == "" then "" else . + " · " end)
+            + ($t.input.detail // $t.name | split("\n")[0] | if $t.name == "run_terminal_cmd" then "$ " + . else . end)
+        else $last end
+    else ([.[] | select(.type == "text")] | last | .text // "" | split("\n")[0]) end
+    | gsub("[\t\n]"; " ") | .[0:200]' 2>/dev/null
+}
+dots() {
+  [ -s "$1/plan.json" ] || return 0
+  now=$(tail -n 300 "$1/events.jsonl" 2>/dev/null | jq -rs '[.[] | select(.who == "tester") | (.input.detail // .text // "") | capture("(^|[^a-zA-Z0-9_])(?<c>c[0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c] | last // ""' 2>/dev/null)
+  for c in $(jq -r '.criteria[].id' "$1/plan.json" 2>/dev/null); do
+    r=$(jq -r --arg c "$c" '.criteria[]? | select(.id == $c) | .result' "$1/verdict.json" 2>/dev/null)
+    if [ "$r" = verified ]; then printf '●'
+    elif [ -n "$r" ]; then printf '✗'
+    elif [ "$c" = "$now" ]; then printf '◌'
+    elif ls "$1/artifacts/$c"* >/dev/null 2>&1; then printf '●'
+    else printf '○'; fi
+  done
+}
 scan() {
   for kind in gmr-claude gmr-fix gmr-watch otis-verify; do
     for dir in "$common/$kind"/*/; do
@@ -74,7 +104,9 @@ scan() {
       # Its last word: the run's own lines, not the agents', and never its
       # (long) final result.
       last=$(tail -n 300 "$dir/events.jsonl" 2>/dev/null | jq -r 'select(.type == "otis") | .text' 2>/dev/null | tail -1)
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$(cat "$dir/started")" "$(cat "$dir/ended" 2>/dev/null)" "$kind" "$dir" "$last"
+      sub= dot=
+      [ "$state" = running ] && { sub=$(doing "$dir" "$kind"); dot=$(dots "$dir"); }
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$(cat "$dir/started")" "$(cat "$dir/ended" 2>/dev/null)" "$kind" "$dir" "$last" "$sub" "$dot"
     done
   done
 }

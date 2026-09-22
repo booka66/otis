@@ -269,7 +269,7 @@ git remote set-url origin https://github.com/x/y.git
 mkdir -p "$tmp/dash"
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
-expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "24"
+expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | sort -u)" "26"
 expect otis-list/here-last "$(printf '%s\n' "$rows" | tail -1 | cut -f6,11,14 | tr '\t' ' ')" "here here here"
 expect otis-list/here-always "$(printf '%s\n' "$rows" | strip | grep -c '── here ')" "1"
 expect otis-list/quiet "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "nothing waiting on you"
@@ -280,6 +280,24 @@ rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
 expect otis-list/waiting "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 == "w-fix-b-feature" { print $1 }' | tr -s ' ')" " ✎1 fold in 1 fix feature"
 expect otis-list/waiting-first "$(printf '%s\n' "$rows" | strip | head -1 | cut -f1 | sed 's/ ─*$//')" "── waiting on you"
 expect otis-list/waiting-count "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "1 thing waiting on you"
+# A verification that runs says what its tester is on and how its criteria
+# stand (git-agent-list --data), for the dashboard's row and its glyphs;
+# otis-agent draws it.
+mkdir -p "$common/otis-verify/b-live/artifacts"
+printf '{"criteria":[{"id":"c1","claim":"one","how":"x"},{"id":"c2","claim":"two","how":"y"},{"id":"c3","claim":"three","how":"z"}]}\n' > "$common/otis-verify/b-live/plan.json"
+printf 'Verifying live\n' > "$common/otis-verify/b-live/title"; date +%s > "$common/otis-verify/b-live/started"; echo $$ > "$common/otis-verify/b-live/pid"
+: > "$common/otis-verify/b-live/artifacts/c1.txt"
+printf '%s\n' '{"type":"otis","text":"tester started: http://x"}' '{"type":"tool","name":"run_terminal_cmd","input":{"detail":"bazel test //a:b | tee artifacts/c1.txt"},"who":"tester"}' \
+  '{"type":"tool","name":"run_terminal_cmd","input":{"detail":"bazel test //c:d | tee artifacts/c2.txt"},"who":"tester"}' > "$common/otis-verify/b-live/events.jsonl"
+expect agent-list/doing "$(git-agent-list --data | awk -F'\t' '$1 == "running" { print $7 "|" $8 }')" "c2 · $ bazel test //c:d | tee artifacts/c2.txt|●◌○"
+agent=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b a "stty rows 30 cols 150; otis-agent $1"; out=
+  for _ in {1..50}; do while zpty -rt a buf; do out+=$buf; done; [[ $out == *CRITERIA* ]] && break; sleep 0.1; done
+  sleep 0.5; while zpty -rt a buf; do out+=$buf; done
+  zpty -wn a q; sleep 0.3; zpty -d a 2>/dev/null; print -r -- $out' - "$common/otis-verify/b-live" | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+# A frame is cursor moves, not lines: the matches are counted, not the lines.
+expect agent/criteria "$(printf '%s\n' "$agent" | grep -o '● c1 \|◌ c2 \|○ c3 ' | sort -u | wc -l | tr -d ' ')" "3"
+expect agent/now "$(printf '%s\n' "$agent" | grep -o 'bazel test //c:d' | wc -l | tr -d ' ')" "3"
+rm -rf "$common/otis-verify/b-live"
 # Leaving what enter opened comes back to the dashboard's own rows, not gag's.
 expect otis-do/run "$(otis-do enter run run "$common/gmr-fix/b-feature" "" "" "" "" "" "" "" "")" "execute(git-mr-fix 'b-feature' '')+execute-silent(git-fzf-bg otis-list)"
 expect agent-list/open-default "$(git-agent-list --open "$common/gmr-fix/b-feature")" "execute(git-mr-fix 'b-feature' '')+reload(git-agent-list)"
