@@ -498,6 +498,20 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" > /dev/null
   expect symbols/shape-kept-off "$(test -e "$tmp/symst/shape" && echo on || echo off)" "off"
   expect symbols/fresh-head "$(awk -F'\t' '$3 == "fresh" { print $13 }' "$table")" "const fresh = (o: Opts)"
+  # otis.engine dagger: the same table from dagger, over tsgo's language
+  # server, which for lib.ts is seam's row for row; cached apart from seam's.
+  if command -v dagger >/dev/null 2>&1 && command -v tsgo >/dev/null 2>&1; then
+    printf '[[extractors]]\nadapter = "lsp"\ninclude = ["**/*.ts"]\nsettings = { server = ["tsgo", "--lsp", "--stdio"], options = {} }\n' > dagger.toml
+    echo dagger.toml >> "$common/info/exclude"
+    git config otis.engine dagger
+    dt=$(git-symbols --table "$base..$head")
+    lib() { awk -F'\t' '$1 == "lib.ts" { print $2, $3, $4, $6, $8, $9, $13, $18, $19, $20 }' "$1"; }
+    expect symbols/dagger-lib "$(lib "$dt")" "$(lib "$table")"
+    expect symbols/dagger-cached-apart "$(case $dt in (*-dagger*.tsv) echo apart ;; (*) echo "$dt" ;; esac)" "apart"
+    git config --unset otis.engine
+    rm dagger.toml
+    sed -i.bak '/^dagger\.toml$/d' "$common/info/exclude" && rm -f "$common/info/exclude.bak"
+  fi
   expect symbols/removed-side "$(awk -F'\t' '$3 == "helper" { print $7, $8 }' "$table")" "old 5"
   # v on run marks it and Opts under it; Opts is the symbol's, so fresh,
   # which uses it too, is half read. v again clears both.

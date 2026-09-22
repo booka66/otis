@@ -46,7 +46,12 @@ wait
 # Both keyed as git-mr-review's list keys them (git-mr-base's base, the
 # head), and cached by those shas for good, so each MR is read once a push.
 # Not the callers: tsgo is gigabytes a run, for when you are in the review.
+# Each by whichever reads the change (otis.engine), whose name is in the
+# table's: seam's is its mtime alone, dagger's starts with dagger.
 command -v seam >/dev/null 2>&1 || exit 0
+engine=$(otis-config engine)
+command -v "$engine" >/dev/null 2>&1 || exit 0
+case $engine in dagger) tabs=dagger ;; *) tabs='[0-9]' ;; esac
 gloss=; command -v claude >/dev/null 2>&1 && [ "$(git config --get otis.symbolsModel)" != off ] && gloss=1
 cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
 jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
@@ -59,7 +64,7 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
     for f in "$cache/symbols-gloss"/*-"$head".json; do [ -s "$f" ] && glossed=1; done
     for f in "$cache/symbols-gloss"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && glossed=1; done
     tabled=
-    for f in "$cache/symbols"/*-"$head"-*.tsv; do [ -s "$f" ] && tabled=1; done
+    for f in "$cache/symbols"/*-"$head"-$tabs*.tsv; do [ -s "$f" ] && tabled=1; done
     [ -n "$glossed" ] && [ -n "$tabled" ] && continue
     have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
     b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue

@@ -114,6 +114,13 @@ else
 fi
 if have ast-grep; then pass ast-grep "s in a review reads the MR by symbol"; else note ast-grep "reading a change by symbol needs it; without it only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')"; nice ast-grep; fi
 if have seam; then pass seam "s reads the change seam works out, by symbol"; else note seam "the symbol view is a renderer of seam's table; without it only files are listed. $(install_hint booka66/seam/seam 'git clone https://github.com/booka66/seam and put its bin on your PATH')"; nice booka66/seam/seam; fi
+# otis.engine dagger reads the change through dagger instead, and seam scores and splits what it reads.
+if [ "$(otis-config engine 2>/dev/null)" = dagger ]; then
+  if have dagger; then pass dagger "otis.engine dagger: the symbol view reads the change through dagger"; else note dagger "otis.engine is dagger, and without it only files are listed: curl -fsSL https://github.com/joshmoody24/dagger/releases/latest/download/dagger-installer.sh | sh"; fi
+  # dagger reads TypeScript through tsc --lsp, which TypeScript 7 brings, unless the repo's dagger.toml names another server.
+  tv=$(tsc --version 2>/dev/null | sed -n 's/^Version \([0-9]*\).*/\1/p')
+  if [ "${tv:-0}" -ge 7 ]; then pass tsc "$(tsc --version); dagger reads TypeScript through tsc --lsp"; else note tsc "dagger reads TypeScript through tsc --lsp, which needs TypeScript 7: npm install -g typescript"; fi
+fi
 if have claude; then pass claude "C, D and V have Claude review, fix, watch production and judge"; else note claude "C, D and V need Claude Code: curl -fsSL https://claude.ai/install.sh | bash, then claude to log in"; fi
 if have glow; then pass glow "MR descriptions render as markdown"; else note glow "MR descriptions show as plain text without it. $(install_hint glow 'see https://github.com/charmbracelet/glow')"; nice glow; fi
 if have bat; then pass bat "code blocks in MR comments are highlighted"; else note bat "code blocks in MR comments show unhighlighted without it. $(install_hint bat 'see https://github.com/sharkdp/bat')"; nice bat; fi

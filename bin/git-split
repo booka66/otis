@@ -31,6 +31,13 @@ rev=$1 check=$2 named=
 [ $# -ge 2 ] && named=1
 [ -n "$rev" ] || { echo "git-split <rev> [<check command>]" >&2; exit 2; }
 command -v seam >/dev/null 2>&1 || { echo "git-split: seam is not on your PATH" >&2; exit 2; }
+# With otis.engine dagger, seam splits dagger's table of the change (the
+# symbol view's, git-symbols --table) rather than reading the trees itself.
+table=
+if [ "$(otis-config engine)" = dagger ]; then
+  table=$(git-symbols --table "$rev") || { echo "git-split: dagger could not read $rev" >&2; exit 1; }
+fi
+split_seam() { if [ -n "$table" ]; then seam --table "$table" "$@"; else seam "$@"; fi; }
 here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 2
 [ "$here" != HEAD ] || { echo "git-split: you are not on a branch" >&2; exit 2; }
 branch=$4
@@ -65,7 +72,7 @@ trap 'cancelled' INT
 
 # A check named, even '' for none, goes to seam as it is; an expansion like
 # ${named:+--check "$check"} would drop the empty one.
-if [ -n "$named" ]; then seam "$rev" --split --json --check "$check"; else seam "$rev" --split --json; fi > "$tmp/plan" 2>"$tmp/err" || {
+if [ -n "$named" ]; then split_seam "$rev" --split --json --check "$check"; else split_seam "$rev" --split --json; fi > "$tmp/plan" 2>"$tmp/err" || {
   sed 's/^/  /' "$tmp/err" >&2; exit 1; }
 check=$(jq -r '.check // ""' "$tmp/plan")
 n=$(jq '.slices | length' "$tmp/plan")
@@ -142,7 +149,7 @@ draw
 # seam prints a line as each commit lands, so a line arriving means that slice
 # is done and the next one is under way. Its own output is kept for the end.
 set -m 2>/dev/null
-( seam "$rev" --split --branch "$branch" --plan-out "$tmp/live" --check "$check" > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
+( split_seam "$rev" --split --branch "$branch" --plan-out "$tmp/live" --check "$check" > "$tmp/out" 2>"$tmp/err"; echo $? > "$tmp/rc" ) &
 pid=$!
 set +m 2>/dev/null
 frames='|/-\'

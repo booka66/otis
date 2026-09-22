@@ -23,6 +23,8 @@ git clone https://github.com/booka66/otis.git ~/otis && ~/otis/bin/otis-setup
 
 You need zsh installed, though your own shell can be zsh, bash or fish. You also need git 2.41+, jq 1.7+, glab logged in to your GitLab, delta, and a Nerd Font. Setup checks all of these. nvim 0.10+, seam, ast-grep, glow and Claude Code are optional, and each turns on more features: with nvim, a review opens with its comments inline beside the diff; without it, files open in your editor and you comment from the review itself.
 
+The symbol view reads a change with seam by default. `git config --global otis.engine dagger` (or `otis config`) has [dagger](https://github.com/joshmoody24/dagger) read it instead, through language servers (TypeScript 7's `tsc --lsp` for TypeScript: `npm install -g typescript`), and `G` opens dagger's page. seam still scores, splits and glosses what dagger reads, so keep both installed.
+
 ## Getting started
 
 Run `otis-tour`. It's a menu of short guided tours, most of them hands-on with a made-up repo: reviewing by symbol, the review loop in `gmr`, Claude's reviews and fixes, verifying a change, shipping to production, committing, branches and worktrees, settings, and a cheat sheet.

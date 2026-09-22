@@ -18,7 +18,8 @@
 # git-symbols --viewed <rev> <toggle|add> <row id>
 #                                            v: the row and everything under it viewed, or, all of it
 #                                            viewed already, none; add: the row alone, a review's enter
-# git-symbols --page <rev> [row id]          G: seam's page for the change, in the browser, open on the row
+# git-symbols --page <rev> [row id]          G: seam's page for the change, in the browser, open on the row;
+#                                            dagger's, with otis.engine dagger
 # git-symbols --table <rev>                  the table's path in the cache, built first if it is not
 #                                            there (git-mr-prefetch, ahead of a review)
 # git-symbols --copy <row id>               y: "<symbol> in <path>" on the clipboard, a file row its path;
@@ -77,7 +78,9 @@
 # git diff -U0 for the lines that moved. This is its first renderer. otis
 # hands it its own file kinds (git-test-files kinds), so the picker and the
 # table agree on what a test file is. That is well under a second for a large
-# MR and the same answer every time. Once built the table is kept for the
+# MR and the same answer every time. With otis.engine dagger the same table
+# comes from dagger instead (otis-dagger-table), which asks the language
+# servers what changed and what uses what. Once built the table is kept for the
 # picker's life ($GIT_FZF_STATE), so opening a class is a re-render, not a
 # re-parse; the worktree's is rebuilt on every reload, since that is what a
 # reload is for.
@@ -154,6 +157,24 @@ case $mode in
   # --at) is the note.
   --page)
     rev=$1 id=${2%%>callers*}; id=${id##*>}
+    # otis.engine dagger: dagger's own page, which a server of its own on
+    # localhost answers for as long as it runs, so the one this repo last
+    # started is stopped first rather than left to pile up. It opens the
+    # browser itself, and has no row to open on.
+    if [ "$(otis-config engine)" = dagger ]; then
+      command -v dagger >/dev/null 2>&1 || exec git-fzf-note "dagger is not on your PATH"
+      case $rev in
+        worktree) set -- ;;
+        *..*) set -- "$rev" ;;
+        *) set -- commits "$rev^" "$rev" ;;
+      esac
+      pf=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/dagger-gui.pid
+      mkdir -p "${pf%/*}"; read -r pid 2>/dev/null < "$pf" && kill "$pid" 2>/dev/null
+      cd "$(git rev-parse --show-toplevel)" || exit 1
+      nohup dagger gui "$@" </dev/null >/dev/null 2>&1 &
+      echo $! > "$pf"
+      exit 0
+    fi
     case $id in *#*) id=${id%%#*}#$(printf '%s' "${id#*#}" | tr + .) ;; *) id= ;; esac
     t=$st/symbols.tsv
     [ -s "$t" ] || t=$(git-symbols --table "$rev") || exec git-fzf-note "seam could not read the change"
@@ -1051,21 +1072,51 @@ fi
 # A change between two commits is the same diff for good, so its table is
 # kept in the repo's cache as well, by the two shas: built once, here or
 # ahead of time (git-mr-prefetch), and copied from there by every picker
-# opened on it after, where seam was most of the first list. seam's mtime is
-# in the name, so an upgraded seam builds it again. cached <base> <head>:
+# opened on it after, where seam was most of the first list. The reader's
+# mtime is in the name, so an upgraded seam builds it again, and so is dagger's
+# name when otis.engine has dagger read the change instead (otis-dagger-table,
+# the same table): the two never answer for each other. cached <base> <head>:
 # the path, full shas.
+engine=$(otis-config engine)
 cached() {
-  cs=$(command -v seam) && cs=$(stat -L -f %m "$cs" 2>/dev/null || stat -L -c %Y "$cs") || return 1
+  cs=$(command -v "$engine") && cs=$(stat -L -f %m "$cs" 2>/dev/null || stat -L -c %Y "$cs") || return 1
+  [ "$engine" = seam ] || cs=$engine$cs
   cdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols
   mkdir -p "$cdir" && echo "$cdir/$1-$2-$cs.tsv"
 }
+# The table, from whichever reads the change.
+read_change() {
+  if [ "$engine" = dagger ]; then otis-dagger-table "$(git rev-parse "$base")" ${head:+"$(git rev-parse "$head")"}
+  else SEAM_KINDS="git-test-files kinds" seam "$rev"; fi
+}
+# fill <cache file> [<err file>]: the cached table, read once however many
+# ask for it at once. The picker, git-mr-prefetch and C's review can all want
+# one change's table before any of them has it, and each reading it was the
+# same work done two or three times over: nothing with seam, minutes of CPU
+# with dagger. The first to take the lock (a directory, with its pid) reads;
+# the rest wait for the file, or take the lock over from one that died.
+fill() {
+  lk=$1.lock
+  until mkdir "$lk" 2>/dev/null; do
+    [ -s "$1" ] && return 0
+    lp=; read -r lp 2>/dev/null < "$lk/pid"
+    if [ -n "$lp" ] && ! kill -0 "$lp" 2>/dev/null; then rm -rf "$lk"; continue; fi
+    sleep 1
+  done
+  echo $$ > "$lk/pid"
+  if [ ! -s "$1" ]; then
+    read_change > "$1.$$" 2> "${2:-/dev/null}" && mv "$1.$$" "$1"; rm -f "$1.$$"
+  fi
+  rm -rf "$lk"
+  [ -s "$1" ]
+}
 build() {
   c=; [ -n "$head" ] && c=$(cached $now)
-  if [ -n "$c" ] && [ -s "$c" ]; then
-    cp "$c" "$table.new" && mv "$table.new" "$table"; rm -f "$st/seam.err"; return
+  if [ -n "$c" ]; then
+    fill "$c" "$st/seam.err" && cp "$c" "$table.new" && mv "$table.new" "$table" && rm -f "$st/seam.err"
+    return
   fi
-  if SEAM_KINDS="git-test-files kinds" seam "$rev" > "$table.new" 2> "$st/seam.err"; then
-    [ -n "$c" ] && cp "$table.new" "$c.$$" && mv "$c.$$" "$c"
+  if read_change > "$table.new" 2> "$st/seam.err"; then
     mv "$table.new" "$table"; rm -f "$st/seam.err"
   fi
 }
@@ -1073,9 +1124,7 @@ build() {
 if [ "$mode" = --table ]; then
   [ -n "$head" ] || exit 1
   c=$(cached "$(git rev-parse "$base")" "$(git rev-parse "$head")") || exit 1
-  if [ ! -s "$c" ]; then
-    SEAM_KINDS="git-test-files kinds" seam "$rev" > "$c.$$" 2>/dev/null && mv "$c.$$" "$c" || { rm -f "$c.$$"; exit 1; }
-  fi
+  fill "$c" || exit 1
   echo "$c"; exit 0
 fi
 
@@ -1630,8 +1679,12 @@ if [ "$mode" = --rows ]; then
     [ -n "$rechecking" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is checking your fixes${GK_R}")"
   elif ! command -v seam >/dev/null 2>&1; then
     note=$(printf "${GK_ATTENTION}seam is not on your PATH, so there are only files${GK_R}")
+  elif ! command -v "$engine" >/dev/null 2>&1; then
+    note=$(printf "${GK_ATTENTION}%s is not on your PATH (otis.engine), so there are only files${GK_R}" "$engine")
   elif [ -e "$st/seam.err" ]; then
-    note=$(printf "${GK_BAD}seam failed: %s${GK_R}" "$(grep -m1 . "$st/seam.err" || echo "no message, exit status non-zero")")
+    note=$(printf "${GK_BAD}%s failed: %s${GK_R}" "$engine" "$(grep -m1 . "$st/seam.err" || echo "no message, exit status non-zero")")
+  elif [ "$engine" = dagger ]; then
+    note=$(printf "${GK_CONTEXT}dagger read no definitions here, so there are only files${GK_R}")
   elif ! command -v ast-grep >/dev/null 2>&1; then
     note=$(printf "${GK_ATTENTION}ast-grep is not installed (brew install ast-grep), so there are only files${GK_R}")
   else

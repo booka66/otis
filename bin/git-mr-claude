@@ -207,14 +207,15 @@ if [ "$mode" = --run ]; then
   stopping
 
   # The change by symbol, the way the reviewer reads it and will read the
-  # comments (git-symbols): seam's table, and tsgo's callers elsewhere
+  # comments (git-symbols): its table, seam's or dagger's as otis.engine
+  # says and kept by the two commits, and tsgo's callers elsewhere
   # (git-callers), what the change breaks without touching. Asked for here
   # rather than handed over, since C in gmr comes before any symbol view.
   # The callers take a minute; with wait-callers (C's second question)
   # Claude starts once they are in, else with what is there.
   table=$d/symbols.tsv
   if [ ! -s "$table" ] && command -v seam >/dev/null 2>&1; then
-    SEAM_KINDS="git-test-files kinds" seam "$range" > "$table.new" 2> "$d/seam.err" && mv "$table.new" "$table"
+    t=$(git-symbols --table "$range") && cp "$t" "$table"
   fi
   callers=/dev/null shape_ctx=
   if [ -s "$table" ]; then

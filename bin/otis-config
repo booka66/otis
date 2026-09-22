@@ -29,6 +29,9 @@
 #                (gpt-5.6-luna:reasoning=high): otis.cursorModel, else Cursor's default
 #   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
 #                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
+#   engine       what reads a change by symbol for the symbol view: seam, or dagger (github.com/joshmoody24/dagger,
+#                over TypeScript 7's tsc --lsp or what dagger.toml names): otis.engine, else seam. seam still scores,
+#                splits, glosses and finds the callers of either one's table
 #   sideBySide   diffs side by side in every preview (git-delta): always, or auto, from 120 columns: otis.sideBySide
 #   worktrees    where otis puts its worktrees, under the main checkout: otis.worktrees
 #   install      the command that installs node_modules, run at the main checkout by otis-node-modules
@@ -60,7 +63,7 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommand sideBySide worktrees install editor lessons'
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommand engine sideBySide worktrees install editor lessons'
 sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix'
 nl='
 '
@@ -154,7 +157,7 @@ cfg_bool() {
   esac
 }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommands sideBySide worktrees editor lessons gitlab'
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix claudeCommands engine sideBySide worktrees editor lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -217,6 +220,7 @@ one() {
     verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
     verifyFix) [ "$(cfg_bool verifyFix || echo true)" = true ] ;;
     claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
+    engine) case $(cfg engine) in dagger) echo dagger ;; *) echo seam ;; esac ;;
     sideBySide) cfg sideBySide ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
     install) cfg install ;;
@@ -261,7 +265,7 @@ one() {
 # that differs between branches checked out there is the one thing this would
 # miss. A worktree asked on its own, with no environment from above, reads its
 # own .otis into its own cache (repo_facts).
-envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix sideBySide worktrees lessons gitlab'
+envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix engine sideBySide worktrees lessons gitlab'
 boolkeys='verifyRetro verifyFix lessons gitlab'
 cachename=otis-config-cache
 tab='	'

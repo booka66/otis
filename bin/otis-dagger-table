@@ -1,0 +1,215 @@
+#!/bin/sh
+# otis-dagger-table <base> [<head>]: the change between two commits, or from
+# <base> to the worktree when there is no head, as seam's table (seam's README
+# says its columns), read by dagger rather than by seam. otis.engine dagger
+# (otis-config engine) has git-symbols build its table here, and everything
+# that reads a table (the symbol view, and seam's --score, --split, --md,
+# --gloss and --callers over it) reads this one the same way.
+#
+# What dagger decides: which definitions changed, whether a change is to the
+# signature (the compiler's contract, from the language server, where it has
+# one), and what uses what (the server's references, where seam finds names
+# in the text). What is worked out here, from git, the way seam works it out:
+# each definition's changed lines, its line in the diff, the lines no
+# definition claims, the files dagger reads nothing from, and in the worktree
+# what of each is staged.
+#
+# dagger reads the language servers dagger.toml at the repo's top names, and
+# without one, `tsc --lsp` for TypeScript. It is asked with --ripples 0: the
+# table is what changed, and what the change reaches outside it is git-callers'.
+# Errors go to stderr as dagger said them, its progress left out.
+base=$1 head=$2
+[ -n "$base" ] || { echo "usage: otis-dagger-table <base> [<head>]" >&2; exit 2; }
+command -v dagger >/dev/null 2>&1 || { echo "dagger is not on your PATH" >&2; exit 2; }
+share=$(seam --share) || exit 1
+cd "$(git rev-parse --show-toplevel)" || exit 1
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+# Named nothing, dagger reads the worktree against HEAD, which is what the
+# worktree is here; but a clean one it reads as HEAD's own commit instead.
+if [ -z "$head" ]; then
+  [ -n "$(git --no-optional-locks status --porcelain 2>/dev/null)" ] || exit 0
+  set --
+else
+  set -- commits "$base" "$head"
+fi
+if ! dagger json --ripples 0 "$@" > "$tmp/review.json" 2> "$tmp/err"; then
+  sed -n '/^Error/,$p' "$tmp/err" | grep . >&2 || tail -1 "$tmp/err" >&2
+  exit 1
+fi
+
+if [ -n "$head" ]; then
+  git diff --name-status --no-renames "$base" "$head" > "$tmp/status"
+  git diff --numstat -M "$base" "$head" > "$tmp/numstat"
+  git diff -U0 --no-renames "$base" "$head" > "$tmp/hunks"
+else
+  git --no-optional-locks diff-index --name-status --no-renames "$base" > "$tmp/status"
+  git --no-optional-locks ls-files --others --exclude-standard | awk '{ print "?\t" $0 }' >> "$tmp/status"
+  git --no-optional-locks diff-index --numstat -M "$base" > "$tmp/numstat"
+  { git --no-optional-locks diff-index --no-renames -U0 "$base"
+    awk -F'\t' '$1 == "?" { print $2 }' "$tmp/status" | while read -r p; do git diff --no-index -U0 /dev/null "$p"; done
+  } > "$tmp/hunks" 2>/dev/null
+fi
+
+# What each file is (tests, gen, cfg, or source), otis's own reading, as seam
+# is given it: a mention does not cross from one kind to another, so a spec
+# that names everything it tests does not pull it off the top level.
+jq -r '[.definitions[].sides | .. | .file? // empty] | unique[]' "$tmp/review.json" |
+  git-test-files kinds | jq -R 'split("\t") | {(.[0]): (.[1] // "")}' | jq -s 'add // {}' > "$tmp/kinds.json"
+
+# One row a definition, roots first and then by file and line, members right
+# after their class; the counts and a removed row's line are left for the awk
+# below, which has the diff.
+jq -r --slurpfile kinds "$tmp/kinds.json" '
+  $kinds[0] as $K
+  | def squeeze: gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "");
+    # What dagger calls a definition'"'"'s docs is whatever text sits above it,
+    # code as well (an import, a statement); only a comment is its doc here,
+    # the rest what no definition claims, as seam has it.
+    def comment: [split("\n")[] | select(test("\\S"))] | all(test("^\\s*(//|/\\*|\\*|#)"));
+    def pieces($o): [$o.parts | to_entries[] | .key as $k | .value[] | select($k != "docs" or (.text | comment))];
+    def lastline($p): $p.line + ([$p.text | sub("\n$"; "") | scan("\n")] | length);
+    def first($o): pieces($o) | map(.line) | min;
+    def last($o): pieces($o) | map(lastline(.)) | max;
+    def keyline($o): ($o.parts.type // $o.parts.body // [])[0].line // first($o);
+    def text($o): pieces($o) | sort_by(.span.start) | map(.text) | join("");
+    # The interface as seam writes it: no export, whitespace squeezed, and
+    # for a class or a multi-line const only its first line.
+    # A type alias, which tsgo reports as a class.
+    def alias($o): ($o.parts.type // [])[0].text // "" | test("^\\s*(export\\s+)?(declare\\s+)?type\\s");
+    # A const that is an arrow function, which dagger reads whole: its
+    # interface is its first line up to the last arrow there.
+    def arrow($o): ($o.kind == "variable" or $o.kind == "constant") and (($o.parts.type // [])[0].text // "" | split("\n")[0] | test("=>"));
+    # The interface as seam writes it: no export, whitespace squeezed, a class
+    # up to its body, and of anything else longer than a line, the first.
+    def head($o): ($o.parts.type // []) | map(.text) | join(" ")
+      | (if arrow($o) then split("\n")[0] | sub("\\s*=>(?!.*=>).*$"; "")
+         elif $o.role == "container" and (alias($o) | not) then split("\n")[0] | sub("\\s*\\{[^{}]*\\}?\\s*$"; "")
+         elif $o.kind != "function" and $o.kind != "method" and (sub("\\s+$"; "") | test("\n"))
+         then (split("\n")[0] | squeeze) + "…" else . end)
+      | squeeze | sub("^(export )?(default )?(declare )?"; "")
+      | gsub("(?<=\\() | (?=[,)])"; "") | sub("\\s*=>$"; "");
+    def kind($o): if alias($o) then "type" elif arrow($o) then "constfn" else
+      {"function": "fn", "constructor": "method", "variable": "const", "constant": "const",
+       "property": "field", "enum member": "field"}[$o.kind] // $o.kind end;
+    def names($n): test("(^|[^A-Za-z0-9_$.])" + ($n | gsub("(?<c>[$.])"; "\\\(.c)")) + "($|[^A-Za-z0-9_$])");
+    def pad: tostring | ("00000000" + .)[-8:];
+  (.reading | to_entries | map({key: .value.definition, value: .key}) | from_entries) as $rank
+  | [.definitions | to_entries[] | .key as $id | .value as $d
+     | ($d.sides.added // $d.sides.removed // $d.sides.kept.after) as $o
+     # A file read whole, and the text of a file no definition holds (its
+     # imports, a top-level statement), dagger calls a definition too; here
+     # those are file rows, worked out below as seam works them out.
+     | select($o.kind != "file" and $o.kind != "module")
+     | ($d.sides.kept.before // $d.sides.removed) as $b
+     | {id: $id, o: $o, b: $b, path: $o.file, name: $o.locator.name,
+        change: (if $d.change == "added" then "added" elif $d.change == "removed" then "removed"
+                 elif $b.contract != null and $o.contract != null then (if $b.contract != $o.contract then "signature" else "body" end)
+                 elif $d.change.kept.contract then "signature" else "body" end),
+        side: (if $d.change == "removed" then "old" else "new" end)}
+     | .start = first(.o) | .end = last(.o)
+     | .sortkey = .path + (.start | pad) + .side]
+  | (map(select(.o.role == "container" and (alias(.o) | not))) | map({key: "\(.path)\t\(.name)", value: .id}) | from_entries) as $box
+  | map(.cls = (if .o.parent != null and ($box["\(.path)\t\(.o.parent.name)"] // .id) != .id then .o.parent.name else "" end))
+  | (map({key: .id, value: .}) | from_entries) as $R
+  | def top($id): $R[$id] as $r | if $r.cls == "" then $id else $box["\($r.path)\t\($r.cls)"] end;
+  # What uses what, a member standing for its class, as seam has it.
+  ([$ARGS.named.edges[] | select($R[.from] and $R[.to]) | {from: top(.from), to: top(.to)}
+    | select(.from != .to and $K[$R[.from].path] == $K[$R[.to].path])] | unique) as $E
+  | ($E | group_by(.from) | map({key: .[0].from, value: map(.to) | sort_by($rank[.] // 1e9)}) | from_entries) as $uses
+  | ([$E[].to] | unique | map({(.): true}) | add // {}) as $used
+  | [.[] | select(.cls == "")] as $tops
+  # Roots: nothing mentions them. A cycle has none, so whatever the roots
+  # cannot reach gets one, the first by file and line, until nothing is left.
+  | def closure($seed): {seen: ($seed | map({(.): true}) | add // {}), q: $seed}
+      | until(.q == []; .q[0] as $x | .q |= .[1:]
+          | reduce ($uses[$x] // [])[] as $y (.; if .seen[$y] then . else .seen[$y] = true | .q += [$y] end))
+      | .seen;
+    ([$tops[] | select($used[.id] | not) | .id]
+     | until(closure(.) as $seen | [$tops[] | select($seen[.id] | not)] | length == 0;
+         closure(.) as $seen | . + [[$tops[] | select($seen[.id] | not)] | min_by(.sortkey) | .id])
+     | map({(.): true}) | add // {}) as $root
+  # Exported: what its signature opens with, a member as its class is.
+  | ($tops | map({key: .id, value: ((.o.parts.type // [])[0].text // "" | test("^\\s*(export|pub)\\b"))}) | from_entries) as $exp
+  | . as $all | $tops | sort_by([(if $root[.id] then 0 else 1 end), .sortkey])[] as $t
+  | ($t, ([$all[] | select(.cls != "" and top(.id) == $t.id)] | sort_by(.start)[]))
+  | . as $r | top(.id) as $tid
+  | ($uses[.id] // [] | if $r.cls == "" then . else [] end) as $u
+  | [.path, kind(.o), .name, .cls, (if $exp[$tid] then 1 else 0 end), .change, .side, .start, .end,
+     keyline(.o), "", "", head(.o),
+     (if .b != null then first(.b) else "" end), (if .b != null then last(.b) else "" end), "", "",
+     ($u | map($R[.] | "\(.path)#\(.name)") | join("|")),
+     (if .cls == "" and $root[.id] then 1 else 0 end),
+     ($u | map(. as $to | select($r.b == null or (text($r.b) | names($R[$to].name) | not)))
+         | map($R[.] | "\(.path)#\(.name)") | join("|"))]
+  | @tsv
+' --argjson edges "$(jq -c .edges "$tmp/review.json")" "$tmp/review.json" > "$tmp/rows" || exit 1
+
+# The counts from the diff: a row's changed lines on each side, a removed
+# one's line where the change now sits, and a file row for what no definition
+# claims (an import, a top-level statement), blank lines counting for nothing.
+awk -F'\t' '
+  BEGIN { OFS = "\t" }
+  FILENAME == ARGV[1] {
+    r[++m] = $0
+    if ($7 == "new") for (l = $8; l <= $9; l++) inrow["new", $1, l] = 1
+    if ($14 != "") for (l = $14; l <= $15; l++) inrow["old", $1, l] = 1
+    next
+  }
+  '"$(cat "$share/hunks.awk")"'
+  END {
+    for (i = 1; i <= m; i++) {
+      $0 = r[i]
+      if ($7 == "new") { $11 = lines("", $1, "new", $8, $9); $12 = ($14 != "") ? lines("", $1, "old", $14, $15) : 0 }
+      else { $11 = 0; $12 = lines("", $1, "old", $8, $9); $10 = (("", $1, $10) in at) ? at["", $1, $10] : 1 }
+      print; seen[$1] = 1
+    }
+    for (k in add) { split(k, kk, SUBSEP); if ((kk[2] in seen) && !(("new", kk[2], kk[3]) in inrow) && !(("", kk[2], "new", kk[3]) in blank)) { oadd[kk[2]]++; left[kk[2]] = 1 } }
+    for (k in del) { split(k, kk, SUBSEP); if ((kk[2] in seen) && !(("old", kk[2], kk[3]) in inrow) && !(("", kk[2], "old", kk[3]) in blank)) { odel[kk[2]]++; left[kk[2]] = 1 } }
+    for (f in left) print f, "file", "", "", "", "body", "new", "", "", "", oadd[f] + 0, odel[f] + 0, "", "", "", "", "", "", "", ""
+  }' "$tmp/rows" "$tmp/hunks" > "$tmp/table"
+
+# Files with no row yet, dagger's whole-file reads among them, as file rows
+# with the file picker's counts.
+awk -F'\t' "$(cat "$share/numstat.awk")"'
+  BEGIN { OFS = "\t" }
+  FILENAME == ARGV[1] { listed[$1] = 1; next }
+  FILENAME == ARGV[2] { if (NF >= 3 && $1 ~ /^[0-9]+$/) { p = numstat_path($3); add[p] = $1; del[p] = $2 }; next }
+  !($2 in listed) { print $2, "file", "", "", "", ($1 == "A" || $1 == "?" ? "added" : $1 == "D" ? "removed" : "body"), "new", "", "", "", add[$2], del[$2], "", "", "", "", "", "", "", "" }
+' "$tmp/table" "$tmp/numstat" "$tmp/status" >> "$tmp/table"
+
+if [ -z "$head" ]; then
+  # What of each definition is staged and what is not, as seam says it: the
+  # worktree against the index is unstaged, the index against base staged.
+  git --no-optional-locks diff-files -U0 --no-renames > "$tmp/wi" 2>/dev/null
+  git --no-optional-locks diff-index --cached -U0 --no-renames "$base" > "$tmp/ih" 2>/dev/null
+  awk -F'\t' '$1 == "?" { print $2 }' "$tmp/status" > "$tmp/untracked"
+  awk -F'\t' '
+    FILENAME == ARGV[1] { rows[++m] = $0; next }
+    FILENAME == ARGV[2] { untracked[$0] = 1; next }
+    FILENAME == ARGV[3] { which = "wi" }
+    FILENAME == ARGV[4] { which = "ih" }
+    '"$(cat "$share/hunks.awk")"'
+    END {
+      OFS = "\t"
+      for (r = 1; r <= m; r++) {
+        $0 = rows[r]
+        if ($2 == "file" || $8 == "") { print; continue }
+        p = $1; s = $8 + 0; e = $9 + 0
+        if (p in untracked) { $16 = 0; $17 = 1; print; continue }
+        if ($7 == "old") {
+          st = touched("ih", p, "old", s, e)
+          un = touched("wi", p, "old", shift("ih", p, "old", s), shift("ih", p, "old", e))
+        } else {
+          un = touched("wi", p, "new", s, e)
+          if ($14 != "") st = touched("ih", p, "old", $14 + 0, $15 + 0)
+          else st = touched("ih", p, "new", shift("wi", p, "new", s), shift("wi", p, "new", e))
+        }
+        $16 = st; $17 = un
+        print
+      }
+    }' "$tmp/table" "$tmp/untracked" "$tmp/wi" "$tmp/ih"
+else
+  cat "$tmp/table"
+fi

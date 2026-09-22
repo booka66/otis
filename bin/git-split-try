@@ -20,16 +20,23 @@
 rev=$1 check=$2
 [ -n "$rev" ] || { echo "git-split-try <rev> [<check command>]" >&2; exit 2; }
 command -v seam >/dev/null 2>&1 || { echo "git-split-try: seam is not on your PATH" >&2; exit 2; }
+# With otis.engine dagger, seam splits dagger's table of the change (the
+# symbol view's, git-symbols --table) rather than reading the trees itself.
+table=
+if [ "$(otis-config engine)" = dagger ]; then
+  table=$(git-symbols --table "$rev") || { echo "git-split-try: dagger could not read $rev" >&2; exit 1; }
+fi
+split_seam() { if [ -n "$table" ]; then seam --table "$table" "$@"; else seam "$@"; fi; }
 
-base=$(seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
-[ -n "$base" ] || { seam "$rev" --split >/dev/null; echo "git-split-try: no split for $rev" >&2; exit 1; }
+base=$(split_seam "$rev" --split --json 2>/dev/null | jq -r '.base // empty')
+[ -n "$base" ] || { split_seam "$rev" --split >/dev/null; echo "git-split-try: no split for $rev" >&2; exit 1; }
 
 # Named for the moment and for the change, so two of these never collide and
 # one left behind by a kill -9 says what it was.
 branch=seam/try-$(printf '%s' "$rev" | tr -c 'A-Za-z0-9' '-' | sed 's/--*/-/g; s/^-//; s/-$//')-$$
 trap 'git update-ref -d "refs/heads/$branch" 2>/dev/null; exit' EXIT INT TERM
 
-if ! seam "$rev" --split --branch "$branch" --check "$check" > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
+if ! split_seam "$rev" --split --branch "$branch" --check "$check" > "${TMPDIR:-/tmp}/git-split-try.$$" 2>&1; then
   # seam refuses an order that does not stand up, and that refusal is the most
   # useful thing it can say: it is shown and waited on rather than flashed
   # past on the way back to the picker.
