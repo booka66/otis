@@ -34,9 +34,29 @@ case $key in
 esac
 ended=$(cat "$d/ended" 2>/dev/null)
 
-# One JSON line a file the verdict cites. A video's frames are the judge's
-# way of watching it, so the video stands for them.
-jq -r '.criteria[].artifacts[]? | select(startswith("frames/") | not)' "$d/verdict.json" | awk '!seen[$0]++' |
+# The fix the judge accepted, if there is one: its attempt, whose evidence
+# the tester named for it (c2-fix1-toast.png beside c2-toast.png), so the
+# report can set each failed claim's evidence beside the same with the fix.
+fix=null attempt=
+if [ "$(jq -r .accept "$d/verdict-fix.json" 2>/dev/null)" = true ]; then
+  fix=$(cat "$d/verdict-fix.json")
+  attempt=$(ls "$d" | sed -n 's/^verdict-fix-\([0-9]*\)\.json$/\1/p' | sort -n | tail -1)
+fi
+
+# One JSON line a file the verdict cites, and with a fix, each failed claim's
+# evidence of it and what it stands beside, its test's two runs and its
+# patch. A video's frames are the judge's way of watching it, so the video
+# stands for them.
+{ jq -r '.criteria[].artifacts[]? | select(startswith("frames/") | not)' "$d/verdict.json"
+  if [ -n "$attempt" ]; then
+    for c in $(jq -r '.criteria[] | select(.result == "failed") | .id' "$d/verdict.json"); do
+      for f in "$d/artifacts/$c-fix$attempt"*; do
+        [ -f "$f" ] || continue
+        printf '%s\n' "${f##*/}" "$(printf '%s' "${f##*/}" | sed "s/-fix$attempt//")"
+      done
+    done
+    printf '%s\n' "fix$attempt-test-before.txt" "fix$attempt-test-after.txt" "fix-$attempt.patch"
+  fi; } | awk '!seen[$0]++' |
 while IFS= read -r name; do
   f=$d/artifacts/$name
   [ -f "$f" ] || continue
@@ -68,7 +88,7 @@ while IFS= read -r name; do
 done > "$tmp/files.jsonl"
 
 jq -r -L "$share" --slurpfile plan "$d/plan.json" --slurpfile files "$tmp/files.jsonl" \
-  --arg title "$title" --arg what "$what" --arg mr "$mr" \
+  --arg title "$title" --arg what "$what" --arg mr "$mr" --argjson fix "$fix" --arg attempt "$attempt" \
   --arg when "$([ -n "$ended" ] && { date -r "$ended" '+%b %-d, %Y' 2>/dev/null || date -d "@$ended" '+%b %-d, %Y'; })" \
   'include "verify-html"; page' "$d/verdict.json" > "$d/report.html.new" &&
   mv "$d/report.html.new" "$d/report.html"

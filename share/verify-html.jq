@@ -1,6 +1,6 @@
 # A verification's report as one HTML page (bin/git-verify-html says what it
-# is for, and passes $plan, $files, $title, $what, $mr and $when). Input:
-# verdict.json.
+# is for, and passes $plan, $files, $title, $what, $mr, $when, $fix and
+# $attempt). Input: verdict.json.
 
 # The judge's prose is loose markdown: paragraphs, "- " lists, `code` and
 # **bold**. Escaped first, so nothing in it is ever markup.
@@ -68,12 +68,12 @@ h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacin
 .claim-body { margin: 14px 0 0 40px; }
 .finding { color: var(--soft); font-size: 15px; }
 
-.video { margin: 18px 0 0; }
-.video video { display: block; width: 100%; max-height: 72vh; border-radius: 8px; border: 1px solid var(--rule); background: #000; }
-.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 14px; }
-.shots button { all: unset; cursor: zoom-in; display: block; border-radius: 6px; overflow: hidden; border: 1px solid var(--rule); background: var(--surface); aspect-ratio: 4 / 3; }
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 16px; }
+.shots button { all: unset; cursor: zoom-in; display: block; border-radius: 8px; overflow: hidden; border: 1px solid var(--rule); background: var(--surface); }
 .shots button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-.shots img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.shots img { display: block; width: 100%; height: auto; }
+.clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 220px)); gap: 10px; margin-top: 12px; }
+.clips video { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--rule); background: #000; }
 
 details { margin-top: 14px; font-size: 14px; }
 summary { cursor: pointer; color: var(--soft); width: fit-content; }
@@ -83,6 +83,19 @@ summary:hover { color: var(--ink); }
 .file-name span { color: var(--faint); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
 .file pre { margin: 0; padding: 10px 12px; max-height: 360px; overflow: auto; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .none { color: var(--fail); font-size: 14px; margin-top: 10px; }
+
+.fix-claim { padding: 22px 0 6px; border-top: 1px solid var(--rule); }
+.fix-claim .claim-text { font-size: 15px; margin-top: 2px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+.pair figure { margin: 0; min-width: 0; }
+.pair figcaption { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.pair .was { color: var(--fail); } .pair .now { color: var(--pass); }
+.pair button { all: unset; cursor: zoom-in; display: block; border-radius: 6px; overflow: hidden; border: 1px solid var(--rule); background: var(--surface); }
+.pair button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.pair img { display: block; width: 100%; height: auto; }
+.pair video { display: block; width: 100%; border-radius: 6px; border: 1px solid var(--rule); background: #000; }
+.pair.clip { max-width: 460px; }
+.pair .file { margin-top: 0; }
 
 dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 96vh; }
 dialog::backdrop { background: rgb(0 0 0 / 0.86); }
@@ -97,7 +110,7 @@ dialog img { display: block; max-width: 96vw; max-height: 96vh; cursor: zoom-out
 
 def script: "
 const box = document.querySelector('dialog'), big = box.querySelector('img');
-document.querySelectorAll('.shots button').forEach(b => b.addEventListener('click', () => {
+document.querySelectorAll('.shots button, .pair button').forEach(b => b.addEventListener('click', () => {
   big.src = b.querySelector('img').src; big.alt = b.title; box.showModal();
 }));
 box.addEventListener('click', () => box.close());
@@ -114,13 +127,42 @@ def claim($plan_by; $file):
 <div class=\"claim-text\">\($plan_by[$c.id].claim | md)</div></div></div>
 <div class=\"claim-body\">
 <div class=\"finding\">\($c.evidence | md)</div>
-\($ev | map(select(.kind == "video") | "<div class=\"video\"><video controls preload=\"metadata\" src=\"\(.src)\" title=\"\(.name | @html)\"></video></div>") | join(""))
 \(if ($shots | length) > 0 then "<div class=\"shots\">" + ($shots | map("<button type=\"button\" title=\"\(.name | @html)\"><img loading=\"lazy\" src=\"\(.src)\" alt=\"\(.name | @html)\"></button>") | join("")) + "</div>" else "" end)
+\($ev | map(select(.kind == "video")) | if length > 0 then "<div class=\"clips\">" + (map("<video controls preload=\"metadata\" src=\"\(.src)\" title=\"\(.name | @html)\"></video>") | join("")) + "</div>" else "" end)
 \(if ($out | length) > 0 then "<details><summary>Output · \($out | length) file\(if ($out | length) == 1 then "" else "s" end)</summary>"
   + ($out | map("<div class=\"file\"><div class=\"file-name\">\(.name | @html)<span>\(.size | size)\(if .cut then ", cut to what matters and the end" else "" end)</span></div><pre>\(.text | @html)</pre></div>") | join(""))
   + "</details>" else "" end)
 \(if ($ev | length) == 0 then "<p class=\"none\">Nothing the tester saved shows this.</p>" else "" end)
 </div></article>";
+
+# fixed: with a fix the judge accepted, what it changed and each failed
+# claim's evidence before it, beside the same with it: the screenshot, the
+# output, the recording. Then its test's run without the fix and with it, and
+# the patch.
+def fixed($plan_by; $file):
+  if $fix == null then "" else
+  ("-fix" + $attempt) as $tag
+  | def text: "<div class=\"file\"><div class=\"file-name\">\(.name | @html)<span>\(.size | size)\(if .cut then ", cut" else "" end)</span></div><pre>\(.text | @html)</pre></div>";
+    def one($f): if $f.kind == "image" then "<button type=\"button\" title=\"\($f.name | @html)\"><img loading=\"lazy\" src=\"\($f.src)\" alt=\"\($f.name | @html)\"></button>"
+      elif $f.kind == "video" then "<video controls preload=\"metadata\" src=\"\($f.src)\" title=\"\($f.name | @html)\"></video>"
+      else ($f | text) end;
+    def pair($b; $a): "<div class=\"pair\(if $a.kind == "video" then " clip" else "" end)\"><figure><figcaption class=\"was\">Before</figcaption>\(one($b))</figure><figure><figcaption class=\"now\">With the fix</figcaption>\(one($a))</figure></div>";
+    def rank: {image: 0, text: 1, video: 2}[.kind];
+  [.criteria[] | select(.result == "failed")] as $failed
+  | "<h2>With the fix</h2><div class=\"lede\"><p><strong>\($fix.title | @html)</strong></p>\($fix.summary | md)</div>"
+  + ($failed | map(. as $c
+      | [$file | to_entries[] | select(.key | startswith($c.id + $tag)) | .value
+         | {after: ., before: $file[.name | sub($tag; "")]} | select(.before)]
+      | sort_by(.after | rank)
+      | if length == 0 then "" else
+          "<div class=\"fix-claim\"><div class=\"cid\">\($c.id | @html)</div><div class=\"claim-text\">\($plan_by[$c.id].claim | md)</div>"
+          + (map(pair(.before; .after)) | join("")) + "</div>"
+        end) | join(""))
+  + (if $file["fix\($attempt)-test-before.txt"] and $file["fix\($attempt)-test-after.txt"] then
+      "<details><summary>The test it added, run without the fix and with it</summary>"
+      + pair($file["fix\($attempt)-test-before.txt"]; $file["fix\($attempt)-test-after.txt"]) + "</details>" else "" end)
+  + (if $file["fix-\($attempt).patch"] then "<details><summary>The patch</summary>\($file["fix-\($attempt).patch"] | text)</details>" else "" end)
+  end;
 
 def page:
   . as $v
@@ -141,6 +183,7 @@ def page:
 <div class=\"lede\">\($v.summary | md)</div>
 </header>
 \(if ($v.concerns | length) > 0 then "<h2>Concerns</h2><ul class=\"concerns\">" + ($v.concerns | map("<li>" + (md | sub("^<p>"; "") | sub("</p>$"; "")) + "</li>") | join("")) + "</ul>" else "" end)
+\($v | fixed($plan_by; $file))
 <h2>Claims</h2>
 <section>\($v.criteria | map(claim($plan_by; $file)) | join("\n"))</section>
 </main><dialog><img alt=\"\"></dialog><script>\(script)</script></body></html>";
