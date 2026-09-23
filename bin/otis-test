@@ -352,7 +352,7 @@ rm -f "$common/gmr-fix/b-feature"/02.patch "$common/gmr-fix/b-feature/folded" \
   "$common/gmr-fix/b-feature/accepted" "$common/gmr-fix/b-feature/declined"
 # D discards what otis is telling you, and nothing else: a merge request's own
 # state is the merge request's to change.
-expect otis-do/dismiss-refused "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss mine mr "" 42 "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "otis discards what it is telling you, Claude's fixes and its runs' verdicts; that row is the merge request's own state"
+expect otis-do/dismiss-refused "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss mine mr "" 42 "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "otis discards what it is telling you, the agents' fixes and their runs' verdicts; that row is the merge request's own state"
 expect otis-do/dismiss-gone "$(GIT_FZF_STATE=$tmp/dash otis-do dismiss run run "$common/gmr-fix/nope" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that run is not here any more"
 # Discarding a whole run asks first, and git-confirm reads the terminal, so
 # with none there is nothing discarded: the confirm is not a formality.
@@ -580,11 +580,11 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
     # F makes the edit and saves it, staying in the picker; the preview then
     # marks it made, and a second F says it is made already.
     expect callers/fix-apply "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)'):$(sed -n 5p app.ts)" "reload(x):  return run({ a: 1 }, false);"
-    expect callers/fix-apply-note "$(cat "$tmp/symst/note")" "made Claude's fix in app.ts · uncommitted, git diff shows it"
+    expect callers/fix-apply-note "$(cat "$tmp/symst/note")" "made the proposed fix in app.ts · uncommitted, git diff shows it"
     expect callers/fix-made "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -c 'app.ts:5 · made, uncommitted')" "1"
     GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run>callers>app.ts#main' 'reload(x)' >/dev/null
-    expect callers/fix-apply-again "$(cat "$tmp/symst/note")" "Claude's fix for this caller is made already; git diff shows it"
-    expect callers/fix-not-caller "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run' 'reload(x)' >/dev/null; cat "$tmp/symst/note")" "F makes Claude's fix to a broken caller, and this row is not one"
+    expect callers/fix-apply-again "$(cat "$tmp/symst/note")" "the fix proposed for this caller is made already; git diff shows it"
+    expect callers/fix-not-caller "$(GIT_FZF_STATE=$tmp/symst git-callers-fix --apply 'lib.ts#run' 'reload(x)' >/dev/null; cat "$tmp/symst/note")" "F makes the fix proposed for a broken caller, and this row is not one"
     git checkout -q -- app.ts
     rm -rf "$fxdir"
     expect callers/preview "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 5 'lib.ts#run>callers>app.ts#main' | grep -c $'\e\[1;4;38;2;250;189;47mrun\e\[22;24m')" "1"
@@ -1204,6 +1204,14 @@ for _ in 1 2 3 4 5; do
   jq -nc '{type: "otis", text: "got somewhere"}' >> "$lives/events.jsonl"
 done
 expect resume/progress-clears-the-count "$(cat "$lives/status" 2>/dev/null)" ""
+# The pid kept is the run's own, and nothing of the resume holds the caller's
+# output open while the run goes: gb reads its rows through a pipe, and hung
+# until the run ended.
+slow=$tmp/repo/.git/gmr-fix/slow && a_run "$slow" && printf 'sleep\n5\n' > "$slow/cmd" && killed "$slow"
+t=$(date +%s); picks_up "$slow" | cat
+expect resume/leaves-the-pipe "$(( $(date +%s) - t < 3 ))" "1"
+expect resume/pid-is-the-run "$(ps -o command= -p "$(cat "$slow/pid")" | grep -c 'sleep 5$')" "1"
+kill "$(cat "$slow/pid")" 2>/dev/null
 
 # --- git-fzf-later: a key whose answer comes from GitLab runs behind the
 # picker instead of freezing it, and says so while it goes
@@ -1369,6 +1377,74 @@ else
 fi
 PATH=${PATH#"$tmp/glabstub:"}
 cd "$here"
+
+# --- otis-agent-run: claude is claude, flags untouched; another agent's stream
+# comes back as claude's, answer and session included
+mkdir -p "$tmp/agents"
+printf '#!/bin/sh\nfor a; do printf "[%%s]" "$a"; done\n' > "$tmp/agents/claude"
+cat > "$tmp/agents/cursor-agent" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/cursor-args"
+cat > "$HOME/cursor-prompt"
+cat <<'J'
+{"type":"system","subtype":"init","session_id":"cur-1","model":"Auto"}
+{"type":"thinking","subtype":"delta","text":"Reading "}
+{"type":"thinking","subtype":"delta","text":"the note."}
+{"type":"thinking","subtype":"completed"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading it."}]},"session_id":"cur-1"}
+{"type":"tool_call","subtype":"started","call_id":"t1","tool_call":{"readToolCall":{"args":{"path":"note.txt"}}}}
+{"type":"tool_call","subtype":"completed","call_id":"t1","tool_call":{"readToolCall":{"args":{"path":"note.txt"},"result":{"success":{"content":"pelican\n"}}}}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"```json\n{\"word\": \"pelican\"}\n```"}]},"session_id":"cur-1"}
+{"type":"result","subtype":"success","is_error":false,"result":"Reading it.```json...","session_id":"cur-1"}
+J
+EOF
+chmod +x "$tmp/agents/claude" "$tmp/agents/cursor-agent"
+agents() { PATH=$tmp/agents:$PATH "$@"; }
+expect agent-run/claude-untouched "$(agents otis-agent-run -p --tools 'Read,Grep' --json-schema '{"a": 1}' --resume s)" '[-p][--tools][Read,Grep][--json-schema][{"a": 1}][--resume][s]'
+expect agent-run/ready "$(agents otis-agent-run --ready; echo "rc=$?")" "rc=0"
+git config otis.agent codex
+expect agent-run/not-ready "$(PATH=$tmp/agents:/usr/bin:/bin:$root/bin otis-agent-run --ready)" "this needs Codex (codex)"
+git config otis.agent cursor
+expect agent-run/no-gated-shell "$(agents otis-agent-run -p --tools Read,Bash </dev/null | jq -r .is_error)" "true"
+expect agent-run/unknown-flag "$(agents otis-agent-run -p --mcp-config x </dev/null | jq -r .result)" "otis-agent-run: --mcp-config is a claude flag that Cursor's agent has nothing for here"
+out=$(printf 'look\n' | agents otis-agent-run -p --restricted --tools Read,Grep,Glob --add-dir /ctx --session-id mine \
+  --output-format stream-json --verbose --json-schema '{"type":"object"}')
+expect agent-run/answer "$(printf '%s\n' "$out" | jq -c 'select(.type == "result") | [.session_id, .structured_output]')" '["mine",{"word":"pelican"}]'
+expect agent-run/read-only "$(sed -n 1p "$tmp/cursor-args")" "-p --trust --output-format stream-json --mode ask --add-dir /ctx"
+expect agent-run/schema-asked "$(grep -c 'matching this JSON Schema' "$tmp/cursor-prompt")" "1"
+expect agent-run/events "$(printf '%s\n' "$out" | git-claude-view --events | jq -r '[.type, .name // .text // ""] | join(":")' | tr '\n' '|')" \
+  'init:|thinking:Reading the note.|text:Reading it.|tool:Read|output:pelican||text:```json|{"word": "pelican"}|```|result:|'
+printf 'fix\n' | agents otis-agent-run -p --tools Read,Edit --resume mine --output-format json >/dev/null
+expect agent-run/resumes-theirs "$(sed -n 2p "$tmp/cursor-args")" "-p --trust --output-format stream-json --sandbox enabled --resume cur-1"
+expect agent-run/no-session "$(printf 'x\n' | agents otis-agent-run -p --resume nobody | jq -r .result)" "no Cursor's agent session kept for nobody to resume"
+expect agent-run/codex "$(printf '%s\n' '{"type":"thread.started","thread_id":"t"}' \
+  '{"type":"item.started","item":{"id":"i1","type":"command_execution","command":"rg x"}}' \
+  '{"type":"item.completed","item":{"id":"i1","type":"command_execution","aggregated_output":"","exit_code":1}}' \
+  '{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"{\"n\":1}"}}' \
+  '{"type":"turn.completed"}' | OTIS_AGENT_SCHEMA=x otis-agent-run --translate codex | jq -c '[.type, .is_error, .structured_output]' | tr '\n' ' ')" \
+  '["system",null,null] ["assistant",null,null] ["user",null,null] ["assistant",null,null] ["result",false,{"n":1}] '
+expect agent-run/codex-cut-off "$(printf '%s\n' '{"type":"thread.started","thread_id":"t"}' '{"type":"error","message":"stream disconnected"}' |
+  otis-agent-run --translate codex | jq -c '[.is_error, .result]' | tail -1)" '[true,"stream disconnected"]'
+git config --unset otis.agent
+# A run is by the agent it started with, and one from before there was a
+# choice is Claude's.
+mkdir -p "$tmp/run-old" "$tmp/run-codex" && printf 'codex\n' > "$tmp/run-codex/agent-cli"
+git config otis.agent cursor
+expect agent-run/name-now "$(otis-agent-run --name)" "Cursor"
+expect agent-run/name-of-run "$(otis-agent-run --name "$tmp/run-codex")" "Codex"
+expect agent-run/name-of-old-run "$(otis-agent-run --name "$tmp/run-old")" "Claude"
+expect agent-run/pinned "$( (d=$tmp/run-codex; . "$share/claude-run.sh"; pin_agent; printf '%s %s' "$OTIS_AGENT" "$who") )" "codex Codex"
+git config --unset otis.agent
+# A setting of a few values is picked, not typed.
+if picker_open "otis-config --prompt local agent"; then
+  expect config/choices "$(picker_rows)" "3"
+  picker_key j; picker_key "$(printf '\r')"
+  exec 7>&-; wait "$driver" 2>/dev/null
+  expect config/picked "$(git config otis.agent)" "codex"
+else
+  expect config/choices-picker-opens "no" "yes"
+fi
+git config --unset otis.agent
 
 # --- completion: one list of candidates for all three shells
 expect complete/refs "$(otis-complete gl | grep -cx main)" "1"
