@@ -40,6 +40,11 @@ for b in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/b
   [ -x "$b" ] && { brew_bin=$b; break; }
 done
 [ -n "$brew_bin" ] && ! have brew && { PATH=${brew_bin%/*}:${brew_bin%/bin/brew}/sbin:$PATH; export PATH; }
+# seam and Claude Code put a wrapper in ~/.local/bin; on PATH for this run
+# when it is not yet. Their installers add the line that keeps it there.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+  [ -d "$HOME/.local/bin" ] && { PATH=$HOME/.local/bin:$PATH; export PATH; } ;;
+esac
 # What brew would install for required gaps, and casks (macOS only).
 want= want_cask=
 need() { want="$want $1"; }
@@ -98,6 +103,7 @@ offer_run() {
   fi
   printf '  %s — %s\n  ' "$name" "$why"
   if ask "install now? ($without)" && sh -c "$run"; then
+    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH=$HOME/.local/bin:$PATH; export PATH ;; esac
     if have "$cmd"; then pass "$name" "installed"; else note "$name" "installed; put ~/.local/bin on your PATH"; fi
   else
     note "$name" "skipped; later: $without"
@@ -437,6 +443,21 @@ if [ -n "$brew_bin" ] && ! grep -qsE 'shellenv|homebrew|linuxbrew' "$rc" "$HOME/
   fi
 fi
 case $rc in "$HOME"/*) rcname="~/${rc#"$HOME"/}" ;; *) rcname=$rc ;; esac
+# ~/.local/bin: seam and Claude Code put a wrapper there. A new terminal
+# has none of them until a startup file says so.
+if [ -d "$HOME/.local/bin" ]; then
+  if [ "$file" = otis.fish ]; then lline='fish_add_path $HOME/.local/bin'
+  else lline='export PATH="$HOME/.local/bin:$PATH"'; fi
+  if grep -qsE '\.local/bin' "$rc" "$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile" 2>/dev/null; then
+    pass "~/.local/bin" "on PATH in $rcname"
+  elif [ -n "$check_only" ]; then
+    note "~/.local/bin" "add to $rcname: $lline"
+  else
+    mkdir -p "$(dirname "$rc")"
+    printf '\n# ~/.local/bin (seam, Claude Code)\n%s\n' "$lline" >> "$rc"
+    pass "~/.local/bin" "on PATH in $rcname"
+  fi
+fi
 # Written out, or through $HOME or ~.
 rel=${root#"$HOME"/}
 if [ -f "$rc" ] && { grep -qF "$root/$file" "$rc" || grep -qF "\$HOME/$rel/$file" "$rc" || grep -qF "~/$rel/$file" "$rc"; }; then
