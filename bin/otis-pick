@@ -510,11 +510,29 @@ tell() {
 # after it on the same port (otis-test's) could not bind it.
 unlisten() { (( lfd )) && ztcp -c $lfd 2>/dev/null; lfd=0; }
 render() {
-  local w=$1 file=$2 i=$3
+  local w=$1 file=$2 i=$3 out
   subst "$preview" $i
-  FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null |
-    LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" > $file.tmp
-  mv -f $file.cont.tmp $file.cont 2>/dev/null
+  out=$(FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null)
+  if [[ $out == *$'\e_G'* ]]; then
+    # A kitty image (kitten icat --unicode-placeholder): the image itself
+    # kept apart in .gfx, sent to the terminal when the pane shows it, and
+    # the lines it shows through as they are. icat has cut them to the pane,
+    # and the wrap would drop the image's escape and count each placeholder's
+    # marks as letters.
+    print -rn -- $out | perl -0777 -ne 'print $& while /\e_G.*?\e\\/sg' > $file.gfx
+    # icat also moves the cursor to where it would place the image on the
+    # screen (save, CUP, restore): in a pane that is somewhere else entirely,
+    # so of the rest only colors and the placeholders are kept. The image's
+    # color, which says which image a placeholder is, is set once and left to
+    # carry on; the pane draws each line on its own, so each line gets it.
+    print -r -- $out | perl -0777 -pe 's/\e_G.*?\e\\//sg; s/\eP.*?\e\\//sg; s/\e[78]//g; s/\e\[[0-9;]*[A-HJKf]//g; s/\r//g' |
+      perl -ne 'if (/(\e\[38[:;][0-9:;]*m)/) { $c = $1 } elsif ($c && /\x{F4}\x{8E}\x{BB}\x{AE}/) { $_ = $c . $_ } print' > $file.tmp
+    : > $file.cont
+  else
+    rm -f $file.gfx
+    print -r -- $out | LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" > $file.tmp
+    mv -f $file.cont.tmp $file.cont 2>/dev/null
+  fi
   mv -f $file.tmp $file
 }
 # want: the row you are on, drawn if it is not kept yet. One at a time: a
@@ -633,6 +651,9 @@ draw() {
     if [[ $REPLY != $pfile || -z $pfile ]]; then
       pfile=$REPLY
       if [[ -n $REPLY ]]; then P=("${(@f)$(<$REPLY)}"); else P=("${F}…$R"); fi
+      # An image in it goes to the terminal once, as it is shown; its lines
+      # are the placeholders the terminal draws it in.
+      [[ -s $pfile.gfx ]] && print -rnu $tty -- "$(<$pfile.gfx)"
     fi
     (( pwant >= 0 )) && [[ -n $pfile ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
   else P=() pfile=

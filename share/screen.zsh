@@ -257,6 +257,7 @@ memo_keep() {
     n=${f:t}; n=${n%.*}.0
     print -rn -- "$(<$f)" > $memo.pv.new/$n
     [[ -e $f.cont ]] && print -rn -- "$(<$f.cont)" > $memo.pv.new/$n.cont
+    [[ -e $f.gfx ]] && print -rn -- "$(<$f.gfx)" > $memo.pv.new/$n.gfx
   done
   rm -rf -- $memo.pv; mv -f -- $memo.pv.new $memo.pv
   # Every MR reviewed leaves one; a month unopened is gone.
