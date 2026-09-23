@@ -3,8 +3,9 @@
 # Guided setup for otis on macOS or Linux, safe to run any time: it checks
 # what the pickers need and offers to install anything missing through
 # Homebrew (on either OS; without it, says how to get it), asks for your
-# branch prefix if you have none, which editor opens files, whether you want
-# Claude's lessons, and offers to add the one line your shell's startup file
+# branch prefix if you have none, which editor opens files, explains each
+# optional extra and lets you opt in one at a time, and offers to add the
+# one line your shell's startup file
 # needs (zsh, bash or fish). It changes nothing without a y/N, and with
 # --check it only reports.
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -39,11 +40,9 @@ for b in /opt/homebrew/bin/brew /usr/local/bin/brew /home/linuxbrew/.linuxbrew/b
   [ -x "$b" ] && { brew_bin=$b; break; }
 done
 [ -n "$brew_bin" ] && ! have brew && { PATH=${brew_bin%/*}:${brew_bin%/bin/brew}/sbin:$PATH; export PATH; }
-# What brew would install, collected as the checks go: required formulae,
-# optional ones, and casks (macOS only).
-want= want_opt= want_cask=
+# What brew would install for required gaps, and casks (macOS only).
+want= want_cask=
 need() { want="$want $1"; }
-nice() { want_opt="$want_opt $1"; }
 # How to get formula $1: brew where there is one (macOS or Linux), the
 # distro's way ($2) on Linux without it.
 install_hint() {
@@ -57,6 +56,52 @@ ask() {
   printf '%s [y/N] ' "$1"
   read -r answer </dev/tty
   [ "$answer" = y ] || [ "$answer" = Y ]
+}
+# Homebrew 7 loads a formula from a tap outside its own only once you trust
+# it (brew trust). Naming one in full to brew install trusts it, but not one
+# it brings in as a dependency, so each tap's formula is trusted first.
+brew_install() {
+  if brew trust --help >/dev/null 2>&1; then
+    for f in "$@"; do case $f in */*/*) brew trust --formula "$f" >/dev/null ;; esac; done
+  fi
+  brew install "$@"
+}
+# Optional brew formula $1: $2 is why you might want it, $3 without it, $4
+# command to check (defaults to formula name).
+offer_brew() {
+  formula=$1 why=$2 without=$3 cmd=${4:-$1}
+  if have "$cmd"; then
+    pass "$formula" "$why"
+    return
+  fi
+  if [ -n "$check_only" ]; then
+    note "$formula" "$why Without it: $without"
+    return
+  fi
+  printf '  %s — %s\n  ' "$formula" "$why"
+  if have brew && ask "install with brew ($formula)?"; then
+    brew_install "$formula" && pass "$formula" "installed"
+  else
+    note "$formula" "skipped; later: $without"
+  fi
+}
+# Optional thing with its own installer: $1 name, $2 why, $3 without, $4 shell command.
+offer_run() {
+  name=$1 why=$2 without=$3 run=$4 cmd=${5:-$1}
+  if have "$cmd"; then
+    pass "$name" "$why"
+    return
+  fi
+  if [ -n "$check_only" ]; then
+    note "$name" "$why Without it: $without"
+    return
+  fi
+  printf '  %s — %s\n  ' "$name" "$why"
+  if ask "install now? ($without)" && sh -c "$run"; then
+    if have "$cmd"; then pass "$name" "installed"; else note "$name" "installed; put ~/.local/bin on your PATH"; fi
+  else
+    note "$name" "skipped; later: $without"
+  fi
 }
 
 printf 'otis in %s\n\n' "$root"
@@ -117,39 +162,101 @@ else
 fi
 
 printf '\noptional\n'
+printf '  none of these block otis; each is a separate y/N if it is missing.\n\n'
 # nvim shows a review's comments inline, beside the diff; without it enter
 # opens your editor, and c in the review picker comments.
 if have nvim; then
   v=$(nvim --version | head -1 | sed -E 's/^NVIM v([0-9.]+).*/\1/')
-  if at_least "$v" 0.10; then pass nvim "$v; enter in a review shows its comments inline"; else note nvim "$v is too old for comments inline in a review, which needs 0.10. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; nice neovim; fi
+  if at_least "$v" 0.10; then
+    pass nvim "$v; enter in a review opens the diff with every comment inline beside it"
+  else
+    nvim_without="enter opens your editor, and c in the review picker comments (you have $v; 0.10+ needed). $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"
+    if [ -n "$check_only" ]; then
+      note nvim "enter in a review opens the diff with every comment inline beside it. Without it: $nvim_without"
+    else
+      printf '  neovim — enter in a review opens the diff with every comment inline beside it.\n  '
+      if have brew && ask "upgrade with brew (neovim)?"; then
+        brew_install neovim && pass nvim "installed"
+      else
+        note nvim "skipped; later: $nvim_without"
+      fi
+    fi
+  fi
 else
-  note nvim "enter in a review opens your editor; with nvim it shows the comments inline beside the diff. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')"; nice neovim
+  offer_brew neovim "enter in a review opens the diff with every comment inline beside it" \
+    "enter opens your editor, and c in the review picker comments. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')" nvim
 fi
-if have ast-grep; then pass ast-grep "s in a review reads the MR by symbol"; else note ast-grep "reading a change by symbol needs it; without it only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')"; nice ast-grep; fi
-# seam installs with its own curl line, as otis does: into ~/.local/share/seam,
-# with a seam in ~/.local/bin that runs it.
+offer_brew ast-grep "s in a review groups the MR by symbol instead of by file" \
+  "only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')" ast-grep
 seam_install='curl -fsSL https://raw.githubusercontent.com/booka66/seam/main/install.sh | sh'
-if have seam; then pass seam "s reads the change seam works out, by symbol"
-elif [ -z "$check_only" ] && printf '  seam: the symbol view is a renderer of its table; without it only files are listed.\n  ' &&
-  ask "install it ($seam_install)?" && sh -c "$seam_install"; then
-  if have seam; then pass seam "installed"; else note seam "installed; put ~/.local/bin on your PATH"; fi
-else
-  note seam "the symbol view is a renderer of seam's table; without it only files are listed: $seam_install"
-fi
+offer_run seam "s in a review reads the change the way seam scores and splits it, by symbol" \
+  "only files are listed: $seam_install" "$seam_install" seam
 # otis.engine dagger reads the change through dagger instead, and seam scores and splits what it reads.
 if [ "$(otis-config engine 2>/dev/null)" = dagger ]; then
-  if have dagger; then pass dagger "otis.engine dagger: the symbol view reads the change through dagger"; else note dagger "otis.engine is dagger, and without it only files are listed: curl -fsSL https://github.com/joshmoody24/dagger/releases/latest/download/dagger-installer.sh | sh"; fi
-  # dagger reads TypeScript through tsc --lsp, which TypeScript 7 brings, unless the repo's dagger.toml names another server.
+  dagger_install='curl -fsSL https://github.com/joshmoody24/dagger/releases/latest/download/dagger-installer.sh | sh'
+  offer_run dagger "otis.engine dagger: the symbol view reads the change through dagger" \
+    "$dagger_install" "$dagger_install" dagger
   tv=$(tsc --version 2>/dev/null | sed -n 's/^Version \([0-9]*\).*/\1/p')
-  if [ "${tv:-0}" -ge 7 ]; then pass tsc "$(tsc --version); dagger reads TypeScript through tsc --lsp"; else note tsc "dagger reads TypeScript through tsc --lsp, which needs TypeScript 7: npm install -g typescript"; fi
+  if [ "${tv:-0}" -ge 7 ]; then
+    pass tsc "$(tsc --version); dagger reads TypeScript through tsc --lsp"
+  else
+    if [ -n "$check_only" ]; then
+      note tsc "dagger reads TypeScript through tsc --lsp, which needs TypeScript 7. Without it: npm install -g typescript"
+    else
+      printf '  typescript — dagger reads TypeScript through tsc --lsp, which TypeScript 7 brings.\n  '
+      if ask "install with npm (npm install -g typescript)?" && npm install -g typescript; then
+        pass tsc "$(tsc --version); dagger reads TypeScript through tsc --lsp"
+      else
+        note tsc "skipped; later: npm install -g typescript"
+      fi
+    fi
+  fi
 fi
-if have claude; then pass claude "C, D and V have Claude review, fix, watch production and judge"; else note claude "C, D and V need Claude Code: curl -fsSL https://claude.ai/install.sh | bash, then claude to log in"; fi
-if have glow; then pass glow "MR descriptions render as markdown"; else note glow "MR descriptions show as plain text without it. $(install_hint glow 'see https://github.com/charmbracelet/glow')"; nice glow; fi
-if have bat; then pass bat "code blocks in MR comments are highlighted"; else note bat "code blocks in MR comments show unhighlighted without it. $(install_hint bat 'see https://github.com/sharkdp/bat')"; nice bat; fi
-if have ffmpeg; then pass ffmpeg "V's judge can see the tester's videos"; else note ffmpeg "only V uses it, to see the tester's videos. $(install_hint ffmpeg 'apt install ffmpeg')"; nice ffmpeg; fi
+# C and V use the agent otis.agent names; D is Claude Code's whatever it is.
+agent=$(otis-config agent)
+claude_install='curl -fsSL https://claude.ai/install.sh | bash'
+if [ "$agent" = claude ]; then
+  offer_run claude "C has Claude review and fix threads, D watches production, V verifies and judges" \
+    "$claude_install, then claude to log in" "$claude_install" claude
+else
+  if missing=$(otis-agent-run --ready); then
+    pass "$agent" "C and V have $(otis-agent-run --name) review, fix and judge (otis.agent)"
+  else
+    if [ -n "$check_only" ]; then
+      note "$agent" "otis.agent is $agent, which C and V need: $missing"
+    else
+      printf '  %s — C and V use otis.agent for review, fix and judge.\n  ' "$agent"
+      note "$agent" "$missing"
+    fi
+  fi
+  offer_run claude "D watches production through Claude Code and Datadog's MCP server" \
+    "$claude_install, then claude to log in" "$claude_install" claude
+fi
+offer_brew glow "MR descriptions in the picker render as markdown instead of plain text" \
+  "descriptions show as plain text. $(install_hint glow 'see https://github.com/charmbracelet/glow')" glow
+offer_brew bat "code blocks in MR comments are syntax-highlighted in the picker" \
+  "code blocks show unhighlighted. $(install_hint bat 'see https://github.com/sharkdp/bat')" bat
+offer_brew ffmpeg "V's judge can watch the tester's screen recordings from verification" \
+  "V can still verify, but the judge cannot see the videos. $(install_hint ffmpeg 'apt install ffmpeg')" ffmpeg
 if [ "$os" != Darwin ]; then
-  if have xdg-open; then pass xdg-open "w and p open links"; else note xdg-open "w and p print the link instead of opening it"; fi
-  if have wl-copy || have xclip || have xsel; then pass clipboard "y copies links"; else note clipboard "y needs wl-copy, xclip or xsel"; fi
+  if have xdg-open; then pass xdg-open "w and p open links in your browser"
+  elif [ -n "$check_only" ]; then note xdg-open "w and p open links in your browser. Without it: apt install xdg-utils"
+  else
+    printf '  xdg-open — w and p open MR and pipeline links in your browser.\n  '
+    if have brew && ask "install with brew (xdg-utils)?"; then brew_install xdg-utils && pass xdg-open "installed"
+    else note xdg-open "skipped; later: apt install xdg-utils"; fi
+  fi
+  if have wl-copy || have xclip || have xsel; then pass clipboard "y copies links to the clipboard"
+  elif [ -n "$check_only" ]; then note clipboard "y copies links. Without it: apt install wl-clipboard or xclip"
+  else
+    printf '  clipboard — y copies MR and pipeline links instead of printing them.\n  '
+    clip_hint="apt install wl-clipboard or xclip"
+    if have brew && ask "install with brew (wl-clipboard)?"; then
+      brew_install wl-clipboard && pass clipboard "installed"
+    else
+      note clipboard "skipped; later: $clip_hint"
+    fi
+  fi
 fi
 # Alerts work in any terminal; Ghostty's come from the terminal itself.
 case $TERM_PROGRAM in
@@ -158,25 +265,27 @@ case $TERM_PROGRAM in
   *)
     if [ -n "$KITTY_WINDOW_ID" ]; then
       pass kitty "alerts come from the terminal, and a click goes back to it"
-    elif [ "$os" = Darwin ] || have notify-send; then
-      note Ghostty "recommended: alerts come as system notifications here; in Ghostty they come from the terminal and a click goes back to it (brew install --cask ghostty)"
+    elif [ "$os" = Darwin ]; then
+      if [ -n "$check_only" ]; then
+        note Ghostty "alerts for reviews and comments work best in Ghostty: a click in the notification goes back to the terminal. Without it: brew install --cask ghostty"
+      else
+        printf '  Ghostty — alerts for reviews, comments and approvals; a click in one goes back to the terminal.\n  '
+        if have brew && ask "install with brew (--cask ghostty)?"; then
+          brew_install --cask ghostty && pass Ghostty "installed; pick it in your terminal app"
+        else
+          note Ghostty "skipped; later: brew install --cask ghostty"
+        fi
+      fi
+    elif have notify-send; then
+      note alerts "alerts show as desktop notifications; Ghostty makes them come from the terminal instead"
     else
       note alerts "no notify-send, so alerts print in the terminal; Ghostty, or notify-send (libnotify), makes them desktop notifications"
     fi ;;
 esac
 
-# Install what is missing, through brew. Re-run afterwards so the checks
-# above see the result; OTIS_SETUP_INSTALLED stops a second offer.
-# Homebrew 7 loads a formula from a tap outside its own only once you trust
-# it (brew trust). Naming one in full to brew install trusts it, but not one
-# it brings in as a dependency, so each tap's formula is trusted first.
-brew_install() {
-  if brew trust --help >/dev/null 2>&1; then
-    for f in "$@"; do case $f in */*/*) brew trust --formula "$f" >/dev/null ;; esac; done
-  fi
-  brew install "$@"
-}
-if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_opt$want_cask" ]; then
+# Install what is missing for required tools, through brew. Re-run afterwards
+# so the checks above see the result; OTIS_SETUP_INSTALLED stops a second offer.
+if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_cask" ]; then
   printf '\n'
   if have brew; then
     installed=
@@ -184,9 +293,6 @@ if [ -z "$check_only" ] && [ -z "$OTIS_SETUP_INSTALLED" ] && [ -n "$want$want_op
     [ -n "$want_cask" ] && what="${what:+$what and }a Nerd Font"
     if [ -n "$what" ] && ask "  install what is needed with brew ($what)?"; then
       { [ -z "$want" ] || brew_install $want; } && { [ -z "$want_cask" ] || brew install --cask $want_cask; } && installed=1
-    fi
-    if [ -n "$want_opt" ] && ask "  and the optional ones (${want_opt# })?"; then
-      brew_install $want_opt && installed=1
     fi
     if [ -n "$installed" ]; then
       printf '\n'
@@ -287,21 +393,15 @@ else
   fi
 fi
 
-# Claude's lessons: a preference, so asked once and remembered either way.
+# Claude's lessons: off by default; set explicitly so otis-config knows.
 lessons=$(git config --global --type=bool --get otis.lessons 2>/dev/null)
 if [ "$lessons" = true ]; then
-  pass "lessons" "Claude's review comments and fixes each come with a lesson on the principle behind it, for you only (git config --global otis.lessons false turns it off)"
+  pass "lessons" "the agent's review comments and fixes each come with a lesson on the principle behind it, for you only (git config --global otis.lessons false turns it off)"
 elif [ "$lessons" = false ]; then
-  pass "lessons" "off; Claude's comments and fixes come with why, and no lesson (git config --global otis.lessons true turns it on)"
-elif [ -n "$check_only" ]; then
-  note "lessons" "unset, so off: git config --global otis.lessons true has Claude's comments and fixes each teach the principle behind it, for you only"
+  pass "lessons" "off; the agent's comments and fixes come with why, and no lesson (git config --global otis.lessons true turns it on)"
 else
-  printf '  Claude'"'"'s review comments and fixes always come with why it thinks so, for you only.\n  They can also each teach the principle behind it, from first principles, with where to read more.\n  '
-  if ask "want those lessons?"; then
-    git config --global otis.lessons true; pass "lessons" "on"
-  else
-    git config --global otis.lessons false; pass "lessons" "off (git config --global otis.lessons true turns it on)"
-  fi
+  [ -z "$check_only" ] && git config --global otis.lessons false
+  pass "lessons" "off; the agent's comments and fixes come with why, and no lesson (git config --global otis.lessons true turns it on)"
 fi
 
 # The one line your shell needs, in the startup file of the shell you use.
