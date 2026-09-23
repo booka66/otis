@@ -21,12 +21,12 @@ here=$(git branch --show-current)
 [ -n "$here" ] || pause "C proposes fixes for the branch you are on, and HEAD is detached"
 [ "$b" = "$here" ] ||
   pause "C proposes fixes for the branch you are on; enter switches to $b first, then C"
-command -v claude >/dev/null || pause "this needs Claude Code (claude)"
+missing=$(otis-agent-run --ready) || pause "$missing"
 
 base=$(otis-config base)
 [ "$base" != HEAD ] || pause "no $(otis-config main) here to compare against"
 [ "$(git rev-list --count "$base..HEAD")" -gt 0 ] ||
-  pause "$b has nothing past $base for Claude to read"
+  pause "$b has nothing past $base to read"
 
 # b-<name>, slashes as %: a key that can never be mistaken for an MR's iid, and
 # that gmr's rows skip, since only MRs have rows there.

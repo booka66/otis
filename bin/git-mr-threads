@@ -84,10 +84,10 @@ place() {
     '[$s, $o | split("\n")] | transpose | map(select(.[1] | test(" ") | not) | {(.[0]): .[1]}) | add // {}')
   claude=$(git-mr-claude --drafts "$iid" | jq -sc .)
   jq --slurpfile drafts "$2" --argjson blobs "$blobs" --argjson claude "$claude" --argjson why "$(git-mr-claude --why "$iid")" \
-    --arg h "$head" --arg b "$base" '
+    --arg who "$(git-mr-claude --who "$iid")" --arg h "$head" --arg b "$base" '
     def same($made; $now): $blobs[$made] as $x | $x != null and $x == $blobs[$now];
     def draft_note: {id, draft: true, claude: (.id | IN($claude[])), why: $why[.id | tostring], body: .note, created_at: "", position}
-      | .author = {username: (if .claude then "Claude" else "you" end)};
+      | .author = {username: (if .claude then $who else "you" end)};
     ($drafts[0] // []) as $dr |
     [ (.[] | select(.notes[0].system | not) | .id as $id
         | .notes += [$dr[] | select(.discussion_id == $id) | draft_note]),
@@ -185,14 +185,14 @@ case $mode in
     # Every draft, where it sits: a new thread that is one, or a reply
     # waiting at the end of a thread. Claude's first, in the order of the
     # file and line they are on.
-    jq -r -L "$share" '
+    jq -r -L "$share" --arg who "$(git-mr-claude --who "$iid")" '
       include "otis";
       [ .[] | . as $t | .notes[] | select(.draft) | {t: $t, n: .} ]
       | (map(select(.n.claude)) | length) as $c | (length) as $all
-      | ("\($all) \(if $all == 1 then "draft" else "drafts" end), \($c) of them Claude" + (if $c == 1 then "\u0027s" else "\u0027s" end) + ": none is published until you submit") as $foot
+      | ("\($all) \(if $all == 1 then "draft" else "drafts" end), \($c) of them \($who)\u0027s: none is published until you submit") as $foot
       | $foot, (sort_by([(if .n.claude then 0 else 1 end), .t.where.path // "", .t.where.line // 0])[]
         | .t.where as $w |
-        [ (if .n.claude then yours + "✎ Claude  " else attention + "✎ yours   " end) + r
+        [ (if .n.claude then yours + "✎ " + ($who + "        " | .[0:8]) else attention + "✎ yours   " end) + r
             + (if $w.state == "line" then elsewhere + "\($w.path | split("/") | .[-1]):\(if ($w.from // $w.line) != $w.line then "\($w.from)-" else "" end)\($w.line)"
                elif $w.state == "file" then elsewhere + $w.path elif $w.state == "overview" then context + "on the MR"
                else attention + "outdated " + elsewhere + "\($w.path):\($w.line)" end) + r + "  "

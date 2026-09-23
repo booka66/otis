@@ -576,7 +576,7 @@ symkeys() {
   # c comments on a row's lines in a review; in ga it commits, whatever the row.
   [[ -n $GMR_IID && $typ[i] != (sym|file) ]] && rkl[c]=""
   # A caller the change breaks: Claude's fix is the thing to do.
-  if [[ $typ[i] == caller && $err[i] == x ]]; then rkl[F]="make Claude's fix"; rkl[enter]="open the broken call"
+  if [[ $typ[i] == caller && $err[i] == x ]]; then rkl[F]="make the proposed fix"; rkl[enter]="open the broken call"
   else rkl[F]=""; fi
   [[ $typ[i] == (callers|package) ]] && rkl[y]=""
   # The worktree's: staged, not staged, or some of each.
@@ -617,7 +617,7 @@ helplines() {
     "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $X-$R$C removed   $F·$R$C its body alone$R"
     "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: open above already, or all viewed$R"
     "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
-    "  ${G}●$R$C in a review, Claude's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
+    "  ${G}●$R$C in a review, the agent's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
 }
 draw() {

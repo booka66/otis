@@ -28,6 +28,8 @@ theme
 tour=${${TMPDIR:-/tmp}%/}/otis-tour repo=${${TMPDIR:-/tmp}%/}/otis-tour/repo
 seen=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/tour-seen
 here=$PWD
+# The agent C and V use (otis.agent), by name.
+who=$(otis-agent-run --name)
 cols=$(tput cols 2>/dev/null || print 80)
 (( w = cols > 82 ? 78 : cols - 4 ))
 
@@ -39,7 +41,7 @@ ttitle=(
   symbols    "Reviewing by symbol"
   shapes     "Bad changes, and how symbols show them"
   mr         "Reviewing a merge request in gmr"
-  claude     "Claude reviews and fixes (C)"
+  claude     "$who reviews and fixes (C)"
   verify     "Verifying in Cursor Cloud (V)"
   ship       "Merging, deploys and watching production (D)"
   dashboard  "The dashboard: otis and gag"
@@ -78,13 +80,13 @@ tabout=(
   symbols    "Why otis reads a change by symbol rather than by file, shown rather than told: one made-up change as GitLab shows it, as files, and by symbol. Then every key the symbol view has, the callers elsewhere that a change breaks without touching, Claude's fix for them, seam's graph page, and staging one function at a time. Start here."
   shapes     "Six made-up changes that each go wrong a different way: a sweep, a branch of unrelated stories, a parameter threaded nine layers deep, a type change that breaks code it never touched, a cycle, and a 300-line function. Each as files first, so you can guess what is wrong, then as seam's score and the symbol tree, and what to ask the author for. One of them gets cut into eight commits that each build, to show what asking for it looks like when seam does it. Take Reviewing by symbol first."
   mr         "The review loop in gmr: an MR opens by symbol with its threads beside each symbol, comments from the picker or inline in nvim, drafts until you submit, viewed marks, what changed since your last review, catching up when the author pushes."
-  claude     "C has Claude Code review an MR in the background, reading it by symbol with tsgo's callers elsewhere, as you do, and leave drafts on the symbols they are about. You edit them before anything posts, and each says where its symbol sits in the tree, why Claude wrote it and how sure it is. On your own MR it proposes fixes for the threads instead, and folds the ones you accept into the right commits."
-  verify     "V finds out whether a change actually works: Claude writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and Claude judges the evidence, claim by claim. With what you need set up to run one."
+  claude     "C has $who review an MR in the background, reading it by symbol with tsgo's callers elsewhere, as you do, and leave drafts on the symbols they are about. You edit them before anything posts, and each says where its symbol sits in the tree, why $who wrote it and how sure it is. On your own MR it proposes fixes for the threads instead, and folds the ones you accept into the right commits."
+  verify     "V finds out whether a change actually works: $who writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and $who judges the evidence, claim by claim. With what you need set up to run one."
   ship       "From an open MR to production without the browser: CI jobs and logs, merge when the pipeline passes, rebase, whether your merged MR is live yet, gd's deploys, and D, where Claude watches Datadog after your deploy and tells you whether a problem is yours."
-  dashboard  "otis, where a morning starts: everything that wants you in one list, ordered by what a delay costs, one row a thing. And gag, everything Claude is doing in the background."
+  dashboard  "otis, where a morning starts: everything that wants you in one list, ordered by what a delay costs, one row a thing. And gag, everything $who is doing in the background."
   commits    "ga, gcm, gam, gfx, gl, gundo and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and undo any of it."
   branches   "gb with each branch's MR and drift, worktrees for what runs beside your checkout (gw, gwn), gup, and glab stacks (gstack)."
-  settings   "What is set in your repo now, and the settings that change the most: a remote workspace for checks, what Claude may run, lint before folding fixes, Claude's lessons, your editor and theme."
+  settings   "What is set in your repo now, and the settings that change the most: a remote workspace for checks, what Claude may run, lint before folding fixes, the agent's lessons, your editor and theme."
   cheatsheet "Every key worth knowing, on one page."
 )
 ptitle=(
@@ -99,7 +101,7 @@ ptitle=(
   carry "The carry: one file that breaks three"  knot "The knot: a circle, and a bug"
   heavy "The heavy one: 300 lines in one function"  gallery "Side by side"
   mr "The review loop"
-  claude_review "Claude reviews an MR"  claude_fix "Claude fixes your MR"
+  claude_review "$who reviews an MR"  claude_fix "$who fixes your MR"
   verify_how "How a verification works"  verify_run "Reading one"  verify_setup "What it needs"
   ship_merge "Pipelines and merging"  ship_prod "Deploys and production"
   dashboard "otis and gag"
@@ -881,12 +883,12 @@ part_mr() {
 
 part_claude_review() {
   heading $1
-  say "${k}C${r} on an MR you are reviewing, in gmr or from inside the review, has Claude Code read it in the background and propose comments. Everything it writes is a draft of yours: nothing reaches GitLab until you submit."
+  say "${k}C${r} on an MR you are reviewing, in gmr or from inside the review, has $who read it in the background and propose comments. Everything it writes is a draft of yours: nothing reaches GitLab until you submit."
   look 1 "It runs on its own. ${k}q${r} goes back to the picker while it works; ${k}C${r} again opens its view, every step it reads and says, following the newest. ${k}v${r} adds its thinking and what each tool returned, ${k}/${r} searches, ${k}x${r} stops it, ${k}r${r} runs it again."
   look 2 "It reads the change the way you do and knows what the symbol view already shows you: seam's symbols and what each newly uses, Haiku's gloss, tsgo's callers elsewhere with their errors, and Sonnet's fix under each. It adds to that rather than repeat it. It spends its time where the tree says a change can break things, a ${a}~${r} signature or a ${k}⇢${r} new mention, and most of all on the callers with no ${b}✗${r}, which nothing else checks. If tsgo has not found the callers yet, C asks whether to wait for them. Say ${k}y${r}: without them Claude has to hunt for callers with grep."
-  look 3 "Its drafts sit on their symbols in the tree, ${y}✎${r} on the row, and are marked as Claude's in the preview, in nvim and in S's prompt. A comment about a caller the MR does not touch goes on the signature that breaks it, beside its callers row."
-  look 4 "Under each draft, for you alone and never posted: first where its symbol sits (what happened to it, the entry point it is reached from, which callers break), then why Claude wrote it, where in the tree to look, and how sure it is. Edit or delete drafts in nvim, then ${k}S${r} posts what is left, under your name."
-  look 5 "It cannot publish anything: it gets read-only file tools, no MCP servers and none of your settings, and answers in JSON. otis's one write is creating drafts, and if the MR moves while Claude reads, nothing is drafted."
+  look 3 "Its drafts sit on their symbols in the tree, ${y}✎${r} on the row, and are marked as $who's in the preview, in nvim and in S's prompt. A comment about a caller the MR does not touch goes on the signature that breaks it, beside its callers row."
+  look 4 "Under each draft, for you alone and never posted: first where its symbol sits (what happened to it, the entry point it is reached from, which callers break), then why $who wrote it, where in the tree to look, and how sure it is. Edit or delete drafts in nvim, then ${k}S${r} posts what is left, under your name."
+  look 5 "It cannot publish anything: it gets read-only file tools, no MCP servers and none of your settings, and answers in JSON. otis's one write is creating drafts, and if the MR moves while $who reads, nothing is drafted."
   look 6 "With otis.remote and otis.claudeCommand set (the settings tour), it can run the checks you named, a type check or a test, in your workspace when a comment rests on one, and says what it ran. A hook blocks any other command."
   look 7 "Up to four run at once, each in a worktree of its own. Start one on every MR in your queue and read them as they land; the row in gmr shows each one's drafts waiting."
   say "${k}git config --global otis.lessons true${r} has every comment also name the principle behind it and teach it, with where to read more. Also for you alone."
@@ -903,7 +905,7 @@ part_claude_fix() {
   key "a A" "put one, or every accepted one, in your checkout uncommitted, when a proposal is a starting point"
   key B "every accepted one on a branch of its own off origin/main, one commit a fix, for what belongs in a separate MR"
   key d "discard one you do not want"
-  key "l r" "Claude's run, or run it again"
+  key "l r" "$who's run, or run it again"
   print
   say "Runs survive a closed laptop. Sleep pauses them; a run killed outright picks up where it left off the next time gmr or gb draws, keeping every fix it had already made."
   offer "Open gmr" gmr
@@ -912,19 +914,19 @@ part_claude_fix() {
 part_verify_how() {
   heading $1
   say "${k}V${r} on an open MR in gmr, or a pushed branch in gb, finds out whether the change actually works by using it. Two agents, and the one that grades never does the work:"
-  look 1 "The judge, Claude on your machine and read-only, reads the change and writes the few observable claims that would prove it works."
+  look 1 "The judge, $who on your machine and read-only, reads the change and writes the few observable claims that would prove it works."
   look 2 "The tester, a Cursor Cloud agent in a VM with the repo's .cursor environment, starts the sandbox, uses the app in a real browser, records a video per claim, runs what needs running, and reports."
   look 3 "The judge looks at the evidence itself: screenshots, frames from the videos, command output. Then it sends the tester back with what is still unproven, or gives a verdict, pass, fail or inconclusive, claim by claim. Up to three rounds."
   look 4 "Every five minutes the judge looks in. A tester that is merely slow is left alone; one stuck on the same error, off doing what no claim needs, or about to give up on a claim it could check is interrupted with a note, and carries on in the same VM."
   look 5 "A fail the judge puts down to the change gets a fix tried: the tester makes the change the judge names, or, when the judge only has a lead, finds the cause in the VM first, then checks the failed claims again and brings back the patch. The judge accepts it only if it mends the cause, not the symptom, and the evidence shows it; turned down with a better way, it gets one attempt more. An accepted fix is a proposal for you, never a push."
-  look 6 "After the verdict, a fresh Claude looks the whole exchange over as an outside eye: what cost either agent time or a round, and what to change, in the repo's verify-env brief, the sandbox or the criteria."
+  look 6 "After the verdict, a fresh $who looks the whole exchange over as an outside eye: what cost either agent time or a round, and what to change, in the repo's verify-env brief, the sandbox or the criteria."
   say "It takes 15 to 30 minutes, mostly the VM's boot and the sandbox's, billed by Cursor. Verifying again while the last VM is up sends it the new commit instead of booting another."
   pause
 }
 
 part_verify_run() {
   heading $1
-  say "A verification's row in gmr or gb shows where it has got to, and then its verdict. Its view (${k}V${r} again, or enter in gag) works like Claude's other runs, plus the evidence:"
+  say "A verification's row in gmr or gb shows where it has got to, and then its verdict. Its view (${k}V${r} again, or enter in gag) works like $who's other runs, plus the evidence:"
   key enter "the step under the cursor in full; G follows the newest"
   key "v l /" "more detail, all of it in less, search"
   key "x r c" "stop it (asks; the tester goes too), run it again, pick up a failed run"
@@ -945,7 +947,7 @@ part_verify_setup() {
   say "What a verification needs, as it stands here:"
   if [[ -n $CURSOR_API_KEY ]]; then status ok CURSOR_API_KEY "exported"
   else status need CURSOR_API_KEY "export it in your shell: Cursor's dashboard, Integrations"; fi
-  if (( $+commands[claude] )); then status ok claude "the judge"; else status need claude "Claude Code, which is the judge"; fi
+  if missing=$(otis-agent-run --ready); then status ok "$(otis-config agent)" "the judge"; else status need "$(otis-config agent)" "${missing#this needs }, which is the judge"; fi
   if (( $+commands[ffmpeg] )); then status ok ffmpeg "for the judge to see the videos"; else status need ffmpeg "brew install ffmpeg, for the judge to see the videos"; fi
   if mine; then
     local top=$(cd $here && git worktree list --porcelain | sed -n '1s/^worktree //p') v
@@ -967,7 +969,7 @@ part_verify_setup() {
 
 part_ship_merge() {
   heading $1
-  say "From gmr, an MR goes from open to merged without the browser. Each row leads with glyph columns that are never cut off: the pipeline, where review stands, unresolved threads, and what Claude has waiting. A pipeline failing only on approval gates shows as waiting, not broken."
+  say "From gmr, an MR goes from open to merged without the browser. Each row leads with glyph columns that are never cut off: the pipeline, where review stands, unresolved threads, and what $who has waiting. A pipeline failing only on approval gates shows as waiting, not broken."
   key c "CI jobs and logs: r retries a job, P plays a manual one, X cancels, ctrl-x cancels the pipeline"
   key "R N" "retry what failed, start a new pipeline"
   key v "the pipeline's stage graph; p opens it in the browser"
@@ -996,12 +998,12 @@ part_ship_prod() {
 part_dashboard() {
   heading $1
   say "${k}otis${r} is where a morning starts: everything that wants you, ordered by what a delay costs. The headline says how many; the one that wants you most sits in a card under it, with what enter does about it."
-  look 1 "Production trouble first, a watch that found something. Then what is broken: a rollback, a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what Claude has left you, then what you can finish: a verdict in, one ready to merge, one nobody is reviewing."
+  look 1 "Production trouble first, a watch that found something. Then what is broken: a rollback, a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what $who has left you, then what you can finish: a verdict in, one ready to merge, one nobody is reviewing."
   look 2 "One row a thing, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, the pipeline, because that is what you would do next."
-  look 3 "Under that, what is moving without you: Claude's runs, your pipelines, and your merged MRs production has not taken yet, each saying where it has got to. Last, the branch you are on: uncommitted, unpushed, behind."
+  look 3 "Under that, what is moving without you: $who's runs, your pipelines, and your merged MRs production has not taken yet, each saying where it has got to. Last, the branch you are on: uncommitted, unpushed, behind."
   look 4 "${k}enter${r} does what the row says. ${k}m b d a w${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}D${r} discards otis's own note, never the MR's state. ${k}space${r} reads the row's preview in a pager, where the terminal is too narrow to show it beside the list. It reloads every 10 seconds."
   say "Nothing waiting is the point: a section with nothing in it is simply gone."
-  key gag "everything Claude is doing or has done here in the background, reviews, fixes, watches and verifications, running ones first. enter is every step; d forgets a finished run"
+  key gag "everything $who is doing or has done here in the background, reviews, fixes, watches and verifications, running ones first. enter is every step; d forgets a finished run"
   offer "Open otis" otis
 }
 
@@ -1039,17 +1041,17 @@ part_branches_gb() {
     git commit -qam "Say whose refund it is"
     git switch -q tour/restocking-fee)
   say "${k}gb${r} lists branches laid out as gmr is, main first. The demo has three besides main: the restocking fee, a receipt tweak, and tour/old-idea, which you are done with."
-  look 1 "Each row: whether Claude is working there or has fixes waiting, the MR's state (none here, with no GitLab), how far it has drifted from origin/main, then the name, its prefix dimmed. ${k}?${r} names every glyph."
+  look 1 "Each row: whether $who is working there or has fixes waiting, the MR's state (none here, with no GitLab), how far it has drifted from origin/main, then the name, its prefix dimmed. ${k}?${r} names every glyph."
   look 2 "${k}enter${r} switches to it; a branch checked out in a worktree takes you there instead. ${k}c${r} is its commits in gl. ${k}W${r} opens it in a worktree of its own."
   look 3 "${k}d${r} on tour/old-idea deletes it, or every branch marked with ${k}space${r}, leaving anything checked out. In your repo ${k}M${r} marks the ones safe to delete: their MR merged or closed, with nothing committed since."
-  look 4 "In your repo: ${k}n${r} opens an MR for it, ${k}C${r} has Claude propose fixes before there is one, ${k}V${r} verifies it in Cursor Cloud, pushing it first if origin is behind."
+  look 4 "In your repo: ${k}n${r} opens an MR for it, ${k}C${r} has $who propose fixes before there is one, ${k}V${r} verifies it in Cursor Cloud, pushing it first if origin is behind."
   launch gb
 }
 
 part_branches_more() {
   heading $1
   demo_reset
-  say "A worktree is a second checkout of the same repo, for what runs beside yours: a review, Claude's runs, a branch you are waiting on. otis keeps its own under .claude/worktrees."
+  say "A worktree is a second checkout of the same repo, for what runs beside yours: a review, $who's runs, a branch you are waiting on. otis keeps its own under .claude/worktrees."
   key "gwn <name>" "a new branch, <prefix>/<name> off origin/main, in a worktree of its own, and takes you there"
   key gw "worktrees and what each holds: enter goes there, d removes (to the Trash, ignored files and all), M marks the safe ones"
   key "gbn <name>" "a new branch here"
@@ -1078,8 +1080,8 @@ part_settings() {
   }
   setting remote "an ssh host (a Coder workspace) where heavy commands run, with otis.remotePath its checkout; git-remote-run sends your checkout there as it stands and brings back what changed"
   setting claudeCommand "what Claude may run there, one prefix each (bazel test), targets named outright or with :all, never a glob. Without it Claude's runs have no shell at all"
-  setting lintCommand "lint run before F folds Claude's fixes in"
-  setting lessons "true: each of Claude's comments and fixes also teaches the principle behind it, for you alone"
+  setting lintCommand "lint run before F folds $who's fixes in"
+  setting lessons "true: each of $who's comments and fixes also teaches the principle behind it, for you alone"
   setting editor "what opens files from the pickers: cursor, code, zed, nvim"
   setting theme "otis-theme shows each theme on otis's own rows and keeps the one you pick"
   setting sideBySide "always, or auto from 120 columns: diffs side by side"
@@ -1102,7 +1104,7 @@ part_cheatsheet() {
   key "l h L H" "open, close, open all, close all"
   key "~ ⇢ ✗" "signature changed; a new mention; a caller it breaks"
   key "i b s t" "what it uses; bottom up; the shape; hide tests"
-  key "F f enter" "Claude's fix for a broken caller; by file; nvim"
+  key "F f enter" "the proposed fix for a broken caller; by file; nvim"
   key "space c" "in ga: stage one symbol, commit"
   print
   print -r -- "  ${m}gmr${r}"
@@ -1110,7 +1112,7 @@ part_cheatsheet() {
   key "c" "in a review: comment on lines, reply, resolve, no nvim"
   key "v o n u" "viewed, threads on no line, since last review, catch up"
   key "S A" "submit drafts, approve"
-  key "C" "Claude drafts comments, or proposes fixes on yours"
+  key "C" "$who drafts comments, or proposes fixes on yours"
   key "V D" "verify in Cursor Cloud; watch production (merged)"
   key "c m r" "CI jobs, merge, rebase"
   key "<leader>m…" "in nvim: c comment, r resolve, l list, s submit"

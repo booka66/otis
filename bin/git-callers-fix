@@ -48,7 +48,7 @@ case $mode in
   --apply)
     # The picker's callers cache, as its preview finds it.
     rid=$1; shift; after=$*
-    case $rid in *'>callers>'*) ;; *) git-fzf-note "F makes Claude's fix to a broken caller, and this row is not one"; exit 0 ;; esac
+    case $rid in *'>callers>'*) ;; *) git-fzf-note "F makes the fix proposed for a broken caller, and this row is not one"; exit 0 ;; esac
     cid=${rid##*>} st=$GIT_FZF_STATE
     { read -r ckey < "$st/callers-key" || read -r ckey < "$st/key"; } 2>/dev/null
     read -r croot < "$st/cache-root" 2>/dev/null
@@ -118,10 +118,10 @@ if [ "$mode" = --show ]; then
 fi
 
 if [ "$mode" = --apply ]; then
-  [ -s "$file" ] || { git-fzf-note "Claude has no fix for this caller yet"; exit 0; }
+  [ -s "$file" ] || { git-fzf-note "no fix is proposed for this caller yet"; exit 0; }
   cd "$(git rev-parse --show-toplevel)" || exit 0
   list=$(edits)
-  [ -n "$list" ] || { git-fzf-note "Claude's fix for this caller is not an edit it could write down"; exit 0; }
+  [ -n "$list" ] || { git-fzf-note "the fix proposed for this caller is not an edit that could be written down"; exit 0; }
   # Every edit checked before any is made.
   bad=$(printf '%s\n' "$list" | while IFS= read -r ed; do
     field "$ed" path; path=$v; field "$ed" old
@@ -134,7 +134,7 @@ if [ "$mode" = --apply ]; then
       field "$ed" path; path=$v; field "$ed" new
       set -- $(where "$path" "$v"); [ "$1" = 1 ] || echo no
     done)
-    [ -z "$made" ] && { git-fzf-note "Claude's fix for this caller is made already; git diff shows it"; exit 0; }
+    [ -z "$made" ] && { git-fzf-note "the fix proposed for this caller is made already; git diff shows it"; exit 0; }
     git-fzf-note "no edit made: $bad"; exit 0
   fi
   first=
@@ -148,7 +148,7 @@ if [ "$mode" = --apply ]; then
   touch "$dir"
   paths=$(printf '%s\n' "$list" | jq -r .path | sort -u)
   n=$(printf '%s\n' "$paths" | wc -l | tr -d ' ')
-  printf '%s\n' "made Claude's fix in $(printf '%s\n' "$paths" | head -1 | sed 's|.*/||')$([ "$n" -gt 1 ] && echo " and $((n - 1)) more") · uncommitted, git diff shows it" > "$GIT_FZF_STATE/note"
+  printf '%s\n' "made the proposed fix in $(printf '%s\n' "$paths" | head -1 | sed 's|.*/||')$([ "$n" -gt 1 ] && echo " and $((n - 1)) more") · uncommitted, git diff shows it" > "$GIT_FZF_STATE/note"
   echo "${after:-ignore}"
   exit 0
 fi
@@ -207,7 +207,7 @@ model=$(git config --get otis.callersFixModel || echo claude-sonnet-5)
 if [ "$mode" != --run ]; then
   [ -s "$file" ] && { printf '%s\n' "$file"; exit 0; }
   alive && { echo running; exit 0; }
-  [ "$model" != off ] && command -v claude >/dev/null 2>&1 || exit 0
+  [ "$model" != off ] && otis-agent-run --ready >/dev/null || exit 0
   mkdir -p "$dir" || exit 0
   # The callers cache and the table may be replaced while this runs.
   cp "$callers" "$dir/$key.callers"; cp "$table" "$dir/$key.table"
@@ -237,7 +237,7 @@ schema='{"type":"object","additionalProperties":false,"required":["fixes"],"prop
         "properties":{"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"}}}}}}}}}'
 prompt > "$p"
 # From the repo's top, reading only.
-result=$(cd "$(git rev-parse --show-toplevel)" && claude -p --model "$model" --restricted --tools "Read,Grep,Glob" --strict-mcp-config --disable-slash-commands \
+result=$(cd "$(git rev-parse --show-toplevel)" && otis-agent-run -p --model "$model" --restricted --tools "Read,Grep,Glob" --strict-mcp-config --disable-slash-commands \
   --no-session-persistence --permission-prompts none --output-format json --json-schema "$schema" < "$p" 2>>"$dir/$key.err")
 printf '%s' "$result" | jq -e '(.is_error | not) and .structured_output != null' >/dev/null 2>&1 || exit 0
 printf '%s' "$result" | jq '.structured_output' > "$file.new" && mv "$file.new" "$file"

@@ -43,7 +43,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # Your checkout's files, and B's branch, get your usual modes, not the
 # private ones Claude's run state is written with.
 umask "$otis_umask"
-[ -d "$d" ] || { printf 'no fixes from Claude for %s yet; C runs it. press enter\n' "$label"; read -r _; exit 0; }
+[ -d "$d" ] || { printf 'no fixes for %s yet; C runs it. press enter\n' "$label"; read -r _; exit 0; }
 
 # Claude makes each fix on top of the ones before it, so one can change lines
 # an earlier one wrote and not go in, or come out, without it. Which fix
@@ -110,7 +110,7 @@ apply)
     [ -n "$todo" ] || { pause "nothing accepted to apply; space accepts, or a applies the one under the cursor"; exit 0; }
   else
     n=$2
-    [ -s "$d/$(nn "$n").patch" ] || { pause "Claude changed nothing for that one, so there is nothing to apply"; exit 0; }
+    [ -s "$d/$(nn "$n").patch" ] || { pause "no change came of that one, so there is nothing to apply"; exit 0; }
     grep -qx "$n" "$d/folded" 2>/dev/null && { pause "that one is folded into your commits already"; exit 0; }
     if grep -qx "$n" "$d/applied" 2>/dev/null; then
       # Back out, newest first, with whatever in your checkout builds on it,
@@ -244,7 +244,7 @@ fold)
   # Rebased onto or merged with main since the run: base..HEAD holds main's
   # commits now, and the autosquash below would rewrite them into your MR.
   [ "$(git rev-list --count "$base..HEAD")" = "$(git rev-list --count "$base..HEAD" --not "$(otis-config base)")" ] ||
-    { pause "$b was rebased onto or merged with $(otis-config main) since Claude's run; r runs it again"; exit 0; }
+    { pause "$b was rebased onto or merged with $(otis-config main) since the run; r runs it again"; exit 0; }
   todo=$(sort -n "$d/accepted" 2>/dev/null | while read -r n; do grep -qx "$n" "$d/folded" "$d/applied" "$d/branched" 2>/dev/null || echo "$n"; done)
   [ -n "$todo" ] || { pause "nothing accepted to fold; space accepts a proposal (one applied with a is yours to commit)"; exit 0; }
 
@@ -271,7 +271,7 @@ fold)
       stack
     else
       false
-    fi || { printf '%s\n' "$out" | tail -5; pause "fix $n no longer applies to your branch, so nothing was folded; take it back (space) or r to run Claude again"; exit 0; }
+    fi || { printf '%s\n' "$out" | tail -5; pause "fix $n no longer applies to your branch, so nothing was folded; take it back (space) or r to run it again"; exit 0; }
   fi
 
   # A fix whose newest lines are an earlier fix's goes where that one goes: its
@@ -315,7 +315,7 @@ fold)
       tee "$d/lint.log"
     if [ "$(cat "$d/lint.rc")" != 0 ]; then
       git reset -q --hard HEAD
-      pause "lint failed, so nothing was folded; r runs Claude again, and it gets this output"
+      pause "lint failed, so nothing was folded; r runs it again, and it gets this output"
       exit 0
     fi
     # What lint fixed by itself is whatever the patches did not stage.

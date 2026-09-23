@@ -102,10 +102,10 @@ take() {
     else ec+=("$REPLY"); fi
     if [[ $fs[1] == otis ]]; then
       case $fs[2] in
-        "Claude is working out"*) phase=plan ;;
+        (Claude|Codex|Cursor)" is working out"*) phase=plan ;;
         "tester started"*|"tester running"*|"the last tester's VM"*|"starting the tester"*) phase=tester ;;
-        "Claude is judging"*) phase=judge ;;
-        "a fresh Claude"*) phase=retro ;;
+        (Claude|Codex|Cursor)" is judging"*) phase=judge ;;
+        "a fresh "(Claude|Codex|Cursor)*) phase=retro ;;
         "judge steps in"*|"judge looked in"*) seen[checkin]=$#et ;;
       esac
     fi
@@ -120,7 +120,7 @@ reload() {
 }
 integer esize=-1
 grown() {
-  # Asked once a second: its size first, a builtin, and only a change counts
+  # Asked every tick: its size first, a builtin, and only a change counts
   # its lines, which takes two processes.
   local -a sz
   zstat -A sz +size -- $d/events.jsonl 2>/dev/null || return 1
@@ -488,7 +488,7 @@ ndrafts() {
 }
 drafts() {
   local range
-  [[ $kind == gmr-claude ]] || { flash="only a review of Claude's has drafts"; return }
+  [[ $kind == gmr-claude ]] || { flash="only a review has drafts"; return }
   range=$(sed -n 4p $d/cmd 2>/dev/null)
   [[ -n $range ]] || { flash="this review does not say what range it read"; return }
   screen_off
@@ -589,14 +589,16 @@ while :; do
     draw
   else
     changed=0
+    # The clock once a second.
     if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
       orphaned && quit 1
       [[ -z $winch ]] && resize
-      # The rows as they land, and the shape with them; the clock once a second.
-      grown && { criteria; symbols; }
       changed=1
     fi
+    # The rows as they land, and the shape with them, looked for every tick,
+    # so a burst of steps comes in one by one and not a second's worth at once.
+    grown && { criteria; symbols; changed=1; }
     # The step under the cursor, drawn in the background, has landed.
     [[ -n $pwait && -e $pwait ]] && changed=1
     (( changed )) && draw

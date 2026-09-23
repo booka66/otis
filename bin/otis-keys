@@ -12,6 +12,9 @@
 st=$GIT_FZF_STATE
 k() { printf '%s\t%s\n' "$1" "$2"; }
 none() { for x in "$@"; do k "$x" ""; done; }
+# The agent C starts, by name, from the picker's settings (otis-config) rather
+# than a process of its own.
+case ${OTIS_C_agent:-claude} in codex) who=Codex ;; cursor) who=Cursor ;; *) who=Claude ;; esac
 picker=$1; shift
 case $picker in
   # gmr: kind, iid, pipeline id.
@@ -20,7 +23,7 @@ case $picker in
     [ -n "$pipe" ] || none c R N p v
     case $kind in
       review)
-        k enter "review it"; k A "approve it"; k C "Claude reviews it"
+        k enter "review it"; k A "approve it"; k C "$who reviews it"
         none d D ;;
       mine)
         # One jq for both: this runs on every move.
@@ -31,7 +34,7 @@ EOF
         if [ "${threads:-0}" -gt 0 ] 2>/dev/null; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
         else k enter "read it by symbol"; fi
         if [ "$draft" = true ]; then k d "mark it ready"; else k d "mark it draft"; fi
-        k C "Claude proposes fixes"
+        k C "$who proposes fixes"
         none A D ;;
       merged)
         k enter "its deploy"; k D "Claude watches production"

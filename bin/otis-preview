@@ -190,12 +190,12 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
      if ($failed | length) > 0 then "It cannot go out as it is: " + names($failed; 4) + " failed." else "Its pipeline failed." end
    elif ($verb | test("to address$")) then "A reviewer is waiting on you: \($threads) unresolved \(plural($threads; "thread"; "threads"))."
    elif $verb == "review it" then "\($mr.author.username // "Someone") is waiting on your review" + (if $mr.updatedAt then ", updated \($mr.updatedAt | ago) ago." else "." end)
-   elif ($verb | test("to submit$")) then "Claude drafted \($cl.drafts // 0) \(plural($cl.drafts // 0; "comment"; "comments")) on it: yours to keep, change or drop before they post."
+   elif ($verb | test("to submit$")) then "\($cl.by // "Claude") drafted \($cl.drafts // 0) \(plural($cl.drafts // 0; "comment"; "comments")) on it: yours to keep, change or drop before they post."
    elif $verb == "merge it" then "Approved, green and nothing in the way."
    elif $verb == "ask for a review" then "Nobody has been asked to review it yet: a in gmr asks someone."
    elif ($verb | test("^pipeline (running|queued)")) then
      "\($done) of \($jobs | length) jobs done" + (if ($running | length) > 0 then ", \($running | length) running." else "." end)
-   elif ($verb | test("^fold in")) then "Claude proposed fixes for it: enter shows each, to take or leave."
+   elif ($verb | test("^fold in")) then "\($fx.by // "Claude") proposed fixes for it: enter shows each, to take or leave."
    elif ($verb | test("^verified")) then "Its verification has a verdict; the report is below."
    else "" end) as $why |
 

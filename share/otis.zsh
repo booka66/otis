@@ -128,7 +128,7 @@ stack-push() {
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=Claude proposes fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
@@ -864,7 +864,7 @@ gd() {
 _gmr() {
   _g_repo || return 1
   local out
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=Claude reviews / proposes fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
+  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
     --keys-from 'otis-keys mr {6} {2} {9}' \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \

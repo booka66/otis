@@ -70,7 +70,7 @@
 # file under a run would otherwise have it read the new file at old offsets.
 {
 mode=
-case $1 in --run|--footer|--drafts|--why|--marks|--prune) mode=$1; shift ;; esac
+case $1 in --run|--footer|--drafts|--why|--who|--marks|--prune) mode=$1; shift ;; esac
 iid=$1 range=$2
 api="projects/:fullpath/merge_requests/$iid"
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -110,6 +110,11 @@ case $mode in
     [ -r "$ids" ] && cat "$ids"
     exit 0
     ;;
+  # The agent the review is by, for its drafts' labels.
+  --who)
+    otis-agent-run --name "$d"
+    exit 0
+    ;;
   --why)
     if [ -r "$whys" ]; then jq -sc 'map({(.id | tostring): .why}) | add // {}' "$whys"; else echo '{}'; fi
     exit 0
@@ -129,12 +134,13 @@ case $mode in
         case $mr in *[!0-9]*|"") continue ;; esac
         going=false
         running "$dir" && going=true
-        printf '%s\t%s\t%s\t%s\n' "$mr" "$going" "$(grep -c . "$top/$mr.drafts" 2>/dev/null || echo 0)" "$(clean_head "$dir")"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$mr" "$going" "$(grep -c . "$top/$mr.drafts" 2>/dev/null || echo 0)" "$(clean_head "$dir")" "$(cat "$dir/agent-cli" 2>/dev/null)"
       done
     }
     marks=$(rows)
     [ -n "$marks" ] || { echo '{}'; exit 0; }
-    printf '%s\n' "$marks" | jq -Rn '[inputs | split("\t") | {(.[0]): {reviewing: (.[1] == "true"), drafts: (.[2] | tonumber), clean: (if .[3] == "" then null else .[3] end)}}] | add // {}'
+    printf '%s\n' "$marks" | jq -Rn '[inputs | split("\t") | {(.[0]): {reviewing: (.[1] == "true"), drafts: (.[2] | tonumber), clean: (if .[3] == "" then null else .[3] end),
+      by: ({claude: "Claude", codex: "Codex", cursor: "Cursor"}[.[4]] // "Claude")}}] | add // {}'
     exit 0
     ;;
   --prune)
@@ -150,16 +156,17 @@ case $mode in
     ;;
   --footer)
     get_state
+    who=$(otis-agent-run --name "$d")
     case $state in
-      running) printf "${GK_YOURS}Claude is reviewing · C shows progress${GK_R}\n" ;;
-      failed|moved) printf "${GK_BAD}Claude's review stopped short · C shows why${GK_R}\n" ;;
+      running) printf "${GK_YOURS}%s is reviewing · C shows progress${GK_R}\n" "$who" ;;
+      failed|moved) printf "${GK_BAD}%s's review stopped short · C shows why${GK_R}\n" "$who" ;;
       done)
         clean=$(clean_head "$d")
         [ -n "$clean" ] || exit 0
         if [ "$clean" = "$(git rev-parse "${range#*..}" 2>/dev/null)" ]; then
-          printf "${GK_GOOD}⇢ Claude found nothing to comment on${GK_R}\n"
+          printf "${GK_GOOD}⇢ %s found nothing to comment on${GK_R}\n" "$who"
         else
-          printf "${GK_CONTEXT}Claude found nothing at an older push · C reviews again${GK_R}\n"
+          printf "${GK_CONTEXT}%s found nothing at an older push · C reviews again${GK_R}\n" "$who"
         fi
         ;;
     esac
@@ -170,6 +177,7 @@ esac
 if [ "$mode" = --run ]; then
   ctx=$d/context wt=
   head=${range#*..}
+  pin_agent
   # finish <state> <summary>: the last line of the progress, an alert (unless
   # you stopped it), and a reload of the picker that started it, if still open.
   finish() {
@@ -177,7 +185,7 @@ if [ "$mode" = --run ]; then
     printf '%s\n' "$1" > "$d/status"
     date +%s > "$d/ended"
     say "$2"
-    [ "$1" != stopped ] && alert "Claude reviewed !$iid" "$2" "$1"
+    [ "$1" != stopped ] && alert "$who reviewed !$iid" "$2" "$1"
     # The picker that started it: this MR's own file picker gets its rows
     # again, in their shape; gmr's list or the dashboard only a new preview,
     # not this MR's files in place of their rows.
@@ -271,7 +279,8 @@ if [ "$mode" = --run ]; then
   # Only commands from otis.claudeCommand get through the gate: the MR's text
   # is in the prompt, so anything more would be the MR's shell, not yours.
   remote=$(git config --get otis.remote) allowed=$(otis-config claudeCommands) shell= gate=
-  if [ -n "$remote" ] && [ -n "$allowed" ]; then
+  # Only Claude Code has the hook the gate is; another agent runs no checks.
+  if [ -n "$remote" ] && [ -n "$allowed" ] && [ "$(otis-config agent)" = claude ]; then
     shell=,Bash
     jq -n --arg gate "$(cd "$(dirname "$0")" && pwd)/otis-claude-gate" \
       '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $gate}]}]}}' > "$d/claude-settings.json"
@@ -320,7 +329,7 @@ You are part of otis, the tool the reviewer reviews with. They don't read this c
 - The threads already on the MR, beside the symbols they sit on (threads.md).
 - seam's score of the change's shape (shape.md), one key away. A line with advice under it is one the score flags.
 
-Your comments go beside their symbol, marked as Claude's, with your why under each for the reviewer alone. otis heads each why with a line of its own: the symbol, what happened to it, how it is reached from an entry point, and its callers. The reviewer edits or deletes each draft in nvim before anything posts under their name.
+Your comments go beside their symbol, marked as ${who}'s, with your why under each for the reviewer alone. otis heads each why with a line of its own: the symbol, what happened to it, how it is reached from an entry point, and its callers. The reviewer edits or deletes each draft in nvim before anything posts under their name.
 
 Review the way the tree reads, starting from symbols.md:
 - A changed signature (~) or a removed export is where a change breaks code it did not touch. Check its callers, most of all the ones with no ✗.
@@ -359,25 +368,25 @@ EOF
         "first_line":{"type":"integer","minimum":1},"last_line":{"type":"integer","minimum":1},
         "body":{"type":"string"},'"$props"'}}}}}'
   if [ ! -s "$d/comments.json" ]; then
-    say "Claude is reading ..."
+    say "$who is reading ..."
     review_once() {
       set --
       [ -n "$gate" ] && set -- --settings "$gate" --allowedTools 'Bash(git-remote-run:*)'
-      (cd "$wt" && claude -p --restricted --tools "Read,Grep,Glob$shell" "$@" --add-dir "$ctx" \
+      (cd "$wt" && otis-agent-run -p --restricted --tools "Read,Grep,Glob$shell" "$@" --add-dir "$ctx" \
         --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none \
         --output-format stream-json --verbose --json-schema "$schema" < "$ctx/prompt" 2>> "$d/claude.err") |
         tee -a "$d/claude.jsonl" | git-claude-view --events >> "$d/events.jsonl"
     }
     attempt review_once ||
-      finish failed "Claude quit without a result: $(oneline "$(printf '%s' "$result" | jq -r '.result // empty')$(tail -3 "$d/claude.err")")"
+      finish failed "$who quit without a result: $(oneline "$(printf '%s' "$result" | jq -r '.result // empty')$(tail -3 "$d/claude.err")")"
     printf '%s' "$result" | jq -e '(.is_error | not) and .structured_output != null' >/dev/null ||
-      finish failed "Claude could not finish: $(oneline "$(printf '%s' "$result" | jq -r '.result // .subtype')")"
+      finish failed "$who could not finish: $(oneline "$(printf '%s' "$result" | jq -r '.result // .subtype')")"
     printf '%s' "$result" | jq .structured_output.comments > "$d/comments.json.new"
     say "» $(printf '%s' "$result" | jq -r .structured_output.summary)"
     mv "$d/comments.json.new" "$d/comments.json"
   fi
   n=$(jq length "$d/comments.json")
-  [ "$n" -gt 0 ] || finish done "no comments from Claude"
+  [ "$n" -gt 0 ] || finish done "no comments from $who"
 
   out=$(git-mr-claude-drafts "$wt" "$d/refs.json" "$d/comments.json" "$table" "$callers" "$d/kinds.tsv" "$d/order.txt" 2>&1 > "$d/drafts.jsonl") ||
     finish failed "could not work out where the comments go: $(oneline "$out")"
@@ -386,7 +395,7 @@ EOF
   if [ "$now" != "$(git rev-parse "$head")" ]; then
     jq -r '"  \(.where)  \(.fallback | split("\n\n") | .[1:] | join(" ") | gsub("\n"; " "))"' "$d/drafts.jsonl" |
       while IFS= read -r line; do say "$line"; done
-    finish moved "the MR moved to $(printf '%.8s' "$now") while Claude read it, so nothing was drafted; r reviews it again"
+    finish moved "the MR moved to $(printf '%.8s' "$now") while $who read it, so nothing was drafted; r reviews it again"
   fi
 
   # The only write to GitLab here: a draft note, seen by no one but you until
@@ -420,29 +429,31 @@ EOF
     made=$((made + 1))
     say "✎ $where"
   done < "$d/drafts.jsonl"
-  summary="$made draft$([ "$made" -eq 1 ] || echo s) from Claude; read them before S, which publishes them with yours"
+  summary="$made draft$([ "$made" -eq 1 ] || echo s) from $who; read them before S, which publishes them with yours"
   [ "$lost" -gt 0 ] && summary="$summary; $lost could not be drafted"
   finish done "$summary"
 fi
 
 # The picker's C: start a review after a confirm, then show its progress.
-command -v claude >/dev/null || { printf 'this needs Claude Code (claude). press enter\n'; read -r _; exit 0; }
+missing=$(otis-agent-run --ready) || { printf '%s. press enter\n' "$missing"; read -r _; exit 0; }
+who=$(otis-agent-run --name)
 
 start() {
-  note=$(git-confirm --note "Claude reviews !$iid and drafts comments for you to read?") || return 1
+  note=$(git-confirm --note "$who reviews !$iid and drafts comments for you to read?") || return 1
   rm -rf "$d"
   mkdir -p "$d/context" || return 1
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
+  otis-config agent > "$d/agent-cli"
   date +%s > "$d/started"
   # Claude sees what the change breaks only once tsgo has found the callers
   # elsewhere (git-callers), which takes a minute on a big MR: wait for
   # them, or start now with what is there.
   if [ "$(git-callers --state "$range")" != done ] && [ "$(git config --get otis.callers)" != off ] &&
     command -v tsgo >/dev/null && command -v node >/dev/null &&
-    git-confirm "tsgo has not found the callers elsewhere yet. Wait for them first, so Claude sees what the change breaks?"; then
+    git-confirm "tsgo has not found the callers elsewhere yet. Wait for them first, so $who sees what the change breaks?"; then
     : > "$d/wait-callers"
   fi
-  printf "Claude's review of !%s at %.8s\n" "$iid" "$(git rev-parse "${range#*..}")" > "$d/title"
+  printf "%s's review of !%s at %.8s\n" "$who" "$iid" "$(git rev-parse "${range#*..}")" > "$d/title"
   : > "$d/events.jsonl"
   # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
   printf '%s\n' git-mr-claude --run "$iid" "$range" > "$d/cmd"

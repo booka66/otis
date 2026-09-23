@@ -423,7 +423,7 @@ draw() {
       local k v
       for k v in enter "do what the row says" space "read its preview in a pager" j/k "move" g/G "top, bottom" \
         m "every MR" b branches a "background runs" d deploys w worktrees c "otis settings" \
-        D "stop showing it (Claude's fixes and verdicts)" o "open the MR" y "copy the MR link (a run: its folder, for Claude)" \
+        D "stop showing it (the agents' fixes and verdicts)" o "open the MR" y "copy the MR link (a run: its folder, for Claude)" \
         u refresh "ctrl-d/u" "scroll the preview" "?" "this, and back" q quit; do
         P+=("  ${A}${(r:9:: :)k}${R} ${C}$v${R}")
       done

@@ -214,7 +214,7 @@ gather() {
   # comment it proposed, with why, drafted or not.
   r=$OTIS_GITDIR/gmr-claude/$iid
   if [ -n "$iid" ] && [ -s "$r/comments.json" ]; then
-    { printf '# Claude'"'"'s review, at %.8s\n\n' "$(jq -r '.head_sha // ""' "$r/refs.json" 2>/dev/null)"
+    { printf '# The agent'"'"'s review, at %.8s\n\n' "$(jq -r '.head_sha // ""' "$r/refs.json" 2>/dev/null)"
       jq -r 'select(.type == "otis" and (.text | startswith("» "))) | .text[2:]' "$r/events.jsonl" 2>/dev/null
       jq -r '.[] | "\n## \(.path):\(.first_line)-\(.last_line)\(if .side == "old" then " (removed lines)" else "" end)\(if .symbol != "" then " · " + .symbol else "" end)\n\n\(.body)\n\nwhy: \(.why)"' "$r/comments.json"
     } > "$ctx/review.md"

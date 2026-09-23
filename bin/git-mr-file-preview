@@ -126,7 +126,7 @@ EOF
   [ "$total" -gt 0 ] && note="$note · $(printf "${GK_ELSEWHERE}%s unresolved thread%s${GK_R}" "$total" "$([ "$total" -eq 1 ] || echo s)")"
   if [ "${drafts:-0}" -gt 0 ]; then
     mark="$drafts draft$([ "$drafts" -eq 1 ] || echo s)"
-    [ "${claude:-0}" -gt 0 ] && mark="$mark ($claude Claude's)"
+    [ "${claude:-0}" -gt 0 ] && mark="$mark ($claude $(git-mr-claude --who "$iid")'s)"
     note="$note · $(printf "${GK_YOURS}%s, S submits${GK_R}" "$mark")"
   fi
   [ "$files" -gt 0 ] && [ "$done" -eq "$files" ] && [ "$GMR_KIND" = review ] && note="$note · $(printf "${GK_ATTENTION}A approves${GK_R}")"
@@ -175,7 +175,7 @@ $(cat "$share/markdown.awk")"'
   }
   function show(key,    color, i) {
     color = state[key] == "resolved" ? GK_CONTEXT : state[key] == "draft" ? GK_YOURS : GK_ELSEWHERE
-    print pad color "▍ " (state[key] == "resolved" ? "✓ resolved" : state[key] == "draft" ? (author[key, 1] == "Claude" ? "✎ Claude\047s draft" : "✎ your draft") : state[key] == "open" ? " open" : " comment") \
+    print pad color "▍ " (state[key] == "resolved" ? "✓ resolved" : state[key] == "draft" ? (author[key, 1] != "you" ? "✎ " author[key, 1] "\047s draft" : "✎ your draft") : state[key] == "open" ? " open" : " comment") \
       (where[key] == "line" && from[key] < line[key] ? " · lines " from[key] "-" line[key] : "") GK_R
     for (i = 1; i <= count[key]; i++) {
       if (draft[key, i] == "true" && state[key] != "draft") print pad color "▍ " GK_R GK_YOURS "↳ ✎ your draft reply" GK_R

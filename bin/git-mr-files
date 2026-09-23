@@ -113,17 +113,17 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
 first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=the shape of it,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
-claude="git-mr-claude $iid $range"
+rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=the shape of it,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
+claude="git-mr-claude $iid $range" who=$(otis-agent-run --name)
 set --
 if [ "$kind" = review ]; then
-  first="$first,A=approve,C=Claude drafts comments"
+  first="$first,A=approve,C=$who drafts comments"
   rest="$rest,n=since your last review"
   set -- --bind "A:execute(git-mr-approve $iid ${range#*..} ${range%%..*})" \
     --bind "n:transform(git-mr-since toggle $iid $range)" \
     --bind "u:transform(git-mr-files --moved $iid $range)"
 else
-  first="$first,C=Claude proposes fixes"
+  first="$first,C=$who proposes fixes"
   claude="git-mr-fix $iid $range"
   set -- --bind "u:$refresh+refresh-preview"
 fi

@@ -257,7 +257,9 @@ case $mode in
     # image <file> <lines>: drawn in the preview, as the terminal can.
     image() {
       if { [ "$TERM_PROGRAM" = ghostty ] || [ -n "$KITTY_WINDOW_ID" ]; } && command -v kitten >/dev/null; then
-        kitten icat --clear --transfer-mode=memory --unicode-placeholder --stdin=no --place="${cols}x$2@0x0" "$1" |
+        # Inline (stream), not shared memory: the picker sends the image
+        # again each time the row is shown, and memory is read only once.
+        kitten icat --clear --transfer-mode=stream --unicode-placeholder --stdin=no --place="${cols}x$2@0x0" "$1" |
           sed '$d' | sed "\$s/\$/$(printf '\033[m')/"
       elif command -v chafa >/dev/null; then
         chafa -s "${cols}x$2" "$1"
@@ -321,7 +323,8 @@ esac
 key=$1
 [ -n "$key" ] || exit 0
 d=$top/$key
-command -v claude >/dev/null || pause "V needs Claude Code (claude) for the judge"
+missing=$(otis-agent-run --ready) || pause "V's judge: $missing"
+who=$(otis-agent-run --name)
 [ -n "$CURSOR_API_KEY" ] || pause "V needs CURSOR_API_KEY (Cursor dashboard, Integrations, API keys) exported in your shell"
 
 case $key in
@@ -341,7 +344,7 @@ unpushed() {
   if [ -z "$there" ]; then ask="origin has no $b. Push it"
   elif git merge-base --is-ancestor "$there" "$here" 2>/dev/null; then ask="$b is ahead of origin. Push it"
   else ask="$b and origin's ($(printf '%.8s' "$there")) have diverged. Force-push it, with a lease,"; push="$push --force-with-lease=refs/heads/$b:$there"; fi
-  ask="$ask then a Cursor Cloud agent tests it while Claude judges (about 15-30 minutes, billed by Cursor)?"
+  ask="$ask then a Cursor Cloud agent tests it while $who judges (about 15-30 minutes, billed by Cursor)?"
 }
 
 # lessons <dir>: what the verification in <dir> ran into, for the next one:
@@ -376,7 +379,7 @@ start() {
       done
     fi
   else
-    note=$(git-confirm --note "A Cursor Cloud agent tests $what while Claude judges (about 15-30 minutes, billed by Cursor)?") || return 1
+    note=$(git-confirm --note "A Cursor Cloud agent tests $what while $who judges (about 15-30 minutes, billed by Cursor)?") || return 1
   fi
   # The last run's tester, whose VM may still be up with everything set up:
   # git-verify-run sends it the new commit instead of booting another.
@@ -387,6 +390,7 @@ start() {
   [ -n "$learned" ] && printf '%s\n' "$learned" > "$d/lessons.md"
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
   [ -n "$prev" ] && printf '%s\n' "$prev" > "$d/agent-prev"
+  otis-config agent > "$d/agent-cli"
   date +%s > "$d/started"
   printf 'Verifying %s\n' "$what" > "$d/title"
   : > "$d/events.jsonl"

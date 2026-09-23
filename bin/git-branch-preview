@@ -56,9 +56,10 @@ unrelated=
 # say <text>: a callout's line of why, cut to the pane.
 say() { printf "${GK_TEXT}%s${GK_R}" "$(pane_fit "$1" $((PANE_W - 2)))"; }
 plural() { [ "$1" -eq 1 ] && printf '%s' "$2" || printf '%s' "$3"; }
+[ -n "$claude" ] && who=$(otis-agent-run --name "$(git rev-parse --path-format=absolute --git-common-dir)/gmr-fix/b-$(printf '%s' "$b" | tr '/' '%')")
 case $claude in
-  fixing) pane_callout attention "Claude is working on fixes here" "$(say "It proposes them as it goes; they wait for you to take them.")" "keys:C how far it has got" ;;
-  ?*)     pane_callout yours "$claude $(plural "$claude" fix fixes) from Claude waiting" "$(say "Each is a change you accept or leave.")" "keys:C shows them · space accepts · a applies" ;;
+  fixing) pane_callout attention "$who is working on fixes here" "$(say "It proposes them as it goes; they wait for you to take them.")" "keys:C how far it has got" ;;
+  ?*)     pane_callout yours "$claude $(plural "$claude" fix fixes) from $who waiting" "$(say "Each is a change you accept or leave.")" "keys:C shows them · space accepts · a applies" ;;
 esac
 case $kind in
   merged-diff) pane_callout bad "Commits since its MR merged" "$(say "GitLab never got them: !$iid is already in.")" "keys:n opens a new MR for them" ;;

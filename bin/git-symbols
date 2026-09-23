@@ -768,7 +768,7 @@ EOF
           if (!firsterr) firsterr = l
           n = split(msg[l], m, "\n"); for (i = 1; i <= n; i++) block(ind, GK_BAD, "\342\234\227", m[i])
           fixes(ind, l)
-          if (looking && l == firsterr) { print gk_rep(" ", ind) GK_YOURS "\342\224\203 \342\234\246" GK_R " " GK_FAINT "Claude is looking at it" GK_R; row++ }
+          if (looking && l == firsterr) { print gk_rep(" ", ind) GK_YOURS "\342\224\203 \342\234\246" GK_R " " GK_FAINT "an agent is looking at it" GK_R; row++ }
         }
         BEGIN { BG = "\033[" (ENVIRON["OTIS_T_ERRBG"] != "" ? ENVIRON["OTIS_T_ERRBG"] : "48;5;52") "m" }' "$errfile" "$fixfile" -
     rm -f "$names" "$errfile" "$fixfile"
@@ -1296,7 +1296,7 @@ if [ "$mode" = --rows ]; then
       fi
       if [ -n "$GMR_IID" ]; then
         printf "${GK_CONTEXT}threads on its lines${GK_R}\n"
-        printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or Claude's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
+        printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or an agent's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
       printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body   ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
@@ -1309,7 +1309,7 @@ if [ "$mode" = --rows ]; then
       printf "  in its preview what it uses is ${GK_ATTENTION}marked${GK_R}, and ${GK_ATTENTION}\342\206\263${GK_R} under the first mention says what that is; i shows them whole\n"
       printf "  ${GK_CONTEXT}callers elsewhere${GK_R}: what uses the symbol that this change did not touch, from tsgo, by package; l opens it, enter opens one\n"
       printf "  ${GK_BAD}\342\234\227${GK_R} a caller the change breaks: a type error in it that the base did not have; a last row lists what breaks without calling anything changed\n"
-      printf "  ${GK_YOURS}\342\234\246${GK_R} under an error in its preview, Claude's fix for it, whether it belongs in the caller or the change, and its edits; F makes them and saves them, uncommitted\n"
+      printf "  ${GK_YOURS}\342\234\246${GK_R} under an error in its preview, the fix proposed for it, whether it belongs in the caller or the change, and its edits; F makes them and saves them, uncommitted\n"
     } > "$st/legend"
   fi
   # In a review, what Claude's review of the MR (git-mr-claude) did with each
@@ -1675,7 +1675,7 @@ if [ "$mode" = --rows ]; then
     # And the packages the finding never reached before its time was up.
     [ -z "$finding" ] && read -r nleft 2>/dev/null < "$OTIS_CACHE_ROOT/callers/$OTIS_CALLERS_KEY.partial" &&
       note="$note · $(printf "${GK_ATTENTION}%s packages never looked in${GK_R}" "$nleft")"
-    [ -n "$fixing" ] && note="$note · $(printf "${GK_ATTENTION}Claude is fixing what it breaks${GK_R}")"
+    [ -n "$fixing" ] && note="$note · $(printf "${GK_ATTENTION}%s is fixing what it breaks${GK_R}" "$(otis-agent-run --name)")"
     [ -n "$rechecking" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is checking your fixes${GK_R}")"
   elif ! command -v seam >/dev/null 2>&1; then
     note=$(printf "${GK_ATTENTION}seam is not on your PATH, so there are only files${GK_R}")
@@ -1711,7 +1711,7 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
@@ -1722,12 +1722,12 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make Claude'"'"'s fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \

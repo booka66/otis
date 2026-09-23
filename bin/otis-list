@@ -134,8 +134,8 @@ EOF
 {
   printf "${GK_CONTEXT}columns${GK_R}\n"
   printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
-  printf "  ${GK_YOURS}\342\234\2163${GK_R}      Claude has left you three of something: fixes to fold in, drafts to submit\n"
-  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_ATTENTION}\342\227\216${GK_R}      Claude is working \302\267 verifying in Cursor Cloud\n"
+  printf "  ${GK_YOURS}\342\234\2163${GK_R}      an agent has left you three of something: fixes to fold in, drafts to submit\n"
+  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_ATTENTION}\342\227\216${GK_R}      an agent is working \302\267 verifying in Cursor Cloud\n"
   printf "  ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R}    verified: passed, failed, inconclusive\n"
   printf "  ${GK_YOURS}\357\201\265${GK_R}        unresolved threads on your MR\n"
   printf "  ${GK_BAD}\342\234\227${GK_R} ${GK_YOURS}\342\232\240${GK_R}      failed \302\267 production may be unhappy about it\n"

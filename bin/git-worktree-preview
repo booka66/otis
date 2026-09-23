@@ -52,8 +52,8 @@ else
     "$wt_review") role="gmr moves this checkout to each MR you review; removing it means the next review checks out the repo again" ;;
     "$wt_mine")   role="gmr switches this checkout to your MRs that are not checked out anywhere else" ;;
     *) case ${wtp##*/} in
-         claude-fix*)    role="one of Claude's, for fix runs (C in gmr or gb); a run moves it to the branch it works on" ;;
-         claude-review*) role="one of Claude's, for reviews (C in gmr); a review moves it to the MR it reads" ;;
+         claude-fix*)    role="one of the agents', for fix runs (C in gmr or gb); a run moves it to the branch it works on" ;;
+         claude-review*) role="one of the agents', for reviews (C in gmr); a review moves it to the MR it reads" ;;
        esac ;;
   esac
 fi

@@ -91,20 +91,21 @@ case $mode in
       going=false
       running "$dir" && going=true
       left=$(waiting_in "$dir" | grep -c .)
-      printf '%s\t%s\t%s\n' "$mr" "$going" "$left"
+      printf '%s\t%s\t%s\t%s\n' "$mr" "$going" "$left" "$(cat "$dir/agent-cli" 2>/dev/null)"
     done)
     [ -n "$rows" ] || { echo '{}'; exit 0; }
-    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {fixing: (.[1] == "true"), fixes: (.[2] | tonumber)}}] | add // {}'
+    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {fixing: (.[1] == "true"), fixes: (.[2] | tonumber),
+      by: ({claude: "Claude", codex: "Codex", cursor: "Cursor"}[.[3]] // "Claude")}}] | add // {}'
     exit 0
     ;;
   --footer)
-    running "$d" && printf "${GK_YOURS}Claude is working on fixes · C shows progress${GK_R}\n"
+    running "$d" && printf "${GK_YOURS}%s is working on fixes · C shows progress${GK_R}\n" "$(otis-agent-run --name "$d")"
     [ -s "$d/items.json" ] && ! running "$d" && [ "$(cat "$d/status" 2>/dev/null)" = done ] &&
       printf "${GK_YOURS}%s fixes proposed · C shows them${GK_R}\n" "$(ls "$d"/[0-9][0-9].patch 2>/dev/null | wc -l | tr -d ' ')"
     exit 0
     ;;
   --list)
-    range=$(cat "$d/range")
+    range=$(cat "$d/range") who=$(otis-agent-run --name "$d")
     jq -r '.items[] | [.n, .source, .where, .title, (.thread_author // "")] | map(tostring | gsub("[\t\n]"; " ")) | join("\t")' "$d/items.json" |
       while IFS="$(printf '\t')" read -r n source where title author; do
         p="$d/$(nn "$n").patch"
@@ -116,7 +117,7 @@ case $mode in
         elif grep -qx "$n" "$d/accepted" 2>/dev/null; then state="${GK_GOOD}✓ accepted "
         else state="${GK_CONTEXT}· proposed "
         fi
-        from=$([ "$source" = thread ] && printf ' %s' "$author" || printf '✎ Claude')
+        from=$([ "$source" = thread ] && printf ' %s' "$author" || printf '✎ %s' "$who")
         into=
         if [ -s "$p" ] && ! grep -qx "$n" "$d/folded" "$d/applied" "$d/branched" "$d/declined" 2>/dev/null; then
           t=$(target "$(patch_of "$n")" "${range%%..*}")
@@ -146,7 +147,7 @@ case $mode in
       [ -s "$d/$(nn "$n").kept.patch" ] && printf "${GK_CONTEXT}the hunks you kept (h changes them)${GK_R}\n"
       git-delta < "$p"
     else
-      printf "${GK_CONTEXT}Claude changed nothing for this one${GK_R}\n"
+      printf "${GK_CONTEXT}no change for this one${GK_R}\n"
     fi
     result="$d/$(nn "$n").json"
     [ -s "$result" ] && jq -r '"", "\u0001" + (.summary | gsub("\n"; "\u001f"))' "$result"
@@ -159,7 +160,7 @@ case $mode in
     ;;
   --toggle)
     n=$2
-    [ -s "$d/$(nn "$n").patch" ] || exec git-fzf-note "Claude changed nothing for that one, so there is nothing to accept"
+    [ -s "$d/$(nn "$n").patch" ] || exec git-fzf-note "no change came of that one, so there is nothing to accept"
     grep -qx "$n" "$d/folded" 2>/dev/null && exec git-fzf-note "that one is folded in already"
     grep -qx "$n" "$d/applied" 2>/dev/null && exec git-fzf-note "that one is in your checkout already; a takes it back out"
     undecline "$n"
@@ -214,7 +215,7 @@ case $mode in
     ;;
   --hunks)
     n=$2 full="$d/$(nn "$2").patch" hunks="$d/hunks/$(nn "$2")"
-    [ -s "$full" ] || { printf 'Claude changed nothing for that one. press enter\n'; read -r _; exit 0; }
+    [ -s "$full" ] || { printf 'no change came of that one. press enter\n'; read -r _; exit 0; }
     # Each hunk to its own file, <h>.patch, its file's header and the hunk; a
     # new, deleted or binary file is one hunk, whole. <h>.row is its picker row.
     rm -rf "$hunks" && mkdir -p "$hunks"
@@ -257,12 +258,13 @@ range=$2
 if [ "$mode" = --run ]; then
   ctx=$d/context wt=
   head=$(cat "$d/head") base=${range%%..*}
+  pin_agent
   finish() {
     [ -n "$wt" ] && git-claude-worktree release "$wt"
     printf '%s\n' "$1" > "$d/status"
     date +%s > "$d/ended"
     say "$2"
-    [ "$1" != stopped ] && alert "Claude on $label" "$2" "$1"
+    [ "$1" != stopped ] && alert "$who on $label" "$2" "$1"
     # This MR's own file picker gets its rows again, in their shape; gmr's
     # list or the dashboard only a new preview.
     if [ "$kind" = mr ] && [ "$GMR_IID" = "$iid" ]; then
@@ -412,7 +414,8 @@ EOF
   # is in the prompt), and the settings file lives outside the directories
   # this run can write to, so a turn cannot loosen its own gate.
   remote=$(git config --get otis.remote) allowed=$(otis-config claudeCommands) shell= gate=
-  if [ -n "$remote" ] && [ -n "$allowed" ]; then
+  # Only Claude Code has the hook the gate is; another agent runs no checks.
+  if [ -n "$remote" ] && [ -n "$allowed" ] && [ "$(otis-config agent)" = claude ]; then
     shell=,Bash
     jq -n --arg gate "$(cd "$(dirname "$0")" && pwd)/otis-claude-gate" \
       '{hooks: {PreToolUse: [{matcher: "Bash", hooks: [{type: "command", command: $gate}]}]}}' > "$d/claude-settings.json"
@@ -434,7 +437,7 @@ You have no shell, so you cannot run type checks or tests; say so in the summary
     if [ -e "$d/session-used" ]; then flag=--resume; else flag=--session-id; : > "$d/session-used"; fi
     set --
     [ -n "$gate" ] && set -- --settings "$gate" --allowedTools 'Bash(git-remote-run:*)'
-    (cd "$wt" && claude -p --restricted --tools "$ttools$shell" "$@" --add-dir "$ctx" --strict-mcp-config --disable-slash-commands \
+    (cd "$wt" && otis-agent-run -p --restricted --tools "$ttools$shell" "$@" --add-dir "$ctx" --strict-mcp-config --disable-slash-commands \
       --permission-prompts none --permission-mode acceptEdits "$flag" "$session" \
       --output-format stream-json --verbose --json-schema "$tschema" < "$tprompt" 2>> "$d/claude.err") |
       tee -a "$d/claude.jsonl" | git-claude-view --events >> "$d/events.jsonl"
@@ -443,11 +446,11 @@ You have no shell, so you cannot run type checks or tests; say so in the summary
     ttools=$1 tschema=$2 tprompt=$3
     attempt turn_once &&
       printf '%s' "$result" | jq -e '(.is_error | not) and .structured_output != null' >/dev/null ||
-      finish failed "Claude could not finish: $(oneline "$(printf '%s' "$result" | jq -r '.result // .subtype // "no result"')")"
+      finish failed "$who could not finish: $(oneline "$(printf '%s' "$result" | jq -r '.result // .subtype // "no result"')")"
     printf '%s' "$result" | jq .structured_output > "$4"
   }
   if [ ! -s "$d/items.json" ]; then
-    say "Claude is planning ..."
+    say "$who is planning ..."
     claude_turn Read,Grep,Glob "$plan_schema" "$ctx/prompt-plan" "$d/plan.json"
   # Numbered, with who wrote each thread, for the picker.
   jq --slurpfile t "$ctx/threads.json" '{summary, skipped,
@@ -458,7 +461,7 @@ You have no shell, so you cannot run type checks or tests; say so in the summary
   jq -r '.skipped[] | "skipped thread \(.thread_id): \(.reason)"' "$d/items.json" | while IFS= read -r l; do say "$l"; done
   fi
   count=$(jq '[.items[] | select(.where != "what lint reported")] | length' "$d/items.json")
-  [ "$count" -gt 0 ] || finish done "nothing to change, as Claude sees it"
+  [ "$count" -gt 0 ] || finish done "nothing to change, as $who sees it"
 
   # Picking up: lint that did not finish runs again from the top, so what it
   # left goes; the fixes already made go back in the worktree, in order.
@@ -514,7 +517,7 @@ EOF
     round=1
     while [ "$round" -le 2 ]; do
       stopping
-      say "linting Claude's fixes ($(git config --get otis.remote)) ..."
+      say "linting $who's fixes ($(git config --get otis.remote)) ..."
       git -C "$wt" diff --name-only "$head" HEAD > "$d/changed-files"
       (cd "$wt" && GIT_BASE_REF=$base OTIS_CHANGED_FILES=$d/changed-files git-remote-run "$lint") > "$d/lint.log" 2>&1
       rc=$?
@@ -533,7 +536,7 @@ EOF
       fi
       [ "$rc" -eq 0 ] && break
       [ "$round" -eq 2 ] && { say "lint still fails; its output is above, and the fixes are yours to judge"; break; }
-      say "lint failed; Claude is fixing what it reported ..."
+      say "lint failed; $who is fixing what it reported ..."
       cp "$d/lint.log" "$ctx/lint.log"
       cat > "$ctx/prompt-lint" <<EOF
 The repo's lint ran over your fixes and failed. Its output is in $ctx/lint.log. Fix what it reports, in the files you changed, and nothing else. Answer changed and summary as before.
@@ -550,7 +553,8 @@ fi
 
 # C: start a run after a confirm; while it runs, its progress; once it is
 # done, the proposals.
-command -v claude >/dev/null || { printf 'this needs Claude Code (claude). press enter\n'; read -r _; exit 0; }
+missing=$(otis-agent-run --ready) || { printf '%s. press enter\n' "$missing"; read -r _; exit 0; }
+who=$(otis-agent-run --name)
 
 start() {
   # No Claude run here makes a verification's fix, so none makes it again.
@@ -560,11 +564,11 @@ start() {
     return 1
   fi
   if [ "$kind" = mr ]; then
-    note=$(git-confirm --note "Claude works through $label's threads and proposes fixes for you to accept?") || return 1
+    note=$(git-confirm --note "$who works through $label's threads and proposes fixes for you to accept?") || return 1
   elif [ "$kind" = retro ]; then
-    note=$(git-confirm --note "Claude acts on $label, as changes to this checkout for you to accept (a applies them)?") || return 1
+    note=$(git-confirm --note "$who acts on $label, as changes to this checkout for you to accept (a applies them)?") || return 1
   else
-    note=$(git-confirm --note "Claude reads what $label changes and proposes fixes for you to accept?") || return 1
+    note=$(git-confirm --note "$who reads what $label changes and proposes fixes for you to accept?") || return 1
   fi
   # A lint failure is the one thing a new run keeps, to fix what it found.
   [ -s "$d/lint.log" ] && { keep=$(mktemp) && cp "$d/lint.log" "$keep"; }
@@ -572,11 +576,12 @@ start() {
   mkdir -p "$d/context" || return 1
   [ -n "$keep" ] && { cp "$keep" "$d/lint.log"; rm -f "$keep"; keep=; }
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
+  otis-config agent > "$d/agent-cli"
   date +%s > "$d/started"
   git rev-parse HEAD > "$d/head"
   git branch --show-current > "$d/branch"
   printf '%s..%s\n' "${range%%..*}" "$(cat "$d/head")" > "$d/range"
-  if [ "$kind" = retro ]; then printf "Claude acts on %s\n" "$label"; else printf "Claude's fixes for %s at %.8s\n" "$label" "$(cat "$d/head")"; fi > "$d/title"
+  if [ "$kind" = retro ]; then printf "%s acts on %s\n" "$who" "$label"; else printf "%s's fixes for %s at %.8s\n" "$who" "$label" "$(cat "$d/head")"; fi > "$d/title"
   : > "$d/events.jsonl"
   # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
   printf '%s\n' git-mr-fix --run "$key" "${range%%..*}..$(cat "$d/head")" > "$d/cmd"
@@ -586,7 +591,7 @@ start() {
 }
 
 proposals() {
-  git-fzf "$label fixes " 'space=accept or take back,enter=accept or take back,d=discard one you do not want,a=apply to your checkout,A=apply all accepted,B=accepted onto a branch of their own,h=keep some hunks,F=fold accepted and push,l=the run,r=run Claude again' \
+  git-fzf "$label fixes " 'space=accept or take back,enter=accept or take back,d=discard one you do not want,a=apply to your checkout,A=apply all accepted,B=accepted onto a branch of their own,h=keep some hunks,F=fold accepted and push,l=the run,r=run it again' \
     --ansi --delimiter='\t' --with-nth=2 --track --id-nth=1 \
     --bind "start:reload(git-mr-fix --list $key)" \
     --bind "a:execute(git-mr-fold --apply $key {1})+reload(git-mr-fix --list $key)+refresh-preview" \

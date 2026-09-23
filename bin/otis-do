@@ -80,7 +80,7 @@ if [ "$what" = dismiss ]; then
       [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
       echo "$confirm"; exit 0 ;;
     *)
-      exec git-fzf-note "otis discards what it is telling you, Claude's fixes and its runs' verdicts; that row is the merge request's own state" ;;
+      exec git-fzf-note "otis discards what it is telling you, the agents' fixes and their runs' verdicts; that row is the merge request's own state" ;;
   esac
 fi
 

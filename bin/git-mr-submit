@@ -33,7 +33,7 @@ n=$(printf '%s' "$drafts" | jq length)
 if [ -n "$asked" ]; then
   [ "$n" -gt 0 ] || fail "you have no drafts on !$iid to submit"
   claude=$(printf '%s' "$drafts" | jq --argjson ids "$(git-mr-claude --drafts "$iid" | jq -sc .)" '[.[].id | select(IN($ids[]))] | length')
-  git-confirm "publish your $n draft$([ "$n" -eq 1 ] || echo s) on !$iid$([ "${claude:-0}" -gt 0 ] && echo " ($claude of them Claude's)")?" || exit 0
+  git-confirm "publish your $n draft$([ "$n" -eq 1 ] || echo s) on !$iid$([ "${claude:-0}" -gt 0 ] && echo " ($claude of them $(git-mr-claude --who "$iid")'s)")?" || exit 0
   answer=comment
   [ "$kind" = review ] && git-confirm "approve it too, at $(printf '%.8s' "$head")?" && answer=approve
 fi

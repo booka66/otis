@@ -5,6 +5,15 @@
 # defines its own finish <state> <summary>, since what to reload and whom to
 # alert differ.
 
+# pin_agent: the run keeps to the coding agent it started with, resumed or
+# not: start() leaves otis-config agent in $d/agent-cli, and a run from before
+# there was a choice is Claude's. $who is what its lines call it.
+pin_agent() {
+  OTIS_AGENT=$(cat "$d/agent-cli" 2>/dev/null || echo claude)
+  export OTIS_AGENT
+  who=$(otis-agent-run --name)
+}
+
 # running <dir>: the run is going: its pid is alive and it has not said how it
 # ended (a pid alone can be some other process by now).
 running() { [ ! -s "$1/status" ] && [ -r "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null; }
@@ -52,7 +61,7 @@ attempt() {
     fi
     tries=$((tries + 1))
     [ "$tries" -le 3 ] || return 1
-    say "Claude's turn broke off$([ -n "$result" ] && printf ': %s' "$(oneline "$(printf '%s' "$result" | jq -r .result)")"); trying again in a minute ($tries of 3)"
+    say "${who:-Claude}'s turn broke off$([ -n "$result" ] && printf ': %s' "$(oneline "$(printf '%s' "$result" | jq -r .result)")"); trying again in a minute ($tries of 3)"
     sleep "${OTIS_RETRY_WAIT:-60}" &
     wait $!
     stopping
@@ -113,7 +122,7 @@ resume() {
         '{type: "otis", text: $t}' >> "$dir/events.jsonl"
       echo failed > "$dir/status"
       date +%s > "$dir/ended"
-      alert "$(cat "$dir/title" 2>/dev/null || echo "Claude's run")" \
+      alert "$(cat "$dir/title" 2>/dev/null || echo "a run of otis's")" \
         "its process kept dying; giving up" failed
       rmdir "$dir/resuming"
       return 0
@@ -123,8 +132,10 @@ resume() {
     jq -nc --arg t "picking up where it left off" '{type: "otis", text: $t}' >> "$dir/events.jsonl"
     printf '%s %s\n' "$dead" "$(wc -c < "$dir/events.jsonl" | tr -d ' ')" > "$dir/lives"
     # cmd holds the argv one a line (a branch name can hold shell syntax).
+    # exec: the subshell becomes the run, so $! is the run's pid, and no
+    # shell is left holding the picker's output open until the run ends.
     (cd "$where" && IFS='
-' && set -f && set -- $(cat "$dir/cmd") && otis-detach "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
+' && set -f && set -- $(cat "$dir/cmd") && exec otis-detach "$@" </dev/null >> "$dir/log" 2>&1 & echo $! > "$dir/pid")
   fi
   rmdir "$1/resuming"
 }

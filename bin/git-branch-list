@@ -202,7 +202,7 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
 {
   printf "${GK_CONTEXT}columns${GK_R}\n"
   printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
-  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R}      Claude is working \302\267 Claude has fixes waiting for you (C)\n"
+  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R}      an agent is working \302\267 an agent has fixes waiting for you (C)\n"
   printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
   printf "  ${GK_ATTENTION}!1234${GK_R}    its merge request\n"
   printf "  ${GK_ATTENTION}\342\206\2213${GK_R} ${GK_CONTEXT}\342\206\22312${GK_R}  commits it has that origin/main does not, and the other way round\n"

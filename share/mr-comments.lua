@@ -213,7 +213,7 @@ local function render(buf)
       end, t.notes)
       local replies = t.draft and 0 or #t.notes - 1 - drafts
       local head = ("  %s %s%s%s%s"):format(t.draft and "✎" or t.resolved and "✓" or "",
-        t.draft and (t.claude and "Claude's draft" or "your draft") or first.author.username,
+        t.draft and (t.claude and first.author.username .. "'s draft" or "your draft") or first.author.username,
         w.from < w.line and ("  lines " .. w.from .. "-" .. w.line) or "",
         replies > 0 and ("  +" .. replies .. " repl" .. (replies == 1 and "y" or "ies")) or "",
         not t.draft and drafts > 0 and ("  ✎ " .. drafts .. " draft repl" .. (drafts == 1 and "y" or "ies")) or "")
@@ -441,10 +441,10 @@ local function latest_mine(t)
   end
 end
 
--- Why Claude wrote a draft, and its lesson, in a read-only float above its
+-- Why the agent wrote a draft, and its lesson, in a read-only float above its
 -- compose window win: a buffer of its own, so :w there can never send it.
 -- <C-w>w goes into it to scroll a long lesson. Closes with win.
-local function show_why(win, why)
+local function show_why(win, why, who)
   local cfg = vim.api.nvim_win_get_config(win)
   local lines = vim.split(why, "\n")
   local rows = 0
@@ -460,7 +460,7 @@ local function show_why(win, why)
   local fwin = vim.api.nvim_open_win(buf, false, {
     relative = "editor", anchor = "SW", row = cfg.row, col = cfg.col, width = cfg.width, height = height,
     border = "rounded", style = "minimal", zindex = 60,
-    title = " why Claude wrote it · for you only, never posted ", title_pos = "center",
+    title = (" why %s wrote it · for you only, never posted "):format(who), title_pos = "center",
     footer = " <C-w>w scrolls it ", footer_pos = "center",
   })
   vim.wo[fwin].wrap = true
@@ -484,7 +484,7 @@ local function edit_note(t, n)
     end
   end)
   if n.why and n.why ~= "" then
-    show_why(win, n.why)
+    show_why(win, n.why, n.author.username)
   end
 end
 
@@ -665,11 +665,12 @@ end
 -- Publish every draft at once (git-mr-submit); reviewing, as a comment or with
 -- an approval of the head you are reading.
 local function submit()
-  local n, claude = 0, 0
+  local n, claude, who = 0, 0, nil
   for _, t in ipairs(threads) do
     for _, note in ipairs(t.notes) do
       n = n + (note.draft and 1 or 0)
       claude = claude + (note.claude and 1 or 0)
+      who = note.claude and note.author.username or who
     end
   end
   if n == 0 then
@@ -677,7 +678,7 @@ local function submit()
     return
   end
   local question = ("Publish your %d draft%s%s?"):format(n, n == 1 and "" or "s",
-    claude > 0 and (" (%d of them Claude's)"):format(claude) or "")
+    claude > 0 and (" (%d of them %s's)"):format(claude, who) or "")
   local answer
   if reviewing then
     answer = ({ "comment", "approve" })[vim.fn.confirm(question, "&Comment\n&Approve too\n&Cancel", 3)]

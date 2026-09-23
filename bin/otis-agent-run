@@ -1,0 +1,201 @@
+#!/bin/sh
+# otis-agent-run <claude -p flags> < prompt: one turn of the coding agent
+# otis's background runs use (review, fixes, verify's judge, callers' fixes),
+# whichever it is: git config otis.agent claude (the default), codex or
+# cursor. It takes the flags those runs give claude -p and answers the way
+# claude does, stream-json events or one json result, structured_output
+# included, so everything that reads a run (claude-run.sh's attempt,
+# git-claude-view --events) reads any agent's.
+#
+# With claude it is claude, flags and all. The others get what they can do of
+# the same request:
+#   --tools        Read,Grep,Glob reads only: codex's read-only sandbox,
+#                  cursor's ask mode. Edit or Write too: codex's
+#                  workspace-write sandbox, cursor's agent mode in its
+#                  sandbox. Both have a shell in their sandbox, with no
+#                  network; neither can hold one to otis-claude-gate, so Bash
+#                  is refused and a run asks for it only of claude.
+#   --json-schema  codex's --output-schema; for cursor, asked for in the
+#                  prompt and read out of its last message.
+#   --session-id / --resume  the caller's id, kept against the agent's own
+#                  in $OTIS_AGENT_SESSIONS.
+#   --model        a claude model, so dropped; otis.agentModel names the
+#                  model for the others, else it is theirs.
+# A flag this does not know is refused, not passed over: a run that grows one
+# says so here before another agent quietly ignores it.
+#
+# A run keeps to the agent it started with: $OTIS_AGENT, which it sets from
+# its <dir>/agent-cli (share/claude-run.sh's pin_agent), wins over the setting.
+#
+# otis-agent-run --ready: exit 0 when the agent is installed, else say what is
+# missing. --name [run dir]: what otis calls it, Claude, Codex or Cursor: the
+# run's own, and Claude for a run from before there was a choice, else the
+# one set now. --translate <agent> [session]: that agent's stream on stdin as
+# claude's (the tests use it), with OTIS_AGENT_SCHEMA set when it answers
+# with one.
+nl='
+'
+agent=${OTIS_AGENT:-$(otis-config agent)}
+if [ "$1" = --name ]; then
+  [ -n "$2" ] && { agent=$(cat "$2/agent-cli" 2>/dev/null) || agent=claude; }
+  case $agent in claude) echo Claude ;; codex) echo Codex ;; cursor) echo Cursor ;; *) echo "$agent" ;; esac
+  exit 0
+fi
+case $agent in
+  claude) bin=claude name="Claude Code" ;;
+  codex) bin=codex name=Codex ;;
+  cursor) bin=cursor-agent name="Cursor's agent" ;;
+  *) printf 'otis.agent is %s; it is claude, codex or cursor\n' "$agent" >&2; exit 2 ;;
+esac
+
+if [ "$1" = --ready ]; then
+  command -v "$bin" >/dev/null 2>&1 && exit 0
+  printf 'this needs %s (%s)\n' "$name" "$bin"
+  exit 1
+fi
+[ "$agent" = claude ] && [ "$1" != --translate ] && exec claude "$@"
+
+# translate <agent> <session>: the agent's stream on stdin as claude's
+# stream-json on stdout, a result line last whatever happened. Its last
+# message, the answer, is structured_output when $OTIS_AGENT_SCHEMA is set.
+translate() {
+  jq -nR --unbuffered -c --arg agent "$1" --arg session "$2" --arg model "$(otis-config agentModel)" \
+    --arg schema "${OTIS_AGENT_SCHEMA:+1}" '
+    def say($c): {type: "assistant", message: {role: "assistant", content: [$c]}};
+    def returned($id; $text; $err): {type: "user", message: {role: "user",
+      content: [{type: "tool_result", tool_use_id: $id, content: ($text // "" | tostring), is_error: $err}]}};
+    # An answer asked for as JSON: all of the message, or what a fence or
+    # prose around it holds.
+    def answer: (. // "") as $t | ($t | fromjson?) //
+      ($t | capture("```(?:json)?\\s*(?<j>[\\s\\S]*?)```").j | fromjson?) //
+      ($t | (index("{")) as $a | (rindex("}")) as $b | if $a and $b then .[$a:$b + 1] | fromjson? else null end) // null;
+    def done($s; $err; $text): {type: "result", subtype: (if $err then "error" else "success" end), is_error: $err,
+      result: $text, session_id: (if $session != "" then $session else $s.id end), agent_session: $s.id}
+      + (if $schema != "" and ($err | not) then {structured_output: ($s.text | answer)} else {} end);
+    def cursor_tool: to_entries[0] | .key as $k | (.value.args // {}) as $a |
+      {name: ({readToolCall: "Read", grepToolCall: "Grep", globToolCall: "Glob", shellToolCall: "Bash",
+               editToolCall: "Edit", writeToolCall: "Write", deleteToolCall: "Delete", lsToolCall: "LS"}[$k]
+              // ($k | sub("ToolCall$"; ""))),
+       input: ({file_path: ($a.path // null), pattern: ($a.pattern // $a.globPattern // null),
+                command: ($a.command // null)} | with_entries(select(.value != null)))};
+    def cursor_output: to_entries[0].value.result // {} |
+      if .success then {err: false, text: (.success | .content // .stdout // tostring)}
+      else {err: true, text: ((.failure // .error // .) | (.stderr // "") + (.stdout // "") + (.message // "") |
+        if . == "" then tostring else . end)} end;
+    foreach ((inputs | fromjson? // empty), {type: "otis-end"}) as $e ({id: null, text: "", think: "", ended: false, out: []};
+      .out = [] |
+      if $agent == "cursor" then
+        if $e.type == "system" then .id = $e.session_id
+          | .out = [{type: "system", subtype: "init", model: ($e.model // "cursor"), session_id: $e.session_id, mcp_servers: []}]
+        elif $e.type == "assistant" then
+          .text += ([$e.message.content[]? | select(.type == "text") | .text] | join(""))
+          | .out = [$e | del(.session_id, .model_call_id, .timestamp_ms)]
+        elif $e.type == "thinking" then
+          if $e.subtype == "delta" then .think += ($e.text // "")
+          else .out = (if .think != "" then [say({type: "thinking", thinking: .think})] else [] end) | .think = "" end
+        elif $e.type == "tool_call" then .text = "" |
+          if $e.subtype == "started" then .out = [say({type: "tool_use", id: $e.call_id} + ($e.tool_call | cursor_tool))]
+          else ($e.tool_call | cursor_output) as $o | .out = [returned($e.call_id; $o.text; $o.err)] end
+        elif $e.type == "result" then .ended = true
+          | .out = [done(.; ($e.is_error // false); (if $e.is_error then $e.result else .text end))]
+        else . end
+      else
+        if $e.type == "thread.started" then .id = $e.thread_id
+          | .out = [{type: "system", subtype: "init", model: (if $model != "" then $model else "codex" end),
+                     session_id: $e.thread_id, mcp_servers: []}]
+        elif $e.type == "item.started" and $e.item.type == "command_execution" then
+          .out = [say({type: "tool_use", id: $e.item.id, name: "Bash", input: {command: $e.item.command}})]
+        elif $e.type == "item.completed" then $e.item as $i |
+          if $i.type == "agent_message" then .text = $i.text | .out = [say({type: "text", text: $i.text})]
+          elif $i.type == "reasoning" then .out = [say({type: "thinking", thinking: $i.text})]
+          elif $i.type == "command_execution" then
+            .out = [returned($i.id; $i.aggregated_output; (($i.exit_code // 0) != 0))]
+          elif $i.type == "file_change" then
+            .out = [say({type: "tool_use", id: $i.id, name: "Edit", input: {file_path: ([$i.changes[]?.path] | join(", "))}})]
+          elif $i.type == "mcp_tool_call" then
+            .out = [say({type: "tool_use", id: $i.id, name: "\($i.server)/\($i.tool)", input: {}})]
+          elif $i.type == "web_search" then
+            .out = [say({type: "tool_use", id: $i.id, name: "WebSearch", input: {query: $i.query}})]
+          else . end
+        elif $e.type == "turn.completed" then .ended = true | .out = [done(.; false; .text)]
+        elif $e.type == "turn.failed" then .ended = true | .out = [done(.; true; ($e.error.message // "the turn failed"))]
+        elif $e.type == "error" then .last_error = $e.message
+        else . end
+      end
+      | if $e.type == "otis-end" and (.ended | not) then
+          .out = [done(.; true; (.last_error // "\($agent) stopped without finishing"))]
+        else . end;
+      .out[])'
+}
+
+if [ "$1" = --translate ]; then
+  translate "$2" "$3"
+  exit 0
+fi
+
+write= fmt=text schema= session= resume= persist=1 dirs=
+refuse() {
+  jq -nc --arg r "$1" '{type: "result", subtype: "error", is_error: true, result: $r}'
+  exit 1
+}
+while [ $# -gt 0 ]; do
+  case $1 in
+    -p | --restricted | --strict-mcp-config | --disable-slash-commands | --verbose) ;;
+    --permission-prompts | --permission-mode | --model) shift ;;
+    --no-session-persistence) persist= ;;
+    --tools)
+      shift
+      case ",$1," in *,Bash,*) refuse "$name has no gated shell here; only claude runs checks through git-remote-run" ;; esac
+      case ",$1," in *,Edit,* | *,Write,*) write=1 ;; esac ;;
+    --add-dir) shift; dirs="$dirs$1$nl" ;;
+    --output-format) shift; fmt=$1 ;;
+    --json-schema) shift; schema=$1 ;;
+    --session-id) shift; session=$1 resume= ;;
+    --resume) shift; session=$1 resume=1 ;;
+    *) refuse "otis-agent-run: $1 is a claude flag that $name has nothing for here" ;;
+  esac
+  shift
+done
+command -v "$bin" >/dev/null 2>&1 || refuse "this needs $name ($bin)"
+
+store=${OTIS_AGENT_SESSIONS:-${XDG_STATE_HOME:-$HOME/.local/state}/otis/agent-sessions}
+theirs=
+if [ -n "$resume" ]; then
+  theirs=$(cat "$store/$session" 2>/dev/null)
+  [ -n "$theirs" ] || refuse "no $name session kept for $session to resume"
+fi
+model=$(otis-config agentModel)
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+cat > "$tmp/prompt"
+
+set --
+case $agent in
+  codex)
+    sandbox=read-only
+    [ -n "$write" ] && sandbox=workspace-write
+    set -- -c "sandbox_mode=\"$sandbox\"" --json --skip-git-repo-check
+    [ -n "$persist" ] || set -- "$@" --ephemeral
+    [ -n "$model" ] && set -- "$@" -m "$model"
+    if [ -n "$schema" ]; then printf '%s' "$schema" > "$tmp/schema.json"; set -- "$@" --output-schema "$tmp/schema.json"; fi
+    if [ -n "$theirs" ]; then set -- exec resume "$@" "$theirs" -; else set -- exec "$@" -; fi ;;
+  cursor)
+    set -- -p --trust --output-format stream-json
+    if [ -n "$write" ]; then set -- "$@" --sandbox enabled; else set -- "$@" --mode ask; fi
+    [ -n "$model" ] && set -- "$@" --model "$model"
+    [ -n "$theirs" ] && set -- "$@" --resume "$theirs"
+    IFS=$nl
+    for dir in $dirs; do set -- "$@" --add-dir "$dir"; done
+    unset IFS
+    [ -n "$schema" ] && printf '\n\nWhen you are done, your last message is the answer, and it must be one JSON object and nothing else, no prose and no code fence, matching this JSON Schema:\n%s\n' "$schema" >> "$tmp/prompt" ;;
+esac
+
+"$bin" "$@" < "$tmp/prompt" |
+  OTIS_AGENT_SCHEMA=$schema translate "$agent" "$session" | tee "$tmp/out" |
+  if [ "$fmt" = stream-json ]; then cat; else jq -c --unbuffered 'select(.type == "result")'; fi
+# The agent's own id, for the next --resume of the caller's.
+if [ -n "$session" ] && [ -z "$resume" ]; then
+  id=$(jq -r 'select(.type == "result") | .agent_session // empty' "$tmp/out" | tail -1)
+  [ -n "$id" ] && mkdir -p "$store" && printf '%s\n' "$id" > "$store/$session"
+fi
+jq -e 'select(.type == "result") | .is_error | not' "$tmp/out" >/dev/null

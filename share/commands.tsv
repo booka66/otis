@@ -13,9 +13,9 @@ look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r reword
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
 look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens its MR, d deletes (M marks the safe ones)	
 look	gmr	gmr			every MR: to review, yours with pipelines, merged and whether live; enter reviews or opens comments	
-look	gci	gci			gmr with your MRs first	in a review: c comments on lines, v viewed, S submit drafts, A approve, C Claude drafts comments, a asks Claude about the row, ? the rest (on yours, proposes fixes)
+look	gci	gci			gmr with your MRs first	in a review: c comments on lines, v viewed, S submit drafts, A approve, C the agent drafts comments, a asks Claude about the row, ? the rest (on yours, proposes fixes)
 look	gd	gd			production deploys, newest first, with what each carried and whether it went live	gd <pipeline id>
-look	gag	gag			everything Claude is doing here in the background: reviews, fixes, production watches, verifications	
+look	gag	gag			everything the agents are doing here in the background: reviews, fixes, production watches, verifications	
 change	ga	ga			stage panel; space stages, p hunks, c commits, enter opens your editor	ga <path>, gu <path>
 change	gah	gah			stage single hunks of a file, untracked ones too	
 change	gcm	gcm			commit in your editor with the diff below	gcm "subject" for a one-liner
@@ -41,6 +41,6 @@ other	otis-config	otis-config			otis's settings, each with where it comes from; 
 other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
 other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
 other	otis-update	otis-update			bring otis, and seam, up to their newest releases (the curl install)	
-other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, Claude, V, deploys, history	
+other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, the agent, V, deploys, history	
 other	gi	gi		<tags>	fetch a .gitignore	gi node macos >> .gitignore; gi lists the tags
 other	gi	fixterm			reset a garbled terminal	
