@@ -17,7 +17,7 @@
 // capabilities) are answered, so every server request gets a null reply.
 import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { totalmem } from "node:os";
+import { cpus, totalmem } from "node:os";
 import { dirname, resolve, relative } from "node:path";
 
 const job = JSON.parse(readFileSync(0, "utf8"));
@@ -28,7 +28,19 @@ const root = job.root;
 let baselineIn = null;
 if (job.baselineIn) { try { baselineIn = JSON.parse(readFileSync(job.baselineIn, "utf8")); } catch { baselineIn = null; } }
 const baselineOut = job.baselineOut ? {} : null;
-const lsp = spawn("tsgo", ["--lsp", "--stdio"], { stdio: ["pipe", "pipe", "ignore"] });
+// Nice alone left tsgo every core and as much memory as it liked: behind
+// the scenes, that was the whole machine lagging while it ran. Go's own
+// limits hold it to half the cores and, softly, a quarter of the memory
+// (past that it collects harder rather than growing); either set in the
+// environment wins.
+const lsp = spawn("tsgo", ["--lsp", "--stdio"], {
+  stdio: ["pipe", "pipe", "ignore"],
+  env: {
+    GOMAXPROCS: String(Math.max(1, Math.floor(cpus().length / 2))),
+    GOMEMLIMIT: `${Math.floor(totalmem() / 4 / 2 ** 20)}MiB`,
+    ...process.env,
+  },
+});
 let buf = Buffer.alloc(0);
 let nextId = 1;
 const waiting = new Map();

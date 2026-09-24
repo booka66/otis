@@ -53,6 +53,15 @@ if [ "$1" = --ready ]; then
   printf 'this needs %s (%s)\n' "$name" "$bin"
   exit 1
 fi
+# --keep <ours> <theirs>: the agent's own session id kept against the caller's
+# now, for a turn stopped before its result (which is when it is kept
+# otherwise), so --resume can go on with it. Claude's is the caller's own.
+if [ "$1" = --keep ]; then
+  [ "$agent" = claude ] && exit 0
+  store=${OTIS_AGENT_SESSIONS:-${XDG_STATE_HOME:-$HOME/.local/state}/otis/agent-sessions}
+  mkdir -p "$store" && printf '%s\n' "$3" > "$store/$2"
+  exit 0
+fi
 [ "$agent" = claude ] && [ "$1" != --translate ] && exec claude "$@"
 
 # translate <agent> <session>: the agent's stream on stdin as claude's

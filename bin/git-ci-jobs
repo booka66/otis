@@ -62,9 +62,7 @@ if [ "$1" = "--run" ]; then
     cancel-pipeline) git-confirm "cancel every job still going in pipeline $id?" || exit 0; path=pipelines/$id/cancel ;;
   esac
   out=$(glab api -X POST "projects/:fullpath/$path" 2>&1) && exit 0
-  printf '%s\n' "$out" | tail -3
-  printf '%s failed. press enter\n' "$what"
-  read -r _
+  otis-popup say "$(printf '%s\n' "$out" | tail -3; printf '%s failed' "$what")"
   exit 0
 fi
 
@@ -118,7 +116,7 @@ git-fzf "!$iid jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job
   --bind "P:transform(git-ci-jobs --key play $id {2} {3})" \
   --bind "X:transform(git-ci-jobs --key cancel $id {2} {3})" \
   --bind "ctrl-x:transform(git-ci-jobs --key cancel-pipeline $id {2} {3})" \
-  --bind "w:execute-silent(otis-open {4})" \
+  --bind "w:transform(otis-open --fzf {4})" \
   --bind "y:execute-silent(printf %s {4} | otis-copy)+transform(git-fzf-note copied {4})" \
   --preview "git-ci-log --tail {2} {3}" </dev/null >/dev/null
 exit 0

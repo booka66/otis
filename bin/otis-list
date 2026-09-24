@@ -181,7 +181,7 @@ if otis-config gitlab >/dev/null 2>&1; then
   # rows wait for the new one (ci-merged.old) rather than say that.
   { merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
       cp "$merged" "$st/ci-merged.json" &&
-      if [ $(( $(date +%s) - $(stat -f %m "$merged" 2>/dev/null || stat -c %Y "$merged") )) -gt 300 ]; then
+      if [ $(( $(date +%s) - $(stat -c %Y "$merged" 2>/dev/null || stat -f %m "$merged") )) -gt 300 ]; then
         : > "$st/ci-merged.old"
       else rm -f "$st/ci-merged.old"; fi; } &
   { deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&

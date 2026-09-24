@@ -43,7 +43,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # Your checkout's files, and B's branch, get your usual modes, not the
 # private ones Claude's run state is written with.
 umask "$otis_umask"
-[ -d "$d" ] || { printf 'no fixes for %s yet; C runs it. press enter\n' "$label"; read -r _; exit 0; }
+[ -d "$d" ] || { otis-popup say "no fixes for $label yet; C runs it"; exit 0; }
 
 # Claude makes each fix on top of the ones before it, so one can change lines
 # an earlier one wrote and not go in, or come out, without it. Which fix
@@ -102,7 +102,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 0
 
 case $mode in
 apply)
-  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  pause() { otis-popup say "$1"; }
   b=$(git branch --show-current)
   [ "$b" = "$(cat "$d/branch")" ] || { pause "apply with $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }
   if [ "$2" = --accepted ]; then
@@ -161,7 +161,7 @@ apply)
 # the branch in gb brings it here. For a retrospective's changes, which belong
 # on no MR of yours, and for any fix you would rather ship apart.
 branch)
-  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  pause() { otis-popup say "$1"; }
   todo=$(sort -n "$d/accepted" 2>/dev/null | while read -r n; do grep -qx "$n" "$d/folded" "$d/branched" 2>/dev/null || echo "$n"; done)
   [ -n "$todo" ] || { pause "nothing accepted to put on a branch; space accepts"; exit 0; }
   # One already in your checkout (a) may be meant for your MR or for here;
@@ -183,8 +183,7 @@ branch)
   esac
   name=$2
   if [ -z "$name" ]; then
-    printf 'branch name [%s/%s]: ' "$prefix" "$default"
-    read -r name
+    name=$(otis-popup text "branch name, after $prefix/" "$default") || exit 0
     name=${name:-$default}
   fi
   b=$prefix/$name
@@ -233,7 +232,7 @@ fold)
   # onto it would put it in yours. Where your branch really forks is its
   # merge base with HEAD.
   base=$(git merge-base "$base" HEAD)
-  pause() { printf '%s. press enter\n' "$1"; read -r _; }
+  pause() { otis-popup say "$1"; }
   [ "$kind" = retro ] && { pause "a retrospective's changes go in with a (into your checkout, uncommitted), then commit them on a branch of your own"; exit 0; }
   b=$(git branch --show-current)
   [ "$b" = "$(cat "$d/branch")" ] || { pause "fold from $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }

@@ -7,7 +7,7 @@
 # colored as the file it was, and nothing is written anywhere.
 spec=$1 p=$2 line=${3:-1}
 [ -n "$spec" ] && [ -n "$p" ] || exit 2
-git cat-file -e "$spec" 2>/dev/null || { printf '%s has no %s. press enter\n' "${spec%%:*}" "$p"; read -r _; exit 0; }
+git cat-file -e "$spec" 2>/dev/null || { otis-popup say "${spec%%:*} has no $p"; exit 0; }
 name=$(otis-edit --name)
 case $name in
   nvim|vim|vi) git show "$spec" | exec "$name" -M -R "+$line" -c "silent file $p" -c 'filetype detect' - ;;

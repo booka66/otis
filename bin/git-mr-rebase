@@ -25,7 +25,7 @@
 # all of it (git-stack --update), and gup with --update-refs moves a branch
 # stack.
 mr() { glab api "projects/:fullpath/merge_requests/$iid$1"; }
-pause() { printf '%s. press enter\n' "$1"; read -r _; }
+pause() { otis-popup say "$1"; }
 
 if [ "$1" = --check ]; then
   kind=$2 iid=$3

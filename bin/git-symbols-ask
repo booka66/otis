@@ -278,7 +278,7 @@ if [ "$mode" = send ]; then
   command -v claude >/dev/null || { printf '\001E this needs Claude Code (claude)\n' >> "$chat"; exit 0; }
   stale && { printf '\001T reading the change\n' >> "$chat"; gather; }
 else
-  command -v claude >/dev/null || { printf 'this needs Claude Code (claude). press enter\n'; read -r _; exit 0; }
+  command -v claude >/dev/null || { otis-popup say 'this needs Claude Code (claude)'; exit 0; }
   stale && { printf "${GK_CONTEXT}reading %s ...${GK_R}\n" "$label"; gather; }
 fi
 

@@ -16,9 +16,6 @@ while [ -e "$m" ] && kill -0 "$(cat "$m" 2>/dev/null)" 2>/dev/null; do
 done
 [ -s "$m.err" ] || exit 0
 if [ "$1" != quiet ]; then
-  printf 'the review worktree could not move to this MR:\n'
-  cat "$m.err"
-  printf 'press enter\n'
-  read -r _
+  otis-popup say "$(printf 'the review worktree could not move to this MR:\n'; cat "$m.err")"
 fi
 exit 1

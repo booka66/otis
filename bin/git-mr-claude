@@ -435,7 +435,7 @@ EOF
 fi
 
 # The picker's C: start a review after a confirm, then show its progress.
-missing=$(otis-agent-run --ready) || { printf '%s. press enter\n' "$missing"; read -r _; exit 0; }
+missing=$(otis-agent-run --ready) || { otis-popup say "$missing"; exit 0; }
 who=$(otis-agent-run --name)
 
 start() {

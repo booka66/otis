@@ -64,7 +64,7 @@ auto= run=
 [ "$1" = --run ] && { auto=1 run=1; shift; }
 iid=$1
 [ -n "$iid" ] || exit 0
-pause() { printf '%s. press enter\n' "$1"; read -r _; }
+pause() { otis-popup say "$1"; }
 json=$(mr "") || { pause "could not load !$iid"; exit 1; }
 sha=$(printf '%s' "$json" | jq -r .sha)
 printf '%s' "$json" | jq -r --arg main "$(otis-config main)" '

@@ -23,6 +23,8 @@
 #                either agent and what to change (git config otis.verifyRetro false turns it off); on by default
 #   verifyFix    exit 0 when a failed verification whose judge puts the cause in the change has the tester try a fix,
 #                a proposal if the judge accepts it (git config otis.verifyFix false turns it off); on by default
+#   verifyBreak  exit 0 when a verification has a fresh Claude look for what the change might break around it, and the
+#                tester check that too (git config otis.verifyBreak false turns it off); on by default
 #   checkInModel  the model the judge's looks in run on (a claude --model value, e.g. sonnet), for cost: otis.checkInModel, else the judge's own
 #   verifyCheckIn  minutes between the judge's looks at what V's tester is doing, 0 for never: otis.verifyCheckIn, else 5
 #   cursorModel  the model V's Cursor Cloud tester runs, an id from Cursor's GET /v1/models with its parameters after a colon
@@ -43,6 +45,9 @@
 #                none means the repo's own packages are linked and a third-party one added since is missed
 #   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim where it is
 #                installed, else $VISUAL, $EDITOR, vi
+#   terminalBrowser  exit 0 when w, p, h and the rest open in terminal-browser where it is
+#                installed, so the page takes this pane and ctrl-c comes back
+#                (git config otis.terminalBrowser false turns it off); on by default
 #   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the
 #                principle behind it, for you alone (git config --global otis.lessons true); off by default
 #   gitlab       exit 0 when origin is on GitLab: its host is <host>, or has gitlab in its name (ends the run, so ask it alone)
@@ -53,8 +58,8 @@
 #
 # Several keys at once print one value a line, in the order asked, which is one
 # process where a list script used to spend five: otis-config project url base.
-# Only keys that answer with a value; gitlab, lessons, verifyRetro and verifyFix answer
-# with an exit status, so they are asked on their own.
+# Only keys that answer with a value; gitlab, lessons, terminalBrowser, verifyRetro,
+# verifyFix and verifyBreak answer with an exit status, so they are asked on their own.
 #
 # A team keeps what is true of its repo for everyone (its CI's gate and deploy
 # jobs, its Datadog env, its Cursor environment) in .otis at the
@@ -67,8 +72,8 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the agent, the commands
 # Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix agent agentModel claudeCommand engine sideBySide worktrees install editor lessons'
-sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix'
+names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommand engine sideBySide worktrees install editor terminalBrowser lessons'
+sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak'
 nl='
 '
 shared() {
@@ -161,7 +166,7 @@ cfg_bool() {
   esac
 }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix agent agentModel claudeCommands engine sideBySide worktrees editor lessons gitlab'
+keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommands engine sideBySide worktrees editor terminalBrowser lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -223,6 +228,7 @@ one() {
     checkInModel) cfg checkInModel ;;
     verifyRetro) [ "$(cfg_bool verifyRetro || echo true)" = true ] ;;
     verifyFix) [ "$(cfg_bool verifyFix || echo true)" = true ] ;;
+    verifyBreak) [ "$(cfg_bool verifyBreak || echo true)" = true ] ;;
     agent) cfg agent || echo claude ;;
     agentModel) cfg agentModel ;;
     claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
@@ -232,6 +238,7 @@ one() {
     install) cfg install ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor ||
       { command -v nvim >/dev/null 2>&1 && echo nvim; } || echo "${VISUAL:-${EDITOR:-vi}}" ;;
+    terminalBrowser) [ "$(cfg_bool terminalBrowser || echo true)" = true ] ;;
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
     gitlab)
       origin_parts || exit 1
@@ -271,8 +278,8 @@ one() {
 # that differs between branches checked out there is the one thing this would
 # miss. A worktree asked on its own, with no environment from above, reads its
 # own .otis into its own cache (repo_facts).
-envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix agent agentModel engine sideBySide worktrees lessons gitlab'
-boolkeys='verifyRetro verifyFix lessons gitlab'
+envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons gitlab'
+boolkeys='verifyRetro verifyFix verifyBreak terminalBrowser lessons gitlab'
 cachename=otis-config-cache
 tab='	'
 
@@ -325,7 +332,7 @@ build_cache() {
   main >/dev/null
   unset_keys=
   for key in $envkeys; do
-    # gitlab, lessons, verifyRetro and verifyFix answer with a status alone and end the
+    # gitlab, lessons, terminalBrowser, verifyRetro, verifyFix and verifyBreak answer with a status alone and end the
     # run they are in, so those are asked in a subshell; the rest are asked
     # here, where what they work out is kept for the ones after.
     case " $boolkeys " in
@@ -450,7 +457,7 @@ case $1 in
     . "$(dirname "$0")/../share/palette.sh"
     for key in $keys; do
       case $key in
-        verifyRetro | verifyFix | lessons | gitlab) (one "$key") && v=yes || v=no ;;
+        verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons | gitlab) (one "$key") && v=yes || v=no ;;
         *) v=$(one "$key" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }') ;;
       esac
       s=$(source_of "$key")
@@ -522,7 +529,7 @@ $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
         grep -v -e '^#' -e '^$' "$f" | while IFS= read -r v; do git config "--$scope" --add "otis.$n" "$v"; done
         rm -f "$f" ;;
       # One of a few values: picked from them, not typed.
-      agent | engine | sideBySide | verifyRetro | verifyFix | lessons)
+      agent | engine | sideBySide | verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons)
         case $n in
           agent) c='claude	Claude Code
 codex	Codex
@@ -539,7 +546,7 @@ false	off' ;;
         [ -n "$v" ] && git config "--$scope" "otis.$n" "$v" ;;
       *)
         cur=$(cfg "$n")
-        v=$(zsh -fc 'bindkey -e; v=$1; vared -p "otis.$2 ($3, empty unsets)> " v </dev/tty >/dev/tty && print -r -- "$v"' _ "$cur" "$n" "$scope") || exit 0
+        v=$(otis-popup text "otis.$n ($scope, empty unsets)" "$cur") || exit 0
         if [ -n "$v" ]; then git config "--$scope" "otis.$n" "$v"
         else git config "--$scope" --unset-all "otis.$n" 2>/dev/null
         fi ;;
@@ -562,7 +569,7 @@ if [ $# -eq 0 ]; then
     --preview 'otis-config --about {2}' </dev/null >/dev/null
 fi
 # One key answers as it always has, exit status included, since gitlab,
-# lessons and verifyRetro are asked that way. Several print one value a line,
+# lessons, terminalBrowser and verifyRetro are asked that way. Several print one value a line,
 # a blank one for a setting with no value, so the answers line up with the
 # keys however many of them are unset.
 #

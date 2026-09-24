@@ -103,8 +103,10 @@ take() {
     if [[ $fs[1] == otis ]]; then
       case $fs[2] in
         (Claude|Codex|Cursor)" is working out"*) phase=plan ;;
-        "tester started"*|"tester running"*|"the last tester's VM"*|"starting the tester"*) phase=tester ;;
+        # The VM boots while the plan is made; the tester's phase is its brief.
+        "tester briefed"*|"tester started"*|"tester running"*) phase=tester ;;
         (Claude|Codex|Cursor)" is judging"*) phase=judge ;;
+        "a fresh "(Claude|Codex|Cursor)" is looking for what the change might break"*) ;;
         "a fresh "(Claude|Codex|Cursor)*) phase=retro ;;
         "judge steps in"*|"judge looked in"*) seen[checkin]=$#et ;;
       esac
@@ -133,15 +135,25 @@ grown() {
 
 # --- the run's shape, on the left ------------------------------------------------------------
 # A verification: its criteria (plan.json), each where it is.
-typeset -a cid cclaim cstate
+typeset -a cid cplain cclaim cstate
 integer ncrit=0
 criteria() {
-  cid=() cclaim=() cstate=()
+  cid=() cplain=() cclaim=() cstate=()
   [[ -s $d/plan.json ]] || return
   local line i r now=
+  local -a parts
   local -A res art
-  for line in ${(f)"$(jq -r '.criteria[] | "\(.id)\t\(.claim | gsub("[\t\r\n]+"; " "))"' $d/plan.json 2>/dev/null)"}; do
-    cid+=("${line%%	*}") cclaim+=("${line#*	}")
+  # plain is the claim in a reader's words, claim the tester's exact one; a
+  # run from before plain has only the claim.
+  # The breaker's checks (break.json) as soon as it has them, before they
+  # join the plan after the tester's first round.
+  local -a from=($d/plan.json)
+  [[ -s $d/break.json ]] && from+=($d/break.json)
+  for line in ${(f)"$(jq -rs '(.[0].criteria | map(.id)) as $have
+    | (.[0].criteria + ((.[1].attacks // []) | map(select(.id as $i | $have | index($i) | not))))[]
+    | "\(.id)\t\(.plain // .claim | gsub("[\t\r\n]+"; " "))\t\(.claim | gsub("[\t\r\n]+"; " "))"' $from 2>/dev/null)"}; do
+    parts=("${(@ps:\t:)line}")
+    cid+=("$parts[1]") cplain+=("$parts[2]") cclaim+=("$parts[3]")
   done
   ncrit=$#cid
   local v=$d/verdict.json
@@ -231,6 +243,9 @@ visible() {
     vis+=($i)
   done
 }
+# who_of <who>: the color of an agent's label (judge ›), one of its own, so
+# each reads apart; the rows keep their kind's (tools blue, otis's own orange).
+who_of() { case $1 in judge) REPLY=$A ;; tester) REPLY=$e"[${OTIS_T_MAIN}m" ;; breaker) REPLY=$X ;; retro) REPLY=$C ;; *) REPLY= ;; esac; }
 color_of() { case $1 in tool) REPLY=$EL ;; text) REPLY=$T ;; otis) REPLY=$Y ;; think) REPLY=$C ;; out) REPLY=$F ;; bad) REPLY=$X ;; *) REPLY=$T ;; esac; }
 # clock <epoch>: minutes and seconds since the run started, for a step.
 clock() { local s; [[ $1 == <-> ]] || { REPLY=; return }; (( s = $1 - ${started:-$1} )); REPLY="$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}"; }
@@ -257,13 +272,18 @@ left() {
       line= used=0
       [[ $filter == $cid[i] ]] && put "$A" "▌" || put "" " "
       put "$gc" "$g "; put "$B$A" "$cid[i]"; line+=$UB; put "" "  "
-      # The claim, two lines of it at most, its backticks off.
-      wrap "${cclaim[i]//\`/}" $(( w - 8 ))
+      # The claim in plain words, two lines of it at most, its backticks
+      # off; with more detail (v), the exact claim, all of it.
+      if (( detail )); then wrap "${cclaim[i]//\`/}" $(( w - 8 )); else wrap "${cplain[i]//\`/}" $(( w - 8 )); fi
       local cc=$T; [[ $cstate[i] == wait ]] && cc=$C
       put "$cc" "${reply[1]}"
       pad $w; L+=("$line")
-      t=${reply[2]}
-      if [[ -n $t ]]; then (( $#reply > 2 )) && { fit "$t" $(( w - 8 )); t=${REPLY%…}…; }; L+=("       $cc$t$R"); fi
+      if (( detail )); then
+        for t in "${(@)reply[2,-1]}"; do L+=("       $cc$t$R"); done
+      else
+        t=${reply[2]}
+        if [[ -n $t ]]; then (( $#reply > 2 )) && { fit "$t" $(( w - 8 )); t=${REPLY%…}…; }; L+=("       $cc$t$R"); fi
+      fi
       case $cstate[i] in
         now) L+=("       $Y◌ the tester is on it$R$C · $n step${${n:#1}:+s}$R") ;;
         in) L+=("       $C${cid[i]}.txt is in · $n step${${n:#1}:+s} · judged at the end$R") ;;
@@ -413,7 +433,9 @@ draw() {
       (( i == cur )) && put "$A" "▌" || put "" " "
       clock "$ea[i]"; put "$F" "${(l:5:: :)REPLY} "
       [[ -n $ec[i] && $ek[i] != otis ]] && put "$A" "${(r:3:: :)ec[i]}" || put "" "   "
-      cut "$t${et[i]}" $(( rw - used - 1 )); line+=$REPLY
+      s=${et[i]}
+      if [[ -n $ew[i] && $s == "$ew[i] › "* ]]; then who_of $ew[i]; s="$REPLY$ew[i] ›$R$t ${s#"$ew[i] › "}"; fi
+      cut "$t$s" $(( rw - used - 1 )); line+=$REPLY
       (( i == cur )) && { vw "$line"; used=$REPLY; pad $(( rw - 1 )); line=$BG${line//$R/$R$BG}$R; }
       right+=("$line$R")
     else right+=(""); fi
@@ -433,7 +455,7 @@ draw() {
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
     for k v in enter "this step in full" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
-      v "more or less detail: thinking, what tools returned" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective" f "the fix it proposes" \
+      v "more or less detail: thinking, what tools returned, each criterion's exact claim" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective" f "the fix it proposes" \
       l "all of it in less" o "the tester in Cursor" a "artifacts" h "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
@@ -513,7 +535,7 @@ act() {
     done
     s=${out[1,i-1]} out=${out[i+1,-1]}
     case $s in
-      execute\(*) screen_off; zsh -fc "${${s#execute\(}%\)}" <&$tty >&$tty 2>&1; screen_on; shown_rows=() ;;
+      execute\(*) run_tty "${${s#execute\(}%\)}" ;;
       execute-silent\(*) zsh -fc "${${s#execute-silent\(}%\)}" </dev/null >/dev/null 2>&1 ;;
       print\(again\)) code=3 ;;
       accept) quit 0 ;;
@@ -560,7 +582,7 @@ handle() {
     i) act --improve $d ;;
     f) act --fix $d ;;
     l) screen_off; git-claude-view --less $d <&$tty >&$tty; screen_on ;;
-    o) [[ -s $d/agent-url ]] && otis-open "$(<$d/agent-url)" >/dev/null 2>&1 ;;
+    o) [[ -s $d/agent-url ]] && act --open "$(<$d/agent-url)" ;;
     a) act --artifacts $d ;;
     h) act --html $d ;;
     p) act --attach $d ;;

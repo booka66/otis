@@ -200,7 +200,7 @@ case $mode in
       undecline "$n"
       exit 0
     fi
-    said() { printf '%s. press enter\n' "$1"; read -r _; exit 0; }
+    said() { otis-popup say "$1"; exit 0; }
     grep -qx "$n" "$d/folded" 2>/dev/null   && said "that one is folded into your commits already"
     grep -qx "$n" "$d/applied" 2>/dev/null  && said "that one is in your checkout; a takes it back out"
     grep -qx "$n" "$d/branched" 2>/dev/null && said "that one is on a branch of its own already"
@@ -215,7 +215,7 @@ case $mode in
     ;;
   --hunks)
     n=$2 full="$d/$(nn "$2").patch" hunks="$d/hunks/$(nn "$2")"
-    [ -s "$full" ] || { printf 'no change came of that one. press enter\n'; read -r _; exit 0; }
+    [ -s "$full" ] || { otis-popup say 'no change came of that one'; exit 0; }
     # Each hunk to its own file, <h>.patch, its file's header and the hunk; a
     # new, deleted or binary file is one hunk, whole. <h>.row is its picker row.
     rm -rf "$hunks" && mkdir -p "$hunks"
@@ -553,14 +553,13 @@ fi
 
 # C: start a run after a confirm; while it runs, its progress; once it is
 # done, the proposals.
-missing=$(otis-agent-run --ready) || { printf '%s. press enter\n' "$missing"; read -r _; exit 0; }
+missing=$(otis-agent-run --ready) || { otis-popup say "$missing"; exit 0; }
 who=$(otis-agent-run --name)
 
 start() {
   # No Claude run here makes a verification's fix, so none makes it again.
   if [ "$kind" = verified ]; then
-    printf '%s came from its tester; V verifies again, and tries a fix again if one is needed. press enter\n' "$label"
-    read -r _
+    otis-popup say "$label came from its tester; V verifies again, and tries a fix again if one is needed"
     return 1
   fi
   if [ "$kind" = mr ]; then

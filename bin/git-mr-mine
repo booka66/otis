@@ -15,7 +15,7 @@ claude=
 [ "$1" = --claude ] && { claude=1; shift; }
 iid=$1 target=${2:-$(otis-config main)} url=$3 b=$4 head=$5 base=$6 start=$7
 [ -n "$iid" ] && [ -n "$b" ] || exit 0
-pause() { printf '%s. press enter\n' "$1"; read -r _; }
+pause() { otis-popup say "$1"; }
 
 # Nothing to fetch when the MR's head (as gmr's list reports it) and its base
 # are here: your branch at it, the usual case, or git-mr-prefetch fetched it

@@ -540,7 +540,7 @@ run() {
     while [[ $arg == (#b)(*)\{([0-9]##)\}(*) ]]; do done_=${(qq)fld[$match[2]]}$match[3]$done_ arg=$match[1]; done
     arg=$arg$done_
     case $name in
-      execute) screen_off; sh -c "$arg" <&$tty >&$tty 2>&1; screen_on; refresh ;;
+      execute) run_tty "$arg" sh; refresh ;;
       execute-silent) sh -c "$arg" </dev/null >/dev/null 2>&1; refresh ;;
     esac
   done

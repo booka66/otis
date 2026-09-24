@@ -56,10 +56,32 @@ screen_start() {
 # this one, takes it over rather than entering it again, and draws over it
 # whole. The otis function leaves it when it is done. An accept leaves as
 # ever, since what it hands back may print.
+#
+# screen_on back: after run_tty. A command that left the frame up (it only
+# asked, otis-popup) finds it drawn again in place, every line rewritten
+# over what is there; a clear first would blink. One that left the alternate
+# screen (an editor) finds it entered and drawn whole, as ever.
 screen_on() {
   local alt=$e'[?1049h'
   [[ -n $OTIS_ALT && -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; alt=; }
-  stty -icanon -echo -isig min 1 time 0 <&$tty; print -nu $tty -- $alt$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; shown_rows=(); screen=1
+  stty -icanon -echo -isig min 1 time 0 <&$tty
+  shown_rows=()
+  if [[ $1 == back ]] && on_alt; then
+    # A line no frame has, a screen's worth: every line differs, none is
+    # skipped, and the screen is not taken as empty (which clears it).
+    alt=
+    repeat $H shown_rows+=($'\0')
+    shown_pane=("${shown_rows[@]}")
+  fi
+  print -nu $tty -- $alt$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; screen=1
+}
+# on_alt: the terminal says it is still on the alternate screen (DECRQM); one
+# that does not answer in a tenth of a second is taken as not.
+on_alt() {
+  local r= c
+  print -nu $tty -- $e'[?1049$p'
+  while zselect -t 10 -r $tty && sysread -s 1 -i $tty c; do r+=$c; [[ $c == y ]] && break; done
+  [[ $r == *'?1049;1$y' ]]
 }
 # screen_off [keep]: keep, the alternate screen left up (above).
 screen_off() {
@@ -70,9 +92,41 @@ screen_off() {
   fi
   stty $saved <&$tty; screen=0
 }
+# run_tty <command> [<shell>]: a command on the terminal, the screen's frame
+# left up under it rather than the terminal's own screen, so what the command
+# asks (otis-popup, git-confirm) goes in a box over the frame: the frame is
+# drawn whole into a file for it to draw the box over (OTIS_FRAME). Whatever
+# else the command prints goes over the frame from its last line, and one
+# that takes the whole screen (an editor, a pager, another screen) takes it
+# as ever. The screen is back, drawn whole, when it is done. INT is ignored
+# meanwhile so ctrl-c belongs to the command: the screen's trap would end the
+# whole screen, and a command that signals INT as it starts
+# (terminal-browser) would only blip and never take the pane.
+run_tty() {
+  screen_hold $st/frame
+  trap '' INT
+  OTIS_FRAME=$st/frame ${=2:-zsh -f} -c "$1" <&$tty >&$tty 2>&1
+  trap 'quit 1' INT
+  rm -f -- $st/frame
+  screen_on back
+}
+# screen_hold <file>: the frame drawn whole into the file and left up, the
+# terminal as the screen found it otherwise, for a command to run over.
+screen_hold() {
+  local fd=$tty
+  exec {tty}>$1
+  shown_rows=() shown_pane=(); draw
+  exec {tty}>&-; tty=$fd
+  print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e"[$H;1H"
+  stty $saved <&$tty; screen=0
+}
+# A screen that goes back to a command run over another's frame (git-verify
+# asking after its run's screen says r) leaves its own frame up in that one's
+# place, so what the command asks next goes over what you were looking at.
 quit() {
   if (( screen )); then
-    if (( ${1:-0} == 130 )); then screen_off keep; else screen_off; fi
+    if [[ -n $OTIS_FRAME && -e $OTIS_FRAME ]] && (( $#shown_rows )); then screen_hold $OTIS_FRAME
+    elif (( ${1:-0} == 130 )); then screen_off keep; else screen_off; fi
   fi
   (( $+functions[at_leave] )) && at_leave
   rm -rf -- $st

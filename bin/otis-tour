@@ -956,7 +956,7 @@ part_verify_setup() {
     else
       status note verify-env "no .agents/skills/verify-env/SKILL.md here, so the tester has only AGENTS.md or the README"
     fi
-    for v in cursorEnv cursorModel checkInModel verifyCheckIn verifyRetro verifyFix; do
+    for v in cursorEnv cursorModel checkInModel verifyCheckIn verifyRetro verifyFix verifyBreak; do
       status note otis.$v "${$(cd $here && git config --get otis.$v):-not set}"
     done
   else
@@ -1083,6 +1083,7 @@ part_settings() {
   setting lintCommand "lint run before F folds $who's fixes in"
   setting lessons "true: each of $who's comments and fixes also teaches the principle behind it, for you alone"
   setting editor "what opens files from the pickers: cursor, code, zed, nvim"
+  setting terminalBrowser "true: w, p and h open in terminal-browser where it is installed, in this pane; ctrl-c comes back"
   setting theme "otis-theme shows each theme on otis's own rows and keeps the one you pick"
   setting sideBySide "always, or auto from 120 columns: diffs side by side"
   setting branchPrefix "the <prefix>/ that gbn and gwn put on a branch"

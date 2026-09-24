@@ -67,6 +67,8 @@ h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacin
 .claim-text ul { font-weight: 500; }
 .claim-body { margin: 14px 0 0 40px; }
 .finding { color: var(--soft); font-size: 15px; }
+.exact { margin-top: 10px; color: var(--soft); }
+.exact b { display: block; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--faint); }
 
 .shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-top: 16px; }
 .shots button { all: unset; cursor: zoom-in; display: block; border-radius: 8px; overflow: hidden; border: 1px solid var(--rule); background: var(--surface); }
@@ -121,15 +123,21 @@ def claim($plan_by; $file):
   | ($c.artifacts // [] | map($file[.] // empty)) as $ev
   | ($ev | map(select(.kind == "image"))) as $shots
   | ($ev | map(select(.kind == "text"))) as $out
+  # A run from before plain and saw has only the precise claim and evidence,
+  # so they stay out front.
+  | ($plan_by[$c.id].plain // "") as $plain
+  | ($c.saw // "") as $saw
   | "<article class=\"claim \($c.result | state)\" id=\"\($c.id | @html)\">
 <div class=\"claim-head\"><div class=\"dot\" aria-hidden=\"true\">\($c.result | mark)</div><div>
-<div class=\"cid\">\($c.id | @html) · <b>\($c.result | said)</b></div>
-<div class=\"claim-text\">\($plan_by[$c.id].claim | md)</div></div></div>
+<div class=\"cid\">\($c.id | @html)\(if $plan_by[$c.id].kind == "attack" then " · what it might break" else "" end) · <b>\($c.result | said)</b></div>
+<div class=\"claim-text\">\(if $plain != "" then $plain | md else $plan_by[$c.id].claim | md end)</div></div></div>
 <div class=\"claim-body\">
-<div class=\"finding\">\($c.evidence | md)</div>
+<div class=\"finding\">\(if $saw != "" then $saw | md else $c.evidence | md end)</div>
 \(if ($shots | length) > 0 then "<div class=\"shots\">" + ($shots | map("<button type=\"button\" title=\"\(.name | @html)\"><img loading=\"lazy\" src=\"\(.src)\" alt=\"\(.name | @html)\"></button>") | join("")) + "</div>" else "" end)
 \($ev | map(select(.kind == "video")) | if length > 0 then "<div class=\"clips\">" + (map("<video controls preload=\"metadata\" src=\"\(.src)\" title=\"\(.name | @html)\"></video>") | join("")) + "</div>" else "" end)
-\(if ($out | length) > 0 then "<details><summary>Output · \($out | length) file\(if ($out | length) == 1 then "" else "s" end)</summary>"
+\(if ($out | length) > 0 or $plain != "" or $saw != "" then "<details><summary>Details\(if ($out | length) > 0 then " · \($out | length) file\(if ($out | length) == 1 then "" else "s" end)" else "" end)</summary>"
+  + (if $plain != "" then "<div class=\"exact\"><b>Exactly</b>\($plan_by[$c.id].claim | md)</div>" else "" end)
+  + (if $saw != "" then "<div class=\"exact\"><b>Proof</b>\($c.evidence | md)</div>" else "" end)
   + ($out | map("<div class=\"file\"><div class=\"file-name\">\(.name | @html)<span>\(.size | size)\(if .cut then ", cut to what matters and the end" else "" end)</span></div><pre>\(.text | @html)</pre></div>") | join(""))
   + "</details>" else "" end)
 \(if ($ev | length) == 0 then "<p class=\"none\">Nothing the tester saved shows this.</p>" else "" end)
@@ -155,7 +163,7 @@ def fixed($plan_by; $file):
          | {after: ., before: $file[.name | sub($tag; "")]} | select(.before)]
       | sort_by(.after | rank)
       | if length == 0 then "" else
-          "<div class=\"fix-claim\"><div class=\"cid\">\($c.id | @html)</div><div class=\"claim-text\">\($plan_by[$c.id].claim | md)</div>"
+          "<div class=\"fix-claim\"><div class=\"cid\">\($c.id | @html)</div><div class=\"claim-text\">\($plan_by[$c.id] | .plain // .claim | md)</div>"
           + (map(pair(.before; .after)) | join("")) + "</div>"
         end) | join(""))
   + (if $file["fix\($attempt)-test-before.txt"] and $file["fix\($attempt)-test-after.txt"] then

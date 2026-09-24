@@ -62,8 +62,7 @@ case $1 in
   *)
     iid=$1
     if [ -z "$iid" ]; then
-      printf 'no MR for this branch yet, so there is nothing to label. press enter\n'
-      read -r _
+      otis-popup say 'no MR for this branch yet, so there is nothing to label'
       exit 0
     fi
     toggle="execute-silent(git-mr-labels --toggle $iid {2} {3})+reload(git-mr-labels --list $iid)"

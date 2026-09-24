@@ -12,16 +12,14 @@ b=$1
 [ -n "$b" ] || exit 0
 
 base=$(otis-config base)
-[ "$base" != HEAD ] || { printf 'no %s to compare against. press enter\n' "$(otis-config main)"; read -r _; exit 0; }
+[ "$base" != HEAD ] || { otis-popup say "no $(otis-config main) to compare against"; exit 0; }
 
 n=$(git rev-list --count "$base..$b" 2>/dev/null) || {
-  printf '%s is not a branch here. press enter\n' "$b"
-  read -r _
+  otis-popup say "$b is not a branch here"
   exit 0
 }
 if [ "$n" -eq 0 ]; then
-  printf '%s has nothing that %s does not. press enter\n' "$b" "$base"
-  read -r _
+  otis-popup say "$b has nothing that $base does not"
   exit 0
 fi
 

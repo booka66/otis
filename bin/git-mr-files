@@ -153,7 +153,7 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
   --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "m:execute(gl $range)" \
-  --bind "w:execute-silent(otis-open '$url')" \
+  --bind "w:transform(otis-open --fzf '$url')" \
   "$@" \
   --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12}" </dev/null)
 # u found a push: the same review, at the MR's new head and base. print()

@@ -74,8 +74,7 @@ case $1 in
   *)
     iid=$1
     if [ -z "$iid" ]; then
-      printf 'no MR for this branch yet, so there is nobody to request a review from. press enter\n'
-      read -r _
+      otis-popup say 'no MR for this branch yet, so there is nobody to request a review from'
       exit 0
     fi
     toggle="execute-silent(git-mr-reviewers --toggle $iid {2} {3})+reload(git-mr-reviewers --list $iid {q})"

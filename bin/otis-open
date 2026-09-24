@@ -1,7 +1,67 @@
 #!/bin/sh
-# otis-open <url>: open a link in the browser, on macOS (open) or Linux
-# (xdg-open), for the pickers' w and p keys.
+# otis-open [--fzf] <url>: open a link. With --fzf, print the picker action
+# instead: execute(...) when the page takes this pane (terminal-browser),
+# execute-silent(...) when it opens in the desktop browser, for the pickers'
+# w, p and h keys.
+#
+# otis.terminalBrowser (on by default) uses terminal-browser where it is
+# installed, so the page takes this pane and ctrl-c comes back. A directory
+# or a video or image still opens in its app.
+fzf=
+[ "$1" = --fzf ] && { fzf=1; shift; }
 [ -n "$1" ] || exit 0
+
+# The pane, not the desktop: the setting is on (the default), the command is
+# there, and this is a page rather than a folder or a recording.
+in_pane() {
+  command -v terminal-browser >/dev/null 2>&1 || return 1
+  otis-config terminalBrowser || return 1
+  [ -d "$1" ] && return 1
+  case $1 in
+    *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) return 1 ;;
+  esac
+  return 0
+}
+
+if [ -n "$fzf" ]; then
+  q=$(printf '%s' "$1" | sed "s/'/'\\\\''/g")
+  if in_pane "$1"; then
+    printf "execute(otis-open '%s')\n" "$q"
+  else
+    printf "execute-silent(otis-open '%s')\n" "$q"
+  fi
+  exit 0
+fi
+
+if in_pane "$1"; then
+  # terminal-browser answers a page asking for the local network "denied",
+  # and Okta FastPass asks before it talks to Okta Verify on this machine,
+  # so sign-in stopped there. Its fallback, the Open Okta Verify button, is
+  # a com-okta-authenticator: link, and Electron asks the same handler
+  # (openExternal) before it hands a link to macOS. Grant both to Okta's
+  # pages alone: any other page could probe what listens here or open apps.
+  # A brew upgrade takes it out again, so this looks each time, and puts
+  # this version in place of an older one; the daemon reads it when it
+  # starts (terminal-browser shutdown, once).
+  js=$(dirname "$(readlink -f "$(command -v terminal-browser)")")/../browser/dist/main.js
+  grep -q 'otis: okta 2' "$js" 2>/dev/null ||
+    perl -0777 -pi -e 's{\n[ \t]*/\* otis: okta[^\n]*}{}; s{function granted\(contents, permission\) \{}{$&\n      /* otis: okta 2 */ if (/^((local|loopback)-network|openExternal)/.test(permission) && /(^|\.)okta\.com\$/.test(new URL(contents?.getURL() || "about:blank").hostname)) return true;}' "$js" 2>/dev/null
+  # A picker hands its commands the terminal as /dev/tty, so `tty` says
+  # /dev/tty, and that is the name terminal-browser gives its daemon: a name
+  # that means nothing there, so the page blipped and was gone. Run it on
+  # the pane's own device, which `ps` names, so the daemon draws on it.
+  t=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+  case $t in
+    '' | '?' | '??') ;;
+    *)
+      # Signed in as Zen is, where it has cookies for the site (otis-cookies).
+      case $1 in
+        http://* | https://*) otis-cookies --tty "/dev/$t" "$1" </dev/null >/dev/null 2>&1 & ;;
+      esac
+      exec terminal-browser open "$1" <"/dev/$t" >"/dev/$t" 2>&1 ;;
+  esac
+  exec terminal-browser open "$1"
+fi
 if command -v open >/dev/null 2>&1 && [ "$(uname)" = Darwin ]; then
   exec open "$1"
 elif command -v xdg-open >/dev/null 2>&1; then

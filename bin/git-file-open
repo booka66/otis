@@ -32,8 +32,7 @@ case $st in
     ;;
 esac
 if [ ! -e "$p" ]; then
-  printf '%s is gone from the working tree now. press enter\n' "$p"
-  read -r _
+  otis-popup say "$p is gone from the working tree now"
   exit 0
 fi
 if [ -n "$off" ]; then

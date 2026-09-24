@@ -36,17 +36,24 @@ case $1 in
       echo "otis-theme: no theme called $name; using terminal (otis-theme lists them)" >&2
       name=terminal
     fi
+    # A syntax theme this delta does not have (Catppuccin before delta 0.19,
+    # which is what Debian and Ubuntu ship) would warn on every diff: ansi then.
+    syntax=$(sed -n 's/^delta_syntax=//p' "$dir/$name")
+    case $syntax in '' | ansi) syntax= ;; *)
+      delta --list-syntax-themes 2>/dev/null | cut -f2 | grep -qxF "$syntax" && syntax= || syntax=ansi ;;
+    esac
     # Every key, empty where the theme has none, so one theme loaded over
     # another leaves nothing of the first behind. One awk: a shell pays for
     # this once when it starts, and --env-fish says it in fish's own syntax,
     # which cannot read an export.
-    awk -v keys="$keys" -v name="$name" -v want="$OTIS_THEME" -v fish="$fish" '
+    awk -v keys="$keys" -v name="$name" -v want="$OTIS_THEME" -v fish="$fish" -v syntax="$syntax" '
       function set(k, v) {
         if (fish) printf "set -gx OTIS_T_%s \047%s\047\n", toupper(k), v
         else printf "export OTIS_T_%s=\047%s\047\n", toupper(k), v
       }
       { i = index($0, "="); if (i > 1) { k = substr($0, 1, i - 1); if (!(k in v)) v[k] = substr($0, i + 1) } }
       END {
+        if (syntax != "") v["delta_syntax"] = syntax
         n = split(keys, K, " ")
         for (j = 1; j <= n; j++) set(K[j], v[K[j]])
         set("name", name)

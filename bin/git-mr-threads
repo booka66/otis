@@ -287,7 +287,7 @@ case $mode in
       --bind "d:execute(git-mr-say --delete $iid $range {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
       --bind "enter:execute(if [ -n {3} ]; then git-commit-open $range {3} {4}; fi)" \
       --bind "S:execute(git-mr-submit $iid $range ${GMR_KIND:-review})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
-      --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\")" \
+      --bind "w:transform(otis-open --fzf \"\$(git-mr-url $iid)\")" \
       --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
       --preview "git-mr-threads --show {2} $range" </dev/null >/dev/null
     exit 0
@@ -303,7 +303,7 @@ case $mode in
       --bind "e:execute(git-mr-say --edit $iid $range {2})+reload($list)" \
       --bind "d:execute(git-mr-say --delete $iid $range {2})+reload($list)" \
       --bind "r:transform(git-mr-threads --resolve $iid $range {2} {3} {4})" \
-      --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\"#note_{5})" \
+      --bind "w:transform(otis-open --fzf \"\$(git-mr-url $iid)#note_{5}\")" \
       --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
       --preview "git-mr-threads --show {2}" </dev/null >/dev/null
     exit 0

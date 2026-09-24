@@ -10,6 +10,4 @@ if out=$(glab mr approve "$iid" --sha "$head" 2>&1); then
   git-mr-since record "$iid" "$head" "$base"
   exit 0
 fi
-printf '%s\n' "$out" | tail -3
-printf 'approve failed. press enter\n'
-read -r _
+otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"

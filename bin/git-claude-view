@@ -29,7 +29,8 @@
 # v shows or hides the detail (thinking, what tools returned), enter and l
 # open a step, or the whole progress, in less, o opens the tester in Cursor,
 # a lists what the run brought back (git-verify --artifacts), h opens a
-# verification's report in the browser (git-verify-html), and p links it
+# verification's report in the browser (git-verify-html; terminal-browser
+# where otis.terminalBrowser is on), and p links it
 # from the MR's description (git-verify --attach).
 if [ "$1" = --events ]; then
   exec jq --unbuffered -c --arg who "$2" '
@@ -55,10 +56,11 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 
 # Everything the run runs, and what that runs (claude's own tools too), but
-# not the run itself, which then sees stopping and finishes.
+# not the run itself, which then sees stopping and finishes. The recursion is
+# in a subshell: sh's $c is global, and the call would leave it the last leaf.
 stop_children() {
   for c in $(pgrep -P "$1"); do
-    stop_children "$c"
+    (stop_children "$c")
     kill -TERM "$c" 2>/dev/null
   done
 }
@@ -261,7 +263,10 @@ case $1 in
     d=$2
     [ -s "$d/verdict.json" ] || exec git-fzf-note "no verdict yet, so no report"
     [ -s "$d/report.html" ] || git-verify-html "$d" || exec git-fzf-note "could not write the report"
-    echo "execute-silent(otis-open '$d/report.html')" ;;
+    otis-open --fzf "$d/report.html" ;;
+  # --open <url>: o, the tester in Cursor.
+  --open)
+    otis-open --fzf "$2" ;;
   # --attach <dir>: p, only on a verification that has a verdict.
   --attach)
     d=$2
@@ -290,7 +295,7 @@ case $1 in
       --bind "c:transform(git-claude-view --continue '$d')" \
       --bind "l:execute(git-claude-view --less '$d')" \
       --bind "i:transform(git-claude-view --improve '$d')" \
-      --bind "o:execute-silent([ -s '$d/agent-url' ] && otis-open \"\$(cat '$d/agent-url')\")" \
+      --bind "o:transform([ -s '$d/agent-url' ] && otis-open --fzf \"\$(cat '$d/agent-url')\")" \
       --bind "a:transform(git-claude-view --artifacts '$d')" \
       --bind "h:transform(git-claude-view --html '$d')" \
       --bind "p:transform(git-claude-view --attach '$d')" \

@@ -11,6 +11,9 @@ unset GIT_FZF_STATE
 # The tests check hues, so they run in one theme whatever yours is.
 export OTIS_THEME=gruvbox
 eval "$(otis-theme --env)"
+# Nor on the host's pager: the zpty tests are a terminal, and a pager that
+# waits for a key (more, without less installed) would hang them.
+export GIT_PAGER=cat
 failed=0 passed=0
 
 # expect <name> <got> <want>
@@ -80,6 +83,10 @@ expect md/fence-kept "$(md_fn '```ts\037const a: Array<string> = [];\037```')" "
 
 # --- a throwaway repo for the scripts that read git
 tmp=$(mktemp -d) && tmp=$(cd "$tmp" && pwd -P) || exit 1
+# Editors that echo what they were asked, so the tests that pick nvim do not
+# depend on this machine having it.
+mkdir -p "$tmp/eds"
+for e in cursor nvim zed hx; do printf '#!/bin/sh\necho "$@"\n' > "$tmp/eds/$e"; chmod +x "$tmp/eds/$e"; done
 trap 'rm -rf "$tmp"' EXIT
 # 220 columns: the pickers sit side by side from 120 up (git-fzf), so the row
 # scripts get 45% of this, the same budget the rows had back when a 100-column
@@ -118,6 +125,10 @@ rm .otis
 expect config/lessons-default "$(otis-config lessons; echo $?)" "1"
 git config otis.lessons true
 expect config/lessons-on "$(otis-config lessons; echo $?)" "0"
+expect config/terminalBrowser-default "$(otis-config terminalBrowser; echo $?)" "0"
+git config otis.terminalBrowser false
+expect config/terminalBrowser-off "$(otis-config terminalBrowser; echo $?)" "1"
+git config --unset otis.terminalBrowser
 git config otis.host code.example.com; git config otis.project other/path; git config otis.mainBranch develop
 expect config/host-set "$(otis-config host)" "code.example.com"
 expect config/project-set "$(otis-config project)" "other/path"
@@ -167,7 +178,30 @@ expect config/worktree-not-main "$(cached deployJob)" "deploy"
 git worktree remove --force "$tmp/cfg-wt"
 # The editor follows $OTIS_EDITOR, so it is never one of the answers kept.
 expect config/cache-editor-env "$(OTIS_EDITOR=chosen cached editor)" "chosen"
-expect config/cache-editor-none "$(cached editor)" "nvim"
+expect config/cache-editor-none "$(PATH=$tmp/eds:$PATH cached editor)" "nvim"
+expect config/cache-env-tb "$(cached terminalBrowser; echo $?)" "0"
+# A repo's .otis cannot choose whether pages take this pane.
+printf '[otis]\n\tterminalBrowser = false\n' > .otis
+expect config/repo-file-not-terminalBrowser "$(otis-config terminalBrowser; echo $?)" "0"
+rm -f .otis
+
+# otis-open: terminal-browser takes the pane when the setting is on and it is
+# on PATH; a folder or a recording still opens in its app.
+tb=$tmp/tb; mkdir -p "$tb"
+printf '#!/bin/sh\nprintf "tb %%s\\n" "$*"\n' > "$tb/terminal-browser"
+chmod +x "$tb/terminal-browser"
+openpath=$root/bin:/usr/bin:/bin
+tbpath=$tb:$root/bin:/usr/bin:/bin
+expect open/fzf-url "$(PATH=$openpath otis-open --fzf 'https://example.com/mr')" "execute-silent(otis-open 'https://example.com/mr')"
+expect open/fzf-tb "$(PATH=$tbpath otis-open --fzf 'https://example.com/mr')" "execute(otis-open 'https://example.com/mr')"
+expect open/fzf-html "$(PATH=$tbpath otis-open --fzf /tmp/report.html)" "execute(otis-open '/tmp/report.html')"
+opend=$tmp/open-dir; mkdir -p "$opend"
+expect open/fzf-dir "$(PATH=$tbpath otis-open --fzf "$opend")" "execute-silent(otis-open '$opend')"
+expect open/fzf-mp4 "$(PATH=$tbpath otis-open --fzf /tmp/c1.mp4)" "execute-silent(otis-open '/tmp/c1.mp4')"
+git config otis.terminalBrowser false
+expect open/fzf-off "$(PATH=$tbpath otis-open --fzf 'https://example.com/mr')" "execute-silent(otis-open 'https://example.com/mr')"
+git config --unset otis.terminalBrowser
+expect open/tb "$(PATH=$tbpath otis-open 'https://example.com/mr')" "tb open https://example.com/mr"
 
 # --- otis-claude-gate: one git-remote-run of a named check, nothing around it
 gate() { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | otis-claude-gate >/dev/null 2>&1; echo $?; }
@@ -190,7 +224,7 @@ git config --unset otis.worktrees
 rows=$(printf 'x\ta.ts\ny\tb.spec.ts\nz\tsrc/c.test.tsx\n')
 expect test-files/count "$(printf '%s\n' "$rows" | cut -f2 | git-test-files count)" "2"
 expect test-files/filter-shown "$(printf '%s\n' "$rows" | git-test-files filter 2 | wc -l | tr -d ' ')" "3"
-expect test-files/section-heading "$(printf '%s\n' "$rows" | git-test-files filter --section 2 | strip | sed -n 2p | cut -c1-15)" "── 2 test files"
+expect test-files/section-heading "$(printf '%s\n' "$rows" | git-test-files filter --section 2 | strip | sed -n 2p | sed -E 's/^(.{15}).*/\1/')" "── 2 test files"
 cfg=$(printf 'x\tsrc/a.ts\ny\tsrc/BUILD.bazel\nz\tpackage.json\nw\tlibs/tsconfig.build.json\nv\tlibs.bzl\nu\tpackage-json.ts\n')
 expect test-files/config-heading "$(printf '%s\n' "$cfg" | git-test-files filter --section 2 | strip | sed -n 3p | sed 's/ ·.*//')" "── 4 build and config files"
 expect test-files/config-not-source "$(printf '%s\n' "$cfg" | git-test-files filter --section 2 | sed -n 2p | cut -f2)" "package-json.ts"
@@ -257,7 +291,7 @@ JSON
 mkdir -p "$tmp/dl"
 expect deploy-list/fields "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" | awk -F'\t' '{ print NF }' | sort -u)" "7"
 expect deploy-list/order "$(git-deploy-list --from "$tmp/deploys.json" | cut -f4 | tr '\n' ' ')" "30 20 10 "
-expect deploy-list/glyphs "$(git-deploy-list --from "$tmp/deploys.json" | strip | cut -c3 | tr '\n' ' ')" "◐ ⊘ ✓ "
+expect deploy-list/glyphs "$(git-deploy-list --from "$tmp/deploys.json" | strip | sed -E 's/^..(.).*/\1/' | tr '\n' ' ')" "◐ ⊘ ✓ "
 expect deploy-list/strip "$(git-deploy-list --from "$tmp/deploys.json" --strip | strip)" "✓⊘◐"
 expect deploy-list/pos "$(git-deploy-list --from "$tmp/deploys.json" --pos 20)" "pos(2)"
 expect deploy-list/mrs "$(git-deploy-list --from "$tmp/deploys.json" | strip | head -1 | grep -o '![0-9]*' | tr '\n' ' ')" "!7 !9 "
@@ -565,7 +599,7 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
     expect callers/package-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 == "package" { print $1 ":" $12 }' | sed 's/^ *//')" "fx:lib.ts#run>callers>fx"
     expect callers/preview-errors "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | sed -n 1p | grep -c 'type error')" "1"
     # The error under its line, and the preview scrolled to it on first view.
-    expect callers/preview-inline "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -A1 '^ *5 ' | tail -1 | sed 's/^ *┃ //' | cut -c1-30)" "✗ Expected 2 arguments, but go"
+    expect callers/preview-inline "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" app.ts file 3 6 'lib.ts#run>callers>app.ts#main' | strip | grep -A1 '^ *5 ' | tail -1 | sed 's/^ *┃ //' | sed -E 's/^(.{30}).*/\1/')" "✗ Expected 2 arguments, but go"
     expect callers/preview-scrolled "$(cat "$tmp/symst/off.lib.ts#run>callers>app.ts#main" 2>/dev/null | grep -c '^[0-9]')" "1"
     rm -f "$tmp/symst/off.lib.ts#run>callers>app.ts#main"
     # Claude's fix for it under the error, from a cache written by hand,
@@ -1059,9 +1093,7 @@ expect shell/bash-clash "$(bash --norc --noprofile -c "shopt -s expand_aliases; 
 function"
 
 # --- otis-edit: nvim unless told otherwise, and each editor's way to a line
-mkdir -p "$tmp/eds"
-for e in cursor nvim zed hx; do printf '#!/bin/sh\necho "$@"\n' > "$tmp/eds/$e"; chmod +x "$tmp/eds/$e"; done
-expect edit/default "$(otis-edit --name)" "nvim"
+expect edit/default "$(PATH=$tmp/eds:$PATH otis-edit --name)" "nvim"
 # Without nvim, the editor you already have.
 expect edit/default-without-nvim "$(EDITOR=nano VISUAL= PATH=$root/bin:/usr/bin:/bin otis-config editor)" "nano"
 expect edit/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-edit -R +3 -- a.ts)" "-R +3 -- a.ts"
@@ -1452,6 +1484,7 @@ expect complete/paths "$(otis-complete ga | sed -n 1p)" "@files"
 expect complete/no-paths-for-a-ref "$(otis-complete gl | grep -c '@files')" "0"
 expect complete/help-everywhere "$(otis-complete gp)" "--help"
 expect complete/settings "$(otis-complete otis-config | grep -cx deployJob)" "1"
+expect complete/settings-tb "$(otis-complete otis-config | grep -cx terminalBrowser)" "1"
 expect complete/themes "$(otis-complete otis-theme | grep -cx gruvbox)" "1"
 expect complete/unknown "$(otis-complete nope)" ""
 

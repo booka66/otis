@@ -1,0 +1,129 @@
+#!/bin/sh
+# otis-cookies [--tty <device>] [url]: sign terminal-browser in the way Zen
+# is. A passkey in 1Password cannot sign terminal-browser in (it is not a
+# browser macOS hands passkeys to), but Zen can, and what the sign-in
+# leaves is cookies, kept in its profile (cookies.sqlite, and its session
+# for those that end with the browser). This copies the ones for the page's
+# site into the browser in this terminal tab and opens the page again. With
+# no url, the page is the one that browser has open. With --tty, the browser
+# is the one on that terminal, waited for while it starts: otis-open runs
+# this beside the page it opens, so the page comes up signed in.
+#
+# Zen is Firefox underneath: the cookies are not encrypted, and the database
+# is locked while Zen runs, so a copy is read, with its write-ahead log.
+tty=
+[ "$1" = --tty ] && { tty=$2; shift 2; }
+url=${1:-$(terminal-browser action -- get url 2>/dev/null)}
+[ -n "$url" ] || { echo "otis-cookies: no terminal-browser open in this tab" >&2; exit 1; }
+host=$(printf '%s' "$url" | sed 's|^[a-zA-Z-]*://||; s|[/:?#].*||')
+
+# The profile Zen is using is the one whose cookies changed last.
+db=$(ls -t "$HOME/Library/Application Support/zen/Profiles"/*/cookies.sqlite \
+  "$HOME/.zen"/*/cookies.sqlite 2>/dev/null | head -1)
+[ -n "$db" ] || { echo "otis-cookies: no Zen profile found" >&2; exit 1; }
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+chmod 700 "$tmp"
+cp "$db" "$tmp/c.sqlite"
+[ -f "$db-wal" ] && cp "$db-wal" "$tmp/c.sqlite-wal"
+
+# The site's own cookies and those of the domains above it (a sign-in on
+# app.example.com is often kept on .example.com). One of each: the default
+# container's over a container tab's, else the one used last; none from a
+# private window.
+h=$(printf '%s' "$host" | sed "s/'/''/g")
+sqlite3 -json "$tmp/c.sqlite" "
+  SELECT name, value, host, path, expiry, isSecure, isHttpOnly, sameSite FROM (
+    SELECT *, row_number() OVER (PARTITION BY host, path, name
+      ORDER BY originAttributes <> '', lastAccessed DESC) AS n
+    FROM moz_cookies
+    WHERE ltrim(host, '.') = '$h' OR '$h' LIKE '%.' || ltrim(host, '.'))
+  WHERE n = 1 AND originAttributes NOT LIKE '%privateBrowsingId=1%'" > "$tmp/db.json" || exit 1
+
+# A cookie that ends with the browser (GitLab's sign-in is one) is never in
+# cookies.sqlite: Firefox keeps it in its session, written to
+# recovery.jsonlz4 while it runs (sessionstore.jsonlz4 once it has quit):
+# JSON as one LZ4 block after "mozLz40\0" and its length. Picked the same way.
+dir=$(dirname "$db")
+session=$dir/sessionstore-backups/recovery.jsonlz4
+[ -f "$session" ] || session=$dir/sessionstore.jsonlz4
+python3 - "$session" "$host" > "$tmp/session.json" <<'EOF' || exit 1
+import json, sys
+
+def unlz4(src, size):
+    out = bytearray(); i = 0
+    while i < len(src):
+        tok = src[i]; i += 1
+        n = tok >> 4
+        if n == 15:
+            while True:
+                b = src[i]; i += 1; n += b
+                if b != 255: break
+        out += src[i:i + n]; i += n
+        if i >= len(src): break
+        off = src[i] | src[i + 1] << 8; i += 2
+        m = tok & 15
+        if m == 15:
+            while True:
+                b = src[i]; i += 1; m += b
+                if b != 255: break
+        m += 4
+        s = len(out) - off
+        for k in range(m): out.append(out[s + k])
+    return bytes(out[:size])
+
+path, host = sys.argv[1:]
+try:
+    raw = open(path, 'rb').read()
+except OSError:
+    print('[]'); sys.exit()
+cookies = json.loads(unlz4(raw[12:], int.from_bytes(raw[8:12], 'little'))).get('cookies', [])
+# A container tab's first, so the default container's, later, wins.
+cookies.sort(key=lambda c: c.get('originAttributes', {}).get('userContextId', 0) == 0)
+rows = {}
+for c in cookies:
+    d = c.get('host', '').lstrip('.')
+    if c.get('originAttributes', {}).get('privateBrowsingId') or not (host == d or host.endswith('.' + d)):
+        continue
+    rows[(c['host'], c.get('path', '/'), c['name'])] = {
+        'name': c['name'], 'value': c.get('value', ''), 'host': c['host'], 'path': c.get('path', '/'),
+        'expiry': 0, 'isSecure': int(bool(c.get('secure'))), 'isHttpOnly': int(bool(c.get('httponly'))),
+        'sameSite': c.get('sameSite', 0)}
+print(json.dumps(list(rows.values())))
+EOF
+
+# Both, the saved one first where they name the same cookie. Firefox's
+# expiry was seconds and is now milliseconds, and 0 is the session's; its
+# sameSite is 0 none, 1 lax, 2 strict, and Chromium refuses None without
+# Secure, so that is Lax.
+jq -s 'add // [] | unique_by([.host, .path, .name]) | map({name, value, domain: .host, path,
+    secure: (.isSecure == 1), httpOnly: (.isHttpOnly == 1),
+    sameSite: (if .sameSite == 2 then "Strict" elif .sameSite == 1 or .isSecure != 1 then "Lax" else "None" end)}
+    + (if .expiry > 100000000000 then {expires: (.expiry / 1000 | floor)}
+       elif .expiry > 0 then {expires: .expiry} else {} end))' \
+  "$tmp/db.json" "$tmp/session.json" > "$tmp/cookies.json" || exit 1
+
+n=$(jq length "$tmp/cookies.json")
+[ "$n" -gt 0 ] || { echo "otis-cookies: Zen has no cookies for $host (sign in there first)"; exit 1; }
+at=
+if [ -n "$tty" ]; then
+  i=0
+  until at=$(terminal-browser ls --all --json 2>/dev/null |
+    jq -er --arg t "$tty" '[.browsers[] | select(.tty == $t)][0].key'); do
+    i=$((i + 1)); [ $i -lt 100 ] || exit 1
+    sleep 0.2
+  done
+fi
+tb() { terminal-browser action ${at:+--browser "$at"} -- "$@"; }
+# A browser just started takes the cookies once its tab has a page: before,
+# CDP refuses them all ("Invalid cookie fields").
+i=0
+until tb cookies set --curl "$tmp/cookies.json" >/dev/null; do
+  i=$((i + 1)); [ $i -lt 20 ] || exit 1
+  sleep 0.5
+done
+# The page asked for, not a reload: by now the site may have sent the tab
+# to its sign-in page, which a reload only shows again.
+tb open "$url" >/dev/null
+echo "otis-cookies: $n cookies for $host from Zen"

@@ -18,5 +18,5 @@ fi
 case $action in
   jobs)     echo "execute(git-ci-jobs $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
   retry)    echo "execute(git-ci-retry $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
-  pipeline) echo "execute-silent(otis-open $url)" ;;
+  pipeline) otis-open --fzf "$url" ;;
 esac

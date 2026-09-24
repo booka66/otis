@@ -91,7 +91,7 @@ action=$1 iid=$2 then=$3
 # True both ways: a branch with no MR in gb, and a section heading in gmr.
 [ -n "$iid" ] || exec git-fzf-note "no MR on that row"
 case $action in
-  web)       echo "execute-silent(otis-open '$(git-mr-url "$iid")')" ;;
+  web)       otis-open --fzf "$(git-mr-url "$iid")" ;;
   copy)
     git-mr-url "$iid" | tr -d '\n' | otis-copy && exec git-fzf-note "copied link to !$iid"
     exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $(git-mr-url "$iid")" ;;

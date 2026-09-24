@@ -828,7 +828,7 @@ run() {
     subst "$arg" $row; arg=$REPLY
     case $name in
       execute)
-        offout; screen_off; zsh -fc "$arg" <&$tty >&$tty 2>&1; screen_on; offin; resize ;;
+        offout; run_tty "$arg"; offin; resize ;;
       execute-silent)
         offout; zsh -fc "$arg" </dev/null >/dev/null 2>&1; offin ;;
       transform)

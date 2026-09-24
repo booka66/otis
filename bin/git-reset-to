@@ -4,10 +4,10 @@
 # uncommitted work. Only a failure stops to be read; success goes straight back.
 mode=$1 sha=$2
 [ -n "$sha" ] || exit 0
-git-lock || { printf 'press enter\n'; read -r _; exit 1; }
+why=$(git-lock 2>&1) || { otis-popup say "$why"; exit 1; }
 case $mode in
   hard)  git-confirm "hard reset to $sha discards ALL uncommitted changes. proceed?" || exit 0
          out=$(git reset --hard "$sha" 2>&1) ;;
   soft)  out=$(git reset --soft "$sha" 2>&1) ;;
   *)     out=$(git reset "$sha" 2>&1) ;;
-esac || { printf '%s\nreset failed. press enter\n' "$out"; read -r _; exit 1; }
+esac || { otis-popup say "$(printf '%s\nreset failed' "$out")"; exit 1; }

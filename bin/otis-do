@@ -144,7 +144,7 @@ case $verb in
     # The trash is the file manager's, not otis's, so otis opens it and stops
     # there: nothing here deletes anything of yours for good.
     [ -d "$extra" ] || exec git-fzf-note "the trash is empty now"
-    echo "execute-silent(otis-open '$extra')"
+    otis-open --fzf "$extra"
     exit 0 ;;
   here)
     # What you would do here: settle what is uncommitted, else read the branch.

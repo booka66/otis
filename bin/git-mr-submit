@@ -15,8 +15,7 @@ api="projects/:fullpath/merge_requests/$iid"
 head=$(git rev-parse "${range#*..}") base=$(git rev-parse "${range%%..*}")
 fail() {
   if [ -n "$asked" ]; then
-    printf '%s. press enter\n' "$1"
-    read -r _
+    otis-popup say "$1"
   else
     printf '%s\n' "$1" >&2
   fi

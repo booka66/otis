@@ -43,7 +43,7 @@
 # Nothing moves before you say yes, and a checkout with uncommitted changes is
 # never used or moved (sync would carry them from layer to layer). Both ask
 # first: they push, and gstack opens MRs.
-pause() { printf '%s. press enter\n' "$1"; read -r _; exit "${2:-1}"; }
+pause() { otis-popup say "$1"; exit "${2:-1}"; }
 common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
 stacked=$common/stacked
 main=$(otis-config main)

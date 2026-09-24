@@ -95,7 +95,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # tried and the other taken; a probe of its own cost a process on every run,
 # previews included. Whole seconds would key a cache on a file that changed
 # within the second it was read (F, then its preview).
-mtimes() { stat -f %Fm "$@" 2>/dev/null || stat -c %.9Y "$@" 2>/dev/null; }
+mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
 case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
 
@@ -152,8 +152,8 @@ case $mode in
   # callers row is the symbol it hangs under. From the picker's table, or the
   # cache's where the picker has none (gmr's list, a review read by file), so
   # seldom is a tree read again; and with seam's stdout the terminal, as when
-  # you run it: it writes the page, opens it and fills in the notes and
-  # callers as they land. What seam says when it fails (a seam too old for
+  # you run it: it writes the page and fills in the notes and callers as
+  # they land, and otis-open opens it (below). What seam says when it fails (a seam too old for
   # --at) is the note.
   --page)
     rev=$1 id=${2%%>callers*}; id=${id##*>}
@@ -178,9 +178,16 @@ case $mode in
     case $id in *#*) id=${id%%#*}#$(printf '%s' "${id#*#}" | tr + .) ;; *) id= ;; esac
     t=$st/symbols.tsv
     [ -s "$t" ] || t=$(git-symbols --table "$rev") || exec git-fzf-note "seam could not read the change"
-    err=$(seam --table "$t" "$rev" --html ${id:+--at "$id"} 2>&1 >/dev/tty) ||
-      git-fzf-note "$(printf '%s\n' "$err" | grep -m1 . || echo "seam could not write the page")"
-    exit 0 ;;
+    # seam opens the page itself, with open (xdg-open), which is always the
+    # desktop browser: those do nothing here, and the page it names goes to
+    # otis-open, so it takes this pane where terminal-browser is on, as h does.
+    noop=$(mktemp -d) || exit 1
+    printf '#!/bin/sh\n' > "$noop/open"; cp "$noop/open" "$noop/xdg-open"; chmod +x "$noop/open" "$noop/xdg-open"
+    err=$(PATH=$noop:$PATH seam --table "$t" "$rev" --html ${id:+--at "$id"} 2>&1 >/dev/tty)
+    ok=$?
+    rm -rf "$noop"
+    [ $ok = 0 ] || exec git-fzf-note "$(printf '%s\n' "$err" | grep -m1 . || echo "seam could not write the page")"
+    exec otis-open --fzf "$(printf '%s\n' "$err" | grep '\.html$' | tail -1)" ;;
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;

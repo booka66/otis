@@ -51,7 +51,7 @@ fi
 if [ "$1" = --forget ]; then
   dir=$2
   [ -d "$dir" ] || exit 0
-  running "$dir" && { printf 'it is still running; x in its progress stops it. press enter\n'; read -r _; exit 0; }
+  running "$dir" && { otis-popup say 'it is still running; x in its progress stops it'; exit 0; }
   git-confirm "forget $(cat "$dir/title" 2>/dev/null || basename "$dir")? its progress and what it brought back go" || exit 0
   rm -rf "$dir"
   exit 0

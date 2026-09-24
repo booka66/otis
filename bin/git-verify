@@ -17,8 +17,11 @@
 # pipeline already runs on the commit and to leave that to it: a verification
 # is worth its half hour for the states CI cannot produce, so one criterion at
 # least follows the change's value to its far end, through the real path, with
-# the row or the event it left read back. A Cursor Cloud agent
-# is the tester: a VM with the repo's environment (its .cursor/), where it
+# the row or the event it left read back. A second Claude, fresh, reads the
+# change the other way, sure it broke something its author was not looking
+# at, and adds checks for that (otis.verifyBreak). A Cursor Cloud agent
+# is the tester: a VM with the repo's environment (its .cursor/), booted and
+# its services started at the outset so it is warm when the plan is in, where it
 # can start the sandbox, click through the app and record it, and run tests.
 # otis carries what each says to the other, up to three rounds. When the
 # verdict is a fail the judge puts down to the change, the tester tries a fix:
@@ -56,7 +59,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/repo.sh"
 common=$OTIS_GITDIR
 top=$common/otis-verify
-pause() { printf '%s. press enter\n' "$1"; read -r _; exit 0; }
+pause() { otis-popup say "$1"; exit 0; }
 
 . "$share/claude-run.sh"
 
@@ -117,7 +120,7 @@ case $mode in
         include "otis";
         def one: gsub("[\\s]+"; " ") | gsub("`|\\*\\*|_"; "") | ltrimstr(" ");
         def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
-        (($plan[0] // {}).criteria // [] | map({(.id): .claim}) | add // {}) as $claims |
+        (($plan[0] // {}).criteria // [] | map({(.id): (.plain // .claim)}) | add // {}) as $claims |
         (.criteria | length) as $total |
         ([.criteria[] | select(.result == "verified")] | length) as $ok |
         ([.criteria[] | select(.result == "failed")] | length) as $bad |
@@ -137,8 +140,8 @@ case $mode in
           ((($claims[.id] // .evidence // "") | one | wrapl($w - 8; 3)) as $ls |
            "  " + $g + r + " " + attention + (.id | .[0:4]) + r + (" " * (4 - ([(.id | length), 4] | min))) + text + $ls[0] + r,
            ($ls[1:][] | "        " + text + . + r)),
-          (if .result != "verified" and (.evidence // "") != "" then
-             (.result) as $res | (.evidence | one | wrapl($w - 8; 2)[] | "        " + (if $res == "failed" then bad else context end) + . + r) else empty end)),
+          (if .result != "verified" and (.saw // .evidence // "") != "" then
+             (.result) as $res | (.saw // .evidence | one | wrapl($w - 8; 2)[] | "        " + (if $res == "failed" then bad else context end) + . + r) else empty end)),
         (if ((.concerns // []) | length) > 0 then
            "", context + "CONCERNS" + r + "  " + yours + "\(.concerns | length)" + r,
            (.concerns[0:3][] | (one | wrapl($w - 4; 2)) as $ls | "  " + yours + "!" + r + " " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r)),
@@ -197,11 +200,11 @@ case $mode in
       done
     }
     rows=$(list)
-    [ -n "$rows" ] || { printf 'the tester brought nothing back. press enter\n'; read -r _; exit 0; }
+    [ -n "$rows" ] || { otis-popup say 'the tester brought nothing back'; exit 0; }
     printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (videos and images in their app; text in your editor),o=the folder in Finder,y=copy path' \
       --ansi --delimiter='\t' --with-nth=1 \
       --bind 'enter:execute(case {2} in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) otis-open {2} ;; *) otis-edit -R -- {2} ;; esac)' \
-      --bind "o:execute-silent(otis-open '$d/artifacts')" \
+      --bind "o:transform(otis-open --fzf '$d/artifacts')" \
       --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
       --preview 'git-verify --artifact {2}' >/dev/null
     exit 0

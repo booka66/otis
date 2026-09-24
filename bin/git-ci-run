@@ -8,6 +8,4 @@ iid=$1
 [ -n "$iid" ] || exit 0
 git-confirm "start a new pipeline for !$iid (every job runs again)?" || exit 0
 out=$(glab api -X POST "projects/:fullpath/merge_requests/$iid/pipelines" 2>&1) && exit 0
-printf '%s\n' "$out" | tail -3
-printf 'starting the pipeline failed. press enter\n'
-read -r _
+otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'starting the pipeline failed')"

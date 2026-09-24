@@ -132,7 +132,7 @@ if [ -s "$d/plan.json" ] && [ ! -s "$d/verdict.json" ]; then
     ([$res[] | select(.id == $id) | .result][0] // "") as $r |
     (if $r == "verified" then "verified" elif $r != "" then "failed" elif $id == $on then "testing"
      elif ($arts | contains(" " + $id + " ")) then "in" else "planned" end) as $s |
-    "\($s)\t\($id)\t\(.claim | gsub("[\t\n]"; " "))"' "$d/plan.json" 2>/dev/null)
+    "\($s)\t\($id)\t\(.plain // .claim | gsub("[\t\n]"; " "))"' "$d/plan.json" 2>/dev/null)
   total=$(printf '%s\n' "$rows" | grep -c .)
   good=$(printf '%s\n' "$rows" | grep -c '^verified')
   bad=$(printf '%s\n' "$rows" | grep -c '^failed')
@@ -162,7 +162,7 @@ if [ -s "$d/plan.json" ] && [ ! -s "$d/verdict.json" ]; then
     # well), why it thought so.
     note=$(jq -r 'if (.note // "") != "" then .note else .why // "" end' "$ck" 2>/dev/null)
     ok=$(jq -r '.ok' "$ck" 2>/dev/null)
-    ago=$(span $(( now - $(stat -f %m "$ck" 2>/dev/null || stat -c %Y "$ck") )))
+    ago=$(span $(( now - $(stat -c %Y "$ck" 2>/dev/null || stat -f %m "$ck") )))
     if [ "$ok" = false ]; then pane_section "the judge" "not happy" bad "$ago ago"
     else pane_section "the judge" "" "" "$ago ago"; fi
     pane_wrap "$note" context

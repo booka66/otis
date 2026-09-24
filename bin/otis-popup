@@ -1,0 +1,154 @@
+#!/usr/bin/env -S zsh -f
+# otis-popup confirm <question>         y is yes (exit 0), any other key no
+# otis-popup note <question>            the same, and a is yes with a line of
+#                                       your own, printed (git-confirm --note)
+# otis-popup text <prompt> [<default>]  a line typed, printed; esc exits 130
+# otis-popup say <message>              shown until a key
+#
+# A question asked in a box over the screen whose key started it, so answering
+# never drops you to the terminal under otis. A screen keeps its frame up for
+# what its execute runs and names a file it drew it into (OTIS_FRAME,
+# share/screen.zsh's run_tty); the box goes over that, and the frame is drawn
+# again without it once it is answered. Yes leaves "…" in the box while the
+# command goes on. With no screen under it, text and say ask on the terminal's
+# line as ever; git-confirm, which sends its questions here, asks there itself.
+setopt extendedglob no_nomatch
+mode=$1 msg=$2 text=$3
+
+if [[ -z $OTIS_FRAME || ! -e $OTIS_FRAME ]]; then
+  case $mode in
+    say) print -r -- "$msg. press enter"; read -r _; exit 0 ;;
+    text) vared -p "$msg " text </dev/tty >/dev/tty || exit 130; print -r -- "$text"; exit 0 ;;
+    *) exit 1 ;;
+  esac
+fi
+
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+st=${TMPDIR:-/tmp}/otis-popup.$$.$RANDOM
+mkdir -m 700 $st || exit 1
+. ${0:A:h:h}/share/screen.zsh
+exec {tty}<>/dev/tty
+saved=$(stty -g <&$tty)
+at_leave() { stty $saved <&$tty; }
+stty -icanon -echo -isig min 1 time 0 <&$tty
+size
+
+# --- the box ------------------------------------------------------------------
+# The message wrapped to the box, line by line; a word too long for it cut.
+integer bw iw at=$#text
+(( bw = W - 4 < 64 ? W - 4 : 64, iw = bw - 4 ))
+typeset -a body
+for l in "${(@f)msg}"; do
+  wrap "$l" $iw
+  (( $#reply )) || reply=("")
+  for s in $reply; do fit "$s" $iw; body+=("$REPLY"); done
+done
+(( $#body > H - 8 )) && body=("${(@)body[1,H-9]}" "…")
+
+# box <hint> [<input line>]: the frame again, then the box over it, the
+# terminal's cursor in the input line when there is one.
+box() {
+  local hint=$1 input=$2 l out
+  integer i top left h y cy=0 cx=0
+  typeset -a lines
+  for l in "${body[@]}"; do lines+=("$T$l$R"); done
+  if [[ -n $input ]]; then
+    # The text in a window the cursor stays in, … marking what is out of
+    # sight either side, as otis-ask's.
+    local shown room=$(( iw - 2 ))
+    integer from=1
+    while (( ${(m)#${text[from,at]}} > room - 1 )); do (( from++ )); done
+    shown=${text[from,-1]}
+    (( from > 1 )) && shown="…"${shown:1}
+    while (( ${(m)#shown} > room )); do shown=${shown[1,-2]}; done
+    (( from + $#shown - 1 < $#text )) && shown=${shown[1,-2]}"…"
+    lines+=("" "$A›$R $T$shown$R")
+    (( cy = $#lines, cx = 3 + ${(m)#${text[from,at]}} ))
+  fi
+  lines+=("" "$hint")
+  (( h = $#lines + 2, top = (H - h) / 2 + 1, left = (W - bw) / 2 + 1 ))
+  # The frame is on the screen already; it is drawn again only where a box
+  # of another size leaves some of the last one showing.
+  out=$e'[?25l'
+  (( btop && (top != btop || h != bh) )) && { unbox; out=$REPLY$out; }
+  (( btop = top, bh = h ))
+  out+=$e"[$top;${left}H"$F"╭"${(l:bw-2::─:)}"╮"$R
+  for (( i = 1; i <= $#lines; i++ )); do
+    vw "$lines[i]"
+    out+=$e"[$(( top + i ));${left}H"$F"│"$R" "$lines[i]${(l:iw-REPLY:: :)}" "$F"│"$R
+  done
+  out+=$e"[$(( top + h - 1 ));${left}H"$F"╰"${(l:bw-2::─:)}"╯"$R
+  if (( cy )); then out+=$e"[$(( top + cy ));$(( left + 1 + cx ))H"$e'[?25h'
+  else out+=$e"[$H;1H"; fi
+  print -rnu $tty -- $out
+}
+# unbox: the last box gone, in REPLY: blanked, then the frame over it, each
+# of its lines in place, never the whole screen cleared first, which blinks.
+integer btop=0 bh=0
+unbox() {
+  local f=$(<$OTIS_FRAME)
+  integer y
+  REPLY=
+  for (( y = btop; y < btop + bh; y++ )); do REPLY+=$e"[$y;$(( (W - bw) / 2 + 1 ))H"${(l:bw:: :)}; done
+  REPLY+=${f//$e\[2J/}
+}
+# done_ <code> [<busy>]: the box gone, or left saying the command goes on.
+done_() {
+  if [[ -n $2 ]]; then box "$F…$R"; else unbox; print -rnu $tty -- $REPLY$e"[$H;1H"; fi
+  quit $1
+}
+keys() { local s= k l; for k l in "$@"; do s+="$A$k$R $C$l$R   "; done; REPLY=${s%   }; }
+
+# ask: a line typed into the box, in text; 0 for enter, 1 for esc.
+ask() {
+  local k n hint=$1
+  while :; do
+    box "$hint" input
+    readkey; k=$REPLY
+    [[ $k == $e'[<'* ]] && continue
+    keyname "$k"; n=$REPLY
+    case $k in
+      $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
+      $e'[H'|$e'[1~'|$'\x01') n=home ;; $e'[F'|$e'[4~') n=end ;;
+      $'\x17') n=ctrl-w ;;
+    esac
+    case $n in
+      enter) return 0 ;;
+      esc|ctrl-c) return 1 ;;
+      left) (( at > 0 )) && (( at-- )) ;;
+      right) (( at < $#text )) && (( at++ )) ;;
+      home) at=0 ;;
+      end|ctrl-e) at=$#text ;;
+      bspace) (( at > 0 )) && { text=${text[1,at-1]}${text[at+1,-1]}; (( at-- )); } ;;
+      ctrl-u) text=${text[at+1,-1]} at=0 ;;
+      ctrl-w)
+        local head=${text[1,at]}
+        head=${head%%[[:space:]]#}; head=${head%%[^[:space:]]#}
+        text=$head${text[at+1,-1]} at=$#head ;;
+      *) [[ $k == [[:print:]]* && $k != $e* ]] && { text=${text[1,at]}$k${text[at+1,-1]}; (( at += $#k )); } ;;
+    esac
+  done
+}
+
+case $mode in
+  confirm)
+    keys y yes n no; box "$REPLY"
+    readkey; [[ $REPLY == y ]] && done_ 0 busy; done_ 1 ;;
+  note)
+    keys y yes a "yes, with a note" n no; box "$REPLY"
+    readkey
+    [[ $REPLY == y ]] && done_ 0 busy
+    [[ $REPLY == a ]] || done_ 1
+    body+=("" "${C}a note for it; none is a plain yes$R")
+    keys ⏎ go esc "back out"
+    if ask "$REPLY"; then print -r -- "$text"; done_ 0 busy; fi
+    done_ 1 ;;
+  text)
+    keys ⏎ done esc cancel
+    if ask "$REPLY"; then print -r -- "$text"; done_ 0 busy; fi
+    done_ 130 ;;
+  say)
+    keys "any key" close; box "$REPLY"
+    readkey; done_ 0 ;;
+esac
+done_ 2

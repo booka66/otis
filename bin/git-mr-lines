@@ -203,7 +203,7 @@ git-fzf "!$iid $path " 'enter=open in your editor,c=comment or reply,J=mark line
   --bind "d:transform(git-mr-lines --own delete $iid $range {2} {5})" \
   --bind "r:transform(git-mr-lines --resolve $iid $range {5} {6} {7})" \
   --bind "S:execute(git-mr-submit $iid $range ${GMR_KIND:-review})+reload($list)" \
-  --bind "w:execute-silent(otis-open \"\$(git-mr-url $iid)\")" \
+  --bind "w:transform(otis-open --fzf \"\$(git-mr-url $iid)\")" \
   --bind "u:execute-silent(git-mr-threads --refresh $iid refresh-preview)+reload($list)" \
   --preview "git-mr-lines --preview $iid $range {2} {3} {4} {9} {5} {8}" </dev/null >/dev/null
 exit 0

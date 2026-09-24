@@ -39,8 +39,10 @@ tell_picker() { [ -n "$FZF_PORT" ] && curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x
 # leaves $d/cmd (the --run command) and $d/cwd, which is what resume runs.
 
 # results: how many result events $d's progress holds; a turn's own result is
-# one more than there were before it.
-results() { awk '/"type":"result"/ { n++ } END { print n + 0 }' "$d/events.jsonl" 2>/dev/null || echo 0; }
+# one more than there were before it. With $awho set, only that agent's (its
+# events' who): the tester's stream, or another turn running beside this one,
+# writes results into the same progress.
+results() { awk -v w="$awho" '/"type":"result"/ && (w == "" || index($0, "\"who\":\"" w "\"")) { n++ } END { print n + 0 }' "$d/events.jsonl" 2>/dev/null || echo 0; }
 
 # attempt <command...>: one Claude turn that appends its events to
 # $d/events.jsonl, tried again when it broke off rather than failed: no
@@ -54,7 +56,7 @@ attempt() {
     "$@"
     stopping
     result=
-    [ "$(results)" -gt "$before" ] && result=$(jq -c 'select(.type == "result")' "$d/events.jsonl" | tail -1)
+    [ "$(results)" -gt "$before" ] && result=$(jq -c --arg w "$awho" 'select(.type == "result" and ($w == "" or .who == $w))' "$d/events.jsonl" | tail -1)
     if [ -n "$result" ] && ! printf '%s' "$result" |
       jq -e '.is_error and ((.result // "") | test("API Error|[Cc]onnection|network|ECONN|ETIMEDOUT|socket|overloaded|fetch failed"))' >/dev/null; then
       return 0

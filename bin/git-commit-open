@@ -181,8 +181,7 @@ if [ -n "$2" ]; then
   fi
   if [ ! -e "$2" ]; then
     [ "$st" = A ] && exec git-show-file "$(after):$2" "$2" "${at:-$( [ -n "$GMR_IID" ] && preview_line "$2" || plain_line "$2" || echo 1)}"
-    printf '%s is gone from the working tree now. press enter\n' "$2"
-    read -r _
+    otis-popup say "$2 is gone from the working tree now"
     exit 0
   fi
   if [ -n "$at" ]; then line=$at; elif [ "$st" = A ] && [ -z "$GMR_IID" ]; then line=$(plain_line "$2"); else line=$(preview_line "$2"); fi
@@ -194,8 +193,7 @@ fi
 
 files=$(changes --name-only --no-renames)
 if [ -z "$files" ]; then
-  printf '%s changes no files. press enter\n' "$rev"
-  read -r _
+  otis-popup say "$rev changes no files"
   exit 0
 fi
 
