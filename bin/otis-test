@@ -83,6 +83,19 @@ expect md/fence-kept "$(md_fn '```ts\037const a: Array<string> = [];\037```')" "
 
 # --- a throwaway repo for the scripts that read git
 tmp=$(mktemp -d) && tmp=$(cd "$tmp" && pwd -P) || exit 1
+# The pickers run here log their keys here, not in your own key log.
+export OTIS_KEY_LOG=$tmp/keys.tsv
+
+# --- otis-keys only names keys its picker declares: a key renamed in one and
+# not the other labels a key that does nothing, or leaves one unlabelled.
+declared() { sed "s/'\"'\"'//g" "$share/otis.zsh" | sed -n "s/.*git-fzf '$1 ' '\([^']*\)'.*/\1/p" | tr ',' '\n' | sed 's/=.*//' | sort -u; }
+undeclared() {
+  picker=$1; shift
+  declared "$picker" > "$tmp/declared"
+  for row in "$@"; do eval "GIT_FZF_STATE=/nonexistent otis-keys $row" 2>/dev/null; done | cut -f1 | sort -u | comm -23 - "$tmp/declared" | tr '\n' ' '
+}
+expect keys/mr "$(undeclared MRs 'mr review 1 9' 'mr mine 1 9' 'mr merged 1 ""' 'mr sep "" ""')" ""
+expect keys/branch "$(undeclared branch 'branch b main here "" ""' 'branch b merged worktree "" 7' 'branch b open "" "" ""')" ""
 # Editors that echo what they were asked, so the tests that pick nvim do not
 # depend on this machine having it.
 mkdir -p "$tmp/eds"
@@ -770,20 +783,23 @@ EOF
   # A test's walk: a row a call it made (the second call of run marked as a
   # return to it), the line within a call the preview's, rendered once.
   expect trace/walk-rows "$(node "$share/walk.mjs" walk-rows "$td" 0 head | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ')" "$(printf 'run:2|v:0\n grow:8|v:1\n↩ run:3|v:2')"
-  expect trace/walk-show "$(GIT_FZF_STATE=$tmp/tst FZF_PREVIEW_COLUMNS=100 git-trace --walk-show "$td" 0 v:2 | strip | grep '▶' | tr -s ' ')" " 3 ▶ return o.a; o = { a: 1 }"
-  expect trace/walk-nav "$(cat "$td/walks/0-head.nav")" "$(printf '0 0 2 1 -1\n1 1 2 -1 2\n2 2 -1 -1 -1')"
+  expect trace/walk-show "$(GIT_FZF_STATE=$tmp/tst FZF_PREVIEW_COLUMNS=100 git-trace --walk-show "$td" 0 v:2 | strip | grep '▶' | sed 's/ *$//' | tr -s ' ')" " 3 ▶ return o.a; o = { a: 1 }"
+  expect trace/walk-nav "$(cat "$td/walks/0-head.nav")" "$(printf '0 0 2 1 -1 0 2\n1 1 2 -1 2 0 8\n2 2 -1 -1 -1 0 3')"
   expect trace/walk-pin "$(GIT_FZF_STATE=$tmp/tst FZF_PREVIEW_COLUMNS=100 git-trace --walk-show "$td" 0 v:0 | head -1 | cut -c1-5)" "$(printf '\036pin ')"
   expect trace/walk-args "$(GIT_FZF_STATE=$tmp/tst FZF_PREVIEW_COLUMNS=100 git-trace --walk-show "$td" 0 v:2 | strip | tr -s ' ' | grep -c 'called with o = { a: 1 } twice = true')" "1"
-  # j, l, h and k: from run into grow, back, over the call to run's next line.
   export FZF_PREVIEW_COLUMNS=100
   # What it was called with, whole, under a call's first line; the line
   # itself says what it reads, as far down as it reads (o.a, not o).
   expect trace/walk-tree "$(GIT_FZF_STATE=$tmp/tst git-trace --walk-show "$td" 1 v:0 | strip | grep '│' | tr -s ' ' | tr '\n' '|')" " │ o { a: 2, deep: Box { size: 3 } }|"
-  expect trace/walk-one "$(GIT_FZF_STATE=$tmp/tst git-trace --walk-show "$td" 1 v:0 | strip | grep '▶' | tr -s ' ')" " 3 ▶ return o.a; o.a = 2"
-  expect trace/step-into "$(GIT_FZF_STATE=$tmp/tst git-trace --step "$td" 0 into v:0):$(cat "$tmp/tst/cur")" "pos(2)+refresh-preview:1"
-  expect trace/step-back "$(GIT_FZF_STATE=$tmp/tst git-trace --step "$td" 0 back v:1):$(cat "$tmp/tst/cur")" "pos(1)+refresh-preview:0"
-  expect trace/step-over "$(GIT_FZF_STATE=$tmp/tst git-trace --step "$td" 0 over v:0)" "pos(3)+refresh-preview"
-  expect trace/step-none "$(GIT_FZF_STATE=$tmp/tst git-trace --step "$td" 0 into v:2; cat "$tmp/tst/note")" "this line calls nothing the change made"
+  expect trace/walk-one "$(GIT_FZF_STATE=$tmp/tst git-trace --walk-show "$td" 1 v:0 | strip | grep '▶' | sed 's/ *$//' | tr -s ' ')" " 3 ▶ return o.a; o.a = 2"
+  # j, l, h and k, on the screen itself (otis-symbols --steps), in a pty:
+  # from run into grow, out to run's next line, a glide through lib.ts, and
+  # back. Each key's step comes up in its head ("2 of 3").
+  expect trace/steps-file "$(ls "$td/walks/0-head-100" | grep -c '^file-')" "1"
+  TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b s "stty rows 40 cols 180; git-trace --walk $1 0"; out=
+    upto() { for _ in {1..60}; do while zpty -rt s buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"$1 of 3"* ]] && { print -n "$1 "; out=; return; }; sleep 0.1; done; print -n "x "; }
+    setopt extendedglob; upto 1; zpty -wn s l; upto 2; zpty -wn s h; upto 3; zpty -wn s k; upto 2; zpty -wn s q; sleep 0.3; zpty -d s' _ "$td" > "$tmp/steps.seen" 2>/dev/null
+  expect trace/steps "$(cat "$tmp/steps.seen")" "1 2 3 2 "
   unset FZF_PREVIEW_COLUMNS
   expect trace/side-unbased "$(GIT_FZF_STATE=$tmp/tst git-trace --side "$td" 0; cat "$tmp/tst/side" 2>/dev/null; cat "$tmp/tst/note")" "no run at the base yet: b on P's screen runs the tests there"
   # A written input that reaches its gap: kept on the list, marked, and its test marked too.
@@ -798,7 +814,7 @@ EOF
   printf '%s' '{"intent":"grows things","planning":false,"chapters":[{"title":"","files":["lib.ts"],"intent":"grows things","state":"","questions":["what does shrink do?"],"stops":[{"title":"runs it","says":"`run` reads MY_FLAG and o.a","path":"lib.ts","start":2,"end":4,"focus":3,"test":"lib steps","proves":"o.a is 1"},{"title":"shrinks it","says":"nothing runs it","path":"lib.ts","start":10,"end":12,"focus":11,"test":"","proves":""}]}]}' > "$td/tour.json"
   export FZF_PREVIEW_COLUMNS=100
   expect trace/tour-rows "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | tr '\n' ';')" "what it sets out to do|tour:0; 1 runs it|tour:1-1; 2 shrinks it|tour:1-2;"
-  expect trace/tour-stop "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | strip | grep -E '✓|▶' | tr -s ' ' | tr '\n' '|')" "✓ o.a is 1| 3 ▶ return o.a; o = { a: 1 }|"
+  expect trace/tour-stop "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | strip | grep -E '✓|▶' | sed 's/ *$//' | tr -s ' ' | tr '\n' '|')" "✓ o.a is 1| 3 ▶ return o.a; o = { a: 1 }|"
   # Its sentences: a symbol drawn as code, backticks or not, the backticks dropped.
   expect trace/tour-prose "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | grep 'reads' | sed -E "s/$(printf '\033')\\[[0-9;]*m/|/g" | tr -s '|')" "|run| reads |MY_FLAG| and |o.a|"
   # The page: its stops, their sentences' symbols as code, their code as rows with the stop's line marked.
@@ -806,6 +822,12 @@ EOF
   expect trace/tour-no-test "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-2 | strip | grep -c 'no test stops here')" "1"
   expect trace/tour-step "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-step "$td" tour:1-1)" "execute(git-trace --walk '$td' 0 2)"
   expect trace/tour-questions "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:0 | strip | grep -c '? what does shrink do')" "1"
+  # The tour's screen (otis-symbols --panes), in a pty: j and k bring each
+  # row's pane, drawn ahead, up with the cursor.
+  TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob; zpty -b s "stty rows 40 cols 180; git-trace --view $1"; out=
+    upto() { for _ in {1..60}; do while zpty -rt s buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"$1"* ]] && { print -n "ok "; out=; return; }; sleep 0.1; done; print -n "x "; }
+    upto "what does shrink do"; zpty -wn s j; upto "o.a is 1"; zpty -wn s j; upto "no test stops here"; zpty -wn s k; upto "o.a is 1"; zpty -wn s q; sleep 0.3; zpty -d s' _ "$td" > "$tmp/tour.seen" 2>/dev/null
+  expect trace/tour-screen "$(cat "$tmp/tour.seen")" "ok ok ok ok "
   printf '%s' '{"intent":"all of it","planning":false,"chapters":[{"title":"runs","files":["lib.ts"],"intent":"runs","state":"","questions":[],"stops":[{"title":"runs it","says":"s","path":"lib.ts","start":2,"end":4,"focus":3,"test":"","proves":""}]},{"title":"pairs","files":["pair.ts"],"intent":"","state":"writing","questions":[],"stops":[]}]}' > "$td/tour.json"
   rm -rf "$td"/tour-*
   expect trace/tour-chapters "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | tr '\n' ';')" "what it sets out to do|tour:0;1 runs|tour:c1; 1 runs it|tour:1-1;2 pairs being written|tour:c2;"
@@ -1135,17 +1157,17 @@ fi
 
 # The dashboard (otis-dash), in a pty: origin is a path here, so it draws
 # from the checkout alone, the here section and nothing waiting; j moves
-# nothing off the one row, and b hands gb to the otis function to run.
+# nothing off the one row, and gb hands gb to the otis function to run.
 dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash"; out=
   for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *"nothing to commit"* ]] && break; sleep 0.1; done
   zpty -wn d j; sleep 0.3; while zpty -rt d buf; do out+=$buf; done
-  zpty -wn d b; for _ in {1..20}; do while zpty -rt d buf; do out+=$buf; done; zpty -t d || break; sleep 0.1; done
+  zpty -wn d g; zpty -wn d b; for _ in {1..20}; do while zpty -rt d buf; do out+=$buf; done; zpty -t d || break; sleep 0.1; done
   zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
 expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing waiting on you')" "1"
 expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
 # Nothing uncommitted and nothing past the base: enter has nothing to do,
 # so the footer offers only the keys that open the rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c 'm MRs')" "0:1"
+expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c 'gm MRs')" "0:1"
 # The last thing it writes, after the screen is put back.
 expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
 
@@ -1164,6 +1186,10 @@ TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b g "stty rows 40 cols 140
 expect ga/rows "$(sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' "$tmp/ga.screen" | grep -c 'FILES, AND WHAT NO SYMBOL CLAIMS')" "1"
 expect ga/space-stages "$(cat "$tmp/ga.staged")" "d.ts"
 expect ga/U-unstages "$(cat "$tmp/ga.unstaged")" ""
+# Each key it acted on is a line in the key log (otis-usage), with what ga
+# says it is for; the keys it offers, as it opened.
+expect keys/logged "$(awk -F'\t' '$3 == "space" || $3 == "U" { print $3 "=" $4 }' "$OTIS_KEY_LOG" | LC_ALL=C sort -u | tr '\n' ' ')" "U=unstage all space=stage it "
+expect keys/opened "$(awk -F'\t' '$3 == ":open" && $4 ~ /space=stage it/' "$OTIS_KEY_LOG" | wc -l | tr -d ' ')" "1"
 git checkout -q -- a.ts && rm -f d.ts
 
 # --- gb's n: an MR in one key, drafted from the branch's commits as gp's

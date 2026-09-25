@@ -20,11 +20,11 @@ case $picker in
   # gmr: kind, iid, pipeline id.
   mr)
     kind=$1 iid=$2 pipe=$3
-    [ -n "$pipe" ] || none c R N p v
+    [ -n "$pipe" ] || none c r N p v
     case $kind in
       review)
         k enter "review it"; k A "approve it"; k C "$who reviews it"
-        none d D ;;
+        none R D ;;
       mine)
         # One jq for both: this runs on every move.
         read -r threads draft <<EOF
@@ -33,13 +33,13 @@ $(jq -r --arg iid "$iid" 'first(.data.currentUser.authoredMergeRequests.nodes[]?
 EOF
         if [ "${threads:-0}" -gt 0 ] 2>/dev/null; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
         else k enter "read it by symbol"; fi
-        if [ "$draft" = true ]; then k d "mark it ready"; else k d "mark it draft"; fi
+        if [ "$draft" = true ]; then k R "mark it ready"; else k R "mark it draft"; fi
         k C "$who proposes fixes"
         none A D ;;
       merged)
         k enter "its deploy"; k D "Claude watches production"
-        none A d C V P m r R N s W l a G ;;
-      *) none enter c m r A d l a s W C D V P R N w G y p v ;;
+        none A R C V P m b r N s W l a G ;;
+      *) none enter c m b A R l a s W C D V P r N w G y p v ;;
     esac ;;
 
   # gb: branch, kind, worktree, MR iid, place.

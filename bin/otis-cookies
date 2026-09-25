@@ -124,6 +124,7 @@ until tb cookies set --curl "$tmp/cookies.json" >/dev/null; do
   sleep 0.5
 done
 # The page asked for, not a reload: by now the site may have sent the tab
-# to its sign-in page, which a reload only shows again.
-tb open "$url" >/dev/null
+# to its sign-in page, which a reload only shows again. In this tab: open
+# here is a new tab, beside the one otis-open opened.
+tb eval "location.assign($(jq -n --arg u "$url" '$u'))" >/dev/null
 echo "otis-cookies: $n cookies for $host from Zen"

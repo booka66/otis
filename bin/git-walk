@@ -27,7 +27,7 @@
 # enter in gag or on the dashboard) opens the walk on a screen of its own
 # (--view): its steps the list, j and k through them, the step the preview
 # with its code under it, enter the step's line in your editor, y the step
-# for Claude, R walked again.
+# for Claude, r walked again.
 #
 # A run keeps its state in <git dir>/otis-walk/<key>, the key an MR's iid or
 # b-<branch> with slashes as %: what the progress view reads (title, pid,
@@ -215,14 +215,14 @@ if [ "$1" = --view ]; then
   [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && exec git-trace --view "$d"
   rev=$(cat "$d/rev") k=$(cat "$d/key")
   b=${k%-*}
-  otis-symbols "walk $(cat "$d/what") " 'enter=open the step in your editor,>=next step,<=step back,y=copy it for Claude,R=walk it again,q=back' \
+  otis-symbols "walk $(cat "$d/what") " 'enter=open the step in your editor,>=next step,<=step back,y=copy it for Claude,r=walk it again,q=back' \
     --header-from-state --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
     --bind "start:reload(git-walk --list '$2')" \
     --bind ">:transform(git-symbols-walk --step 1)" \
     --bind "<:transform(git-symbols-walk --step -1)" \
     --bind "y:transform(git-symbols-walk --note {12})" \
     --bind "enter:execute(NVIM_DIFF_BASE=$b git-commit-open '$rev' {2} {3})+reload(git-walk --list '$2')" \
-    --bind "R:execute(git-walk --again '$2')+reload(git-walk --list '$2')" \
+    --bind "r:execute(git-walk --again '$2')+reload(git-walk --list '$2')" \
     --preview "git-symbols-walk --show '$rev' {12}" </dev/null >/dev/null
   exit 0
 fi

@@ -234,8 +234,8 @@ case $mode in
       }
       { out($0) }' "$full"
     kept=$(for r in $(ls "$hunks" | sed -n 's/\.row$//p' | sort -n); do printf '%s\t%s\n' "$r" "$(cat "$hunks/$r.row")"; done |
-      git-fzf "hunks to keep " 'tab=keep or drop,enter=done' --multi --ansi --delimiter='\t' --with-nth=2 \
-        --header 'tab marks the hunks to keep; enter keeps them (none marked keeps them all)' \
+      git-fzf "hunks to keep " 'space=keep or drop,enter=done' --multi --ansi --delimiter='\t' --with-nth=2 \
+        --header 'space marks the hunks to keep; enter keeps them (none marked keeps them all)' \
         --bind 'enter:transform:[ "$FZF_SELECT_COUNT" -eq 0 ] && echo select-all+accept || echo accept' \
         --preview "git-delta < '$hunks'/{1}.patch" | cut -f1 | sort -n)
     if [ -z "$kept" ]; then

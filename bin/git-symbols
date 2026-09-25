@@ -1245,16 +1245,15 @@ if [ "$mode" = --rows ]; then
   # spine is lines at the top. A gloss landing while the picker is open
   # goes in as it lands, whoever started it (a review's prefetch, say):
   # the picker waits on the run and reloads once it is done, the row you
-  # are on kept (--track), the rows held back while you read a preview
-  # longer than its pane (git-fzf-bg --tick). Once per run, and the waiter
+  # are on kept (--track). Once per run, and the waiter
   # closes the list's output, or fzf would wait on it too.
   if [ -n "$glossing" ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$FZF_PORT" ] && mkdir "$st/gloss-wait.$OTIS_SYMBOLS_KEY" 2>/dev/null; then
     (
       read -r gpid 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.running"
       while [ -n "$gpid" ] && kill -0 "$gpid" 2>/dev/null; do sleep 1; done
       rmdir "$st/gloss-wait.$OTIS_SYMBOLS_KEY"
-      if [ -n "$GMR_IID" ]; then git-fzf-bg --tick --then refresh-preview git-mr-files --list "$GMR_IID" "$rev"
-      else git-fzf-bg --tick --then refresh-preview git-symbols --rows "$rev"; fi
+      if [ -n "$GMR_IID" ]; then git-fzf-bg --then refresh-preview git-mr-files --list "$GMR_IID" "$rev"
+      else git-fzf-bg --then refresh-preview git-symbols --rows "$rev"; fi
     ) </dev/null >/dev/null 2>&1 &
   fi
   if [ -n "$gf" ]; then

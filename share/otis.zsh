@@ -813,7 +813,7 @@ gag() {
   git-fzf 'agents ' 'enter=every step (a fix run: its proposals),y=copy its folder for Claude,d=forget a finished run,u=refresh' --ansi --no-sort \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=5 --keys-from 'otis-keys run {2}' \
     --bind 'start:reload(git-agent-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(2):execute-silent(git-fzf-bg --tick git-agent-list)' \
+    --bind 'every(2):execute-silent(git-fzf-bg git-agent-list)' \
     --bind 'u:execute-silent(git-fzf-bg git-agent-list)' \
     --bind 'enter:transform(git-agent-list --open {2})' \
     --bind 'd:execute(git-agent-list --forget {2})+reload(git-agent-list)' \
@@ -836,7 +836,7 @@ gd() {
   git-fzf 'deploys ' 'enter=jobs and logs,w=open the job,p=pipeline in browser,y=copy sha,u=refresh' --ansi --no-sort \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=2 \
     --bind 'start:reload(git-deploy-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(30):execute-silent(git-fzf-bg --tick git-deploy-list)' \
+    --bind 'every(30):execute-silent(git-fzf-bg git-deploy-list)' \
     --bind 'u:execute-silent(git-fzf-bg git-deploy-list --refresh)' \
     --bind 'enter:execute(git-ci-jobs {4} "")' \
     --bind 'w:transform(otis-open --fzf {5})' \
@@ -855,10 +855,10 @@ gd() {
 # (in its branch's checkout, git-mr-mine), or show a merged one's deploy jobs.
 # Either of the first two is a file picker over the whole diff with threads
 # inline; q in there comes back here, and q again returns you where you were.
-# c is CI jobs and logs, R retries failed jobs, m merges once GitLab says it
-# is ready, r has GitLab rebase it onto its target (git-mr-rebase), A approves, l and a manage labels and reviewers, s switches to the
+# c is CI jobs and logs, r retries failed jobs, m merges once GitLab says it
+# is ready, b has GitLab rebase it onto its target (git-mr-rebase), A approves, l and a manage labels and reviewers, s switches to the
 # branch (bringing it here from a worktree), W opens it in a worktree of its own, w and y open
-# m and r are the two keys whose answer comes from GitLab, and the only two
+# m and b are the two keys whose answer comes from GitLab, and the only two
 # that ever made you wait: they run behind the picker (git-fzf-later), which
 # keeps it live and puts what they are doing in the footer until they answer.
 # and copy the MR, p opens its pipeline and v is glab's stage graph. C has
@@ -871,22 +871,22 @@ gd() {
 _gmr() {
   _g_repo || return 1
   local out
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
+  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,b=rebase onto target,A=approve,R=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,r=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
     --keys-from 'otis-keys mr {6} {2} {9}' \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(30):execute-silent(git-fzf-bg --tick git-mr-list)' \
+    --bind 'every(30):execute-silent(git-fzf-bg git-mr-list)' \
     --bind 'f:execute-silent(git-fzf-bg git-mr-list toggle)' \
     --bind 'u:execute-silent(git-fzf-bg git-mr-list --refresh)' \
     --bind 'enter:transform(git-mr-do open {6} {2} {3} {4} {5} {7} {8} {9} {12})' \
     --bind 'C:transform(git-mr-do claude {6} {2} {3} {4} {5} {7} {8} {9} {12})' \
     --bind 'c:transform(git-ci-do jobs {9} {2})' \
-    --bind 'R:transform(git-ci-do retry {9} {2})' \
+    --bind 'r:transform(git-ci-do retry {9} {2})' \
     --bind 'N:transform(git-ci-do new {9} {2})' \
     --bind 'm:transform(git-fzf-later "asking GitLab whether !{2} can merge" git-ci-merge --check {2})' \
-    --bind 'r:transform(git-fzf-later "asking GitLab what !{2} would rebase onto" git-mr-rebase --check {6} {2})' \
+    --bind 'b:transform(git-fzf-later "asking GitLab what !{2} would rebase onto" git-mr-rebase --check {6} {2})' \
     --bind 'A:transform(git-mr-do approve {6} {2} {7} {8})' \
-    --bind 'd:transform(git-mr-do draft {6} {2})' \
+    --bind 'R:transform(git-mr-do draft {6} {2})' \
     --bind 'l:transform[git-mr-do labels {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
     --bind 'a:transform[git-mr-do reviewers {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
     --bind 's:print(switch)+accept' \
@@ -910,7 +910,7 @@ gmr() { _gmr review }
 gci() { _gmr mine }
 
 # This branch's commits as a glab stack, one branch and MR a commit, then
-# synced (git-stack). r in gmr rebases a glab stack onto origin/main.
+# synced (git-stack). b in gmr rebases a glab stack onto origin/main.
 gstack() {
   _g_repo || return 1
   git-stack "$@"

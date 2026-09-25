@@ -75,7 +75,7 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
-preview= startacts= hdr=0 searching=0 watchfiles=()
+preview= startacts= hdr=0 searching=0 watchfiles=() stepscmd= panescmd=
 # --repeat j,k: keys cheap enough to act on every repeat of a key held down
 # (a debugger's step), which the rest do not (below).
 typeset -A repeat
@@ -88,11 +88,16 @@ while (( $# )); do
     # A file whose change reloads the rows and previews, as the cache's do.
     --watch) watchfiles+=($2); shift 2 ;;
     --search) searching=1; shift ;;
+    # A walk's steps, stepped through here (steps_load, below).
+    --steps) stepscmd=$2; shift 2 ;;
+    # Every row's preview drawn ahead, one file a row (panes_load, below).
+    --panes) panescmd=$2; shift 2 ;;
     *) shift ;;
   esac
 done
 
 . ${0:A:h:h}/share/screen.zsh
+keys_caller; keys_open "${REPLY:-${${title//\!<-> /}%% *}}" "$spec"
 screen_start
 # What an accept hands back, printed once the screen is given back.
 typeset -a outq
@@ -439,8 +444,39 @@ go() {
   (( $1 == cur )) && return
   (( pwant >= 0 )) && { poff=$pwant; pwant=-1; }
   (( cur )) && { offs[$rid[cur]]=$poff; }
+  # The lit row slides there from wherever it has got to (litrow).
   cur=$1 sel=0
   poff=${offs[$rid[cur]]:-0}
+}
+# litrow: the list's rows lit now (LITI, indices into L) and how much
+# (LITA): the cursor's, or, for 0.3s after it moves, the light on its way
+# there from where it was, shared by the two rows it is between. lpos is
+# where it is, for a move that starts before this one ends.
+integer lon=0
+float lt0=0 lfrom=0 lpos=0
+typeset -a LITI LITA
+litrow() {
+  integer to=${LI[(ie)$cur]} a
+  (( to <= $#LI )) || to=0
+  LITI=($to) LITA=(1) lpos=$to
+  (( lon && to && lfrom )) || { lon=0; return; }
+  float t=$(( (EPOCHREALTIME - lt0) / 0.3 )) f
+  (( t >= 1 )) && { lon=0; return; }
+  (( t = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2 ))
+  (( lpos = lfrom + (to - lfrom) * t, a = int(lpos), f = lpos - a ))
+  LITI=($a $(( a + 1 ))) LITA=($(( 1 - f )) $f)
+}
+# litline <row> <a>: a row of the list lit a of the way (REPLY).
+integer ATr=250 ATg=189 ATb=47
+[[ $OTIS_T_ATTENTION == (#b)*38\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]] && ATr=$match[1] ATg=$match[2] ATb=$match[3]
+litline() {
+  float a=$2
+  if (( a >= 0.98 )); then REPLY=$A"▌ "$R$BG${RL[$1]//$R/$R$BG}$R; return; fi
+  if (( a <= 0.02 )); then REPLY="  "$RL[$1]; return; fi
+  local m g
+  xmix $ATr $ATg $ATb $a; m=$e"[38;2;${REPLY}m"
+  xmix $LBr $LBg $LBb $a; g=$e"[48;2;${REPLY}m"
+  REPLY=$m"▌ "$R$g${RL[$1]//$R/$R$g}$R
 }
 
 # --- the preview ------------------------------------------------------------------
@@ -453,6 +489,15 @@ lastpv= pfile= crumbfor= crumbline=
 key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
 pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
 shown() {
+  if [[ -n $pdir ]]; then
+    local n=${rid[cur]#*:}
+    if (( cur )) && [[ -n $n && -e $pdir/$n ]]; then wrapped $pdir $pwdir $pw $n; else REPLY=/dev/null; fi
+    return
+  fi
+  if [[ -n $sbase ]]; then
+    if steps_at; then steps_file $REPLY; else REPLY=; fi
+    return
+  fi
   pvname "$rid[cur]" $pw
   # This gen's, when it is there, whatever landed after it: a render of an
   # older gen that finished later is newer on disk, and stale.
@@ -460,6 +505,670 @@ shown() {
   local -a have=($REPLY.<->(Nom))
   (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
   REPLY=${have[1]}
+}
+
+# --- a walk's steps ---------------------------------------------------------------
+# --steps <command>: a walk (git-trace --walk), stepped through here rather
+# than by a script a key: the command says where walk-prep put the walk for
+# this pane's width (its nav and a preview a step, git-trace --steps-base),
+# and it runs when the screen opens, when the rows are reloaded (b, the other
+# side) and when the width settles, never on a key. j, l and h go over, into
+# and out, k back, each one frame: the step's preview was drawn and wrapped
+# ahead (steps_warm), so a key moves the cursor and the pane together. A
+# step to another line of the same file scrolls there through the file
+# (xcode), under its head held in place, and lands on its preview.
+typeset -a nvi nover ninto nout nfi nline shist
+typeset -A sfirst frow
+integer kcur=-1 sw=0
+sbase= sdir=
+steps_load() {
+  local was=$sbase line
+  local -a f
+  subst "$stepscmd" 0
+  sbase=$(FZF_PREVIEW_COLUMNS=$pw zsh -fc "$REPLY" 2>/dev/null </dev/null)
+  [[ -n $sbase && -s $sbase.nav ]] || { sbase=$was; return 1; }
+  # Where the walk is: a tour's stop opens on its step (git-trace --walk-at).
+  kcur=-1
+  [[ -r $st/cur ]] && { read -r kcur < $st/cur; [[ $kcur == <-> ]] || kcur=-1; }
+  if [[ $sbase != $was ]] || (( pw != sw )); then
+    nvi=() nover=() ninto=() nout=() nfi=() nline=() sfirst=() frow=()
+    for line in ${(f)"$(<$sbase.nav)"}; do
+      f=(${=line})
+      nvi+=($f[2]) nover+=($f[3]) ninto+=($f[4]) nout+=($f[5]) nfi+=($f[6]) nline+=($f[7])
+      (( ${+sfirst[$f[2]]} )) || sfirst[$f[2]]=$f[1]
+    done
+    sw=$pw sdir=$st/steps/${sbase:t}-$pw
+    mkdir -p $sdir
+    [[ $sbase != $was ]] && shist=()
+    steps_warm
+  fi
+  return 0
+}
+# steps_at: the step the row under the cursor shows: the walk's own when it
+# is in this row's call, else the call's first. -1 on a row that is no call.
+steps_at() {
+  REPLY=-1
+  (( cur )) && [[ $rid[cur] == v:<-> ]] || return 1
+  local vi=${rid[cur]#v:}
+  if (( kcur >= 0 && nvi[kcur+1] == vi )); then REPLY=$kcur; else REPLY=${sfirst[$vi]:--1}; fi
+  (( REPLY >= 0 ))
+}
+# wrapped <raw dir> <wrapped dir> <width> <name>: a preview drawn ahead,
+# wrapped to the pane, wrapping it now if wrapall has not got to it yet.
+wrapped() {
+  REPLY=$2/$4
+  [[ -e $REPLY ]] || wrapin $3 $1/$4 $REPLY $REPLY.tmp.$sysparams[pid]
+}
+# wrapall <raw dir> <wrapped dir> <width> <names...>: those wrapped in the
+# background, in that order, so none is wrapped on a key.
+wrapall() {
+  local raw=$1 d=$2 w=$3; shift 3
+  {
+    local f
+    for f in "$@"; do
+      [[ -d $d ]] || break
+      [[ -e $d/$f ]] || wrapin $w $raw/$f $d/$f $d/$f.tmp.$sysparams[pid]
+    done
+  } &!
+}
+steps_file() { wrapped ${sbase}-$sw $sdir $sw $1; }
+# steps_warm: the files first, which every scroll in them needs and which are
+# the biggest, then the steps from the one you are on outward.
+steps_warm() {
+  local -a names=(${sbase}-$sw/file-<->(N:t))
+  integer at=$(( kcur >= 0 ? kcur : 0 )) n=$#nvi i
+  for (( i = 0; i < n; i++ )); do
+    (( at + i < n )) && names+=($(( at + i )))
+    (( i && at - i >= 0 )) && names+=($(( at - i )))
+  done
+  hfixof ${sbase}-$sw $names
+  wrapall ${sbase}-$sw $sdir $sw $names
+}
+
+# --- panes drawn ahead --------------------------------------------------------------
+# --panes <command>: every row's preview drawn ahead, in the directory the
+# command names for this pane's width, a file a row named by the row's id
+# after its first colon (a tour's: git-trace --tour-panes). All wrapped in
+# the background as it opens, so j and k move the cursor and the pane in
+# one frame, with no preview drawn behind them. The command runs when it
+# opens, when the rows reload and when the width settles. A row's preview
+# can say where it is (<name>.at: its path and line first), and the
+# directory can hold each such file whole (files/<path, / as %>): j or k
+# from one to another line of the same file scrolls there (xcode).
+pdir= pwdir=
+panes_load() {
+  local d
+  subst "$panescmd" 0
+  d=$(FZF_PREVIEW_COLUMNS=$pw zsh -fc "$REPLY" 2>/dev/null </dev/null)
+  [[ -n $d && -d $d ]] || return 1
+  # Drawn again (the rows reloaded because they changed): wrapped again.
+  pdir=$d pwdir=$st/panes/$pw
+  rm -rf $pwdir; mkdir -p $pwdir/files
+  local -a names
+  local n
+  integer at=$(( cur ? cur : 1 )) i
+  for (( i = 0; i < $#rid; i++ )); do
+    (( at + i <= $#rid )) && n=${rid[at+i]#*:} && [[ -e $pdir/$n ]] && names+=($n)
+    (( i && at - i >= 1 )) && n=${rid[at-i]#*:} && [[ -e $pdir/$n ]] && names+=($n)
+  done
+  # The files whole first, the biggest and what every scroll needs.
+  local -a files=($pdir/files/*(N))
+  hfixof $pdir $names
+  wrapall $pdir $pwdir $pw ${files#$pdir/} $names
+  return 0
+}
+# --- fading ------------------------------------------------------------------------
+# A row comes and goes by fading, not at once: xfade draws it that much of
+# the way from the pane's own ground (its colors mixed toward the terminal's
+# background, which the screen asks the terminal for as it opens).
+integer PBr=29 PBg=32 PBb=33 TXr=235 TXg=219 TXb=178 HBr=0 HBg=0 HBb=0 LBr=60 LBg=56 LBb=54
+[[ $OTIS_T_TEXT == (#b)*38\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]] && TXr=$match[1] TXg=$match[2] TXb=$match[3]
+[[ $OTIS_T_CODEBG == (#b)*48\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]] && LBr=$match[1] LBg=$match[2] LBb=$match[3]
+# pbask: the terminal's background (OSC 11), for fading into; kept as it
+# was when the terminal does not say within a moment.
+pbask() {
+  local r= c
+  print -rnu $tty -- $'\e]11;?\e\\'
+  while sysread -t 0.08 -s 1 -i $tty c; do
+    r+=$c
+    [[ $r == *($'\a'|$'\e\\') ]] && break
+  done
+  [[ $r == (#b)*rgb:([0-9a-fA-F]##)/([0-9a-fA-F]##)/([0-9a-fA-F]##)* ]] || return 0
+  PBr=$(( 16#${match[1][1,2]} )) PBg=$(( 16#${match[2][1,2]} )) PBb=$(( 16#${match[3][1,2]} ))
+}
+# xmix <r> <g> <b> <a>: that color a of the way from the background (REPLY "r;g;b").
+xmix() {
+  REPLY="$(( int(PBr + ($1 - PBr) * $4 + 0.5) ));$(( int(PBg + ($2 - PBg) * $4 + 0.5) ));$(( int(PBb + ($3 - PBb) * $4 + 0.5) ))"
+}
+# xfade <row> <a>: the row a of the way from nothing to itself (REPLY): every
+# color it sets mixed toward the background, and its plain text too.
+xfade() {
+  float a=$2
+  (( a >= 0.999 )) && { REPLY=$1; return; }
+  (( a < 0 )) && a=0
+  local s=$1 out p ft
+  local -a f o
+  integer i
+  xmix $TXr $TXg $TXb $a; ft="38;2;$REPLY"
+  out=$e"[${ft}m"
+  while [[ $s == (#b)([^$e]#)$e\[([0-9\;]#)m(*) ]]; do
+    out+=$match[1] p=$match[2] s=$match[3]
+    f=("${(@s:;:)p}") o=()
+    (( $#f )) || f=(0)
+    for (( i = 1; i <= $#f; i++ )); do
+      if [[ $f[i] == (38|48) && $f[i+1] == 2 ]]; then
+        xmix $f[i+2] $f[i+3] $f[i+4] $a; o+=("$f[i];2;$REPLY"); (( i += 4 ))
+      elif [[ -z $f[i] || $f[i] == 0 ]]; then o+=("0;$ft")
+      else o+=("$f[i]"); fi
+    done
+    out+=$e"[${(j:;:)o}m"
+  done
+  REPLY=$out$s
+}
+# xbarbg <a>: the ground of the line you are on, a of the way in.
+xbarbg() {
+  (( HBr + HBg + HBb )) || [[ $HEREbg != (#b)*48\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]] || HBr=$match[1] HBg=$match[2] HBb=$match[3]
+  xmix $HBr $HBg $HBb $1; REPLY=$e"[48;2;${REPLY}m"
+}
+
+# --- transitions ------------------------------------------------------------------
+# Nothing in the pane changes at once. A key that changes what the pane
+# shows starts a transition from what is on the screen to what will be, a
+# frame every 20ms, and the pane lands on the real preview when it is done.
+# The head (a stop's words, a step's) holds where it is, as tall as every
+# head of the walk or tour (headpad), and its words change in place, a row
+# at a time; under it the code:
+#   scrolls, to another line of the same file, as an editor would: what
+#     hangs under the old lines folds, the lines move together to the new
+#     one, and what hangs under the new lines unfolds (xcode);
+#   pushes, to another file or a page with no code: the old code goes up
+#     and away and the new follows it in (down and away with k).
+# The key that starts one is handled at once; any key or the mouse lands
+# the one going first (xstop).
+typeset -a XK XO XN XF XT XOLD XOLDK XNEW XNEWK XHO XHN XHF
+integer xfh=0 xfk=0
+xmode=anchor
+integer xon=0 xa0=0 xa1=0 xy0=0 xy1=0 xland=0 syncing=0
+float xt0=0 xdur=0.2
+xnext= afile=
+float xe=0 xh=0
+# The ground of the line you are on, as walk.mjs draws it.
+if [[ $OTIS_T_ATTENTION == (#b)*38\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]]; then
+  HEREbg=$e"[48;2;$(( int(match[1] * 0.28 + 0.5) ));$(( int(match[2] * 0.28 + 0.5) ));$(( int(match[3] * 0.28 + 0.5) ))m"
+else HEREbg=$e'[48;5;58m'; fi
+# xkeys <rows...>: a key a row (reply): L<n> a line of code, R<n> a line
+# the change removed, <key>+<row> what hangs under one (its values, its
+# box, a piece of it wrapped), h:<row> a row over the code (a stop's words).
+xkeys() {
+  local r last= k pat="(#b)(#s)($e\\[[0-9;]#m)#( #)([0-9]##)$e\\[0m($e\\[[0-9;]#m)# (*)"
+  local -A seen
+  reply=()
+  for r in "$@"; do
+    if [[ $r == ${~pat} ]]; then
+      if [[ $match[5] == ($e\[[0-9\;]#m)#-* ]]; then k=R$match[3]; else k=L$match[3]; fi
+      last=$k
+    elif [[ -n $last ]]; then k=$last+$r
+    else k=h:$r; fi
+    (( seen[$k]++ )) && k+="#$seen[$k]"
+    reply+=("$k")
+  done
+}
+# xfile <file>: a preview drawn ahead, whole, head and all (reply), as the
+# pane shows it scrolled to its top.
+xfile() {
+  local -a p=("${(@f)$(<$1)}")
+  xfh=0 xfk=0
+  [[ $p[1] == (#b)$'\036'pin\ (<->)(\ at\ (<->))# ]] && { xfh=$match[1] xfk=${match[3]:-0}; p=("${(@)p[2,-1]}"); }
+  reply=("${(@)p}")
+}
+# xshown: what the pane shows now, as one list from its top (XOLD, XOLDK):
+# the head and the code from where it is scrolled.
+xcr0=
+integer xpo=0
+xshown() {
+  # What is shown now, before the key moves the cursor (go sets the scroll
+  # for the row it lands on): the head line, the scroll, the rows.
+  xcr0=$crumbline xpo=$poff
+  XOLD=("${(@)PH}" "${(@)P[poff+1,-1]}")
+  xkeys "${(@)XOLD}"; XOLDK=("${(@)reply}")
+}
+# xnew <file>: the preview it goes to (XNEW, XNEWK).
+xnew() {
+  xfile $1; XNEW=("${(@)reply}")
+  xkeys "${(@)XNEW}"; XNEWK=("${(@)reply}")
+}
+# xmerge: XOLD and XNEW as one list: XK the keys, XO and XN each one's row,
+# XF 0 both, 1 the old alone, 2 the new alone.
+xmerge() {
+  local -A inN
+  integer i n=$#XOLDK m=$#XNEWK j
+  for (( j = 1; j <= m; j++ )); do inN[$XNEWK[j]]=$j; done
+  XK=() XO=() XN=() XF=()
+  i=1 j=1
+  while (( i <= n || j <= m )); do
+    if (( i <= n && j <= m )) && [[ $XOLDK[i] == $XNEWK[j] ]]; then
+      XK+=("$XOLDK[i]") XO+=("$XOLD[i]") XN+=("$XNEW[j]") XF+=(0); (( i++, j++ ))
+    elif (( i <= n )) && { (( j > m )) || (( ! ${+inN[$XOLDK[i]]} )) || (( inN[$XOLDK[i]] < j )); }; then
+      XK+=("$XOLDK[i]") XO+=("$XOLD[i]") XN+=("") XF+=(1); (( i++ ))
+    else
+      XK+=("$XNEWK[j]") XO+=("") XN+=("$XNEW[j]") XF+=(2); (( j++ ))
+    fi
+  done
+  # A line of code only one has is the same file around it, drawn the same
+  # (walk.mjs's codeRows): it stays, so only what hangs under lines folds,
+  # and nothing out of sight folds at once and jerks the scroll.
+  for (( i = 1; i <= $#XK; i++ )); do
+    [[ $XF[i] != 0 && $XK[i] == [LR]<->(\#<->)# ]] || continue
+    if (( XF[i] == 1 )); then XN[i]=$XO[i]; else XO[i]=$XN[i]; fi
+    XF[i]=0
+  done
+}
+# xsame <rows...>: every row in both, for a scroll (XK XO XN XF).
+xsame() {
+  local r
+  XO=("$@") XN=("$@") XF=()
+  for r in "$@"; do XF+=(0); done
+}
+# xwhen: when each row folds (the old alone) or unfolds (the new alone):
+# a wave out from the anchor, a row going and a row coming at the same
+# distance at the same moment, so the pane never opens a gap. The rows that
+# change within a pane's height of the anchor are spread evenly over the
+# whole of it by their order out from the anchor, however many or few, so
+# thirteen rows of a box fold one by one rather than in a blink; those
+# farther off, out of sight, change at the end. None on the first frame.
+xwhen() {
+  integer i d H=$(( ph - 2 )) n=0 k
+  local -a near
+  XT=()
+  for (( i = 1; i <= $#XK; i++ )); do
+    XT+=(0)
+    (( XF[i] )) || continue
+    (( d = i > xa1 ? i - xa1 : xa1 - i ))
+    if (( d <= H )); then near+=("${(l:6::0:)d} $i"); (( n++ )); else XT[i]=$(( 1 - XFW )); fi
+  done
+  (( n )) || return 0
+  # A row going starts fading at once (it is gone by XT), a row coming
+  # starts showing at once (it is in by XT + XFW): the first frame after
+  # the key already moves.
+  k=0
+  float r
+  for d i in ${=${(on)near}}; do
+    (( r = n > 1 ? 1.0 * k / (n - 1) : 0 ))
+    if (( XF[i] == 1 )); then XT[i]=$(( XFW + (1 - XFW) * r )); else XT[i]=$(( (1 - XFW) * r )); fi
+    (( k++ ))
+  done
+}
+# xstart <seconds> <next phase>: go.
+xstart() {
+  xdur=$1 xnext=$2 xt0=$EPOCHREALTIME xon=1 syncing=1
+}
+# xindex <key>: its place in XK, else 0.
+xindex() { REPLY=${XK[(ie)$1]}; (( REPLY <= $#XK )) || REPLY=0; }
+# xvis <i>: shown at this moment: in both, or not folded yet, or unfolded already.
+xvis() { (( XF[$1] == 0 || (XF[$1] == 1 && xe < XT[$1]) || (XF[$1] == 2 && xe >= XT[$1]) )); }
+# xease: how far the phase has come, eased in and out (xe).
+xease() {
+  float t=$(( (EPOCHREALTIME - xt0) / xdur ))
+  (( t > 1 )) && t=1
+  # Sine in and out: it gets going at once and settles gently, where a
+  # cubic sat still for its first fifth, which read as the key lagging.
+  (( xe = (1 - cos(3.14159265 * t)) / 2 ))
+}
+# xrow <i>: the merged row i at this moment of a push (REPLY): every row is
+# in both there, so as it is.
+float XFW=0.22
+xrow() { REPLY=$XN[$1]; }
+# xswap <old> <new>: a row changing in place, crossfaded (REPLY): the
+# old dims a quarter and the new comes up from there, never through nothing,
+# which read as a blink, nor far, which read as a flicker.
+xswap() {
+  if [[ $1 == "$2" ]]; then REPLY=$2
+  elif (( xe < 0.5 )); then xfade "$1" $(( 1 - 0.25 * (xe < 0.25 ? 0 : (xe - 0.25) / 0.25) ))
+  else xfade "$2" $(( 0.75 + 0.25 * (xe > 0.75 ? 1 : (xe - 0.5) / 0.25) )); fi
+}
+# xbar <row> <a>: the bar of the line you are on over the row, a of the
+# way in (REPLY), carried past every reset in it.
+xbar() {
+  local c=${1//${~${(b)HEREbg}}/} g
+  integer padn
+  xbarbg $2; g=$REPLY
+  vw "$c"; (( padn = pw - REPLY, padn < 0 ? (padn = 0) : 0 ))
+  REPLY=$g${c//(#m)$e\[0(\;[0-9\;]#)#m/$MATCH$g}${(l:padn:: :)}$R
+}
+# xframe: the pane at this moment of it (P, drawn from the pane's top, the
+# head first, held in place, changing in place).
+xframe() {
+  xease
+  P=()
+  integer i
+  # The head's words change over the whole of a scroll, not each step of it.
+  xh=$xe
+  if [[ $xmode == code ]]; then
+    (( xh = xgdur > 0 ? (EPOCHREALTIME - xg0) / xgdur : 1, xh > 1 ? (xh = 1) : 0 ))
+    (( xh = (1 - cos(3.14159265 * xh)) / 2 ))
+  fi
+  # The head's words change a row at a time, top down, each row out and its
+  # new words in (a wave, so the head is never all gone at once), and it
+  # grows before the new words come or shrinks after the old have gone, a
+  # row at a time, so the code under it never jumps.
+  integer ho=$#XHO hn=$#XHN hr n=$#XHF
+  float tl
+  if (( hn < ho )); then (( hr = xh < 0.8 ? ho : int(ho + (hn - ho) * (xh - 0.8) * 5 + 0.5) ))
+  else (( hr = xh >= 0.2 ? hn : int(ho + (hn - ho) * xh * 5 + 0.5) )); fi
+  for (( i = 1; i <= hr; i++ )); do
+    (( tl = (xh - 0.5 * (i - 1) / (n > 1 ? n - 1 : 1)) / 0.3, tl < 0 ? (tl = 0) : (tl > 1 ? (tl = 1) : 0) ))
+    if (( XHF[i] == 0 )) && [[ $XHO[i] == "$XHN[i]" ]]; then REPLY=$XHN[i]
+    elif (( tl < 0.5 )); then
+      if (( XHF[i] == 2 )); then REPLY=; else xfade "$XHO[i]" $(( 1 - tl * 2 )); fi
+    elif (( XHF[i] == 1 )); then REPLY=
+    else xfade "$XHN[i]" $(( tl * 2 - 1 )); fi
+    P+=("$REPLY")
+  done
+  if [[ $xmode == code ]]; then xframe_code; else xframe_anchor; fi
+  PH=() phd=2 poff=0 pfile=
+}
+# xframe_anchor: the code under the head around the anchor row, which goes
+# from xa0 to xa1 and from row xy0 to xy1 of the code.
+xframe_anchor() {
+  integer H=$(( ph - 2 - $#P )) A y i n
+  (( A = int(xa0 + (xa1 - xa0) * xe + 0.5), y = int(xy0 + (xy1 - xy0) * xe + 0.5) ))
+  while (( A > 1 )) && ! xvis $A; do (( A-- )); done
+  local -a up down
+  for (( i = A - 1; i >= 1 && $#up < y; i-- )); do xvis $i && up=($i $up); done
+  for (( i = A + 1; i <= $#XK && $#down < H - y - 1; i++ )); do xvis $i && down+=($i); done
+  for (( n = $#up; n < y; n++ )); do P+=(""); done
+  for i in $up $A $down; do xrow $i; P+=("$REPLY"); done
+}
+# xtick: a frame on; a phase done goes on to the next, the last lands.
+xtick() {
+  (( EPOCHREALTIME - xt0 >= xdur )) || return 0
+  if [[ -n $xnext ]]; then local f=$xnext; xnext=; $f; return 0; fi
+  xon=0 pfile= poff=$xland
+  (( cur )) && offs[$rid[cur]]=$poff
+  return 0
+}
+# xstop: land the one going now, drawn, so a key goes on from there.
+xstop() {
+  (( xon )) || return 0
+  while (( xon )); do xt0=0; xtick; done
+  draw
+}
+
+# headpad <rows...>: a pinned head as tall as every head of the walk or tour
+# (hfix, the tallest), blank rows over its rule, so the code under it starts
+# on the same row whatever it says and only its words change (reply).
+integer hfix=0
+headpad() {
+  reply=("$@")
+  integer want=$hfix room=$(( ph - 2 - 6 )) i
+  (( want > room )) && want=room
+  (( $#reply >= want )) && return 0
+  local -a pad
+  for (( i = $#reply; i < want; i++ )); do pad+=(""); done
+  if [[ $reply[-1] == *─* ]]; then reply=("${(@)reply[1,-2]}" "${(@)pad}" "$reply[-1]")
+  else reply+=("${(@)pad}"); fi
+}
+# hfixof <dir> <names...>: hfix, the tallest head of those previews.
+hfixof() {
+  local d=$1 f l; shift
+  hfix=0
+  for f in "$@"; do
+    [[ -r $d/$f ]] || continue
+    IFS= read -r l < $d/$f
+    [[ $l == (#b)$'\036'pin\ (<->)* ]] && (( match[1] > hfix )) && hfix=$match[1]
+  done
+}
+# xsplit <file>: a preview drawn ahead as the pane will show it: its head
+# (NH, as many rows as the pane pins, padded as every head is: headpad) and
+# its code (NB), the row of the code its line is on (NK), and the scroll it
+# lands at (NL), that line a third of the way down.
+typeset -a NH NB NBK
+integer NK=0 NL=0
+xsplit() {
+  xfile $1
+  local -a all=("${(@)reply}")
+  integer np=$xfh room=$(( ph - 2 - 6 ))
+  (( np > room )) && np=room
+  headpad "${(@)all[1,np]}"; NH=("${(@)reply}")
+  NB=("${(@)all[np+1,-1]}")
+  xkeys "${(@)NB}"; NBK=("${(@)reply}")
+  (( NK = xfk ? xfk + xfh - np : 0 ))
+  xlanding $#NH
+  NL=$REPLY
+}
+# xlanding <head rows>: where a preview lands scrolled: its line (NK) a third
+# of the way down the code under a head that tall.
+xlanding() {
+  integer F=$(( (ph - 2 - $1) / 3 ))
+  REPLY=$(( NK - 1 - F > 0 ? NK - 1 - F : 0 ))
+}
+# xhead <old rows> -- <new rows>: the head crossfading in place (XHO XHN XHF).
+xhead() {
+  integer i n
+  XHF=()
+  (( n = $#XHO > $#XHN ? $#XHO : $#XHN ))
+  for (( i = 1; i <= n; i++ )); do
+    if (( i <= $#XHO && i <= $#XHN )); then XHF+=(0); elif (( i <= $#XHO )); then XHF+=(1); else XHF+=(2); fi
+  done
+}
+# xpush <1 forward, -1 back>: to another file or a page with no code. When
+# both have a head it holds and its words change in place while the code
+# under it goes up and away and the new code follows it in (down with k);
+# else the old pane goes whole and the new one follows it, head and all.
+xpush() {
+  integer H=$(( ph - 2 ))
+  local -a old new
+  if (( $#PH && $#NH )); then
+    XHO=("${(@)PH}") XHN=("${(@)NH}"); xhead
+    (( H -= $#NH ))
+    old=("${(@)P[xpo+1,-1]}") new=("${(@)NB[NL+1,-1]}")
+  else
+    XHO=() XHN=() XHF=()
+    old=("${(@)PH}" "${(@)P[xpo+1,-1]}") new=("${(@)NH}" "${(@)NB[NL+1,-1]}")
+  fi
+  old=("${(@)old[1,H]}") new=("${(@)new[1,H]}")
+  if (( $1 > 0 )); then
+    XK=("${(@)old}" "" "${(@)new}")
+    xa0=1 xa1=$(( $#old + 2 ))
+  else
+    XK=("${(@)new}" "" "${(@)old}")
+    xa0=$(( $#new + 2 )) xa1=1
+  fi
+  xsame "${(@)XK}"; XT=()
+  xy0=0 xy1=0 xland=$NL xmode=anchor
+  xstart 0.6 ""
+}
+# The scroll, to another line of the same file, as an editor would: the file
+# is one list of its lines (the file whole, GFR, with each preview's own
+# rows in place of its lines: xspread), and it goes in three steps, one
+# thing at a time:
+#   fold: what hangs under the old lines (values, boxes) fades and folds
+#     away, the old line held where it is;
+#   scroll: the lines, and only the lines, move together from where the old
+#     line is to where the new one lands, its bar going off the old line and
+#     on to the new as they pass;
+#   unfold: the new lines' marks come in, and what hangs under them unfolds,
+#     the new line held where it lands.
+typeset -a GFR GFK XTA XTC XV
+integer xfa=0 xfb=0 xA0=0 xY0=0 xA1=0 xY1=0 xtop0=0 xtop1=0
+float xg0=0 xgdur=0 xdA=0 xdB=0 xdC=0
+xphase=
+# xspread <rows> <keys> <g0> <g1>: the file whole from its row g0 to g1 with
+# those rows (a preview's code) in place of its lines there (reply).
+xspread() {
+  local -a R=("${(@P)1}") K=("${(@P)2}")
+  local -A at
+  integer i n=$#K g own=0
+  for (( i = 1; i <= n; i++ )); do [[ $K[i] == [LR]<->(\#<->)# ]] && at[$K[i]]=$i; done
+  reply=()
+  for (( g = $3; g <= $4; g++ )); do
+    if [[ $GFK[g] == [LR]<->(\#<->)# ]]; then
+      if (( ${+at[$GFK[g]]} )); then
+        own=1 i=$at[$GFK[g]]
+        reply+=("$R[i]")
+        for (( i++; i <= n && ! ${+at[$K[i]]}; i++ )); do reply+=("$R[i]"); done
+      else own=0 reply+=("$GFR[g]"); fi
+    elif (( ! own )); then reply+=("$GFR[g]"); fi
+  done
+}
+# xcode <from line> <to line>: the scroll, set going (see above).
+xcode() {
+  integer la=$1 lb=$2 H=$(( ph - 2 - $#NH )) g0 g1 i
+  local -a ok nk
+  XOLD=("${(@)P}"); xkeys "${(@)XOLD}"; XOLDK=("${(@)reply}")
+  (( ${XOLDK[(ie)L$la]} <= $#XOLDK && ${NBK[(ie)L$lb]} <= $#NBK && ${GFK[(ie)L$la]} <= $#GFK && ${GFK[(ie)L$lb]} <= $#GFK )) || return 1
+  # Only the stretch of the file both previews cover and what lies between.
+  ok=(${(M)XOLDK:#[LR]<->}) nk=(${(M)NBK:#[LR]<->})
+  (( $#ok && $#nk )) || return 1
+  g0=${GFK[(ie)$ok[1]]} g1=${GFK[(ie)$ok[-1]]}
+  i=${GFK[(ie)$nk[1]]}; (( i < g0 )) && g0=i
+  i=${GFK[(ie)$nk[-1]]}; (( i > g1 && i <= $#GFK )) && g1=i
+  (( g1 > $#GFK )) && g1=$#GFK
+  xspread XOLD XOLDK $g0 $g1; XOLD=("${(@)reply}"); xkeys "${(@)XOLD}"; XOLDK=("${(@)reply}")
+  xspread NB NBK $g0 $g1; XNEW=("${(@)reply}"); xkeys "${(@)XNEW}"; XNEWK=("${(@)reply}")
+  xmerge
+  xindex L$la; xfa=$REPLY; xindex L$lb; xfb=$REPLY
+  (( xfa && xfb )) || return 1
+  # The bars off the two lines: drawn over them as the steps go (xcrow).
+  local strip=${~${(b)HEREbg}}
+  XO[xfa]=${XO[xfa]//$strip/} XN[xfa]=${XN[xfa]//$strip/}
+  XO[xfb]=${XO[xfb]//$strip/} XN[xfb]=${XN[xfb]//$strip/}
+  # Held rows: the old line where it is shown (else the top row, at the
+  # top), the new line where it lands.
+  xkeys "${(@)P}"
+  integer oi=${reply[(ie)L$la]}
+  (( xY0 = oi - 1 - xpo ))
+  if (( xY0 >= 0 && xY0 < H )); then xA0=$xfa
+  else xindex "$reply[xpo+1]"; xA0=$REPLY xY0=0; fi
+  (( xY1 = ${NBK[(ie)L$lb]} - 1 - NL ))
+  if (( xY1 >= 0 && xY1 < H )); then xA1=$xfb
+  else xindex "$NBK[NL+1]"; xA1=$REPLY xY1=0; fi
+  (( xA0 && xA1 )) || return 1
+  # When each row folds (ranked out from the old line) and unfolds (from the new).
+  xa1=$xA0; xwhen; XTA=("${(@)XT}")
+  xa1=$xA1; xwhen; XTC=("${(@)XT}")
+  # The lines alone, in order: what the scroll moves through.
+  XV=()
+  for (( i = 1; i <= $#XK; i++ )); do (( XF[i] )) || XV+=($i); done
+  (( xtop0 = ${XV[(ie)$xA0]} - 1 - xY0, xtop1 = ${XV[(ie)$xA1]} - 1 - xY1 ))
+  integer nold=${#${(M)XF:#1}} nnew=${#${(M)XF:#2}} dist=$(( xtop1 > xtop0 ? xtop1 - xtop0 : xtop0 - xtop1 ))
+  (( xdA = nold ? 0.4 : 0 ))
+  (( xdB = dist || xfa != xfb ? 0.5 + (dist > 900 ? 900 : dist) / 700.0 : 0 ))
+  (( xdC = 0.45 ))
+  XHO=("${(@)PH}") XHN=("${(@)NH}"); xhead
+  xland=$NL xmode=code
+  xg0=$EPOCHREALTIME xgdur=$(( xdA + xdB + xdC ))
+  xcodeA
+}
+xcodeA() { xphase=A; (( xdA > 0 )) && { xstart $xdA xcodeB; return; }; xcodeB; }
+xcodeB() { xphase=B; (( xdB > 0 )) && { xstart $xdB xcodeC; return; }; xcodeC; }
+xcodeC() { xphase=C; xstart $xdC ""; }
+# xcrow <i>: merged row i at this moment of the scroll (REPLY).
+xcrow() {
+  integer n=$1
+  float a
+  case $XF[n] in
+    1) xfade "$XO[n]" $(( (XTA[n] - xe) / XFW )); return ;;
+    2) xfade "$XN[n]" $(( (xe - XTC[n]) / XFW )); return ;;
+  esac
+  if [[ $xphase == C ]]; then xswap "$XO[n]" "$XN[n]"; else REPLY=$XO[n]; fi
+  if (( n == xfa && n == xfb )); then a=1
+  elif (( n == xfa )); then
+    case $xphase in A) a=1 ;; B) (( a = 1 - 2 * xe )) ;; C) a=0 ;; esac
+  elif (( n == xfb )); then
+    case $xphase in A) a=0 ;; B) (( a = 2 * xe - 1 )) ;; C) a=1 ;; esac
+  else return 0; fi
+  (( a > 0.02 )) && { xbar "$REPLY" $a; }
+  return 0
+}
+# xframe_code: the code under the head at this moment of the scroll.
+xframe_code() {
+  integer H=$(( ph - 2 - $#P )) i top A y
+  local -a up down
+  if [[ $xphase == B ]]; then
+    (( top = int(xtop0 + (xtop1 - xtop0) * xe + (xtop1 > xtop0 ? 0.5 : -0.5)) ))
+    for (( i = top + 1; i <= top + H; i++ )); do
+      if (( i < 1 || i > $#XV )); then P+=(""); else xcrow $XV[i]; P+=("$REPLY"); fi
+    done
+    return 0
+  fi
+  if [[ $xphase == A ]]; then A=$xA0 y=$xY0; else A=$xA1 y=$xY1; fi
+  for (( i = A - 1; i >= 1 && $#up < y; i-- )); do xcvis $i && up=($i $up); done
+  for (( i = A + 1; i <= $#XK && $#down < H - y - 1; i++ )); do xcvis $i && down+=($i); done
+  for (( i = $#up; i < y; i++ )); do P+=(""); done
+  for i in $up $A $down; do xcrow $i; P+=("$REPLY"); done
+}
+# xcvis <i>: shown at this moment of the scroll: a line always, what hangs
+# under the old ones until it folds, under the new once it unfolds.
+xcvis() {
+  case $XF[$1] in
+    0) return 0 ;;
+    1) [[ $xphase == A ]] && (( xe < XTA[$1] )) ;;
+    2) [[ $xphase == C ]] && (( xe >= XTC[$1] )) ;;
+  esac
+}
+# xgo <new preview> <file whole or ""> <from line> <to line> <1|-1>: the
+# transition from what is shown to that preview: the scroll within a file,
+# else the push.
+typeset -A xkcache
+xgo() {
+  local np=$1 fv=$2
+  integer la=$3 lb=$4 dir=$5
+  xsplit $np
+  if [[ -n $fv ]] && (( la && lb )); then
+    [[ $afile == $fv ]] || { GFR=("${(@f)$(<$fv)}") afile=$fv; }
+    if [[ -n $xkcache[$fv] ]]; then GFK=("${(@ps:\x1f:)xkcache[$fv]}")
+    else xkeys "${(@)GFR}"; GFK=("${(@)reply}"); xkcache[$fv]=${(pj:\x1f:)GFK}; fi
+    xcode $la $lb && return
+  fi
+  xpush $dir
+}
+# panes_go <row it was on> <1|-1>: from that row's preview to this one's: a
+# scroll when both say where they are (<name>.at) in the same file and the
+# directory has it whole (files/), else a push.
+panes_go() {
+  local a=${rid[$1]#*:} b=${rid[cur]#*:} pa pb fv= np=/dev/null
+  integer la=0 lb=0
+  [[ -e $pdir/$b ]] && { wrapped $pdir $pwdir $pw $b; np=$REPLY; }
+  if [[ -r $pdir/$a.at && -r $pdir/$b.at ]]; then
+    read -r pa la _ < $pdir/$a.at; read -r pb lb _ < $pdir/$b.at
+    [[ $pa == $pb && -e $pdir/files/${pa//\//%} ]] && { wrapped $pdir $pwdir $pw files/${pa//\//%}; fv=$REPLY; }
+  fi
+  xgo $np "$fv" $la $lb $2
+}
+
+# steps_key <j|l|h|k>: over, into, out, or back.
+steps_key() {
+  steps_at || return
+  local k=$REPLY j
+  case $1 in
+    j) j=$nover[k+1] ;;
+    l) j=$ninto[k+1] ;;
+    h) j=$nout[k+1] ;;
+    k) j=${shist[-1]:--1} ;;
+  esac
+  if (( j < 0 )); then
+    case $1 in
+      j) flash="that was its last line in this call; h goes out" ;;
+      l) flash="this line calls nothing the change made" ;;
+      h) flash="the test called this one" ;;
+      k) flash="nowhere to go back to" ;;
+    esac
+    return
+  fi
+  if [[ $1 == k ]]; then shist[-1]=(); else shist+=($k); fi
+  xshown
+  kcur=$j
+  print -r -- $j > $st/cur
+  local row=${rid[(ie)v:$nvi[j+1]]}
+  (( row <= $#rid )) && go $row
+  # From what is shown to the step's preview: in the same file a scroll,
+  # else a push (xgo).
+  local fv=
+  (( nfi[k+1] == nfi[j+1] )) && { steps_file file-$nfi[j+1]; fv=$REPLY; }
+  steps_file $j
+  local dir=-1; [[ $1 == [jl] ]] && dir=1
+  xgo $REPLY "$fv" $nline[k+1] $nline[j+1] $dir
 }
 # subst <text> <row>: fzf's {n} as the row's nth field, quoted; {q} the query.
 subst() {
@@ -473,26 +1182,37 @@ subst() {
   REPLY=$s
 }
 render() {
-  local w=$1 file=$2 i=$3 first
+  local w=$1 file=$2 i=$3
   subst "$preview" $i
   FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null > $file.raw
-  IFS= read -r first < $file.raw
-  if [[ $first == $'\036'pin\ <-> ]]; then
+  wrapin $w $file.raw $file $file.tmp
+  rm -f $file.raw
+}
+# wrapin <width> <raw> <file> <tmp>: a preview as it came, wrapped to the
+# pane, written through <tmp> into <file>, and where each line wrapped into
+# <file>.cont (for a selection's copy).
+wrapin() {
+  local w=$1 raw=$2 file=$3 tmp=$4 first
+  IFS= read -r first < $raw
+  if [[ $first == $'\036'pin\ <->* ]]; then
     # Pinned lines ("\036pin N" and N lines, draw): wrapped apart from the
     # rest, and the marker written after, with how many lines they wrapped
-    # to, since the wrap drops the control character that marks it.
-    integer n=${first#*pin }
-    sed -n "2,$(( n + 1 ))p" $file.raw | LC_ALL=C awk -v w=$w -v cont=/dev/null "$wrap_awk" > $file.pin
-    { print -r -- $'\036'"pin ${$(wc -l < $file.pin)// /}"
-      cat $file.pin
-      sed -n "$(( n + 2 )),\$p" $file.raw | LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk"; } > $file.tmp
-    rm -f $file.pin
+    # to, since the wrap drops the control character that marks it, and
+    # whatever it says after the count (" at K", the row of the code the
+    # preview's line is on).
+    local rest=${first#*pin }
+    integer n=${rest%% *}
+    local suf=${rest#$n}
+    sed -n "2,$(( n + 1 ))p" $raw | LC_ALL=C awk -v w=$w -v cont=/dev/null "$wrap_awk" > $tmp.pin
+    { print -r -- $'\036'"pin ${$(wc -l < $tmp.pin)// /}$suf"
+      cat $tmp.pin
+      sed -n "$(( n + 2 )),\$p" $raw | LC_ALL=C awk -v w=$w -v cont=$tmp.cont "$wrap_awk"; } > $tmp
+    rm -f $tmp.pin
   else
-    LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" < $file.raw > $file.tmp
+    LC_ALL=C awk -v w=$w -v cont=$tmp.cont "$wrap_awk" < $raw > $tmp
   fi
-  rm -f $file.raw
-  mv -f $file.cont.tmp $file.cont 2>/dev/null
-  mv -f $file.tmp $file
+  mv -f $tmp.cont $file.cont 2>/dev/null
+  mv -f $tmp $file
 }
 # want: the row you are on, drawn if it is not kept yet. One at a time: a
 # row changed under you again and again (a key held) waits for the render
@@ -500,7 +1220,7 @@ render() {
 integer wpid=0
 want() {
   local f
-  (( cur && pw > 0 )) && [[ -n $preview && $typ[cur] != head ]] || return 1
+  (( cur && pw > 0 )) && [[ -n $preview && -z $stepscmd$panescmd && $typ[cur] != head ]] || return 1
   (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
   pvname "$rid[cur]" $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
@@ -512,7 +1232,7 @@ want() {
 # so j and k find them drawn. It stops at a gen or a width that is not the
 # one it was started for.
 warm() {
-  (( pw > 0 && $#vis )) && [[ -n $preview ]] || return
+  (( pw > 0 && $#vis )) && [[ -n $preview && -z $stepscmd$panescmd ]] || return
   print -r -- "$gen $pw" > $st/pv/gen
   local -a near
   local at=${vis[(Ie)$cur]} j
@@ -663,7 +1383,15 @@ draw() {
   # The pane: the preview, or ? its keys.
   local head=
   if (( help )); then helplines; pfile=; PH=() phd=2; head="  ${B}${T}keys, and what the glyphs say$R"
-  elif (( cur )) && [[ -n $preview ]]; then
+  elif (( cur )) && [[ -n $preview$stepscmd$panescmd ]] && (( xon )); then
+    # A transition's frame (xframe), under the row's own head line, which
+    # crossfades from the old one.
+    xframe
+    if [[ $rid[cur] != $crumbfor ]]; then crumb; crumbline=$REPLY crumbfor=$rid[cur]; fi
+    # On the whole transition's clock (xh), as the head's words are.
+    local xe=$xh
+    xswap "$xcr0" "$crumbline"; head=$REPLY
+  elif (( cur )) && [[ -n $preview$stepscmd$panescmd ]]; then
     # The preview read and split once when it lands, not every frame: a
     # frame of a scroll is then the lines it shows and nothing else.
     shown; lastpv=$REPLY
@@ -677,10 +1405,19 @@ draw() {
       # scrolls.
       PH=() phd=2
       integer pover=0
-      if [[ $P[1] == $'\036'pin\ <-> ]]; then
-        integer np=${P[1]#*pin } room=$(( ph - 2 - 6 ))
+      integer pat=0
+      if [[ $P[1] == (#b)$'\036'pin\ (<->)(\ at\ (<->))# ]]; then
+        integer np=$match[1] room=$(( ph - 2 - 6 ))
+        pat=${match[3]:-0}
         (( np > room )) && { pover=$(( np - room )); np=room; }
-        PH=("${(@)P[2,np+1]}") P=("${(@)P[np+2,-1]}") phd=$(( 2 + np ))
+        headpad "${(@)P[2,np+1]}"
+        PH=("${(@)reply}") P=("${(@)P[np+2,-1]}") phd=$(( 2 + $#reply ))
+        # A preview that says which row of its code is its line opens with
+        # that line a third of the way down, the code around it in sight.
+        if (( pat && ! ${+offs[$rid[cur]]} )); then
+          (( poff = pat + pover - 1 - (ph - phd) / 3, poff < 0 ? (poff = 0) : 0 ))
+          offs[$rid[cur]]=$poff
+        fi
       fi
       # A preview can say where it opens (off.<row>: a walk's step), which a
       # row not scrolled yet takes.
@@ -690,13 +1427,14 @@ draw() {
       fi
     fi
     # The preview a key asked for has landed: its scroll with it.
-    (( pwant >= 0 )) && [[ -n $pfile ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
+    (( pwant >= 0 )) && [[ -n $pfile && -z $sbase$pdir ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
     if [[ $rid[cur] != $crumbfor ]]; then crumb; crumbline=$REPLY crumbfor=$rid[cur]; fi
     head=$crumbline
   else P=() pfile= PH=() phd=2
   fi
   plen=$#P
   local -a fr pr
+  litrow
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     s=
@@ -704,7 +1442,7 @@ draw() {
     elif (( i <= $#L )); then
       if (( LI[i] )); then
         f=$LI[i]
-        if (( f == cur )); then s=$A"▌ "$R$BG${RL[f]//$R/$R$BG}$R
+        if (( ${LITI[(Ie)$i]} )); then litline $f $LITA[${LITI[(Ie)$i]}]; s=$REPLY
         else s="  "$RL[f]; fi
       else s=$L[i]$R; fi
     fi
@@ -786,6 +1524,13 @@ draw() {
   done
   shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
   local t1=$EPOCHREALTIME
+  # A transition's frames, and the one it lands on, as synchronized output (mode
+  # 2026): each changes every row of the pane, and a terminal (or a
+  # multiplexer between) that drew one half written showed the new rows over
+  # the old. Only those: under herdr it held every frame back a moment,
+  # which on a key was lag (otis-dash says), and a transition can spare it.
+  (( syncing )) && body=$e'[?2026h'$body$e'[?2026l'
+  (( xon )) || syncing=0
   print -rnu $tty -- $body
   print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk" >> $trace
   kt= nk=0
@@ -823,6 +1568,9 @@ landed() {
   (( cur )) || cur=$pcur
   (( cur > $#raw )) && cur=$#raw
   list; settle_cur
+  # Rows reloaded after it opened (b, the other side): the steps with them.
+  [[ -n $stepscmd ]] && (( opened )) && steps_load
+  [[ -n $panescmd ]] && (( opened )) && panes_load
   # Still on the row it was on: its scroll as you left it a moment ago, not
   # as it was when you came onto it (offs is kept when you leave a row), or
   # every landing in the background sent the preview back to the top.
@@ -1206,7 +1954,12 @@ chat_frame() {
 
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
+# used <key>: a line in the key log (keys_used), with what this picker says
+# the key is for.
+used() { keys_used $1 "${hv[${hk[(ie)$1]}]}"; }
 handle() {
+  # Any key or the mouse lands a transition at once, and goes on from there.
+  xstop
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
   (( cfocus )) && { chat_key "$1"; return; }
   local k=$1
@@ -1228,12 +1981,14 @@ handle() {
   if (( sel == 1 )) && [[ -n $selr ]]; then
     case $n in
       a) if [[ -n $ctpl ]]; then
+           used a
            local l=$selr
            sel=0 selr=
            chat_open "$l"
            return
          fi ;;
       c) if [[ -n $GMR_IID ]]; then
+           used c
            local side first last; read -r side first last <<< $selr
            sel=0 selr=
            run "execute(git-mr-say --new $GMR_IID $GMR_RANGE {2} $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
@@ -1243,19 +1998,32 @@ handle() {
     esac
   fi
   sel=0 selr=
-  [[ $n == a && -n $ctpl ]] && { chat_open ""; return; }
+  [[ $n == a && -n $ctpl ]] && { used a; chat_open ""; return; }
   # ctrl-a shows or hides it, the conversation kept either way.
-  [[ $k == $'\x01' && -n $ctpl ]] && { if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }
+  [[ $k == $'\x01' && -n $ctpl ]] && { used ctrl-a; if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }
   [[ $n == esc ]] && (( chat )) && { chat=0; return; }
+  # A walk's steps are this screen's own (steps_key).
+  if [[ -n $sbase && $n == [jlhk] ]]; then used $n; steps_key $n; return; fi
+  # Drawn-ahead panes: a move to another row is a transition (panes_go).
+  if [[ -n $pdir && $n == (j|k|down|up) && -z $bind[$n] ]]; then
+    integer was=$cur dir=1
+    [[ $n == (k|up) ]] && dir=-1
+    xshown
+    step $dir
+    (( cur != was )) && panes_go $was $dir
+    return
+  fi
   # A picker's key held down is one press: its repeats, arriving while it
   # runs or within 0.3s of the last of them, are dropped. p held ran the
   # peeks and a preview for every repeat, and the renders piled up. Keys the
   # picker says are cheap (--repeat) act on every repeat.
   if [[ -n $bind[$n] ]]; then
     if [[ -z $repeat[$n] ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
+    used $n
     act $n; held[$n]=$EPOCHREALTIME
     return
   fi
+  [[ $n == (/|\?|\]|\[|.|,) ]] && used $n
   case $n in
     j|down) step 1 ;;
     k|up) step -1 ;;
@@ -1302,6 +2070,7 @@ watched() {
 
 # --- the loop ----------------------------------------------------------------------
 screen_on
+pbask
 size
 layout
 draw
@@ -1310,11 +2079,19 @@ draw
 if [[ $startacts == (#b)(|*+)reload(|-sync)\((*) ]]; then
   fulllist=$match[3]; [[ $fulllist == *\)+* ]] && fulllist=${fulllist%%\)+*} || fulllist=${fulllist%\)}
 fi
+integer opened=0
 run "$startacts" 0
+opened=1
+# A walk's steps come up now, drawn, from the step the start put it on:
+# nothing lands later to draw them.
+[[ -n $stepscmd ]] && steps_load && draw
+[[ -n $panescmd ]] && panes_load && draw
 integer tmo=5 stick=0 wtick=0 rewidth=0
 while :; do
   reply=()
-  zselect -t $tmo -r $tty ${winch:+-r} $winch
+  # A transition draws a frame every 20ms (zselect counts hundredths): at
+  # 10ms a frame of the whole pane, under a multiplexer, came out in bursts.
+  zselect -t $(( xon || lon ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize
@@ -1327,6 +2104,8 @@ while :; do
   else
     float ti=$EPOCHREALTIME
     changed=0
+    (( xon )) && xtick && changed=1
+    (( lon )) && changed=1
     # Once a second: whatever opened this is still there (else it goes,
     # rather than read keys under a shell's prompt), and, without perl, the size.
     if (( EPOCHSECONDS != stick )); then
@@ -1343,7 +2122,7 @@ while :; do
     # The row's preview landing: one test for the file this gen and width
     # draw, and none once it shows. A glob of every kept preview, twenty
     # times a second, was the loop's whole cost at rest.
-    if (( cur && ! help )) && [[ -n $preview ]]; then
+    if (( cur && ! help )) && [[ -n $preview && -z $stepscmd$panescmd ]]; then
       pvname "$rid[cur]" $pw
       [[ $lastpv != $REPLY.$gen && -e $REPLY.$gen ]] && changed=1
     fi
@@ -1352,6 +2131,8 @@ while :; do
       settle=0
       (( rewidth )) && [[ -n $lastlist ]] && { rewidth=0; reload "$lastlist"; }
       (( gen++ )); warm
+      [[ -n $stepscmd ]] && (( pw != sw )) && steps_load
+      [[ -n $panescmd && $pwdir != */$pw ]] && panes_load
     fi
     # Background work landing, looked for twice a second, and not while a
     # reload is out.

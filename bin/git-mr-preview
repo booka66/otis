@@ -1,10 +1,10 @@
 #!/bin/sh
 # git-mr-preview <iid> <kind> [row id]: a gmr row at a glance, from the JSON
-# git-mr-list saved, so moving through the list never waits on GitLab. Yours and
-# merged ones show what gci did (git-ci-preview): approvals, threads, reviewers,
-# labels and the pipeline, or where a merged one is on its way to production.
-# One to review shows its summary and description. Open ones end with their
-# unresolved threads on the MR itself (git-mr-threads), which no file shows.
+# git-mr-list saved, so moving through the list never waits on GitLab. Yours
+# show what the dashboard's preview does (otis-preview); a merged one, where it
+# is on its way to production (git-ci-preview). One to review shows its
+# summary and description. Open ones end with their unresolved threads on the
+# MR itself (git-mr-threads), which no file shows.
 #
 # A section heading gets the section: what is in it, and which of it is waiting
 # on you. The row is a heading rather than an MR, so without this the pane would
@@ -166,7 +166,7 @@ case $kind in
       exec otis-preview "$kind" "$iid" "" ""
     fi ;;
 esac
-[ "$kind" = merged ] && exec git-ci-preview --merged "$iid"
+[ "$kind" = merged ] && exec git-ci-preview "$iid"
 # One from every open MR (f), not in the JSON the dashboard's preview reads:
 # the MR, a line a fact, its threads, its description.
 mr='first((.data.currentUser.reviewRequestedMergeRequests, .data.project.mergeRequests) | .nodes[]? | select(.iid == $iid))'

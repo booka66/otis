@@ -19,7 +19,8 @@
 #   tester.sse    optional: the Cursor tester's stream as it came
 #   agent-url     optional: the tester's page in Cursor
 #
-# A git-fzf picker over the run's steps, one a row, fed as they happen: the
+# The view (otis-agent, which draws it; the modes below are its keys) is
+# the run's steps, one a row, fed as they happen: the
 # list follows the newest step until you move up, and G takes you back to
 # following. The step under the cursor shows in full below the list. The
 # footer says where the run stands, redrawn every second. q leaves, and the
@@ -28,7 +29,7 @@
 # finished step; r, once it is over, exits 3 so the caller starts it afresh.
 # v shows or hides the detail (thinking, what tools returned), enter and l
 # open a step, or the whole progress, in less, o opens the tester in Cursor,
-# a lists what the run brought back (git-verify --artifacts), h opens a
+# a lists what the run brought back (git-verify --artifacts), w opens a
 # verification's report in the browser (git-verify-html; terminal-browser
 # where otis.terminalBrowser is on), and p links it
 # from the MR's description (git-verify --attach).
@@ -136,24 +137,6 @@ paint() {
     }'
 }
 
-# state: running, or how it ended, and the time it took, one line for the footer.
-state() {
-  started=$(cat "$d/started" 2>/dev/null || date +%s) ended=$(cat "$d/ended" 2>/dev/null || date +%s)
-  took=$((ended - started))
-  took="$((took / 60))m$(printf '%02d' $((took % 60)))s"
-  title=$(cat "$d/title" 2>/dev/null)
-  spent=$(costs "$d")
-  if running "$d"; then
-    printf "${GK_YOURS}◌ %s · running for %s%s${GK_R}\n" "$title" "$took" "$spent"
-  else
-    case $(cat "$d/status" 2>/dev/null) in
-      done) printf "${GK_GOOD}✓ %s · done in %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
-      stopped) printf "${GK_CONTEXT}■ %s · stopped after %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
-      *) printf "${GK_BAD}✗ %s · stopped short after %s%s${GK_R}\n" "$title" "$took" "$spent" ;;
-    esac
-  fi
-}
-
 case $1 in
   # --rows <dir> <detail> <from> [to]: the events after line <from> (to line <to>) as rows,
   # kind, text, the event's line, who and when (epoch seconds), for
@@ -164,21 +147,6 @@ case $1 in
     # that counted the lines first must take exactly those, or it takes a
     # line written meanwhile twice.
     sed -n "$(( ${4:-0} + 1 )),${5:-\$}p" "$d/events.jsonl" | lines "$3" "${4:-0}" true ;;
-  # --stream <dir> <detail>: the rows, every event so far and then each new one
-  # as it lands, until the run is over (and its last events are out) or the
-  # picker is gone. fzf reads it as it comes.
-  --stream)
-    d=$2 detail=$3 n=0
-    while :; do
-      total=$(wc -l < "$d/events.jsonl" 2>/dev/null | tr -d ' ')
-      if [ "${total:-0}" -gt "$n" ]; then
-        sed -n "$((n + 1)),${total}p" "$d/events.jsonl" | lines "$detail" "$n" | paint 0
-        n=$total
-      fi
-      running "$d" || { [ "$(wc -l < "$d/events.jsonl" 2>/dev/null | tr -d ' ')" -gt "$n" ] && continue; exit 0; }
-      kill -0 "$PPID" 2>/dev/null || exit 0
-      sleep 0.5
-    done ;;
   # --show <dir> <id>: one event in full, for the preview and enter.
   --show)
     d=$2
@@ -194,14 +162,6 @@ case $1 in
       elif .type == "result" then "\($by)finished: \(.subtype)" + (if .total_cost_usd then ", $\(.total_cost_usd * 100 | round / 100)" else "" end) + "\n\n" + (.result // "")
       elif .type == "init" then "\($by)started with \(.model)" + (if (.mcp | length) > 0 then "\n\nMCP: " + (.mcp | map("\(.name) (\(.status))") | join(", ")) else "" end)
       else .text // tostring end' 2>/dev/null ;;
-  # --tick <dir>: every second: the footer, and the cursor kept on the newest
-  # row while following.
-  --tick)
-    d=$2
-    state > "$GIT_FZF_STATE/footer"
-    printf ignore
-    [ -e "$GIT_FZF_STATE/follow" ] && printf '+last'
-    echo ;;
   # --x <dir>: x, as fzf actions: the confirm needs the terminal, so it runs
   # through execute, which hands it over and redraws afterwards; a transform
   # that wrote to the terminal would draw over the picker.
@@ -230,13 +190,7 @@ case $1 in
     [ -s "$d/cmd" ] || exec git-fzf-note "this one cannot pick up again; r runs it again"
     rm -f "$d/status" "$d/ended" "$d/lives"
     resume "$d"
-    [ -e "$GIT_FZF_STATE/detail" ] && v=1 || v=0
-    echo "reload(git-claude-view --stream '$d' $v)" ;;
-  # --detail <dir>: v, the other way round.
-  --detail)
-    d=$2
-    if [ -e "$GIT_FZF_STATE/detail" ]; then rm -f "$GIT_FZF_STATE/detail"; v=0; else : > "$GIT_FZF_STATE/detail"; v=1; fi
-    echo "reload(git-claude-view --stream '$d' $v)" ;;
+    echo 'reload()' ;;
   # --improve <dir>: i, as fzf actions: a fix run from the base, apart from
   # the change, on the verification's retrospective (git-mr-fix, key v-<verification>).
   --improve)
@@ -266,7 +220,7 @@ case $1 in
     d=$2
     [ -n "$(ls "$d/artifacts" 2>/dev/null)" ] || exec git-fzf-note "nothing brought back yet"
     echo "execute(git-verify --artifacts '$d')" ;;
-  # --html <dir>: h, the report written first for a run from before it had one.
+  # --html <dir>: w, the report written first for a run from before it had one.
   --html)
     d=$2
     [ -s "$d/verdict.json" ] || exec git-fzf-note "no verdict yet, so no report"
@@ -282,33 +236,5 @@ case $1 in
     echo "execute(git-verify --attach '$d')" ;;
   *)
     # The run, drawn by hand (otis-agent); 3 says r: run it again.
-    exec otis-agent "$1"
-    d=$1
-    out=$(git-fzf 'run ' 'enter=this step in full,v=more or less detail,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,m=copy the message for infra,l=all of it in less,o=tester in Cursor,a=artifacts,h=report in the browser,p=link the report from the MR,G=follow the newest' \
-      --ansi --no-sort --tail=20000 --delimiter="$(printf '\t')" --with-nth=1 --id-nth=2 \
-      --preview-window='down,35%,border-top,wrap' \
-      --bind "start:reload(git-claude-view --stream '$d' 0)+execute-silent(touch \"\$GIT_FZF_STATE/follow\")" \
-      --bind "every(1):transform(git-claude-view --tick '$d')" \
-      --bind 'k:up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
-      --bind 'up:up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
-      --bind 'page-up:page-up+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
-      --bind 'g:first+execute-silent(rm -f "$GIT_FZF_STATE/follow")' \
-      --bind 'j:down+execute-silent([ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && touch "$GIT_FZF_STATE/follow")' \
-      --bind 'down:down+execute-silent([ "$FZF_POS" -ge "$FZF_MATCH_COUNT" ] && touch "$GIT_FZF_STATE/follow")' \
-      --bind 'G:last+execute-silent(touch "$GIT_FZF_STATE/follow")' \
-      --bind "enter:execute(git-claude-view --show '$d' {2} | less -R)" \
-      --bind "v:transform(git-claude-view --detail '$d')" \
-      --bind "x:transform(git-claude-view --x '$d')" \
-      --bind "r:transform(git-claude-view --again '$d')" \
-      --bind "c:transform(git-claude-view --continue '$d')" \
-      --bind "l:execute(git-claude-view --less '$d')" \
-      --bind "i:transform(git-claude-view --improve '$d')" \
-      --bind "m:transform(git-claude-view --ask '$d')" \
-      --bind "o:transform([ -s '$d/agent-url' ] && otis-open --fzf \"\$(cat '$d/agent-url')\")" \
-      --bind "a:transform(git-claude-view --artifacts '$d')" \
-      --bind "h:transform(git-claude-view --html '$d')" \
-      --bind "p:transform(git-claude-view --attach '$d')" \
-      --preview "git-claude-view --show '$d' {2}" </dev/null | head -1)
-    [ "$out" = again ] && exit 3
-    exit 0 ;;
+    exec otis-agent "$1" ;;
 esac

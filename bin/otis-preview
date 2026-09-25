@@ -60,7 +60,7 @@ case $kind in
     exec git-deploy-preview "$extra" ;;
   merged)
     callout "Merged. Where it has got to on its way to production:"
-    exec git-ci-preview --merged "$iid" ;;
+    exec git-ci-preview "$iid" ;;
   trash)
     callout "Worktrees otis took out of your way instead of deleting."
     printf "${GK_CONTEXT}So what git would have dropped along with the directory, an .env, a\n"

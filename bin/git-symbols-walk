@@ -718,7 +718,7 @@ if [ "$mode" = --show ]; then
       rm -f "$st/walk.pending"
       printf "${GK_BAD}%s${GK_R}\n\n" "The walk did not come back."
       [ -s "$err" ] && printf "${GK_CONTEXT}%s${GK_R}\n\n" "$(tail -3 "$err")"
-      printf "${GK_CONTEXT}%s${GK_R}\n" "R walks it again."
+      printf "${GK_CONTEXT}%s${GK_R}\n" "r walks it again."
     fi
     exit 0
   fi

@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-mr-rebase --check <kind> <iid>   gmr's r, as fzf actions for a transform binding
+# git-mr-rebase --check <kind> <iid>   gmr's b, as fzf actions for a transform binding
 # git-mr-rebase <iid>                  confirm, then rebase the MR onto its target
 #
 # GitLab does the rebase, on its side, onto the branch the MR targets: main,
@@ -21,7 +21,7 @@
 # MR that is part of a stack. Rebasing one layer on GitLab leaves the MRs above
 # it carrying the old copies of its commits, and glab stack keeps each layer's
 # sha in .git/stacked, so its next sync would push the old commits back over
-# the rebase. A stack moves as a whole: r on any layer of a glab stack rebases
+# the rebase. A stack moves as a whole: b on any layer of a glab stack rebases
 # all of it (git-stack --update), and gup with --update-refs moves a branch
 # stack.
 mr() { glab api "projects/:fullpath/merge_requests/$iid$1"; }

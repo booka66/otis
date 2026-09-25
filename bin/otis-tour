@@ -17,6 +17,8 @@
 # caller it breaks.
 root=${0:A:h:h}
 path=($root/bin $path)
+# What you press in a tour is practice, not use: kept out of the key log (otis-usage).
+export OTIS_KEY_LOG=off
 # The theme, for the tour's own words and every picker it opens; loaded again
 # at the menu, so one picked in the settings tour takes from there on.
 theme() {
@@ -932,7 +934,7 @@ part_verify_run() {
   key "x r c" "stop it (asks; the tester goes too), run it again, pick up a failed run"
   key o "the tester in Cursor"
   key a "the artifacts: recordings, screenshots, output; enter opens each"
-  key h "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
+  key w "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
   key p "after a confirm, upload the report to the MR and link it at the end of its description"
   key i "act on the retrospective: a fix run from main, apart from this change, whose proposals edit the verify-env brief; B puts them on a branch of their own"
   key m "copy the message the retrospective drafted for infra (git config otis.infraContact names them)"
@@ -972,11 +974,11 @@ part_ship_merge() {
   heading $1
   say "From gmr, an MR goes from open to merged without the browser. Each row leads with glyph columns that are never cut off: the pipeline, where review stands, unresolved threads, and what $who has waiting. A pipeline failing only on approval gates shows as waiting, not broken."
   key c "CI jobs and logs: r retries a job, P plays a manual one, X cancels, ctrl-x cancels the pipeline"
-  key "R N" "retry what failed, start a new pipeline"
+  key "r N" "retry what failed, start a new pipeline"
   key v "the pipeline's stage graph; p opens it in the browser"
   key m "merge, or merge when the pipeline succeeds; with no pipeline yet (the next layer of a stack), starts one first"
-  key r "have GitLab rebase it onto its target, after a confirm; on a glab stack, the whole stack"
-  key d "draft or ready, on yours"
+  key b "have GitLab rebase it onto its target, after a confirm; on a glab stack, the whole stack"
+  key R "draft or ready, on yours"
   key "A l a" "approve, labels, reviewers"
   key "s W" "switch to its branch, or open it in its own worktree"
   key "w y" "open it in the browser, copy its link"
@@ -1002,7 +1004,7 @@ part_dashboard() {
   look 1 "Production trouble first, a watch that found something. Then what is broken: a rollback, a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what $who has left you, then what you can finish: a verdict in, one ready to merge, one nobody is reviewing."
   look 2 "One row a thing, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, the pipeline, because that is what you would do next."
   look 3 "Under that, what is moving without you: $who's runs, your pipelines, and your merged MRs production has not taken yet, each saying where it has got to. Last, the branch you are on: uncommitted, unpushed, behind."
-  look 4 "${k}enter${r} does what the row says. ${k}m b d a w${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}D${r} discards otis's own note, never the MR's state. ${k}space${r} reads the row's preview in a pager, where the terminal is too narrow to show it beside the list. It reloads every 10 seconds."
+  look 4 "${k}enter${r} does what the row says. ${k}gm gb gd ga gw${r} open gmr, gb, gd, gag and gw, and q there comes back. ${k}w${r} opens the MR in the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads the row's preview in a pager, where the terminal is too narrow to show it beside the list. It reloads every 10 seconds."
   say "Nothing waiting is the point: a section with nothing in it is simply gone."
   key gag "everything $who is doing or has done here in the background, reviews, fixes, watches and verifications, running ones first. enter is every step; d forgets a finished run"
   offer "Open otis" otis
@@ -1084,7 +1086,7 @@ part_settings() {
   setting lintCommand "lint run before F folds $who's fixes in"
   setting lessons "true: each of $who's comments and fixes also teaches the principle behind it, for you alone"
   setting editor "what opens files from the pickers: cursor, code, zed, nvim"
-  setting terminalBrowser "true: w, p and h open in terminal-browser where it is installed, in this pane; ctrl-c comes back"
+  setting terminalBrowser "true: w and p open in terminal-browser where it is installed, in this pane; ctrl-c comes back"
   setting theme "otis-theme shows each theme on otis's own rows and keeps the one you pick"
   setting sideBySide "always, or auto from 120 columns: diffs side by side"
   setting branchPrefix "the <prefix>/ that gbn and gwn put on a branch"
@@ -1116,7 +1118,7 @@ part_cheatsheet() {
   key "S A" "submit drafts, approve"
   key "C" "$who drafts comments, or proposes fixes on yours"
   key "V D" "verify in Cursor Cloud; watch production (merged)"
-  key "c m r" "CI jobs, merge, rebase"
+  key "c m b" "CI jobs, merge, rebase"
   key "<leader>m…" "in nvim: c comment, r resolve, l list, s submit"
   print
   print -r -- "  ${m}fixes${r}      enter on a fix run"

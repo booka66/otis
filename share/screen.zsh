@@ -397,3 +397,41 @@ port_serve() {
     port_post "$body"
   fi
 }
+
+# --- the key log ---------------------------------------------------------------------
+# Every key that does something, a line each, in ~/.cache/otis/keys.tsv
+# (OTIS_KEY_LOG, or off for none), for otis-usage: which keys you use, and
+# which you never do. Movement, scrolling and quitting are not logged; a
+# screen logs what its keys are for. A screen says what it is when it opens
+# (keys_open), with the keys it offers as its key=label list, so a key never
+# pressed still shows, as a nought.
+typeset -g _klog=${OTIS_KEY_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/keys.tsv} _kname=
+# keys_open <name> <keys>: this screen, and the keys it offers.
+keys_open() {
+  [[ $_klog == off ]] && return
+  _kname=$1
+  [[ -d ${_klog:h} ]] || mkdir -p ${_klog:h} 2>/dev/null
+  { print -r -- "$EPOCHSECONDS"$'\t'"$1"$'\t:open\t'"$2" >> $_klog; } 2>/dev/null
+}
+# keys_used <key> [label]: one of them pressed, and what it is for there.
+# A key held down is one press: its repeats, each within 0.3s of the last,
+# are not lines of their own.
+typeset -gF _kat=0
+typeset -g _klast=
+keys_used() {
+  [[ $_klog == off || -z $_kname ]] && return
+  if [[ $1 == $_klast ]] && (( EPOCHREALTIME - _kat < 0.3 )); then _kat=$EPOCHREALTIME; return; fi
+  _klast=$1 _kat=$EPOCHREALTIME
+  { print -r -- "$EPOCHSECONDS"$'\t'"$_kname"$'\t'"$1"$'\t'"$2" >> $_klog; } 2>/dev/null
+}
+# keys_caller: the otis command that opened this picker, by name (gb, gmr,
+# git-mr-lines), from the process that started it: the title a picker shows
+# carries an MR's number or a file's path, which would split one picker
+# into many. Once, as it opens.
+keys_caller() {
+  local w bin=${ZSH_ARGZERO:A:h}
+  REPLY=
+  for w in ${(z)"$(ps -o args= -p $PPID 2>/dev/null)"}; do
+    [[ $w == */* && -e $bin/${w:t} && ${w:t} != (otis-pick|otis-symbols|git-fzf) ]] && { REPLY=${w:t}; return; }
+  done
+}

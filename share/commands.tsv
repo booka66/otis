@@ -7,7 +7,7 @@
 # section	group	name	also	args	summary	extra
 # Commands in one group share a line in gg, the first one's name padded to
 # a column and the rest run on after it; group is the first one's name.
-look	otis	otis			the dashboard: what wants you, what is running, where you are	m b a d w open the full lists, c otis's settings
+look	otis	otis			the dashboard: what wants you, what is running, where you are	gm gb ga gd gw open the full lists, gc otis's settings
 look	gs	gs			status	
 look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r rewords	gl origin/main..
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
@@ -39,6 +39,7 @@ clean up and undo	gw	gw			worktrees and what each holds; enter goes there, d rem
 other	gg	gg			every command there is, on one screen	
 other	otis-config	otis-config			otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default	
 other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
+other	otis-usage	otis-usage		[days]	what you use: each screen's keys as a heat bar by how often you press them, the ones you never do, and the commands you never run	
 other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
 other	otis-update	otis-update			bring otis, and seam, up to their newest releases (the curl install)	
 other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, the agent, V, deploys, history	

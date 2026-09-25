@@ -8,9 +8,9 @@
 # git-trace --walk <dir> <test>   enter on a test: its walk, on a screen of its own
 # git-trace --walk-list <dir> <test>, --walk-show <dir> <test> <row id>   that screen's list (a row a
 #                                 call the test made) and preview (the line you are on in it)
-# git-trace --step <dir> <test> <over|into|out|back> <row id>   j, l, h and k there, as fzf actions
+# git-trace --steps-base <dir> <test>   where that screen's steps are drawn for its width (otis-symbols --steps)
 # git-trace --side <dir> <test>   b there: the same test before the change, or back
-# git-trace --write <dir> <gap>   w on a gap: Claude writes an input that reaches it, and it is traced
+# git-trace --write <dir> <gap>   i on a gap: Claude writes an input that reaches it, and it is traced
 # git-trace --base <dir>          b on P's screen: the spec files again at the base, for before and after
 # git-trace --phase <dir> <what> [arg]   the background half of --run, --write and --base
 #
@@ -24,7 +24,7 @@
 #
 # P's screen puts first the changed functions no test runs, each with why
 # (mocked in the spec that reaches it, a call in a caller that never runs,
-# nothing traced reaching it), and w has Claude write an input that reaches
+# nothing traced reaching it), and i has Claude write an input that reaches
 # one: a test that only has to run, added to a spec that already sets up
 # around it, in the slot and nowhere else. Then the tests, by how much of the
 # change each runs; enter walks one line by line, j the next line in the same
@@ -50,7 +50,7 @@
 # The run's state is git-walk's (<git dir>/otis-walk/<key>), with engine
 # trace in it, so gag, the dashboard and gmr's marks read it as they read a
 # walk. Here: shas, table, specs, targets.json, trace/<i>.jsonl and ran/<i>
-# (the head's), base/ (the base's), inputs.json and inputs.patch (w's), and
+# (the head's), base/ (the base's), inputs.json and inputs.patch (i's), and
 # cover.json (share/walk.mjs cover).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
@@ -79,17 +79,23 @@ esac
 # Everything a key or a preview needs is rendered once, by walk-prep, for the
 # pane's width: here it is looked up and printed, never worked out again.
 # prepared <dir> <test> <side>: $b the walk's files, rendered for this width.
+# drawn: what a walk or a tour drawn for a width is marked with once it is.
+# Its number goes up whenever what walk.mjs draws does (the steps' files and
+# lines, the files whole for the glide, lines as wide as the pane, the code
+# around a step's own, added lines always on their ground), so one
+# drawn before is drawn again rather than shown as it was.
+drawn=v5
 prepared() {
   w=${FZF_PREVIEW_COLUMNS:-100}
   b=$1/walks/$2-$3
-  [ -e "$b-$w.done" ] && return 0
+  [ -e "$b-$w.$drawn" ] && return 0
   mkdir -p "$1/walks"
   # The pane draws the rows around the cursor at once: one renders, the rest wait.
   if mkdir "$b-$w.lock" 2>/dev/null; then
-    $walk walk-prep "$1" "$2" "$3" "$w" && : > "$b-$w.done"
+    $walk walk-prep "$1" "$2" "$3" "$w" && : > "$b-$w.$drawn"
     rmdir "$b-$w.lock"
   else
-    i=0; while [ ! -e "$b-$w.done" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+    i=0; while [ ! -e "$b-$w.$drawn" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
   fi
 }
 # shown <row id>: the step the row's preview shows: the one you are on, when
@@ -102,15 +108,15 @@ side() { cat "$GIT_FZF_STATE/side" 2>/dev/null || echo head; }
 # toured <dir>: the tour drawn for this width (walk.mjs tour-prep).
 toured() {
   w=${FZF_PREVIEW_COLUMNS:-100}
-  [ -e "$1/tour-$w.done" ] && return 0
+  [ -e "$1/tour-$w.$drawn" ] && return 0
   [ -s "$1/tour.json" ] || return 1
   if mkdir "$1/tour-$w.lock" 2>/dev/null; then
-    $walk tour-prep "$1" "$w" 2>>"$1/log" && : > "$1/tour-$w.done"
+    $walk tour-prep "$1" "$w" 2>>"$1/log" && : > "$1/tour-$w.$drawn"
     rmdir "$1/tour-$w.lock"
   else
-    i=0; while [ ! -e "$1/tour-$w.done" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+    i=0; while [ ! -e "$1/tour-$w.$drawn" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
   fi
-  [ -e "$1/tour-$w.done" ]
+  [ -e "$1/tour-$w.$drawn" ]
 }
 case $1 in
   --walk-show)
@@ -139,6 +145,8 @@ case $1 in
   # The tour's screen, drawn the same way: once a width, then looked up.
   --tour-list) toured "$2" && cat "$2/tour.rows"; exit 0 ;;
   --tour-show) toured "$2" && cat "$2/tour-$w/${3#tour:}" 2>/dev/null; exit 0 ;;
+  # Where the tour's previews are drawn for this width, for its screen (otis-symbols --panes).
+  --tour-panes) toured "$2" && printf '%s\n' "$2/tour-$w"; exit 0 ;;
   --tour-open)
     toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "enter opens a stop's line; this one is the overview"; exit 0; }
     echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)"; exit 0 ;;
@@ -541,28 +549,28 @@ case $1 in
       i=0; while [ ! -s "$d/tour.json" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     fi
     [ -s "$d/tour.json" ] || exec git-trace --tests "$d"
-    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,a=every test and what none runs,h=the tour as a page,p=post the page to the MR,T=write the tour again,R=run the tests again,q=back' \
+    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,a=every test and what none runs,w=the tour as a page in the browser,p=post the page to the MR,T=write the tour again,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --tour-list '$d')" \
       --bind "enter:transform(git-trace --tour-open '$d' {12})" \
       --bind "s:transform(git-trace --tour-step '$d' {12})" \
       --bind "a:execute(git-trace --tests '$d')" \
       --bind "T:execute-silent(git-trace --retour '$d')" \
-      --bind "h:execute-silent(git-trace --page '$d' && otis-open '$d/tour.html')" \
+      --bind "w:execute-silent(git-trace --page '$d' && otis-open '$d/tour.html')" \
       --bind "p:execute(git-trace --attach '$d')" \
-      --bind "R:execute(git-trace --again '$d')+reload(git-trace --tour-list '$d')" \
-      --watch "$d/tour.json" \
-      --preview "git-trace --tour-show '$d' {12}" </dev/null >/dev/null
+      --bind "r:execute(git-trace --again '$d')+reload(git-trace --tour-list '$d')" \
+      --watch "$d/tour.json" --panes "git-trace --tour-panes '$d'" \
+      </dev/null >/dev/null
     exit 0 ;;
   --tests)
     d=$2 st=${GIT_FZF_STATE:-}
-    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test,w=Claude writes an input for a gap,b=run it at the base too,R=run the tests again,q=back' \
+    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test,i=Claude writes an input for a gap,b=run it at the base too,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --list '$d')" \
       --bind "enter:transform(git-trace --open '$d' {12})" \
-      --bind "w:transform(git-trace --gap-key '$d' {12})" \
+      --bind "i:transform(git-trace --gap-key '$d' {12})" \
       --bind "b:execute(git-trace --base '$d')+reload(git-trace --list '$d')" \
-      --bind "R:execute(git-trace --again '$d')+reload(git-trace --list '$d')" \
+      --bind "r:execute(git-trace --again '$d')+reload(git-trace --list '$d')" \
       --preview "git-trace --show '$d' {12}" </dev/null >/dev/null
     exit 0 ;;
   --open)
@@ -578,7 +586,7 @@ EOF
     case $3 in
       g:*) if jq -e --argjson g "${3#g:}" '.gaps[$g].mocked' "$2/cover.json" >/dev/null; then note "that one is mocked out: no input can reach it"
            else echo "execute(git-trace --write '$2' ${3#g:})+reload(git-trace --list '$2')"; fi ;;
-      *) note "w is for the changed code no test runs, at the top" ;;
+      *) note "i is for the changed code no test runs, at the top" ;;
     esac
     exit 0 ;;
   --write)
@@ -647,16 +655,17 @@ EOF
     name=$(jq -r --argjson t "$ti" '.tests[$t].name' "$d/cover.json")
     # The name as a title, cut to fit: a long one ran into the preview.
     [ ${#name} -gt 56 ] && name="$(printf '%s' "$name" | cut -c1-55)…"
+    # j, l, h and k step through it on the screen itself (--steps).
     otis-symbols "$name " 'j=next line,l=step into,h=step out,k=back,b=before the change,enter=open the line,q=back' \
-      --ansi --delimiter='\t' --with-nth=1 --id-nth=12 --repeat j,k,l,h \
+      --ansi --delimiter='\t' --with-nth=1 --id-nth=12 --steps "git-trace --steps-base '$d' $ti" \
       --bind "start:reload${at:+-sync}(git-trace --walk-list '$d' $ti)${at:++transform(git-trace --walk-at '$d' $ti $at)}" \
-      --bind "j:transform(git-trace --step '$d' $ti over {12})" \
-      --bind "l:transform(git-trace --step '$d' $ti into {12})" \
-      --bind "h:transform(git-trace --step '$d' $ti out {12})" \
-      --bind "k:transform(git-trace --step '$d' $ti back {12})" \
       --bind "b:execute-silent(git-trace --side '$d' $ti)+reload(git-trace --walk-list '$d' $ti)+first" \
       --bind "enter:execute(git-commit-open \$(git-trace --rev '$d') \$(git-trace --walk-line '$d' $ti {12}))" \
-      --preview "git-trace --walk-show '$d' $ti {12}" </dev/null >/dev/null
+      </dev/null >/dev/null
+    exit 0 ;;
+  --steps-base)
+    prepared "$2" "$3" "$(side)"
+    printf '%s\n' "$b"
     exit 0 ;;
   --walk-at)
     # From a tour's stop: its step, and the row of its call.
@@ -671,28 +680,6 @@ EOF
     if [ "$(cat "$st/side" 2>/dev/null)" = base ]; then echo head > "$st/side"; : > "$st/hist"; rm -f "$st/cur"
     elif [ "$(jq -r '.based' "$d/cover.json")" = true ]; then echo base > "$st/side"; : > "$st/hist"; rm -f "$st/cur"
     else note "no run at the base yet: b on P's screen runs the tests there"; fi
-    exit 0 ;;
-  --step)
-    d=$2 ti=$3 how=$4 st=$GIT_FZF_STATE
-    case $5 in v:*) ;; *) exit 0 ;; esac
-    prepared "$d" "$ti" "$(side)"
-    k=$(shown "$5")
-    if [ "$how" = back ]; then
-      j=$(tail -1 "$st/hist" 2>/dev/null)
-      [ -n "$j" ] || { note "nowhere to go back to"; exit 0; }
-      sed '$d' "$st/hist" > "$st/hist.new"; mv "$st/hist.new" "$st/hist"
-    else
-      j=$(awk -v k="$k" -v how="$how" '$1 == k { print (how == "over" ? $3 : how == "into" ? $4 : $5); exit }' "$b.nav")
-      if [ "${j:--1}" = -1 ]; then
-        case $how in over) note "that was its last line in this call; h goes out" ;; into) note "this line calls nothing the change made" ;; out) note "the test called this one" ;; esac
-        exit 0
-      fi
-      echo "$k" >> "$st/hist"
-    fi
-    echo "$j" > "$st/cur"
-    vi=$(awk -v k="$j" '$1 == k { print $2; exit }' "$b.nav")
-    # A row a call, in order: call i is row i + 1.
-    echo "pos($((vi + 1)))+refresh-preview"
     exit 0 ;;
 esac
 echo "git-trace: see its head for what it takes" >&2

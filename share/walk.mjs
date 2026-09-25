@@ -183,6 +183,18 @@ const sgr = (k, d) => "\x1b[" + (process.env["OTIS_T_" + k] ?? d) + "m";
 const C = { at: sgr("ATTENTION", "33"), good: sgr("GOOD", "32"), bad: sgr("BAD", "31"), yours: sgr("YOURS", "35"),
   text: sgr("TEXT", "39"), ctx: sgr("CONTEXT", "90"), faint: sgr("FAINT", "2"), else: sgr("ELSEWHERE", "36"), r: "\x1b[0m" };
 const width = (s) => [...s.replace(/\x1b\[[0-9;]*m/g, "")].length;
+// solid: each line's erase to its end (a ground carried to the pane's edge:
+// the change's, the line it is on) as spaces to width w instead, since the
+// screens' wrap drops every erase (share/pane-wrap.awk): so every such line
+// is the pane's width whatever its code, and the code sits in a block of
+// one width rather than bars as ragged as the lines. For what the screens
+// read alone: the page (ansiHtml) takes the erase as a row's ground.
+const solid = (text, w) => text.split("\n").map((l) => {
+  const i = l.indexOf("\x1b[0K");
+  if (i < 0) return l;
+  const head = l.slice(0, i);
+  return head + " ".repeat(Math.max(0, w - width(head))) + l.slice(i + 4).replace(/\x1b\[0K/g, "");
+}).join("\n");
 const cut = (s, n) => ([...s].length > n ? [...s].slice(0, Math.max(0, n - 1)).join("") + "…" : s);
 function wrap(t, w, lead = "") {
   const out = [];
@@ -211,6 +223,8 @@ function ground(hex, dflt) {
   const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
   return m ? `\x1b[48;2;${parseInt(m[1], 16)};${parseInt(m[2], 16)};${parseInt(m[3], 16)}m` : `\x1b[${dflt}m`;
 }
+// The code drawn around a step's own lines, above and below (render).
+const AROUND = 60;
 const PLUS = ground(process.env.OTIS_T_PLUS, "48;5;22"), MINUS = ground(process.env.OTIS_T_MINUS, "48;5;52");
 // The line you are on: a bar in the theme's attention hue, dimmed to a ground.
 const HERE = (() => {
@@ -496,7 +510,7 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     if (g.input) {
       out.push(`${C.yours}✦ Claude's input${C.r}${C.ctx}, in ${g.input.spec}: ${C.r}${C.text}${g.input.name}${C.r}`);
       out.push(g.input.reached ? `${C.good}it reaches ${g.name}: it is in the tests below${C.r}` : `${C.at}it ran, but did not reach ${g.name}${g.input.error ? ": " + g.input.error : ""}${C.r}`);
-    } else if (!g.mocked) out.push(`${C.faint}w: Claude writes an input into a spec that reaches this, and P traces it. It only has to run.${C.r}`);
+    } else if (!g.mocked) out.push(`${C.faint}i: Claude writes an input into a spec that reaches this, and P traces it. It only has to run.${C.r}`);
   }
   return out.join("\n") + "\n";
 }
@@ -512,8 +526,10 @@ function previews(r, out) {
 // The list is the calls the test made into the change, in order, a row each
 // (v:<i>); the line within a call is the preview's, moved by j, l, h and k.
 // walk-prep renders it all at once, for a pane's width, into walks/: the
-// rows, nav (a line a step: the step, its call, and where j, l and h go, -1
-// for nowhere) and a preview a step, so moving is a cat and nothing else.
+// rows, nav (a line a step: the step, its call, where j, l and h go, -1 for
+// nowhere, and the file, as an index, and line it is on), a preview a step,
+// and each file the walk goes through whole (file-<index>), which the screen
+// scrolls through from one step to the next in the same file.
 function callRows(steps) {
   const vs = visits(steps), out = [];
   vs.forEach((v, i) => {
@@ -543,7 +559,11 @@ function glossOf(r) {
 
 // render: step k's preview: where it is and what it was called with, pinned,
 // over the code of its call with what each line set and what ran.
-function render(ctx, k, w, win) {
+// around: that many lines of the file above and below the step's own, as
+// the file draws them (codeRows), so the pane is full of code rather than
+// a snippet over nothing; the head's line says which row of the code is
+// the step's ("\x1epin N at K"), where the screen puts it.
+function render(ctx, k, w, win, around = 0) {
   const { r, steps, vs, side, gloss, mockedNames } = ctx;
   const s = steps[k];
   // The line it is about: a tour's stop says (a function's name, say, where
@@ -650,13 +670,11 @@ function render(ctx, k, w, win) {
   let lo = Math.max(s.def[0], Math.min(...ran) - 3), hi = Math.min(s.def[1], Math.max(...ran) + 3);
   if (hi - lo > 34) { lo = Math.max(s.def[0], s.line - 6); hi = Math.min(s.def[1], lo + 34); }
   if (win) [lo, hi] = win;
-  const body = [], hk = hunks(r.rev, s.path);
+  const body = codeRows(r, side, s.path, w, lo - around, lo - 1), hk = hunks(r.rev, s.path);
+  let atRow = 0;
   const paint = painted(side === "base" ? r.rev.base : r.rev.head, s.path);
   const oldPaint = side === "head" ? painted(r.rev.base, s.path) : null;
   const gut = (num, mark) => `${num} ${mark}${C.r} `;
-  // A definition the change wrote whole is all new: no ground to tell it by,
-  // its line numbers say so.
-  const whole = side === "head" && Array.from({ length: s.def[1] - s.def[0] + 1 }, (_, i) => s.def[0] + i).every((n) => hk.added.has(n) || !(src[n - 1] || "").trim());
   for (let n = lo; n <= hi; n++) {
     // What the change removed here, where the head has it no more.
     if (side === "head") for (const [on, ot] of hk.before.get(n) || []) {
@@ -685,8 +703,10 @@ function render(ctx, k, w, win) {
     // The value beside the code when both fit, else on a line of its own under it.
     const beside = tail && width(code) + width(tail) + 2 <= w - 9;
     const line = beside ? code + "  " + tail : code;
-    if (cur) body.push(under(gut(num, mark) + line, HERE) + "\x1b[0K" + C.r);
-    else if (add && !whole) body.push(gut(num, mark) + under(line, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r);
+    if (cur) { body.push(under(gut(num, mark) + line, HERE) + "\x1b[0K" + C.r); atRow = body.length; }
+    // What the change added on its ground, always: the same as the code
+    // around the window (codeRows), so a function it wrote reads as one.
+    else if (add) body.push(gut(num, mark) + under(line, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r);
     else body.push(gut(num, mark) + line + C.r);
     if (tail && !beside) {
       const lead = (tx.match(/^\s*/) || [""])[0].length;
@@ -704,12 +724,14 @@ function render(ctx, k, w, win) {
       body.push(lead + C.faint + "└" + "─".repeat(Math.max(4, w - 12)) + C.r);
     }
   }
-  return `\x1epin ${head.length}\n` + head.join("\n") + "\n" + body.join("\n") + "\n";
+  body.push(...codeRows(r, side, s.path, w, hi + 1, hi + around));
+  return `\x1epin ${head.length} at ${atRow}\n` + head.join("\n") + "\n" + body.join("\n") + "\n";
 }
 
 function walkPrep(r, ti, side, w) {
   const { t, steps } = walk(r, +ti, side);
   const { vs, out } = callRows(steps);
+  const paths = [...new Set(steps.map((s) => s.path))];
   const base = join(r.dir, "walks", `${ti}-${side}`);
   mkdirSync(`${base}-${w}`, { recursive: true });
   writeFileSync(`${base}.rows`, out.join("\n") + (out.length ? "\n" : ""));
@@ -719,11 +741,39 @@ function walkPrep(r, ti, side, w) {
     for (let i = k + 1; i < steps.length; i++) if (steps[i].depth <= s.depth) { over = i; break; }
     if (k + 1 < steps.length && steps[k + 1].depth > s.depth) into = k + 1;
     for (let i = k + 1; i < steps.length; i++) if (steps[i].depth < s.depth) { outk = i; break; }
-    return [k, vs.findIndex((v) => k >= v.first && k <= v.last), over, into, outk].join(" ");
+    return [k, vs.findIndex((v) => k >= v.first && k <= v.last), over, into, outk, paths.indexOf(s.path), s.line].join(" ");
   });
   writeFileSync(`${base}.nav`, nav.join("\n") + "\n");
   const ctx = context(r, t, steps, vs, side);
-  steps.forEach((s, k) => writeFileSync(`${base}-${w}/${k}`, render(ctx, k, w)));
+  steps.forEach((s, k) => writeFileSync(`${base}-${w}/${k}`, solid(render(ctx, k, w, null, AROUND), w)));
+  paths.forEach((p, i) => writeFileSync(`${base}-${w}/file-${i}`, fileView(r, side, p, w)));
+}
+// codeRows: lines from..to of a file as the pane draws code no step is on
+// (the gutter, the change's ground, what it removed), the same bytes
+// wherever they are drawn: the file whole, and the code around a step's own
+// lines, so the screen can scroll from one into the other without a row
+// changing under it.
+function codeRows(r, side, path, w, from, to) {
+  const src = text(side === "base" ? r.rev.base : r.rev.head, path);
+  const hk = hunks(r.rev, path);
+  const paint = painted(side === "base" ? r.rev.base : r.rev.head, path);
+  const oldPaint = side === "head" ? painted(r.rev.base, path) : null;
+  const gut = (num, mark) => `${num} ${mark}${C.r} `;
+  const body = [];
+  for (let n = Math.max(1, from); n <= Math.min(src.length, to); n++) {
+    if (side === "head") for (const [on, ot] of hk.before.get(n) || []) {
+      body.push(gut(C.bad + String(on).padStart(5) + C.r, C.bad + "-") + under(cutA(oldPaint[on - 1] ?? ot, w - 9), MINUS) + "\x1b[0K" + C.r);
+    }
+    const add = side === "head" ? hk.added.has(n) : hk.removed.has(n);
+    const num = (add ? (side === "base" ? C.bad : C.good) : C.faint) + String(n).padStart(5) + C.r;
+    const code = cutA(paint[n - 1] ?? src[n - 1] ?? "", w - 9);
+    body.push(add ? gut(num, " ") + under(code, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r : gut(num, " ") + code + C.r);
+  }
+  return body;
+}
+// fileView: a file whole, for the scroll from one step to the next.
+function fileView(r, side, path, w) {
+  return solid(codeRows(r, side, path, w, 1, Infinity).join("\n") + "\n", w);
 }
 function context(r, t, steps, vs, side) {
   const cans = new Map();
@@ -887,7 +937,7 @@ function tourAssemble(r) {
   const tmp = f(`tour.json.${process.pid}`);
   writeFileSync(tmp, JSON.stringify(t) + "\n");
   renameSync(tmp, f("tour.json"));
-  for (const x of readdirSync(r.dir)) if (/^tour-\d+(\.done)?$/.test(x)) rmSync(join(r.dir, x), { recursive: true, force: true });
+  for (const x of readdirSync(r.dir)) if (/^tour-\d+(\.\w+)?$/.test(x)) rmSync(join(r.dir, x), { recursive: true, force: true });
 }
 // readTour: tour.json, a tour from before chapters (its stops at the top)
 // read as one chapter of them.
@@ -965,16 +1015,21 @@ function tourPrep(r, w) {
       // Where it is, short: the screen shows its whole path over the preview.
       const head = [C.faint + (many ? `${ci + 1}.${si + 1}  ${c.title}  ·  ` : `${si + 1} of ${n}  ·  `) + `${x.path.split("/").pop()}:${x.focus}` + C.r, "", ...para(x.title, C.at + "\x1b[1m"), ...para(x.says), ""];
       // The values: the test it names, else the first that stops on the line.
-      const { ti, k, body } = stopOf(x, w);
+      const { ti, k, body, at } = stopOf(x, w, AROUND);
       if (k >= 0 && x.proves) head.push(...para(x.proves, C.text, w - 4).map((l, j) => (j ? "  " : C.good + "✓ " + C.r) + l), ...wrap(`from the test "${cover.tests[ti].name}"`, w - 4).map((l) => C.faint + "  " + l + C.r));
       else if (k >= 0) head.push(C.faint + `values from the test "${cover.tests[ti].name}"` + C.r);
       else head.push(C.faint + "no test stops here, so no values" + C.r);
       head.push(C.faint + "─".repeat(w) + C.r);
-      writeFileSync(join(dir, id), `\x1epin ${head.length}\n` + head.join("\n") + "\n" + body);
+      writeFileSync(join(dir, id), `\x1epin ${head.length} at ${at}\n` + head.join("\n") + "\n" + solid(body, w));
       // What enter and s need: where it is, and the test and step to step from.
       writeFileSync(join(dir, `${id}.at`), `${x.path} ${x.focus} ${k >= 0 ? ti : -1} ${k}\n`);
     });
   });
+  // Each stop's file whole (files/<path, / as %>), which the screen scrolls
+  // through from one stop to the next in the same file.
+  mkdirSync(join(dir, "files"), { recursive: true });
+  for (const p of new Set(tour.chapters.flatMap((c) => c.stops.map((x) => x.path))))
+    writeFileSync(join(dir, "files", p.replace(/\//g, "%")), fileView(r, "head", p, w));
   writeFileSync(join(r.dir, "tour.rows"), rows.join("\n") + "\n");
 }
 // stops: a stop's lines as the walk draws them, with the values of the test
@@ -991,14 +1046,14 @@ function stops(r, cover) {
     if (k < 0) k = steps.findIndex((s) => s.path === x.path && s.def[0] <= x.focus && x.focus <= s.def[1] && s.line >= x.start && s.line <= x.end);
     return k;
   };
-  return (x, w) => {
+  return (x, w, around = 0) => {
     let ti = cover.tests.findIndex((t) => t.name === x.test || (x.test && t.name.endsWith(x.test)));
     let k = ti >= 0 ? stepAt(ti, x) : -1;
     if (k < 0) for (ti = 0; ti < cover.tests.length && (k = stepAt(ti, x)) < 0; ti++);
-    if (k < 0) return { ti: -1, k: -1, body: plain(r, x, w) };
-    const out = render(walkOf(ti).ctx, k, w, [x.start, x.end, x.focus]).split("\n");
-    const pinned = +(/^\x1epin (\d+)/.exec(out[0]) || [0, 0])[1];
-    return { ti, k, body: out.slice(1 + pinned).join("\n") };
+    if (k < 0) return { ti: -1, k: -1, ...plain(r, x, w, around) };
+    const out = render(walkOf(ti).ctx, k, w, [x.start, x.end, x.focus], around).split("\n");
+    const m = /^\x1epin (\d+) at (\d+)/.exec(out[0]) || [0, 0, 0];
+    return { ti, k, body: out.slice(1 + +m[1]).join("\n"), at: +m[2] };
   };
 }
 // --- the tour as a page ------------------------------------------------------------
@@ -1174,14 +1229,15 @@ function tourMissing(r, ci) {
   return out.join("\n") + (out.length ? "\n" : "");
 }
 // plain: a stop's lines with no test at them: the code, the change's lines marked.
-function plain(r, x, w) {
-  const paint = painted(r.rev.head, x.path), hk = hunks(r.rev, x.path), out = [];
-  for (let n = x.start; n <= x.end; n++) {
-    const num = (hk.added.has(n) ? C.good : C.faint) + String(n).padStart(5) + C.r;
-    const code = cutA(paint[n - 1] ?? "", w - 9);
-    out.push(n === x.focus ? under(`${num} ${C.at}\x1b[1m▶${C.r} ` + code, HERE) + "\x1b[0K" + C.r : `${num}   ` + code + C.r);
-  }
-  return out.join("\n") + "\n";
+function plain(r, x, w, around = 0) {
+  const paint = painted(r.rev.head, x.path), hk = hunks(r.rev, x.path);
+  // The code as the file draws it, the stop's line marked: {body, at}.
+  const rows = codeRows(r, "head", x.path, w, Math.min(x.start, x.focus) - around, x.focus);
+  const num = (hk.added.has(x.focus) ? C.good : C.faint) + String(x.focus).padStart(5) + C.r;
+  rows[rows.length - 1] = under(`${num} ${C.at}\x1b[1m▶${C.r} ` + cutA(paint[x.focus - 1] ?? "", w - 9), HERE) + "\x1b[0K" + C.r;
+  const at = rows.length;
+  rows.push(...codeRows(r, "head", x.path, w, x.focus + 1, Math.max(x.end, x.focus) + around));
+  return { body: rows.join("\n") + "\n", at };
 }
 
 // --- targets ---------------------------------------------------------------------------

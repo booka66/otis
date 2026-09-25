@@ -80,18 +80,29 @@ case $mode in
     # the MR is still there.
     # With no runs at all the answer is {}, and every list asks on every
     # draw, so it is worth saying so without starting jq to read nothing.
-    rows=$(for dir in "$top"/*/; do
+    # The files are read with read and the verdicts by one jq for every run,
+    # rather than two cats and two jqs a run.
+    rows= n=0
+    set --
+    for dir in "$top"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
-      verifying=false verdict= fixed=false
+      verifying=false status= head=
       running "$dir" && verifying=true
-      status=$(cat "$dir/status" 2>/dev/null)
-      [ "$status" = done ] && verdict=$(jq -r '.verdict // empty' "$dir/verdict.json" 2>/dev/null)
-      [ "$(jq -r .accept "$dir/verdict-fix.json" 2>/dev/null)" = true ] && fixed=true
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${dir##*/}" "$verifying" "$status" "$verdict" "$(cat "$dir/head" 2>/dev/null)" "$fixed"
-    done)
-    [ -n "$rows" ] || { echo '{}'; exit 0; }
-    printf '%s\n' "$rows" | jq -Rn '[inputs | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2], verdict: .[3], head: .[4], fixed: (.[5] == "true")}}] | add // {}'
+      read -r status < "$dir/status" 2>/dev/null
+      read -r head < "$dir/head" 2>/dev/null
+      rows="$rows${dir##*/}	$verifying	$status	$head
+"
+      n=$((n + 1))
+      [ "$status" = done ] && [ -s "$dir/verdict.json" ] && set -- "$@" "$dir/verdict.json"
+      [ -s "$dir/verdict-fix.json" ] && set -- "$@" "$dir/verdict-fix.json"
+    done
+    [ $n -gt 0 ] || { echo '{}'; exit 0; }
+    jq -n --arg rows "$rows" --arg top "$top" '
+      (reduce inputs as $v ({}; .[input_filename] = $v)) as $f |
+      [$rows | rtrimstr("\n") | split("\n")[] | split("\t") | {(.[0]): {verifying: (.[1] == "true"), status: .[2],
+        verdict: (if .[2] == "done" then $f[$top + "/" + .[0] + "/verdict.json"].verdict // "" else "" end),
+        head: .[3], fixed: ($f[$top + "/" + .[0] + "/verdict-fix.json"].accept == true)}}] | add // {}' /dev/null "$@"
     exit 0
     ;;
   --preview)

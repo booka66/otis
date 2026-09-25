@@ -416,10 +416,16 @@ EOF
   } > "$ctx/tester-0"
   # The first earlier tester Cursor has idle that takes the warm-up at once:
   # one busy, gone or taken by another run in the meantime is passed over
-  # rather than waited on.
+  # rather than waited on. So is one booted on another model than
+  # cursorModel names now: Cursor's API does not say an agent's model, so
+  # models (id, tab, model) is what each VM was booted with, and a VM not in
+  # it is one whose model is unknown and is not reused either.
+  model=$(otis-config cursorModel) env=$(otis-config cursorEnv)
+  models=$common/otis-verify/models
   reuse=
   [ -s "$d/agent-prev" ] || : > "$d/agent-prev"
   while IFS= read -r a; do
+    grep -qxF "$a	$model" "$models" 2>/dev/null || continue
     info=$(cursor GET "/v1/agents/$a") && [ "$(printf '%s' "$info" | jq -r .status)" = IDLE ] || continue
     out=$(cursor POST "/v1/agents/$a/runs" "$(jq -n --rawfile t "$ctx/tester-0" '{prompt: {text: $t}}')") || continue
     reuse=$a
@@ -433,7 +439,6 @@ EOF
     printf '%s\n' "$reuse" > "$d/agent"
   else
     repo="$(otis-config url)/$(otis-config project)"
-    model=$(otis-config cursorModel) env=$(otis-config cursorEnv)
     # A named environment (the dashboard's, with its snapshot) and repos are one or
     # the other in Cursor's API, so with one the tester checks the commit out itself.
     body=$(jq -n --rawfile text "$ctx/tester-0" --arg url "$repo" --arg ref "$head" --arg name "Verify $what" --arg model "$model" --arg env "$env" '
@@ -445,6 +450,7 @@ EOF
     printf '%s' "$out" | jq -r .run.id > "$d/run-0"
     printf '%s' "$out" | jq -r '.agent.url // empty' > "$d/agent-url"
     printf '%s' "$out" | jq -r .agent.id > "$d/agent"
+    printf '%s\t%s\n' "$(cat "$d/agent")" "$model" >> "$models"
   fi
   say "tester's VM: $(cat "$d/agent-url")"
 fi
@@ -871,7 +877,9 @@ EOF
     judge "$ctx/review-$n" "$review_schema" "$d/verdict-$n.json"
     jq -r '.criteria[] | "\(.id) \(.result): \(.saw // .evidence)"' "$d/verdict-$n.json" | while IFS= read -r line; do say "$line"; done
   fi
-  cp "$d/verdict-$n.json" "$d/verdict.json"
+  # Copied then moved into place: git-verify --marks reads every run's
+  # verdicts in one jq, and a half-copied file would fail them all.
+  cp "$d/verdict-$n.json" "$d/verdict.json.new" && mv "$d/verdict.json.new" "$d/verdict.json"
   { [ "$(jq -r .done "$d/verdict.json")" = true ] || [ "$n" -ge "$rounds" ]; } && break
 
   if [ ! -s "$d/run-$((n + 1))" ]; then
@@ -1003,7 +1011,7 @@ fix() {
   failed=$(jq -r '[.criteria[] | select(.result == "failed") | .id] | join(", ")' "$d/verdict.json")
   a=1
   while n=fix-$a && fix_attempt; do
-    cp "$d/verdict-$n.json" "$d/verdict-fix.json"
+    cp "$d/verdict-$n.json" "$d/verdict-fix.json.new" && mv "$d/verdict-fix.json.new" "$d/verdict-fix.json"
     [ "$(jq -r .accept "$d/verdict-fix.json")" = true ] && break
     say "the checker turns the fix down: $(oneline "$(jq -r .summary "$d/verdict-fix.json")")"
     [ "$a" -lt "$fix_attempts" ] && [ -n "$(jq -r .retry "$d/verdict-fix.json")" ] || break

@@ -4,7 +4,7 @@
 # git-mr-labels --toggle <iid> <label> <on|off>
 #
 # Every label that already exists for the project, its groups' included, one
-# per row in its own color, ticked when the MR has it. tab (or space) adds or
+# per row in its own color, ticked when the MR has it. space (or tab) adds or
 # removes the highlighted label: the tick moves at once and GitLab is told in
 # the background (share/mr-sync.sh); the order never changes, so the cursor
 # stays put. The label set is cached for a day (git-cached-json), since it
@@ -66,7 +66,7 @@ case $1 in
       exit 0
     fi
     toggle="execute-silent(git-mr-labels --toggle $iid {2} {3})+reload(git-mr-labels --list $iid)"
-    git-fzf "!$iid labels " 'tab=add or remove,space=,enter=close' --ansi --track \
+    git-fzf "!$iid labels " 'space=add or remove,tab=,enter=close' --ansi --track \
       --delimiter="$(printf '\t')" --with-nth=1 \
       --bind "start:reload(git-mr-labels --list $iid)" \
       --bind "tab:$toggle" --bind "space:$toggle" \

@@ -1,6 +1,6 @@
 #!/bin/sh
 # git-stack [name]            gstack: this branch's commits as a glab stack, synced
-# git-stack --update <name>   gmr's r on a glab stack: rebase it onto origin/main
+# git-stack --update <name>   gmr's b on a glab stack: rebase it onto origin/main
 # git-stack --of <branch>     the name of the glab stack <branch> is a layer of
 # git-stack --sweep           forget glab stacks whose branches are all gone
 #
@@ -197,8 +197,8 @@ rebase the whole stack onto origin/$main and force-push every layer?" || exit 0
   do_plan "$p" || pause "could not clear the way; nothing was pushed"
   base=$(cat "$stacked/$name/BASE_BRANCH" 2>/dev/null || echo "$main")
   git -C "$wt" switch --quiet "$top" && git -C "$wt" rebase --quiet --update-refs "origin/$base" ||
-    pause "the rebase stopped in $wt; fix it there and git rebase --continue, or --abort, then r again"
-  push_layers "$name" "$wt" || pause "a push failed; the layers are rebased in $wt, and r again picks up from there"
+    pause "the rebase stopped in $wt; fix it there and git rebase --continue, or --abort, then b again"
+  push_layers "$name" "$wt" || pause "a push failed; the layers are rebased in $wt, and b again picks up from there"
   sync "$wt" || pause "glab stack sync failed in $wt"
   pause "done" 0
 fi

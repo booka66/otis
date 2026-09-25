@@ -2,7 +2,7 @@
 # otis-open [--fzf] <url>: open a link. With --fzf, print the picker action
 # instead: execute(...) when the page takes this pane (terminal-browser),
 # execute-silent(...) when it opens in the desktop browser, for the pickers'
-# w, p and h keys.
+# w and p keys.
 #
 # otis.terminalBrowser (on by default) uses terminal-browser where it is
 # installed, so the page takes this pane and ctrl-c comes back. A directory

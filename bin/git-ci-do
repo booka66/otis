@@ -10,7 +10,7 @@
 action=$1 id=$2 iid=$3 url=$4
 if { [ "$action" = retry ] || [ "$action" = new ]; } &&
   jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; then
-  exec git-fzf-note "!$iid is merged; R and N are for open MRs' pipelines, not main's"
+  exec git-fzf-note "!$iid is merged; r and N are for open MRs' pipelines, not main's"
 fi
 [ -n "$iid" ] || exec git-fzf-note "no MR on that row"
 [ "$action" = new ] && exec echo "execute(git-ci-run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"

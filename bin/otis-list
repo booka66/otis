@@ -146,7 +146,7 @@ EOF
   printf "\n${GK_CONTEXT}the list${GK_R}\n"
   printf "  what wants you, then what is running, then where you are.\n"
   printf "  one row a merge request: the thing you would do next about it.\n"
-  printf "  ${GK_ATTENTION}m b a d w${GK_R} open the full list of any of it; ${GK_ATTENTION}q${GK_R} there comes back here.\n"
+  printf "  ${GK_ATTENTION}gm gb ga gd gw${GK_R} open the full list of any of it; ${GK_ATTENTION}q${GK_R} there comes back here.\n"
 } > "$st/legend"
 
 # Only the first time: a redraw keeps the last ones, which the previews read

@@ -21,4 +21,12 @@ fi
 # too (bin/otis-help), so none of them has to carry its own copy. No otis
 # command takes a -h of its own, so it is free to mean this everywhere.
 case $1 in -h | --help) exec otis-help "$cmd" ;; esac
+# A line in the key log (share/screen.zsh), for otis-usage: which commands
+# you run, as well as which keys.
+if [[ ${OTIS_KEY_LOG:-} != off ]]; then
+  zmodload zsh/datetime
+  klog=${OTIS_KEY_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/keys.tsv}
+  [[ -d ${klog:h} ]] || mkdir -p ${klog:h} 2>/dev/null
+  { print -r -- "$EPOCHSECONDS"$'\t'"$cmd"$'\t:run\t' >> $klog; } 2>/dev/null
+fi
 $cmd "$@"

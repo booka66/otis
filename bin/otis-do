@@ -11,7 +11,7 @@
 #
 # An MR row carries gmr's fields in gmr's positions, so the shared key goes
 # through git-mr-do unchanged, placeholders and all.
-# dismiss is d: stop the dashboard saying this one wants you. It only ever
+# dismiss is x: stop the dashboard saying this one wants you. It only ever
 # acts on what otis itself is telling you, Claude's proposals and the verdicts
 # of its runs, and never on the merge request's own state: a thread is
 # unresolved or it is not, and a dashboard that could hide that would be

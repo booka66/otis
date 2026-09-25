@@ -16,7 +16,7 @@
 #   deployJob    the job that deploys it: otis.deployJob
 #   rollbackJob  the job that rolls it back: otis.rollbackJob
 #   datadogEnv   the env tag production carries in Datadog: otis.datadogEnv
-#   readyLabel   the label an MR gets when gmr's d marks it ready, and loses when d makes it a draft
+#   readyLabel   the label an MR gets when gmr's R marks it ready, and loses when R makes it a draft
 #                again: otis.readyLabel, else ready-for-ci; git config otis.readyLabel "" for none
 #   cursorEnv    the Cursor Cloud environment V's tester runs in, by its dashboard name: otis.cursorEnv, else the repo's own
 #   verifyRetro  exit 0 when a verification ends with a retrospective by a fresh Claude on what slowed
@@ -45,7 +45,7 @@
 #                none means the repo's own packages are linked and a third-party one added since is missed
 #   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim where it is
 #                installed, else $VISUAL, $EDITOR, vi
-#   terminalBrowser  exit 0 when w, p, h and the rest open in terminal-browser where it is
+#   terminalBrowser  exit 0 when w, p and the rest open in terminal-browser where it is
 #                installed, so the page takes this pane and ctrl-c comes back
 #                (git config otis.terminalBrowser false turns it off); on by default
 #   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the

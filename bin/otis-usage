@@ -1,0 +1,85 @@
+#!/usr/bin/env -S zsh -f
+# otis-usage [days]: what you use, from the key log (share/screen.zsh's
+# keys_open and keys_used, and otis-run's line a command): each screen you
+# opened, most opened first, its keys as a heat bar by how often you pressed
+# them, and the keys it offers that you never pressed on one line under it.
+# Last, the commands in gg you never ran. [days] counts only the last so
+# many days. It is for deciding what to cut: what nobody presses is weight.
+setopt extendedglob
+S=$'\x1f'
+zmodload zsh/datetime
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+e=$'\e' R=$'\e[0m'
+A=$e"[${OTIS_T_ATTENTION}m" C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m" T=$e"[${OTIS_T_TEXT}m" B=$e'[1m'
+log=${OTIS_KEY_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/keys.tsv}
+[[ $log == off ]] && { print -u2 "otis-usage: OTIS_KEY_LOG is off, so nothing is logged"; exit 1; }
+[[ -s $log ]] || { print "Nothing logged yet: it starts with the next key you press in otis."; exit 0; }
+integer since=0 first=0
+[[ $1 == <-> ]] && (( since = EPOCHSECONDS - $1 * 86400 ))
+
+typeset -A opens runs uses decl label
+typeset -a names order
+local t name key rest pair k v
+while IFS=$'\t' read -r t name key rest; do
+  # What a screen offers counts from any time; what you did, from [days].
+  [[ $key == :open ]] || (( t >= since )) || continue
+  case $key in
+    :run) (( first )) || first=$t; (( runs[$name]++ )) ;;
+    :open)
+      if (( t >= since )); then
+        (( first )) || first=$t
+        (( opens[$name]++ ))
+        (( ${names[(Ie)$name]} )) || names+=($name)
+      fi
+      # The keys it offers, as the picker reads them (otis-pick): a key with
+      # no label is hidden there, and | is where the footer stops. Moving
+      # and leaving are the screen's own and never logged, so never asked.
+      for pair in ${(s:,:)rest}; do
+        k=${pair%%=*} v=${pair#*=}
+        [[ $pair == *=* && -n $v && $k != (j|k|g|G|q|esc|up|down) ]] || continue
+        [[ -n ${decl[$name$S$k$S$v]} ]] || { decl[$name$S$k$S$v]=1; order+=($name$S$k$S$v); }
+        label[$name$S$k]=${label[$name$S$k]:-$v}
+      done ;;
+    *)
+      (( first )) || first=$t
+      (( ${names[(Ie)$name]} )) || names+=($name)
+      # The dashboard and a run's view log the key alone: its label is the
+      # one they opened with.
+      [[ -n $rest ]] || rest=${label[$name$S$key]}
+      (( uses[$name$S$key$S$rest]++ )) || [[ -n ${decl[$name$S$key$S$rest]} ]] || order+=($name$S$key$S$rest) ;;
+  esac
+done < $log
+
+(( first )) || { print "Nothing logged${1:+ in the last $1 days}."; exit 0; }
+print "${B}${T}what you use${R}${C}, since $(strftime '%a %b %-d' $first) ($(( (EPOCHSECONDS - first) / 86400 )) days)${R}"
+local n id c max never w=14
+for name in ${(f)"$(for n in $names; do print -r -- "${opens[$n]:-0} $n"; done | sort -rn | cut -d' ' -f2-)"}; do
+  print "\n${A}${name}${R}${C}  opened ${opens[$name]:-0}×${runs[$name]:+, run ${runs[$name]}×}${R}"
+  max=1 never=
+  local -a rows=()
+  for id in ${(M)order:#$name$S*}; do
+    c=${uses[$id]:-0}
+    (( c > max )) && max=$c
+    k=${${id#*$S}%%$S*} v=${id##*$S}
+    if (( c )); then rows+=("$c"$S"$k"$S"$v")
+    else never+="${never:+${F} · ${R}}${T}$k${R}${C} $v${R}"; fi
+  done
+  for id in ${(f)"$(print -rl -- $rows | sort -t $S -k1,1rn)"}; do
+    [[ -n $id ]] || continue
+    c=${id%%$S*} k=${${id#*$S}%%$S*} v=${id##*$S}
+    (( n = (c * w + max - 1) / max ))
+    print -r -- "  ${A}${(l:n::█:)}${F}${(l:w-n::░:)}${R} ${(l:5:)c}  ${T}${(r:8:)k}${R}${C}$v${R}"
+  done
+  [[ -n $never ]] && print -r -- "  ${F}never  ${R}$never"
+done
+
+# The commands gg lists that nothing logged a run or a screen of: those
+# otis-run runs (a link to it in bin/), which is what logs a run. gs is an
+# alias, and setup, update and the tour log nothing, so they are not asked.
+local -a unused
+for n in ${(f)"$(awk -F'\t' '!/^#/ && NF >= 3 { print $3 }' ${0:A:h:h}/share/commands.tsv)"}; do
+  [[ -L ${0:A:h}/$n ]] || continue
+  (( ${runs[$n]:-0} || ${opens[$n]:-0} )) || unused+=($n)
+done
+(( $#unused )) && print "\n${A}commands never run${R}\n  ${T}${(j:  :)unused}${R}"
+exit 0

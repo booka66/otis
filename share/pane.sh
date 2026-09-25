@@ -139,10 +139,6 @@ pane_bar() {
   printf "${PANE_C}%s${GK_FAINT}%s${GK_R}" "$_pn_on" "$_pn_off"
 }
 
-# pane_keys: nothing. The footer says what the keys do, for the row and the
-# screen it is on; a preview, shown under more than one, names none.
-pane_keys() { :; }
-
 # pane_hang <lead> <lead's columns> <color> <lines> <text> [tail]: the text
 # after a lead (a glyph and an id, colors and all), wrapped under itself to
 # at most that many lines, the tail (a state, colored) after the first.

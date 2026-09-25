@@ -127,6 +127,7 @@ typeset -a piped
 [[ -t 0 ]] || { piped=("${(@f)$(cat)}"); [[ -z $piped ]] && piped=(); }
 
 . ${0:A:h:h}/share/screen.zsh
+keys_caller; keys_open "${REPLY:-${${title//\!<-> /}%% *}}" "$spec"
 port_open
 screen_start
 # What an accept hands back, printed once the screen is given back.
@@ -626,7 +627,7 @@ helplines() {
     drag "in the preview: its text, copied" "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
-  (( multi )) && P+=("  ${A}${(r:9:: :)${:-tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
+  (( multi )) && P+=("  ${A}${(r:9:: :)${:-space/tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
   [[ -s $st/legend ]] && P+=("" "${(@f)$(<$st/legend)}")
   [[ -s $st/last-error ]] && { P+=("" "  ${X}last error$R"); wrap "$(<$st/last-error)" $(( pw - 4 )); P+=("  "${^reply}); }
 }
@@ -969,6 +970,9 @@ kname() {
     *) keyname "$1" ;;
   esac
 }
+# used <key>: a line in the key log (keys_used), with what this picker says
+# the key is for.
+used() { keys_used $1 "${hv[${hk[(ie)$1]}]}"; }
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 handle() {
@@ -989,10 +993,10 @@ handle() {
     # picker, which opens searching, toggles with tab.
     if [[ $n != esc && -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
       [[ $n == enter ]] && searching=0
-      act $n; return
+      used $n; act $n; return
     fi
     case $n in
-      enter) searching=0; accept; return ;;
+      enter) searching=0; used enter; accept; return ;;
       esc) searching=0; return ;;
       tab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1; return ;;
       up|ctrl-k|ctrl-p) step -1; return ;;
@@ -1008,10 +1012,14 @@ handle() {
   if [[ -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
     if [[ $bind[$n] == *[\(:]* ]]; then
       if (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
-      act $n; held[$n]=$EPOCHREALTIME
-    else run "$bind[$n]" $cur; fi
+      used $n; act $n; held[$n]=$EPOCHREALTIME
+    else
+      [[ $n == (j|k|down|up|g|G|home|end|page-down|page-up|shift-down|shift-up) ]] || used $n
+      run "$bind[$n]" $cur
+    fi
     return
   fi
+  [[ $n == (enter|tab|btab|space|/|\?|\]|\[) ]] && used $n
   case $n in
     j|down) step 1 ;;
     k|up) step -1 ;;
@@ -1021,6 +1029,8 @@ handle() {
     page-up) step $(( - (lh - 2) )) ;;
     enter) accept ;;
     tab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1 ;;
+    # space marks, as it does on every screen that marks; tab marks and moves on.
+    space) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )) ;;
     btab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step -1 ;;
     q) code=130; quit 130 ;;
     esc) if [[ -n $query ]]; then query=; requery; else code=130; quit 130; fi ;;

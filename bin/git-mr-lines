@@ -191,7 +191,7 @@ export GMR_LINES_PATH=$path
 # the rows have landed: result fires on every load, the first one empty.
 set --
 [ -n "$line" ] && set -- --bind "result:transform(git-mr-lines --start $line)"
-git-fzf "!$iid $path " 'enter=open in your editor,c=comment or reply,J=mark lines,r=resolve,S=submit drafts,|,e=edit yours,d=delete yours,K=mark lines upward,tab=mark or unmark one,w=web,u=refresh' \
+git-fzf "!$iid $path " 'enter=open in your editor,c=comment or reply,J=mark lines,r=resolve,S=submit drafts,|,e=edit yours,d=delete yours,K=mark lines upward,space=mark or unmark one,w=web,u=refresh' \
   --ansi --delimiter='\t' --with-nth=1 --multi --track --id-nth=8 --no-sort \
   --keys-from 'otis-keys lines {2} {6} {7}' \
   --bind "start:reload($list)" "$@" \

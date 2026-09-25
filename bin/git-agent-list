@@ -93,21 +93,39 @@ dots() {
   done
 }
 scan() {
+  now=$(date +%s)
   for kind in gmr-claude gmr-fix gmr-watch otis-verify otis-walk; do
     for dir in "$common/$kind"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
       [ -s "$dir/started" ] || continue
-      state=$(cat "$dir/status" 2>/dev/null)
+      # read, not cat: this runs for every run on every dashboard draw, and
+      # a process a file a run was most of what the dashboard waited on.
+      status= started= ended= last=
+      read -r status 2>/dev/null < "$dir/status"
+      read -r started 2>/dev/null < "$dir/started"
+      read -r ended 2>/dev/null < "$dir/ended"
+      state=$status
       if [ -z "$state" ]; then
         if running "$dir"; then state=running; else state=died; fi
       fi
       # Its last word: the run's own lines, not the agents', and never its
-      # (long) final result.
-      last=$(tail -n 300 "$dir/events.jsonl" 2>/dev/null | jq -r 'select(.type == "otis") | .text' 2>/dev/null | tail -1)
+      # (long) final result. A run over for more than a few seconds (finish
+      # says its last line just after writing its status) has its kept in
+      # last-word, so it is read once rather than on every draw; any other
+      # is read each time. Written aside and moved into place, as gag and
+      # the dashboard may scan at once.
+      final=; [ -n "$status" ] && [ "${ended:-$now}" -lt $((now - 5)) ] 2>/dev/null && final=1
+      if [ -z "$final" ] || [ ! "$dir/last-word" -nt "$dir/events.jsonl" ]; then
+        tail -n 300 "$dir/events.jsonl" 2>/dev/null | jq -r 'select(.type == "otis") | .text' 2>/dev/null | tail -1 > "$dir/last-word.$$"
+        IFS= read -r last < "$dir/last-word.$$"
+        if [ -n "$final" ]; then mv "$dir/last-word.$$" "$dir/last-word"; else rm -f "$dir/last-word.$$"; fi
+      else
+        IFS= read -r last < "$dir/last-word"
+      fi
       sub= dot=
       [ "$state" = running ] && { sub=$(doing "$dir" "$kind"); dot=$(dots "$dir"); }
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$(cat "$dir/started")" "$(cat "$dir/ended" 2>/dev/null)" "$kind" "$dir" "$last" "$sub" "$dot"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$started" "$ended" "$kind" "$dir" "$last" "$sub" "$dot"
     done
   done
 }

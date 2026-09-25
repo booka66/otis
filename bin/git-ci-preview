@@ -1,165 +1,73 @@
 #!/bin/sh
-# git-ci-preview [--merged | --open] <iid>: one of your MRs in gmr, from the JSON git-mr-list saved. A merged one
-# shows whether it is live, or where it is on the way. An open one: approvals,
-# unresolved threads, reviewers and where each stands, labels, then the pipeline: what failed
-# (grouped by stage, allowed failures marked), what is still going, and what
-# passed. Which it is is looked up in the merged list unless the caller
-# already knows (git-mr-preview does, from the row), since this runs on
-# every cursor move.
-kind=
-case $1 in --merged | --open) kind=${1#--}; shift ;; esac
+# git-ci-preview <iid>: one of your merged MRs, from the JSON git-ci-merged
+# saved: whether it is live, or where it is on the way.
 iid=$1
 [ -n "$iid" ] || exit 0
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
-# A merged MR (git-ci-merged): where it is on the way to production.
-if [ "$kind" = merged ] || { [ -z "$kind" ] && jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; }; then
-  # As every preview speaks (share/pane.sh): where it has got to as a
-  # callout, then the MR, then the way to production as a line of steps,
-  # then a line a fact, each cut to the pane. Links are the keys' (enter
-  # its deploy, p its pipeline), not printed.
-  jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
-    include "otis";
-    def B: "\u001b[1m";
-    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
-    def callout($c; $head; $why): $c + "▌ " + B + ($head | cut($w - 2)) + r,
-      (if $why != "" then $c + "▌ " + r + text + ($why | cut($w - 2)) + r else empty end), "";
-    def fact($c; $t): "  " + $c + ($t | cut($w - 2)) + r;
-    def step($on; $g; $c; $label): $c + $g + " " + $label + r;
-    . as $all | .mrs[] | select(.iid == $iid) |
-    (.deploy.sha // "" | .[0:8]) as $sha |
-    (if .state == "live" then callout(good; "Live in production" + (if .deploy then " since " + (.deploy.at | ago) + " ago" else "" end); if $sha != "" then "Shipped by the deploy of " + $sha + "." else "" end)
-     elif .state == "deploying" then callout(attention; "Deploying now, started " + (.deploy.at | ago) + " ago"; "The running deploy of " + $sha + " has it.")
-     elif .state == "queued" then callout(attention; "Queued to go out"; "The deploy of " + $sha + " has it; it goes when the running one finishes.")
-     elif .state == "rolledback" then callout(bad; "Rolled back: production does not have it"; "The next deploy of a later commit brings it back.")
-     elif .state == "branch" then callout(elsewhere; "Merged into " + .targetBranch + ", not main"; "It goes out once that branch reaches main.")
-     else callout(yours; "Not out yet"; "") end),
-    ((.iid | length) as $il | attention + B + "!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r),
-    (context + ((.sourceBranch + " → " + .targetBranch + "  ·  merged " + (.mergedAt | ago) + " ago") | cut($w)) + r),
-    (if .via then context + (("reached main with !" + .via) | cut($w)) + r else empty end),
-    "",
-    context + "ON ITS WAY" + r,
-    "",
-    # The steps to production, each done, going, waiting or gone wrong.
-    (.state as $s | (.pipeline.job.status // "") as $job |
-     "  " + ([ step(1; "✓"; good; "merged"),
-       (if $s | IN("live", "deploying", "queued", "rolledback") then step(1; "✓"; good; "built")
-        elif $job | IN("FAILED", "SKIPPED", "CANCELED") then step(1; "✗"; bad; "built")
-        elif .pipeline then step(1; "◐"; attention; if $w < 50 then "build" else "building" end) else step(1; "○"; faint; "built") end),
-       (if $s == "live" or $s == "rolledback" then step(1; "✓"; good; if $w < 50 then "out" else "deployed" end)
-        elif $s == "deploying" then step(1; "◐"; attention; if $w < 50 then "going" else "deploying" end)
-        elif $s == "queued" then step(1; "○"; attention; "queued") else step(1; "○"; faint; if $w < 50 then "out" else "deploy" end) end),
-       (if $s == "live" then step(1; "✓"; good; "live") elif $s == "rolledback" then step(1; "✗"; bad; if $w < 50 then "undone" else "rolled back" end) else step(1; "○"; faint; "live") end)
-     ] | join(faint + (if $w < 50 then " → " else "  →  " end) + r))),
-    "",
-    (if .state == "live" and .deploy then fact(context; "deploy of " + $sha + ", " + (.deploy.at | when))
-     elif .state == "rolledback" then fact(bad; "rolled back " + (.deploy.at | ago) + " ago to the build of " + $sha + " (pipeline #" + (.deploy.version // "") + ")")
-     elif .state == "queued" and $all.running then fact(context; "running now: " + $all.running.sha[0:8] + ", started " + ($all.running.at | ago) + " ago")
-     elif (.state | IN("live", "deploying", "queued", "branch")) then empty
-     elif .pipeline then
-       (.pipeline.job.status // "") as $job |
-       fact(text; if $job == "CREATED" then "its build and tests are still running; then it deploys itself"
-         elif $job == "WAITING_FOR_RESOURCE" then "tests passed; queued behind the deploy that is running"
-         elif $job | IN("PENDING", "PREPARING") then "tests passed; its deploy is about to start"
-         elif $job == "RUNNING" then "its deploy is starting"
-         elif $job == "SKIPPED" then "its pipeline did not pass; the next main pipeline that passes takes it"
-         elif $job == "FAILED" then "its deploy job failed (a newer deploy went first); the next deploy takes it"
-         elif $job | IN("CANCELED", "CANCELING") then "its deploy was canceled; the next deploy takes it"
-         elif $job == "MANUAL" then "its deploy waits for someone to run it"
-         elif $job == "SUCCESS" then "its deploy job passed; checking again shortly"
-         elif .pipeline.status | IN("SUCCESS", "FAILED", "CANCELED", "SKIPPED") then "its pipeline has no deploy job (a freeze); the next deploy takes it"
-         else "its pipeline has not reached the deploy job yet" end),
-       fact(context; "pipeline " + (.pipeline.status | ascii_downcase) + ", deploy job " + ($job | ascii_downcase | gsub("_"; " ") | if . == "" then "none" else . end)),
-       (if $all.running then fact(attention; "a deploy is running on " + $all.running.sha[0:8] + ", without it") else empty end)
-     else fact(context; "no main pipeline for its merge commit yet") end),
-    (if $all.rollback and (.state | IN("live", "deploying", "queued")) then
-       fact(bad; "production rolled back " + ($all.rollback.at | ago) + " ago, to the build of " + $all.rollback.sha[0:8])
-     elif (.state | IN("live", "rolledback") | not) and $all.lastDeploy then
-       fact(context; "production is on " + $all.lastDeploy.sha[0:8] + ", deployed " + ($all.lastDeploy.at | ago) + " ago")
-     else empty end),
-    ""
-  ' "$GIT_FZF_STATE/ci-merged.json"
-  exec git-mr-watch --preview "$iid"
-fi
-# Where this checkout is and what it has out, in one git call: the branch's
-# full name, or HEAD when detached, which is no branch.
-{ read -r me; read -r current; } <<EOF
-$(git rev-parse --show-toplevel --symbolic-full-name HEAD 2>/dev/null)
-EOF
-current=${current#refs/heads/}
-[ "$current" = HEAD ] && current=
-wt=$(git worktree list --porcelain | awk -v me="$me" '
-  /^worktree /{ p = substr($0, 10) } /^branch /{ sub("refs/heads/", "", $2); if (p != me) print $2 "\t" p }')
-# The gate jobs, as git-mr-list saved them for this draw.
-[ -s "$GIT_FZF_STATE/marks.json" ] || echo '{"gates": []}' > "$GIT_FZF_STATE/marks.json"
-jq -r -L "$share" --arg iid "$iid" --arg current "$current" --arg wt "$wt" --slurpfile marks "$GIT_FZF_STATE/marks.json" '
+# As every preview speaks (share/pane.sh): where it has got to as a
+# callout, then the MR, then the way to production as a line of steps,
+# then a line a fact, each cut to the pane. Links are the keys' (enter
+# its deploy, p its pipeline), not printed.
+jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
   include "otis";
-  $marks[0].gates as $gates |
-  .data.currentUser.authoredMergeRequests.nodes[] | select(.iid == $iid) |
-  attention + "!\(.iid)  " + text + .title + r,
-  context + .sourceBranch + r
-    + (.sourceBranch as $b | ($wt | split("\n") | map(split("\t")) | map(select(.[0] == $b)) | .[0][1]) as $path |
-       if $b == $current then elsewhere + "  ▶ you are on this branch" + r
-       elif $path then elsewhere + "  checked out in " + $path + r
-       else "" end),
+  def B: "\u001b[1m";
+  def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+  def callout($c; $head; $why): $c + "▌ " + B + ($head | cut($w - 2)) + r,
+    (if $why != "" then $c + "▌ " + r + text + ($why | cut($w - 2)) + r else empty end), "";
+  def fact($c; $t): "  " + $c + ($t | cut($w - 2)) + r;
+  def step($on; $g; $c; $label): $c + $g + " " + $label + r;
+  . as $all | .mrs[] | select(.iid == $iid) |
+  (.deploy.sha // "" | .[0:8]) as $sha |
+  (if .state == "live" then callout(good; "Live in production" + (if .deploy then " since " + (.deploy.at | ago) + " ago" else "" end); if $sha != "" then "Shipped by the deploy of " + $sha + "." else "" end)
+   elif .state == "deploying" then callout(attention; "Deploying now, started " + (.deploy.at | ago) + " ago"; "The running deploy of " + $sha + " has it.")
+   elif .state == "queued" then callout(attention; "Queued to go out"; "The deploy of " + $sha + " has it; it goes when the running one finishes.")
+   elif .state == "rolledback" then callout(bad; "Rolled back: production does not have it"; "The next deploy of a later commit brings it back.")
+   elif .state == "branch" then callout(elsewhere; "Merged into " + .targetBranch + ", not main"; "It goes out once that branch reaches main.")
+   else callout(yours; "Not out yet"; "") end),
+  ((.iid | length) as $il | attention + B + "!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r),
+  (context + ((.sourceBranch + " → " + .targetBranch + "  ·  merged " + (.mergedAt | ago) + " ago") | cut($w)) + r),
+  (if .via then context + (("reached main with !" + .via) | cut($w)) + r else empty end),
   "",
-  (if .approved then good + "approved" + r
-   else attention + "needs \(.approvalsLeft // 0) more approval" + (if (.approvalsLeft // 0) == 1 then "" else "s" end) + r end)
-    + context + " · \((.approvalsRequired // 0) - (.approvalsLeft // 0)) of \(.approvalsRequired // 0)" + r,
-  (if .autoMergeEnabled then good + "merges when the pipeline succeeds" + r
-     + (if .mergeUser.username then context + " · set by " + .mergeUser.username + r else "" end)
+  context + "ON ITS WAY" + r,
+  "",
+  # The steps to production, each done, going, waiting or gone wrong.
+  (.state as $s | (.pipeline.job.status // "") as $job |
+   "  " + ([ step(1; "✓"; good; "merged"),
+     (if $s | IN("live", "deploying", "queued", "rolledback") then step(1; "✓"; good; "built")
+      elif $job | IN("FAILED", "SKIPPED", "CANCELED") then step(1; "✗"; bad; "built")
+      elif .pipeline then step(1; "◐"; attention; if $w < 50 then "build" else "building" end) else step(1; "○"; faint; "built") end),
+     (if $s == "live" or $s == "rolledback" then step(1; "✓"; good; if $w < 50 then "out" else "deployed" end)
+      elif $s == "deploying" then step(1; "◐"; attention; if $w < 50 then "going" else "deploying" end)
+      elif $s == "queued" then step(1; "○"; attention; "queued") else step(1; "○"; faint; if $w < 50 then "out" else "deploy" end) end),
+     (if $s == "live" then step(1; "✓"; good; "live") elif $s == "rolledback" then step(1; "✗"; bad; if $w < 50 then "undone" else "rolled back" end) else step(1; "○"; faint; "live") end)
+   ] | join(faint + (if $w < 50 then " → " else "  →  " end) + r))),
+  "",
+  (if .state == "live" and .deploy then fact(context; "deploy of " + $sha + ", " + (.deploy.at | when))
+   elif .state == "rolledback" then fact(bad; "rolled back " + (.deploy.at | ago) + " ago to the build of " + $sha + " (pipeline #" + (.deploy.version // "") + ")")
+   elif .state == "queued" and $all.running then fact(context; "running now: " + $all.running.sha[0:8] + ", started " + ($all.running.at | ago) + " ago")
+   elif (.state | IN("live", "deploying", "queued", "branch")) then empty
+   elif .pipeline then
+     (.pipeline.job.status // "") as $job |
+     fact(text; if $job == "CREATED" then "its build and tests are still running; then it deploys itself"
+       elif $job == "WAITING_FOR_RESOURCE" then "tests passed; queued behind the deploy that is running"
+       elif $job | IN("PENDING", "PREPARING") then "tests passed; its deploy is about to start"
+       elif $job == "RUNNING" then "its deploy is starting"
+       elif $job == "SKIPPED" then "its pipeline did not pass; the next main pipeline that passes takes it"
+       elif $job == "FAILED" then "its deploy job failed (a newer deploy went first); the next deploy takes it"
+       elif $job | IN("CANCELED", "CANCELING") then "its deploy was canceled; the next deploy takes it"
+       elif $job == "MANUAL" then "its deploy waits for someone to run it"
+       elif $job == "SUCCESS" then "its deploy job passed; checking again shortly"
+       elif .pipeline.status | IN("SUCCESS", "FAILED", "CANCELED", "SKIPPED") then "its pipeline has no deploy job (a freeze); the next deploy takes it"
+       else "its pipeline has not reached the deploy job yet" end),
+     fact(context; "pipeline " + (.pipeline.status | ascii_downcase) + ", deploy job " + ($job | ascii_downcase | gsub("_"; " ") | if . == "" then "none" else . end)),
+     (if $all.running then fact(attention; "a deploy is running on " + $all.running.sha[0:8] + ", without it") else empty end)
+   else fact(context; "no main pipeline for its merge commit yet") end),
+  (if $all.rollback and (.state | IN("live", "deploying", "queued")) then
+     fact(bad; "production rolled back " + ($all.rollback.at | ago) + " ago, to the build of " + $all.rollback.sha[0:8])
+   elif (.state | IN("live", "rolledback") | not) and $all.lastDeploy then
+     fact(context; "production is on " + $all.lastDeploy.sha[0:8] + ", deployed " + ($all.lastDeploy.at | ago) + " ago")
    else empty end),
-  (((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) as $n |
-    if $n == 0 then context + "no unresolved threads" + r
-    else yours + "\($n) unresolved thread" + (if $n == 1 then "" else "s" end) + r end),
-  "reviewers: " + (if (.reviewers.nodes | length) == 0 then context + "none" + r
-    else .reviewers.nodes | map(
-      .username + " " + (.mergeRequestInteraction.reviewState // "UNREVIEWED" |
-        if . == "APPROVED" then good + "approved"
-        elif . == "REQUESTED_CHANGES" then bad + "requested changes"
-        elif . == "REVIEWED" then attention + "reviewed"
-        elif . == "REVIEW_STARTED" then attention + "reviewing"
-        else context + (ascii_downcase | gsub("_"; " ")) end) + r
-    ) | join(", ") end),
-  "labels: " + (if (.labels.nodes | length) == 0 then context + "none" + r else .labels.nodes | map(.title) | join(", ") end),
-  "\u0001verify",
-  "",
-  (if .headPipeline == null then context + "no pipeline for this MR" + r
-   else
-     (.headPipeline.jobs.nodes) as $jobs |
-     ($jobs | map(select(.status == "FAILED" and (.name | IN($gates[]) | not)))) as $failed |
-     ($jobs | map(select(.status == "FAILED" and (.name | IN($gates[]))))) as $gated |
-     ($jobs | map(select(.status != "FAILED" and .status != "SUCCESS"))) as $going |
-     ($jobs | map(select(.status == "SUCCESS"))) as $passed |
-     context + "pipeline "
-       + (if .headPipeline.status == "FAILED" and ($gated | length) > 0 and ($failed | map(select(.allowFailure | not)) | length) == 0
-          then "waiting on approval" else (.headPipeline.status | ascii_downcase) end)
-       + (if .headPipeline.finishedAt then " · finished " + (.headPipeline.finishedAt | when) else " · started " + (.headPipeline.createdAt | when) end) + r,
-     "",
-     (if ($gated | length) > 0 then
-        elsewhere + "waiting on approval (\($gated | length))" + r,
-        ($gated | sort_by(.stage.name)[] | "  " + context + .stage.name + r + "  " + .name),
-        (if ($failed | length) > 0 then "" else empty end)
-      else empty end),
-     (if ($failed | length) > 0 then
-        bad + "failed (\($failed | length))" + r,
-        ($failed | sort_by(.stage.name)[] |
-          "  " + context + .stage.name + r + "  " + .name
-          + (if .allowFailure then context + "  (allowed to fail)" + r else "" end))
-      else empty end),
-     (if ($going | length) > 0 then
-        "", attention + "still going (\($going | length))" + r,
-        ($going | sort_by(.stage.name)[] | "  " + context + .stage.name + r + "  " + .name + context + "  " + (.status | ascii_downcase) + r)
-      else empty end),
-     (if ($passed | length) > 0 then
-        "", good + "passed (\($passed | length))" + r,
-        ($passed | sort_by(.stage.name)[] | "  " + context + .stage.name + r + "  " + context + .name + r)
-      else empty end),
-     (if ($jobs | length) == 0 then context + "no jobs yet" + r else empty end)
-   end)
-' "$GIT_FZF_STATE/ci.json" |
-  # Its verification in Cursor Cloud (git-verify), in its own section under the labels.
-  { mark=$(printf '\001verify')
-  while IFS= read -r line; do
-    if [ "$line" = "$mark" ]; then git-verify --preview "$iid"; else printf '%s\n' "$line"; fi
-  done; }
+  ""
+' "$GIT_FZF_STATE/ci-merged.json"
+exec git-mr-watch --preview "$iid"

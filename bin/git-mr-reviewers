@@ -6,7 +6,7 @@
 # With no search, the MR's current reviewers with where each one stands. Press /
 # and type to search the project's members on GitLab as you type; fzf cancels a
 # search the moment the next keystroke starts one, and the short sleep keeps a
-# fast typist from firing a request per letter. tab adds or removes the
+# fast typist from firing a request per letter. space adds or removes the
 # highlighted person, even mid-search: the tick moves at once and GitLab is
 # told in the background (share/mr-sync.sh). The MR comes through the cache
 # (git-cached-json), so a lookup that fails shows in the footer with ? for
@@ -78,7 +78,7 @@ case $1 in
       exit 0
     fi
     toggle="execute-silent(git-mr-reviewers --toggle $iid {2} {3})+reload(git-mr-reviewers --list $iid {q})"
-    git-fzf "!$iid reviewers " 'tab=add or remove,space=,enter=close' --ansi --track --disabled --search \
+    git-fzf "!$iid reviewers " 'space=add or remove,tab=,enter=close' --ansi --track --disabled --search \
       --delimiter="$(printf '\t')" --with-nth=1 \
       --bind "start:reload(git-mr-reviewers --list $iid)" \
       --bind "change:reload:sleep 0.2; git-mr-reviewers --list $iid {q}" \

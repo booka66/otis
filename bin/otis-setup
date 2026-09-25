@@ -245,7 +245,7 @@ offer_brew bat "code blocks in MR comments are syntax-highlighted in the picker"
 offer_brew ffmpeg "V's judge can watch the tester's screen recordings from verification" \
   "V can still verify, but the judge cannot see the videos. $(install_hint ffmpeg 'apt install ffmpeg')" ffmpeg
 tb_install='curl -fsSl https://terminal-browser.sh/install | bash'
-offer_run terminal-browser "w, p and h open pages in this pane; ctrl-c comes back" \
+offer_run terminal-browser "w and p open pages in this pane; ctrl-c comes back" \
   "$tb_install" "$tb_install" terminal-browser
 if [ "$os" != Darwin ]; then
   if have xdg-open; then pass xdg-open "w and p open links in your browser"
