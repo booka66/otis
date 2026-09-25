@@ -38,8 +38,8 @@ EOF
         none A D ;;
       merged)
         k enter "its deploy"; k D "Claude watches production"
-        none A d C V m r R N s W l a G ;;
-      *) none enter c m r A d l a s W C D V R N w G y p v ;;
+        none A d C V P m r R N s W l a G ;;
+      *) none enter c m r A d l a s W C D V P R N w G y p v ;;
     esac ;;
 
   # gb: branch, kind, worktree, MR iid, place.

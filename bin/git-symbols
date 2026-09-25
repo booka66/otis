@@ -264,39 +264,8 @@ esac
 # applied. Asked for there, since seam starting is a fifth of a preview.
 seam_hunks() { seam --awk hunks; }
 
-# cut_awk: the lines of one hunk that fall inside [s, e] on `side`, with a
-# header for what is left, so delta numbers them as the file does and git
-# apply takes them as a patch. The input is a -U999999 diff: the file as one
-# hunk with every line in it. A change from the other side belongs to the
-# symbol when it sits between two of its lines, not after its last: what
-# follows a removed symbol is usually the next symbol, whole.
-cut_awk='
-  !inhunk && /^@@/ { inhunk = 1; split($2, a, ","); o = substr(a[1], 2) + 0; split($3, b, ","); n = substr(b[1], 2) + 0; next }
-  !inhunk { print; next }
-  /^\\/ { if (last) line[++kept] = $0; next }
-  {
-    c = substr($0, 1, 1)
-    keep = 0
-    if (c == " ")      { keep = (side == "new") ? (n >= s && n <= e) : (o >= s && o <= e); lo = o; ln = n; o++; n++ }
-    else if (c == "-") { keep = (side == "new") ? (n > s && n <= e) : (o >= s && o <= e); lo = o; ln = n; o++ }
-    else if (c == "+") { keep = (side == "new") ? (n >= s && n <= e) : (o > s && o <= e); lo = o; ln = n; n++ }
-    else next
-    last = keep
-    if (!keep) next
-    if (!kept) { O = lo; N = ln; oc = 0; nc = 0 }
-    line[++kept] = $0
-    if (c != "+") oc++
-    if (c != "-") nc++
-  }
-  END {
-    if (!kept) exit
-    # A side with nothing kept names the line before, as git does; 0 for none.
-    # The note rides on the header, where delta draws a function name, in
-    # quotes: delta highlights the header as code, and a string is one color
-    # where bare words would light up as keywords.
-    printf "@@ -%d,%d +%d,%d @@%s\n", (oc ? O : (O > 1 ? O - 1 : 0)), oc, (nc ? N : (N > 1 ? N - 1 : 0)), nc, (note != "" ? " \"" note "\"" : "")
-    for (i = 1; i <= kept; i++) print line[i]
-  }'
+# cut.awk (share): the lines of one hunk that fall inside [s, e] on a side,
+# with a header for what is left; awk -f, so it costs no process to read.
 
 # unclaimed_awk: the lines of a -U999999 diff no symbol claims, as hunks: each
 # unclaimed change with three lines of context either side, and none of it
@@ -838,17 +807,17 @@ EOF
       # definition as the change leaves it (or as it was, for a removed one),
       # its changed lines marked, the path already said above.
       if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$upath"; else wt_diff -U999999 "$upath"; fi 2>/dev/null |
-        awk -v side="$uside" -v s="$us" -v e="$ue" -v note="" "$cut_awk" | gk_delta --file-style=omit
+        awk -v side="$uside" -v s="$us" -v e="$ue" -v note="" -f "$share/cut.awk" | gk_delta --file-style=omit
     done < "$deps"
     rm -f "$deps" "$deps.gl"
     exit 0
   fi
-  # A file seam read no definitions from has no range to cut to, and cut_awk
+  # A file seam read no definitions from has no range to cut to, and cut.awk
   # reads an empty one as zero and keeps nothing, so the row drew a blank
   # pane. The row is the whole file, so that is what it shows.
   [ -n "$s" ] || { s=1 e=999999999; }
   if [ -n "$head" ]; then git diff -U999999 --no-renames "$base" "$head" -- "$path"; else wt_diff -U999999 "$path"; fi 2>/dev/null |
-    awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" "$cut_awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else gk_delta | mark "$deps"; fi
+    awk -v side="$side" -v s="$s" -v e="$e" -v note="$note" -f "$share/cut.awk" | if [ -n "$GIT_SYMBOLS_PLAIN" ]; then cat; else gk_delta | mark "$deps"; fi
   rm -f "$deps" "$deps.gl"
   exit 0
 fi
@@ -908,7 +877,7 @@ if [ "$mode" = --stage ]; then
         awk -v f="$path" -v s="$s" -v e="$e" "$hunk_awk"'END { print shift("", f, "old", s), shift("", f, "old", e) }')
       s=$1 e=$2
     fi
-    git --no-optional-locks diff-files -U999999 --no-renames -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" "$cut_awk" > "$tmp"
+    git --no-optional-locks diff-files -U999999 --no-renames -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" -f "$share/cut.awk" > "$tmp"
     # The cut leaves no context, and git apply anchors a hunk with none after
     # it to the file's end unless told the line numbers are the whole story.
     [ -s "$tmp" ] && git apply --cached --unidiff-zero "$tmp"
@@ -919,7 +888,7 @@ if [ "$mode" = --stage ]; then
         awk -v f="$path" -v s="$s" -v e="$e" "$hunk_awk"'END { print shift("", f, "new", s), shift("", f, "new", e) }')
       s=$1 e=$2
     fi
-    git --no-optional-locks diff-index --cached -U999999 --no-renames "$base" -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" "$cut_awk" > "$tmp"
+    git --no-optional-locks diff-index --cached -U999999 --no-renames "$base" -- "$path" | awk -v side="$side" -v s="$s" -v e="$e" -f "$share/cut.awk" > "$tmp"
     [ -s "$tmp" ] && git apply --cached -R --unidiff-zero "$tmp"
   fi
   exit 0
@@ -943,7 +912,7 @@ vspec_awk='
   { k = ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }
   (k in want) && !(k in seen) { seen[k] = 1; print k "\t" $1 "\t" ($2 == "file" ? "new\t-1\t999999999" : $7 "\t" $8 "\t" $9) }'
 # vhash_awk: what each spec'"'"'s hash is taken over, from a -U999999 diff of
-# its files: the lines cut_awk keeps for it, into a file a spec in dir, named
+# its files: the lines cut.awk keeps for it, into a file a spec in dir, named
 # by its number, for one cksum to hash them all (awk has no digest, and one
 # of its own is a thousand times slower). Run LC_ALL=C.
 vhash_awk='
@@ -1718,7 +1687,7 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
@@ -1729,12 +1698,12 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,P=step through it,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
@@ -1757,7 +1726,6 @@ otis-symbols "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
   --bind "y:transform(git-symbols --copy {12})" \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
   --bind "S:execute-silent(git-symbols --split)+refresh-preview" \
-  --bind "P:execute(git-split-try $rev)" \
   --bind "G:transform(git-symbols --page $rev {12})" \
   --bind "C:execute(git-split --wait $rev)" \
   --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview" \

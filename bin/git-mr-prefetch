@@ -40,6 +40,22 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]? | sele
 [ -n "$refspecs" ] && GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin $refspecs
 wait
 
+# Their own tests, traced for P before you open them (git-walk --ahead), those
+# you review first, then yours: once a push, one at a time, never while a build
+# of yours runs, and only MRs opened since ahead tracing began here
+# (git-walk --ahead-since), not every one already open then.
+since=$(git-walk --ahead-since)
+new='def made: (.createdAt // "") | sub("\\.[0-9]+"; "") | (try fromdateiso8601 catch 0);'
+{ jq -r --argjson since "${since:-0}" "$new"'.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
+    | select(.author.username != $u.username and made >= $since)
+    | [.iid, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json"
+  jq -r --argjson since "${since:-0}" "$new"'.data.currentUser.authoredMergeRequests.nodes[]? | select(made >= $since)
+    | [.iid, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$mine" 2>/dev/null; } |
+  while IFS="$(printf '\t')" read -r iid head base start; do
+    have "$head" && have "$base" || continue
+    git-walk --ahead "$iid" "$head" "$base" "$start" </dev/null >/dev/null 2>&1
+  done
+
 # Each one's symbol table (git-symbols --table), built now rather than when
 # you open it, since seam was most of the first list; and Claude's gloss of
 # it (git-symbols-gloss), so a review opens glossed and stays as it opened.
@@ -56,8 +72,8 @@ gloss=; command -v claude >/dev/null 2>&1 && [ "$(git config --get otis.symbolsM
 cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
 jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
   | select(.author.username != $u.username)
-  | [.targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
-  while IFS="$(printf '\t')" read -r target head base start; do
+  | [.targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // ""), .iid] | @tsv' "$json" |
+  while IFS="$(printf '\t')" read -r target head base start iid; do
     have "$head" && have "$base" || continue
     # Read already at this head, the usual case: globs.
     glossed=$([ -z "$gloss" ] && echo 1)
@@ -71,3 +87,4 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
     t=$(git-symbols --table "$b..$head") || continue
     [ -n "$glossed" ] || OTIS_SYMBOLS_KEY=$b-$head git-symbols-gloss "$b..$head" "$t" >/dev/null 2>&1
   done
+

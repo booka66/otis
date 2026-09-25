@@ -15,17 +15,19 @@ tab=$(printf '\t')
 for p; do shift; [ -n "$p" ] && set -- "$@" "$p"; done
 [ $# -gt 0 ] || exit 0
 
-printf 'remove\n'
-for p; do
+list=$(for p; do
   IFS=$tab read -r b kind <<EOF
 $(row "$p")
 EOF
   case $kind in
-    merged|closed|theirs) printf '  %s  and its branch %s (%s)\n' "${p##*/}" "$b" "$kind" ;;
-    *) printf '  %s\n' "${p##*/}" ;;
+    (merged|closed|theirs) printf '  %s  and its branch %s (%s)\n' "${p##*/}" "$b" "$kind" ;;
+    (*) printf '  %s\n' "${p##*/}" ;;
   esac
-done
-git-confirm "remove?" || exit 0
+done)
+git-confirm "remove
+$list
+
+remove?" || exit 0
 
 removed= left= branches= restore=
 for p; do

@@ -23,8 +23,9 @@ if [ -z "$list" ]; then
   printf '%s\n' "nothing to delete: main and branches checked out anywhere stay" > "$st/note"
   exit 0
 fi
-printf 'delete these local branches? MRs and GitLab copies are not touched\n%s' "$list"
-git-confirm "delete?" || exit 0
+git-confirm "delete these local branches? MRs and GitLab copies are not touched
+$list
+delete?" || exit 0
 
 deleted= left= restore=
 for b; do

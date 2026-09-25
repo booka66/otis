@@ -1,0 +1,321 @@
+#!/bin/sh
+# git-walk <iid> [<head> <base> <start>]  gmr's P: an MR's walk: its progress while it runs; once
+#                                         it has landed, asked whether to walk it again (y) or
+#                                         else the walk itself; or, after a confirm, started
+# git-walk --branch <branch>              gb's P: the same for a branch, as gdm reads it
+# git-walk --check <kind> <iid> <head> <base> <start>
+#                                         gmr's P, as fzf actions: only open MRs have it
+# git-walk --marks                        {iid or branch: {walking, status, head}} of every walk,
+#                                         for gmr's and gb's rows
+# git-walk --run <key>                    the walk itself, in the background (what resume runs)
+# git-walk --view <key>                   the walk, on a screen of its own: its steps the list, the
+#                                         step the preview, its code under it
+# git-walk --list <key>                   that screen's list, the picker's state set up for its previews
+# git-walk --again <key>                  R there: walked again, after a confirm, its progress shown
+# git-walk --ahead <iid> <head> <base> <start>
+#                                         an MR you review or wrote, traced before you open it
+#                                         (git-mr-prefetch)
+# git-walk --ahead-branches               your last branches the same (git-branch-list)
+# git-walk --ahead-since                  when ahead tracing began: only what is newer is traced
+#
+# The walk is git-symbols-walk's: Opus picks the inputs a change was written
+# for and ones whose behavior it changes without saying so, and follows each
+# through the code, a stop a step. This makes it a run like V's and C's: it
+# goes in the background with a progress of its own (git-claude-view, where q
+# leaves it going and x stops it), it is in gag and on the dashboard while it
+# runs, a notification says when it lands, and opening it then (P again, or
+# enter in gag or on the dashboard) opens the walk on a screen of its own
+# (--view): its steps the list, j and k through them, the step the preview
+# with its code under it, enter the step's line in your editor, y the step
+# for Claude, R walked again.
+#
+# A run keeps its state in <git dir>/otis-walk/<key>, the key an MR's iid or
+# b-<branch> with slashes as %: what the progress view reads (title, pid,
+# started, ended, status, events.jsonl), what resume runs (cmd, cwd), and what
+# it walked (rev, head, the walk's cache key in key). The walk itself is in
+# git-symbols-walk's cache, keyed as a review keys the change, so the review
+# and gdm find it too.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/claude-run.sh"
+. "$share/repo.sh" || exit 1
+top=$OTIS_GITDIR/otis-walk
+pause() { otis-popup say "$1"; exit 0; }
+
+case $1 in
+  --check)
+    kind=$2 iid=$3
+    case $kind in
+      review|mine) echo "execute(git-walk $iid {7} {8} {12})" ;;
+      sep) exec git-fzf-note "that row is a section heading" ;;
+      *) exec git-fzf-note "P walks open MRs, and !$iid has merged" ;;
+    esac
+    exit 0 ;;
+  --marks)
+    # Going, how the last one ended, and the head it walked, so a row marks
+    # it walked only while that is still the head.
+    printf '{'
+    n=0
+    for d in "$top"/*/; do
+      d=${d%/}
+      [ -s "$d/started" ] || continue
+      k=${d##*/}; case $k in b-*) k=$(printf '%s' "${k#b-}" | tr '%' '/') ;; esac
+      w=false; running "$d" && w=true
+      [ "$n" -gt 0 ] && printf ','
+      printf '"%s":{"walking":%s,"status":"%s","head":"%s"}' "$k" "$w" "$(cat "$d/status" 2>/dev/null)" "$(cat "$d/head" 2>/dev/null)"
+      n=$((n + 1))
+    done
+    printf '}\n'
+    exit 0 ;;
+  --run)
+    d=$top/$2
+    finish() {
+      printf '%s\n' "$1" > "$d/status"
+      date +%s > "$d/ended"
+      say "$2"
+      [ "$1" != stopped ] && alert "Walked $(cat "$d/what")" "$2" "$1"
+      exit 0
+    }
+    note_signal
+    read -r rev < "$d/rev" 2>/dev/null
+    what=$(cat "$d/what")
+    # An MR's commits, fetched if they are not here (git-mr-prefetch does
+    # this ahead for the MRs you review), and its base as its review reads
+    # it (git-mr-base), so the walk is keyed as the review keys the change.
+    if [ -s "$d/iid" ]; then
+      iid=$(cat "$d/iid") head=$(cat "$d/head") base=$(cat "$d/base") start=$(cat "$d/start" 2>/dev/null)
+      git cat-file -e "$head^{commit}" 2>/dev/null ||
+        GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin "+refs/merge-requests/$iid/head:refs/mr/$iid" 2>>"$d/log"
+      git cat-file -e "$base^{commit}" 2>/dev/null || GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin 2>>"$d/log"
+      git cat-file -e "$head^{commit}" 2>/dev/null || finish failed "could not fetch $what's commits"
+      [ -n "$start" ] && ! git cat-file -e "$start^{commit}" 2>/dev/null && start=
+      b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")" 2>/dev/null) || finish failed "could not work out $what's base"
+      rev=$b..$head key=$b-$head
+    else
+      l=${rev%%...*} r=${rev##*...}
+      key=$(git merge-base "$l" "$r")-$(git rev-parse "$r")
+    fi
+    printf '%s\n' "$rev" > "$d/rev"; printf '%s\n' "$key" > "$d/key"
+    # Traced rather than told: the change's own tests, run (git-trace).
+    if [ "$(cat "$d/engine" 2>/dev/null)" = trace ]; then
+      printf '%s %s\n' "${key%-*}" "${key#*-}" > "$d/shas"
+      exec git-trace --phase "$d" run
+    fi
+    say "reading $what by symbol"
+    t=$(git-symbols --table "$rev" 2>>"$d/log") || finish failed "seam could not read $what"
+    # The walk reports here as it goes (OTIS_WALK_DIR): its own lines, and
+    # each call's steps under its name.
+    OTIS_WALK_DIR=$d OTIS_SYMBOLS_KEY=$key git-symbols-walk --run "$rev" "$t" 2>>"$d/log"
+    stopping
+    f=$(OTIS_SYMBOLS_KEY=$key git-symbols-walk --file "$rev" "$t")
+    if [ -n "$f" ]; then
+      finish done "$(jq -r '"\(.walks | length) walks: " + ([.walks[] | (.point // .title)] | join(" · "))' "$f" 2>/dev/null | cut -c1-300)"
+    else
+      finish failed "no walk came back: $(OTIS_SYMBOLS_KEY=$key git-symbols-walk --state "$rev" "$t")"
+    fi ;;
+esac
+
+# traced <head>: a run that traced this head, under any key (an MR's and its
+# branch's are one change), going or walked, so it is traced the once.
+traced() {
+  for t in "$top"/*/; do
+    t=${t%/}
+    [ "$(cat "$t/engine" 2>/dev/null)" = trace ] && [ "$(cat "$t/head" 2>/dev/null)" = "$1" ] || continue
+    { running "$t" || [ "$(cat "$t/status" 2>/dev/null)" = done ]; } && { printf '%s\n' "$t"; return 0; }
+  done
+  return 1
+}
+
+# --ahead: an MR you review or wrote, or a branch of yours (--ahead-branches),
+# traced before you open it (git-mr-prefetch, git-branch-list), so P finds it
+# walked. Only a change whose own tests can run (git-trace --can), once a push,
+# one at a time, and never while a build or test of yours runs; it leaves you
+# a slot (git-trace), and says nothing when it lands. git config
+# otis.walkAhead off stops it.
+ahead() {
+  [ "$(git config --get otis.walkAhead)" != off ] || exit 0
+  [ "$(cat "$d/head" 2>/dev/null)" = "$head" ] && return 1
+  traced "$head" >/dev/null && return 1
+  running "$d" && return 1
+  # Run here, only on a machine with nothing else to do: no build or test of
+  # yours going, on power, and the last five minutes' load under a quarter of
+  # its cores. On a workspace (otis.walkRemote), whenever.
+  if [ -z "$(git config --get otis.walkRemote)" ]; then
+    pgrep -f "(^|/)(bazel|jest|vitest|yarn|npm) (build|test|run|query|coverage|install)( |$)" >/dev/null 2>&1 && exit 0
+    pmset -g batt 2>/dev/null | grep -q "AC Power" || exit 0
+    awk -v l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{ print $3 }')" -v c="$(sysctl -n hw.ncpu 2>/dev/null)" 'BEGIN { exit !(l != "" && c > 0 && l < c / 4) }' || exit 0
+  fi
+  mkdir -p "$top"
+  lk=$top/.ahead
+  if ! mkdir "$lk" 2>/dev/null; then
+    kill -0 "$(cat "$lk/pid" 2>/dev/null)" 2>/dev/null && exit 0
+    rm -rf "$lk"; mkdir "$lk" 2>/dev/null || exit 0
+  fi
+  git-trace --can "$base" "$head" || { rm -rf "$lk"; return 1; }
+  rm -rf "$d"; mkdir -p "$d"
+  echo trace > "$d/engine"; : > "$d/ahead"
+  printf '%s\n' "$what" > "$d/what"
+  printf 'Walking %s ahead\n' "$what" > "$d/title"
+  printf '%s\n' "$head" > "$d/head"
+  if [ -n "$rev" ]; then printf '%s\n' "$rev" > "$d/rev"
+  else printf '%s\n' "$key" > "$d/iid"; printf '%s\n' "$base" > "$d/base"; printf '%s\n' "$start" > "$d/start"; fi
+  date +%s > "$d/started"
+  : > "$d/events.jsonl"
+  printf '%s\n' git-walk --run "$key" > "$d/cmd"
+  pwd > "$d/cwd"
+  otis-detach git-walk --run "$key" </dev/null > "$d/log" 2>&1 &
+  echo $! > "$d/pid"; echo $! > "$lk/pid"
+  exit 0
+}
+# --ahead-since: when ahead tracing began here (git config otis.walkAheadSince,
+# seconds), set to now the first time it is asked: what was open then is
+# yours to walk by hand, and only what comes after is traced ahead.
+if [ "$1" = --ahead-since ]; then
+  s=$(git config --get otis.walkAheadSince) || { s=$(date +%s); git config otis.walkAheadSince "$s"; }
+  printf '%s\n' "$s"; exit 0
+fi
+if [ "$1" = --ahead ]; then
+  key=$2 head=$3 base=$4 start=$5 d=$top/$2 what="!$2" rev=
+  ahead; exit 0
+fi
+# Your branches: the few you committed to last since ahead tracing began, each once it has sat five
+# minutes (a branch mid-work moves on before its trace lands), that have
+# something since the base. The first that needs it is traced.
+if [ "$1" = --ahead-branches ]; then
+  main=$(otis-config base) now=$(date +%s) since=$(git-walk --ahead-since)
+  git for-each-ref --sort=-committerdate --count=5 --format='%(refname:short)%09%(objectname)%09%(committerdate:unix)' refs/heads |
+    while IFS="$(printf '\t')" read -r br head when; do
+      [ $((now - when)) -ge 300 ] && [ $((now - when)) -le 604800 ] && [ "$when" -ge "$since" ] || continue
+      [ "$br" = "$main" ] && continue
+      base=$(git merge-base "$main" "$br" 2>/dev/null) || continue
+      [ "$base" = "$head" ] && continue
+      key=b-$(printf '%s' "$br" | tr '/' '%') d=$top/b-$(printf '%s' "$br" | tr '/' '%') what=$br rev=$main...$br
+      ahead
+    done
+  exit 0
+fi
+
+# The walk's screen, and its list: the state git-symbols-walk's previews
+# read (the key and cache root, the change's shas and its table), then its
+# rows, kept for > and < to find their rows in.
+if [ "$1" = --list ]; then
+  d=$top/$2 st=$GIT_FZF_STATE
+  rev=$(cat "$d/rev") k=$(cat "$d/key")
+  printf '%s\n' "$k" > "$st/key"
+  printf '%s\n' "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache" > "$st/cache-root"
+  if [ ! -s "$st/symbols.tsv" ]; then
+    t=$(git-symbols --table "$rev" 2>/dev/null) && cp "$t" "$st/symbols.tsv"
+    printf '%s %s\n' "${k%-*}" "${k#*-}" > "$st/symbols.tsv.rev"
+  fi
+  [ -e "$st/walk" ] || echo 0 > "$st/walk"
+  git-symbols-walk --rows "$rev" | tee "$st/rows.last"
+  exit 0
+fi
+if [ "$1" = --view ]; then
+  d=$top/$2
+  [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && exec git-trace --view "$d"
+  rev=$(cat "$d/rev") k=$(cat "$d/key")
+  b=${k%-*}
+  otis-symbols "walk $(cat "$d/what") " 'enter=open the step in your editor,>=next step,<=step back,y=copy it for Claude,R=walk it again,q=back' \
+    --header-from-state --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
+    --bind "start:reload(git-walk --list '$2')" \
+    --bind ">:transform(git-symbols-walk --step 1)" \
+    --bind "<:transform(git-symbols-walk --step -1)" \
+    --bind "y:transform(git-symbols-walk --note {12})" \
+    --bind "enter:execute(NVIM_DIFF_BASE=$b git-commit-open '$rev' {2} {3})+reload(git-walk --list '$2')" \
+    --bind "R:execute(git-walk --again '$2')+reload(git-walk --list '$2')" \
+    --preview "git-symbols-walk --show '$rev' {12}" </dev/null >/dev/null
+  exit 0
+fi
+
+# P: the key, what it is called, and what it walks.
+if [ "$1" = --branch ]; then
+  br=$2
+  [ -n "$br" ] && git rev-parse -q --verify "$br^{commit}" >/dev/null || pause "no such branch: $br"
+  key=b-$(printf '%s' "$br" | tr '/' '%') what=$br
+  main=$(otis-config base)
+  [ -n "$(git diff --name-only "$main...$br" 2>/dev/null)" ] || pause "$br has nothing since it left $main"
+  rev=$main...$br head=$(git rev-parse "$br")
+else
+  [ "$1" = --again ] && shift && set -- "$1" --again
+  key=$1 what="!$1" head=$2 base=$3 start=$4
+  [ "$head" = --again ] && { head= again=1; }
+  [ -n "$key" ] || exit 0
+  case $key in b-*) br=$(printf '%s' "${key#b-}" | tr '%' '/'); what=$br; main=$(otis-config base); rev=$main...$br; head=$(git rev-parse -q --verify "$br") ;; esac
+fi
+d=$top/$key
+# Traced when the change's own tests can run (git-trace): nothing to pay for,
+# and no model to have. Else Claude's walk.
+trace=
+if [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/null)" "$head" && trace=1
+elif [ -n "$head" ]; then git-trace --can "$base" "$head" && trace=1
+else [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && trace=1; fi
+if [ -z "$trace" ]; then
+  missing=$(otis-agent-run --ready) || pause "P's walk: $missing"
+  [ "$(git config --get otis.walkModel)" != off ] || pause "otis.walkModel is off"
+fi
+
+start() {
+  # From gag or the dashboard, an MR's shas are the last run's.
+  if [ -z "$br" ] && [ -z "$head" ]; then
+    head=$(cat "$d/head" 2>/dev/null) base=$(cat "$d/base" 2>/dev/null) start=$(cat "$d/start" 2>/dev/null)
+    [ -n "$head" ] || pause "P in gmr walks $what"
+  fi
+  [ -n "$asked" ] || [ -n "$trace" ] || git-confirm "Opus walks inputs through $what, the one it was written for and ones it changes without saying so (a few minutes, about one to three dollars)?" || return 1
+  rm -rf "$d"
+  mkdir -p "$d" || return 1
+  [ -n "$trace" ] && echo trace > "$d/engine"
+  printf '%s\n' "$what" > "$d/what"
+  printf 'Walking %s\n' "$what" > "$d/title"
+  printf '%s\n' "$head" > "$d/head"
+  if [ -n "$br" ]; then printf '%s\n' "$rev" > "$d/rev"
+  else printf '%s\n' "$key" > "$d/iid"; printf '%s\n' "$base" > "$d/base"; printf '%s\n' "$start" > "$d/start"; fi
+  otis-config agent > "$d/agent-cli"
+  date +%s > "$d/started"
+  : > "$d/events.jsonl"
+  # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
+  printf '%s\n' git-walk --run "$key" > "$d/cmd"
+  pwd > "$d/cwd"
+  otis-detach git-walk --run "$key" </dev/null > "$d/log" 2>&1 &
+  echo $! > "$d/pid"
+}
+
+# progress: the run's progress while it goes (git-claude-view: q leaves it
+# going, x stops it, r once over walks again); walked, the walk.
+progress() {
+  while :; do
+    git-claude-view "$d"
+    [ $? -eq 3 ] || break
+    start || return 0
+  done
+  [ "$(cat "$d/status" 2>/dev/null)" = done ] && ! running "$d" && exec git-walk --view "$key"
+  return 0
+}
+
+# R in the walk's screen: walked again, and its progress shown.
+[ -n "$again" ] && { start && progress; exit 0; }
+
+# The same head traced under its MR's key or its branch's: that run.
+if [ -n "$trace" ] && [ -n "$head" ] && [ "$(cat "$d/head" 2>/dev/null)" != "$head" ] && t=$(traced "$head"); then
+  d=$t key=${t##*/}
+fi
+if [ ! -d "$d" ]; then
+  start || exit 0
+elif orphaned "$d"; then
+  resume "$d"
+elif [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ -n "$head" ] && [ "$(cat "$d/head" 2>/dev/null)" != "$head" ] && ! running "$d"; then
+  # Traced at an older push: traced again, at this one.
+  start || exit 0
+elif [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ]; then
+  exec git-walk --view "$key"
+elif [ "$(cat "$d/status" 2>/dev/null)" = done ]; then
+  # Walked by an older otis (git-symbols-walk's version): walked again, if
+  # you say so, else the old walk.
+  f=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-walk/$(cat "$d/key").json
+  v=$(sed -n 's/^version=//p' "$(command -v git-symbols-walk)")
+  if [ "$(jq '.version // 0' "$f" 2>/dev/null)" != "$v" ] && git-confirm "$what was walked by an older otis. Walk it again? (any other key opens the old walk)"; then
+    asked=1; start || exit 0
+  else
+    exec git-walk --view "$key"
+  fi
+fi
+progress

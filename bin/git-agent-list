@@ -6,7 +6,7 @@
 #
 # Every run keeps its state in a directory (share/claude-run.sh, git-claude-view):
 # reviews under gmr-claude, fix runs under gmr-fix, production watches under
-# gmr-watch and verifications under otis-verify, each named by what it is
+# gmr-watch, verifications under otis-verify and walks under otis-walk, each named by what it is
 # about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
 # as a glyph, what kind of run, what it is about, when and how long, and its
 # last word to you; running ones first, then newest first. Then tab-separated
@@ -39,6 +39,7 @@ if [ "$1" = --open ]; then
         *) echo "execute(git-verify '$key')+$back" ;;
       esac ;;
     */gmr-watch) echo "execute(git-mr-watch '$key')+$back" ;;
+    */otis-walk) echo "execute(git-walk '$key')+$back" ;;
     */gmr-claude)
       # The range it reviewed, from what resume would run: git-mr-claude --run <iid> <range>.
       range=$(sed -n 4p "$dir/cmd" 2>/dev/null)
@@ -92,7 +93,7 @@ dots() {
   done
 }
 scan() {
-  for kind in gmr-claude gmr-fix gmr-watch otis-verify; do
+  for kind in gmr-claude gmr-fix gmr-watch otis-verify otis-walk; do
     for dir in "$common/$kind"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
@@ -132,7 +133,7 @@ awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     return int(s / 3600) "h " int((s % 3600) / 60) "m"
   }
   BEGIN {
-    label["gmr-claude"] = "review"; label["gmr-fix"] = "fixes"; label["gmr-watch"] = "watch"; label["otis-verify"] = "verify"
+    label["gmr-claude"] = "review"; label["gmr-fix"] = "fixes"; label["gmr-watch"] = "watch"; label["otis-verify"] = "verify"; label["otis-walk"] = "walk"
     cols = ENVIRON["FZF_COLUMNS"] + 0
     if (cols <= 0) cols = 100
   }

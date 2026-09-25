@@ -257,7 +257,10 @@ range=$2
 
 if [ "$mode" = --run ]; then
   ctx=$d/context wt=
-  head=$(cat "$d/head") base=${range%%..*}
+  # The range's base is a branch like origin/main, which moves on after the
+  # change is cut; diffing against its tip shows everything since as undone
+  # by the change. What the change did is from where it forked.
+  head=$(cat "$d/head") base=$(git merge-base "${range%%..*}" "$(cat "$d/head")")
   pin_agent
   finish() {
     [ -n "$wt" ] && git-claude-worktree release "$wt"
@@ -548,7 +551,7 @@ EOF
   : > "$d/lint.done"
 
   made=$(ls "$d"/[0-9][0-9].patch 2>/dev/null | wc -l | tr -d ' ')
-  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; $(if [ "$kind" = retro ]; then echo "enter on it in gag shows them"; else echo "C there shows them"; fi)"
+  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; $(if [ "$kind" = retro ]; then echo "enter on it in gag shows them; B puts the accepted on a branch off $(otis-config main)"; else echo "C there shows them"; fi)"
 fi
 
 # C: start a run after a confirm; while it runs, its progress; once it is
@@ -565,7 +568,7 @@ start() {
   if [ "$kind" = mr ]; then
     note=$(git-confirm --note "$who works through $label's threads and proposes fixes for you to accept?") || return 1
   elif [ "$kind" = retro ]; then
-    note=$(git-confirm --note "$who acts on $label, as changes to this checkout for you to accept (a applies them)?") || return 1
+    note=$(git-confirm --note "$who acts on $label, from $(otis-config main) and apart from this change, for you to accept and put on a branch of their own (B)?") || return 1
   else
     note=$(git-confirm --note "$who reads what $label changes and proposes fixes for you to accept?") || return 1
   fi
@@ -577,7 +580,10 @@ start() {
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
   otis-config agent > "$d/agent-cli"
   date +%s > "$d/started"
-  git rev-parse HEAD > "$d/head"
+  # A retrospective's changes make the next verification smoother, whatever
+  # the change was: they start from the base, apart from your branch, and B
+  # puts them on a branch of their own.
+  if [ "$kind" = retro ]; then git rev-parse "${range%%..*}"; else git rev-parse HEAD; fi > "$d/head"
   git branch --show-current > "$d/branch"
   printf '%s..%s\n' "${range%%..*}" "$(cat "$d/head")" > "$d/range"
   if [ "$kind" = retro ]; then printf "%s acts on %s\n" "$who" "$label"; else printf "%s's fixes for %s at %.8s\n" "$who" "$label" "$(cat "$d/head")"; fi > "$d/title"

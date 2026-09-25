@@ -42,7 +42,7 @@ for p in $allowed; do
   case $rest in "$p"|"$p "*) ok=1 ;; esac
 done
 [ -n "$ok" ] || {
-  printf 'blocked: git-remote-run may only run a command starting with one of: %s\n' "$(printf '%s' "$allowed" | tr '\n' ',' | sed 's/,$//; s/,/, /g')" >&2
+  printf 'blocked: git-remote-run may only run a command starting with one of: %s, given unquoted, as separate words after git-remote-run\n' "$(printf '%s' "$allowed" | tr '\n' ',' | sed 's/,$//; s/,/, /g')" >&2
   exit 2
 }
 printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"one of the checks otis.claudeCommand allows"}}\n'

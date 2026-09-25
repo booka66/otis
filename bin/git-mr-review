@@ -62,9 +62,10 @@ else
   git worktree list --porcelain | grep -qxF "worktree $dir" ||
     { pause "$dir exists but is not a git worktree, so it was left alone"; exit 1; }
   if [ -n "$(git -C "$dir" status --porcelain)" ]; then
-    printf 'the review worktree has edits:\n'
-    git -C "$dir" status --short | head -20
-    git-confirm "discard them and continue?" || exit 0
+    git-confirm "the review worktree has edits:
+$(git -C "$dir" status --short | head -20)
+
+discard them and continue?" || exit 0
     git -C "$dir" reset --quiet --hard && git -C "$dir" clean -fdq
   fi
 fi

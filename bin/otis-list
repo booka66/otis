@@ -84,7 +84,7 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 # changes. gmr and gag keep showing them either way; this is the dashboard's
 # own note, not the run's.
 {
-  for kind in gmr-claude gmr-fix gmr-watch otis-verify; do
+  for kind in gmr-claude gmr-fix gmr-watch otis-verify otis-walk; do
     for run in "$common/$kind"/*/; do
       [ -s "$run/seen" ] || continue
       run=${run%/}
@@ -411,6 +411,7 @@ out=$(jq -nr -L "$share" \
     (if $run.kind == "gmr-claude" then { verb: "reviewing", g: "◌" }
      elif $run.kind == "gmr-fix" then { verb: "proposing fixes", g: "◌" }
      elif $run.kind == "gmr-watch" then { verb: "watching production", g: "◌" }
+     elif $run.kind == "otis-walk" then { verb: "tracing", g: "◌" }
      else { verb: "verifying", g: "◎" } end)
     + { rank: (0 - $run.started), gc: attention, kind: "run", extra: $run.dir, verb_key: "run",
         id: "g-\($run.kind)-\($key)", mark: false,

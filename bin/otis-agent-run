@@ -21,6 +21,7 @@
 #                  in $OTIS_AGENT_SESSIONS.
 #   --model        a claude model, so dropped; otis.agentModel names the
 #                  model for the others, else it is theirs.
+#   --effort       claude's, so dropped.
 # A flag this does not know is refused, not passed over: a run that grows one
 # says so here before another agent quietly ignores it.
 #
@@ -150,7 +151,7 @@ refuse() {
 while [ $# -gt 0 ]; do
   case $1 in
     -p | --restricted | --strict-mcp-config | --disable-slash-commands | --verbose) ;;
-    --permission-prompts | --permission-mode | --model) shift ;;
+    --permission-prompts | --permission-mode | --model | --effort) shift ;;
     --no-session-persistence) persist= ;;
     --tools)
       shift

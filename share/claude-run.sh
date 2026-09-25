@@ -147,7 +147,7 @@ resume() {
 resume_all() {
   . "$share/repo.sh" || return 0
   c=$OTIS_GITDIR
-  for r in "$c"/gmr-claude/*/ "$c"/gmr-fix/*/ "$c"/otis-verify/*/; do
+  for r in "$c"/gmr-claude/*/ "$c"/gmr-fix/*/ "$c"/otis-verify/*/ "$c"/otis-walk/*/; do
     [ -d "$r" ] && orphaned "${r%/}" && resume "${r%/}"
   done
   return 0

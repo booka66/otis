@@ -34,14 +34,17 @@ stty -icanon -echo -isig min 1 time 0 <&$tty
 size
 
 # --- the box ------------------------------------------------------------------
-# The message wrapped to the box, line by line; a word too long for it cut.
+# The message wrapped to the box, line by line, its colors dropped and each
+# line's indent kept on what wraps from it; a word too long for it cut.
 integer bw iw at=$#text
 (( bw = W - 4 < 64 ? W - 4 : 64, iw = bw - 4 ))
 typeset -a body
 for l in "${(@f)msg}"; do
-  wrap "$l" $iw
+  plain "$l"; l=$REPLY
+  local ind=${(M)l##[[:space:]]#}
+  wrap "$l" $(( iw - $#ind ))
   (( $#reply )) || reply=("")
-  for s in $reply; do fit "$s" $iw; body+=("$REPLY"); done
+  for s in "${reply[@]}"; do fit "$ind$s" $iw; body+=("$REPLY"); done
 done
 (( $#body > H - 8 )) && body=("${(@)body[1,H-9]}" "…")
 
@@ -67,9 +70,13 @@ box() {
   fi
   lines+=("" "$hint")
   (( h = $#lines + 2, top = (H - h) / 2 + 1, left = (W - bw) / 2 + 1 ))
-  # The frame is on the screen already; it is drawn again only where a box
-  # of another size leaves some of the last one showing.
-  out=$e'[?25l'
+  # The first box has the frame drawn whole under it, which wipes what the
+  # command printed over it and any box an earlier question left (its "…"),
+  # in one synchronized update so the clear in it does not blink. After that
+  # the frame is drawn again only where a box of another size leaves some of
+  # the last one showing.
+  out=$e'[?2026h'$e'[?25l'
+  (( btop )) || out+=$(<$OTIS_FRAME)
   (( btop && (top != btop || h != bh) )) && { unbox; out=$REPLY$out; }
   (( btop = top, bh = h ))
   out+=$e"[$top;${left}H"$F"╭"${(l:bw-2::─:)}"╮"$R
@@ -80,7 +87,7 @@ box() {
   out+=$e"[$(( top + h - 1 ));${left}H"$F"╰"${(l:bw-2::─:)}"╯"$R
   if (( cy )); then out+=$e"[$(( top + cy ));$(( left + 1 + cx ))H"$e'[?25h'
   else out+=$e"[$H;1H"; fi
-  print -rnu $tty -- $out
+  print -rnu $tty -- $out$e'[?2026l'
 }
 # unbox: the last box gone, in REPLY: blanked, then the frame over it, each
 # of its lines in place, never the whole screen cleared first, which blinks.

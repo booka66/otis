@@ -1,0 +1,20 @@
+#!/bin/sh
+# git-branch-push <branch>: gb's p. Asks, then force-pushes the branch with gp,
+# from the checkout it is in, so its lease, its hook and its offer of an MR
+# are gp's own. A branch checked out nowhere has no HEAD for gp to push, so it
+# goes up by name with gp's lease (--force-if-includes reads the branch's own
+# reflog, so it holds without a checkout); n offers its MR from there. The
+# push's output is kept off the screen: the box says "…" while it runs, the
+# footer says what came of it, and a failure's last lines are shown in a box.
+b=$1
+[ -n "$b" ] || exit 0
+git-confirm "force-push $b with gp?" || exit 0
+wt=$(git-worktree-path of "$b")
+if [ -n "$wt" ]; then
+  out=$(cd "$wt" && gp 2>&1)
+else
+  out=$(git push origin "refs/heads/$b:refs/heads/$b" --force-with-lease --force-if-includes 2>&1)
+fi || { otis-popup say "$(printf '%s\n' "$out" | tail -5; printf 'push failed')"; exit 0; }
+# gp's MR offer prints "!<iid> created: <url>" when it made one.
+mr=$(printf '%s\n' "$out" | sed -n "s/$(printf '\033')\[[0-9;]*m//g; /created: /p" | tail -1)
+git-fzf-note "pushed $b${mr:+; $mr}" >/dev/null

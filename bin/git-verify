@@ -26,9 +26,9 @@
 # otis carries what each says to the other, up to three rounds. When the
 # verdict is a fail the judge puts down to the change, the tester tries a fix:
 # the change the judge names, or, when it only has a lead, the cause found in
-# the VM first; then it checks again. A fix the judge turns down with a way to
-# do better gets one attempt more. A fix comes with the smallest test that
-# would have caught it. One the judge accepts is verified, and a proposal to
+# the VM first; then it checks again. A fix turned down with a way to do
+# better gets one attempt more. A fix comes with the smallest test that
+# would have caught it. One a fresh checker accepts is verified, and a proposal to
 # take in (f in its progress view, git-mr-fix f-<key>); one it does not is
 # only a line in the report.
 #
@@ -53,6 +53,9 @@
 # broke off on waking is tried again; a run killed outright picks up from its
 # last finished step the next time gmr or gb draws, or V opens it, against the
 # same Cursor agent (git-verify-run says what it keeps).
+#
+# A run starts on the VM an earlier one left idle, this MR's or any other's
+# here, when Cursor still has one, rather than waiting on a cold boot.
 mode=
 case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--keylines|--attach) mode=$1; shift ;; esac
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -112,11 +115,13 @@ case $mode in
     [ -n "$OTIS_REPORT_NO_COST" ] && spent=
     if [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ -s "$d/verdict.json" ]; then
       retro=0; [ -s "$d/retro.json" ] && retro=$(jq '(.recommendations // []) | length' "$d/retro.json" 2>/dev/null)
+      ask=$(jq -r '.ask // ""' "$d/retro.json" 2>/dev/null)
+      infra=$(git config --get otis.infraContact) || infra=infra
       fix=$(jq -r 'if .accept then "a verified fix" else "a fix turned down" end' "$d/verdict-fix.json" 2>/dev/null)
       # A run with no plan (one that stopped early) has only the verdict's own words.
       plan=$d/plan.json; [ -s "$plan" ] || plan=/dev/null
       jq -r -L "$share" --slurpfile plan "$plan" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" \
-        --arg spent "$spent" --argjson arts "$n" --argjson retro "${retro:-0}" --arg fix "$fix" '
+        --arg spent "$spent" --argjson arts "$n" --argjson retro "${retro:-0}" --arg fix "$fix" --arg ask "$ask" --arg infra "$infra" '
         include "otis";
         def one: gsub("[\\s]+"; " ") | gsub("`|\\*\\*|_"; "") | ltrimstr(" ");
         def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
@@ -146,6 +151,13 @@ case $mode in
            "", context + "CONCERNS" + r + "  " + yours + "\(.concerns | length)" + r,
            (.concerns[0:3][] | (one | wrapl($w - 4; 2)) as $ls | "  " + yours + "!" + r + " " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r)),
            (if (.concerns | length) > 3 then "  " + faint + "+ \(.concerns | length - 3) more in the report" + r else empty end)
+         else empty end),
+        # The message drafted for whoever keeps the environment, as it would
+        # be sent, a line an ask; m in the run (V) copies it.
+        (if $ask != "" then
+           "", context + "FOR " + ($infra | ascii_upcase) + r + "  " + faint + "V, then m copies it" + r,
+           ($ask | split("\n")[] | select(test("\\S")) | wrapl($w - 6; 3) as $ls |
+             "  " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r))
          else empty end),
         "",
         # What there is beyond this, as facts: the footer names the key
@@ -177,7 +189,8 @@ case $mode in
         round=${f##*report-}; round=${round%.md}
         printf "${GK_ELSEWHERE}report${GK_R}    the tester's report, round %s\t%s\n" "$round" "$f"
       done
-      # What the judge made of each claim, for files named after one (c1-...).
+      # What the judge made of each claim, for files named after one (c1-...)
+      # or kept in its folder (c1/...).
       results=$(jq -r '.criteria[]? | "\(.id)\t\(.result)"' "$d/verdict.json" 2>/dev/null)
       find "$d/artifacts" -type f 2>/dev/null | sort | while IFS= read -r f; do
         case $f in
@@ -186,7 +199,7 @@ case $mode in
           *) kind="${GK_CONTEXT}text ${GK_R}" ;;
         esac
         name=${f#"$d/artifacts/"}
-        claim=$(printf '%s' "${name##*/}" | sed -n 's/^\(c[0-9][0-9]*\)[-_.].*/\1/p')
+        claim=$(printf '%s\n%s\n' "$name" "${name##*/}" | sed -n 's/^\([bc][0-9][0-9]*\)[-_./].*/\1/p' | head -1)
         case $(printf '%s\n' "$results" | awk -F'\t' -v c="$claim" 'c != "" && $1 == c { print $2 }') in
           verified) mark="${GK_GOOD}\342\234\223${GK_R}" ;;
           failed)   mark="${GK_BAD}\342\234\227${GK_R}" ;;
@@ -201,9 +214,11 @@ case $mode in
     }
     rows=$(list)
     [ -n "$rows" ] || { otis-popup say 'the tester brought nothing back'; exit 0; }
-    printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (videos and images in their app; text in your editor),o=the folder in Finder,y=copy path' \
+    # A report opens as the reviewer's page (git-verify-html) once there is a
+    # verdict to write it from; before that, as the tester wrote it.
+    printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (a report as the page; videos and images in their app; text in your editor),o=the folder in Finder,y=copy path' \
       --ansi --delimiter='\t' --with-nth=1 \
-      --bind 'enter:execute(case {2} in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) otis-open {2} ;; *) otis-edit -R -- {2} ;; esac)' \
+      --bind "enter:execute(case {2} in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) otis-open {2} ;; */context/report-*.md) if [ -s '$d/report.html' ] || { [ -s '$d/verdict.json' ] && git-verify-html '$d'; }; then otis-open '$d/report.html'; else otis-edit -R -- {2}; fi ;; *) otis-edit -R -- {2} ;; esac)" \
       --bind "o:transform(otis-open --fzf '$d/artifacts')" \
       --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
       --preview 'git-verify --artifact {2}' >/dev/null
@@ -305,8 +320,46 @@ case $mode in
         tail -n $((lines - 6)) "$f" ;;
       *.md)
         # Through the environment: macOS awk refuses a newline in a -v value.
-        GK_TEXT_MD=$(cat "$f") LC_ALL=C awk -v width="$cols" "$(cat "$share/markdown.awk")"'
-          BEGIN { text = ENVIRON["GK_TEXT_MD"]; gsub("\n", "\037", text); md(text, width - 2, "") }' ;;
+        md() {
+          GK_TEXT_MD=$1 LC_ALL=C awk -v width="$cols" "$(cat "$share/markdown.awk")"'
+            BEGIN { text = ENVIRON["GK_TEXT_MD"]; gsub("\n", "\037", text); md(text, width - 2, "") }'
+        }
+        # A tester's report is a few lines of prose and then its claims as a
+        # ```json block: the prose as markdown, the claims laid out one by
+        # one beside what the judge made of each, rather than as one
+        # paragraph of JSON.
+        json=
+        case $f in */context/report-*.md)
+          json=$(awk '/^ *```json/ { on = 1; next } on && /^ *```/ { exit } on' "$f")
+          printf '%s' "$json" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1 || json= ;;
+        esac
+        if [ -z "$json" ]; then md "$(cat "$f")"; exit 0; fi
+        md "$(awk '/^ *```json/ { exit } 1' "$f")"
+        # The judge's word on that round's claims (report-2.md and -2b.md,
+        # verdict-2.json), once it has given it; a fix's is on the fix, not
+        # its claims, so it has none.
+        n=${f##*/report-}; n=${n%.md}; n=${n%b}
+        verdict=$d/verdict-$n.json
+        case $n in fix-*) verdict=/dev/null ;; esac
+        [ -s "$verdict" ] || verdict=/dev/null
+        printf '%s' "$json" | jq -r -L "$share" --slurpfile judge "$verdict" --argjson w "$((cols - 1))" '
+          include "otis";
+          # A label in the margin and the text wrapped beside it.
+          def para($label; $t): ($t | tostring | wrapl($w - 8; 1000)) as $ls |
+            "  " + context + ($label | padr(6)) + r + text + ($ls[0] // "") + r, ($ls[1:][] | "        " + text + . + r);
+          def tester: if . == "pass" then good elif . == "fail" then bad else attention end + . + r;
+          def judge: if . == "verified" then good + "✓ verified" elif . == "failed" then bad + "✗ failed"
+            else context + "? " + . end + r;
+          (if type == "array" then {criteria: .} else . end) as $rep |
+          ([$judge[0].criteria[]? | {key: .id, value: .result}] | from_entries) as $j |
+          ($rep.criteria[]? |
+            "", attention + .id + r + "  " + (.result // "no result" | tester)
+              + (if $j[.id] then faint + "  ·  " + r + context + "judge " + r + ($j[.id] | judge) else "" end),
+            (if .what_i_did then para("did"; .what_i_did) else empty end),
+            (if .observed then para("saw"; .observed) else empty end),
+            (if (.artifacts // []) != [] then para("files"; .artifacts | map(sub("^/opt/cursor/artifacts/"; "")) | join("  ·  ")) else empty end)),
+          (if ($rep.commands // []) != [] then "", ($rep.commands | to_entries[] | para(if .key == 0 then "ran" else "" end; .value)) else empty end),
+          (if ($rep.notes // "") != "" then "", para("notes"; $rep.notes) else empty end)' ;;
       *)
         if command -v bat >/dev/null; then
           bat --color=always --theme="${OTIS_T_BAT:-ansi}" --style=plain --paging=never --terminal-width "$cols" "$f"
@@ -384,9 +437,18 @@ start() {
   else
     note=$(git-confirm --note "A Cursor Cloud agent tests $what while $who judges (about 15-30 minutes, billed by Cursor)?") || return 1
   fi
-  # The last run's tester, whose VM may still be up with everything set up:
-  # git-verify-run sends it the new commit instead of booting another.
-  prev=$(cat "$d/agent" 2>/dev/null)
+  # The testers whose VMs may still be up with everything set up, for
+  # git-verify-run to send the new commit to instead of booting another (the
+  # first one Cursor has idle): this one's last, its setup the closest to
+  # what this needs, then every other run's here, newest first. Cursor keeps
+  # an idle VM's services up for hours. A run still going keeps its own.
+  busy=$(for r in "$top"/*/; do running "${r%/}" && cat "${r%/}/agent" 2>/dev/null; done)
+  prev=$({ cat "$d/agent" 2>/dev/null
+    for r in "$top"/*/; do
+      r=${r%/}
+      [ "$r" != "$d" ] && [ -s "$r/agent" ] || continue
+      printf '%s\t%s\n' "$(cat "$r/ended" 2>/dev/null || cat "$r/started" 2>/dev/null || echo 0)" "$(cat "$r/agent")"
+    done | sort -rn | cut -f2; } | busy=$busy awk 'BEGIN { split(ENVIRON["busy"], b, "\n"); for (i in b) seen[b[i]] = 1 } NF && !seen[$0]++' | head -5)
   learned=$(lessons "$d")
   rm -rf "$d"
   mkdir -p "$d/context" || return 1

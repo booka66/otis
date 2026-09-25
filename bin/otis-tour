@@ -898,7 +898,7 @@ part_claude_review() {
 part_claude_fix() {
   heading $1
   say "On your own MR, ${k}C${r} proposes fixes instead: for the unresolved threads that want a code change, and for anything it finds itself. ${k}C${r} in gb does the same for a branch with no MR yet."
-  look 1 "It plans, then makes each change in a worktree of its own, never your checkout. Start one, leave, start another: gmr and gb show ${k}◌${r} while it works and ${k}✎N${r} when N fixes are waiting for you."
+  look 1 "It plans, then makes each change in a worktree of its own, never your checkout. Start one, leave, start another: gmr and gb say ${k}fixing${r} while it works and ${y}2 fixes${r} when two are waiting for you."
   look 2 "Enter shows the proposals, each a diff beside the thread it answers, with why. Take them one of three ways:"
   key space "accept it, or take it back; h keeps only some of its hunks"
   key F "fold what you accepted: checks each patch still applies, lints (otis.lintCommand), shows which of your commits each goes into, folds them in with one rebase, then offers to push and to reply \"Fixed in <commit>\" and resolve the threads"
@@ -934,7 +934,8 @@ part_verify_run() {
   key a "the artifacts: recordings, screenshots, output; enter opens each"
   key h "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
   key p "after a confirm, upload the report to the MR and link it at the end of its description"
-  key i "act on the retrospective: a fix run whose proposals edit the verify-env brief; B puts them on a branch of their own"
+  key i "act on the retrospective: a fix run from main, apart from this change, whose proposals edit the verify-env brief; B puts them on a branch of their own"
+  key m "copy the message the retrospective drafted for infra (git config otis.infraContact names them)"
   key f "the fix the judge accepted, in the proposals picker: space accepts, F folds it into your commits and pushes"
   print
   say "Nothing else is posted to GitLab. The tester is told not to commit or push; that is a prompt, not a guarantee."

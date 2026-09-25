@@ -253,8 +253,11 @@ case $rev in
 esac
 
 # The queries: the change's exported top-level symbols on its new side, with
-# the line the keyword is on and the bare name.
-awk -F'\t' 'BEGIN { OFS = "\t" } $2 != "file" && $4 == "" && $5 == 1 && $7 == "new" { nm = $3; sub(/^type /, "", nm); print $1 "#" $3, $1, $10, nm }' "$table" > "$tmp/queries"
+# the line the keyword is on and the bare name. Not the ones it adds: nothing
+# the change did not touch can call what did not exist before it, and a type
+# added to a file the whole monorepo imports was every package loaded, for
+# no caller. (A new export colliding through someone's export * goes unseen.)
+awk -F'\t' 'BEGIN { OFS = "\t" } $2 != "file" && $4 == "" && $5 == 1 && $7 == "new" && $6 != "added" { nm = $3; sub(/^type /, "", nm); print $1 "#" $3, $1, $10, nm }' "$table" > "$tmp/queries"
 [ -s "$tmp/queries" ] || { : > "$file"; exit 0; }
 cut -f2 "$tmp/queries" | sort -u > "$tmp/changed"
 

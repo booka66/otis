@@ -214,6 +214,10 @@ jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does
   (context + "\($mr.sourceBranch) → \($mr.targetBranch)"
     + (if $a and $mr.author then "  ·  " + $mr.author.username else "" end)
     + (if $mr.updatedAt then "  ·  updated \($mr.updatedAt | ago) ago" else "" end) + r),
+  # How big it is, from the cached list: absent on one fetched before
+  # the queries asked for it.
+  ($mr.diffStatsSummary | if . then good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
+     + context + "  ·  \(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else empty end),
   (if $mr.draft then yours + "draft" + r else empty end),
   "",
 

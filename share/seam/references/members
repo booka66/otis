@@ -84,7 +84,20 @@ jq -n -R --arg root "$root" --rawfile opened "$tmp/opened" --rawfile members "$t
      # One importer naming every file the queries are in, so the one batch
      # asks all of them; the changed files are open already.
      importers: [{path: $open[0].path, of: [$m[][1]] | unique}]}' > "$tmp/job"
-( cd "$root" && node "$share/lsp-references.mjs" < "$tmp/job" ) > "$tmp/refs" 2>/dev/null || exit 1
+# tsgo's turn, git-callers' own (tsgo_turn there): a session is gigabytes and
+# every core it is given, and two at once, this one beside the callers of the
+# same change, took twice as long each. Niced, like the callers, since
+# nothing waits on the split but the page.
+turn="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/callers/tsgo.turn"
+mkdir -p "$(dirname "$turn")" || exit 1
+until mkdir "$turn" 2>/dev/null; do
+  o=$(cat "$turn/pid" 2>/dev/null)
+  [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null && rm -rf "$turn"
+  sleep 1
+done
+echo $$ > "$turn/pid"
+trap 'rm -rf "$tmp" "$turn"' EXIT
+( cd "$root" && nice -n 10 node "$share/lsp-references.mjs" < "$tmp/job" ) > "$tmp/refs" 2>/dev/null || exit 1
 
 # Each reference placed in the changed definition around it; one in the
 # member's own definition is not a dependency on it.

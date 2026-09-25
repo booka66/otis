@@ -67,17 +67,20 @@ iid=$1
 pause() { otis-popup say "$1"; }
 json=$(mr "") || { pause "could not load !$iid"; exit 1; }
 sha=$(printf '%s' "$json" | jq -r .sha)
-printf '%s' "$json" | jq -r --arg main "$(otis-config main)" '
+# What it is goes in the question, so a box over the screen shows it too.
+about=$(printf '%s' "$json" | jq -r --arg main "$(otis-config main)" '
   "!\(.iid)  \(.title)",
   "  \(.source_branch) -> \(.target_branch)\(if .target_branch != $main then "   (not \($main))" else "" end)",
   "  \(if .squash_on_merge then "squashed into one commit" else "merge commit, not squashed" end), " +
   "\(if .force_remove_source_branch or .should_remove_source_branch then "branch deleted on GitLab" else "branch kept on GitLab" end)",
-  "  head \(.sha[0:8])"'
+  "  head \(.sha[0:8])"')
 if [ -n "$run" ]; then
-  printf '  it has no pipeline (a stacked MR loses its own when the one below merges)\n'
-  git-confirm "start its pipeline, and merge it when that succeeds?" || exit 0
-  out=$(glab api -X POST "projects/:fullpath/merge_requests/$iid/pipelines" 2>&1) || { printf '%s\n' "$out" | head -3; pause "starting the pipeline failed"; exit 1; }
-  printf 'pipeline %s started\n' "$(printf '%s' "$out" | jq -r .web_url 2>/dev/null)"
+  git-confirm "$about
+  it has no pipeline (a stacked MR loses its own when the one below merges)
+
+start its pipeline, and merge it when that succeeds?" || exit 0
+  out=$(glab api -X POST "projects/:fullpath/merge_requests/$iid/pipelines" 2>&1) || { pause "starting the pipeline failed
+$(printf '%s\n' "$out" | head -3)"; exit 1; }
   # GitLab takes a moment to see the new pipeline as the one to wait for;
   # until then it has nothing to merge when.
   tries=0
@@ -86,17 +89,23 @@ if [ -n "$run" ]; then
     tries=$((tries + 1))
   done
 elif [ -n "$auto" ]; then
-  printf '  its pipeline is still running\n'
-  git-confirm "merge it when the pipeline succeeds?" || exit 0
+  git-confirm "$about
+  its pipeline is still running
+
+merge it when the pipeline succeeds?" || exit 0
 fi
 if [ -n "$auto" ]; then
-  out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha&auto_merge=true" 2>&1) || { printf '%s\n' "$out" | head -3; pause "setting auto-merge failed; m again sets it"; exit 1; }
+  out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha&auto_merge=true" 2>&1) || { pause "setting auto-merge failed; m again sets it
+$(printf '%s\n' "$out" | head -3)"; exit 1; }
   [ "$(printf '%s' "$out" | jq -r .merge_when_pipeline_succeeds 2>/dev/null)" = true ] && exit 0
   pause "GitLab accepted it but did not set auto-merge (state $(printf '%s' "$out" | jq -r .state 2>/dev/null))"
   exit 1
 fi
-git-confirm "merge it?" || exit 0
-out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha" 2>&1) || { printf '%s\n' "$out" | head -3; pause "merge failed"; exit 1; }
+git-confirm "$about
+
+merge it?" || exit 0
+out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha" 2>&1) || { pause "merge failed
+$(printf '%s\n' "$out" | head -3)"; exit 1; }
 state=$(printf '%s' "$out" | jq -r .state 2>/dev/null)
 [ "$state" = merged ] && exit 0
 pause "GitLab accepted it but says $state"

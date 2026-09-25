@@ -103,6 +103,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 0
 case $mode in
 apply)
   pause() { otis-popup say "$1"; }
+  [ "$kind" = retro ] && { pause "a retrospective's changes stay apart from your change: B puts the accepted on a branch of their own"; exit 0; }
   b=$(git branch --show-current)
   [ "$b" = "$(cat "$d/branch")" ] || { pause "apply with $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }
   if [ "$2" = --accepted ]; then
@@ -233,7 +234,7 @@ fold)
   # merge base with HEAD.
   base=$(git merge-base "$base" HEAD)
   pause() { otis-popup say "$1"; }
-  [ "$kind" = retro ] && { pause "a retrospective's changes go in with a (into your checkout, uncommitted), then commit them on a branch of your own"; exit 0; }
+  [ "$kind" = retro ] && { pause "a retrospective's changes stay apart from your change: B puts the accepted on a branch of their own"; exit 0; }
   b=$(git branch --show-current)
   [ "$b" = "$(cat "$d/branch")" ] || { pause "fold from $(cat "$d/branch") checked out, not ${b:-a detached HEAD}"; exit 0; }
   [ -z "$(git status --porcelain --untracked-files=no)" ] ||

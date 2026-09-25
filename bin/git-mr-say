@@ -88,9 +88,9 @@ case $mode in
     else url=$api/discussions/$id/notes/$nid field=body; fi
     context=$(printf "${GK_CONTEXT}your comment${GK_R}\n"; printf '%s\n' "$was" | head -6 | clip | sed "s/^/$(printf "${GK_CONTEXT}│${GK_R}") /")
     if [ "$mode" = --delete ]; then
-      printf '%s\n\n' "$context"
-      git-confirm "delete it?" || exit 0
-      echo
+      git-confirm "$context
+
+delete it?" || exit 0
       out=$(glab api -X DELETE "$url" 2>&1) || fail "GitLab said no: $(printf '%s' "$out" | head -1)"
       git-mr-threads --refresh "$iid" refresh-preview
       exit 0

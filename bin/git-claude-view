@@ -237,12 +237,20 @@ case $1 in
     d=$2
     if [ -e "$GIT_FZF_STATE/detail" ]; then rm -f "$GIT_FZF_STATE/detail"; v=0; else : > "$GIT_FZF_STATE/detail"; v=1; fi
     echo "reload(git-claude-view --stream '$d' $v)" ;;
-  # --improve <dir>: i, as fzf actions: a fix run on your checkout from the
-  # verification's retrospective (git-mr-fix, key v-<verification>).
+  # --improve <dir>: i, as fzf actions: a fix run from the base, apart from
+  # the change, on the verification's retrospective (git-mr-fix, key v-<verification>).
   --improve)
     d=$2
     [ -s "$d/retro.json" ] || exec git-fzf-note "no retrospective here to act on"
     echo "execute(git-mr-fix 'v-${d##*/}' \"\$(otis-config base)..HEAD\")" ;;
+  # --ask <dir>: m, the message the retrospective drafted for whoever keeps
+  # the development environment (git-verify-run's ask), onto the clipboard.
+  --ask)
+    d=$2
+    ask=$(jq -r '.ask // ""' "$d/retro.json" 2>/dev/null)
+    [ -n "$ask" ] || exec git-fzf-note "no message for infra here: the retrospective found nothing only they can change"
+    printf '%s\n' "$ask" | otis-copy || exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel)"
+    exec git-fzf-note "copied the message for $(git config --get otis.infraContact || echo infra)" ;;
   # --fix <dir>: f, the fix a failed verification's judge accepted
   # (git-verify-run's fix), in the proposals picker.
   --fix)
@@ -276,7 +284,7 @@ case $1 in
     # The run, drawn by hand (otis-agent); 3 says r: run it again.
     exec otis-agent "$1"
     d=$1
-    out=$(git-fzf 'run ' 'enter=this step in full,v=more or less detail,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,l=all of it in less,o=tester in Cursor,a=artifacts,h=report in the browser,p=link the report from the MR,G=follow the newest' \
+    out=$(git-fzf 'run ' 'enter=this step in full,v=more or less detail,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,m=copy the message for infra,l=all of it in less,o=tester in Cursor,a=artifacts,h=report in the browser,p=link the report from the MR,G=follow the newest' \
       --ansi --no-sort --tail=20000 --delimiter="$(printf '\t')" --with-nth=1 --id-nth=2 \
       --preview-window='down,35%,border-top,wrap' \
       --bind "start:reload(git-claude-view --stream '$d' 0)+execute-silent(touch \"\$GIT_FZF_STATE/follow\")" \
@@ -295,6 +303,7 @@ case $1 in
       --bind "c:transform(git-claude-view --continue '$d')" \
       --bind "l:execute(git-claude-view --less '$d')" \
       --bind "i:transform(git-claude-view --improve '$d')" \
+      --bind "m:transform(git-claude-view --ask '$d')" \
       --bind "o:transform([ -s '$d/agent-url' ] && otis-open --fzf \"\$(cat '$d/agent-url')\")" \
       --bind "a:transform(git-claude-view --artifacts '$d')" \
       --bind "h:transform(git-claude-view --html '$d')" \

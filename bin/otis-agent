@@ -455,7 +455,7 @@ draw() {
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
     for k v in enter "this step in full" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
-      v "more or less detail: thinking, what tools returned, each criterion's exact claim" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective" f "the fix it proposes" \
+      v "more or less detail: thinking, what tools returned, each criterion's exact claim" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective, on a branch off main" m "copy the message it drafted for infra" f "the fix it proposes" \
       l "all of it in less" o "the tester in Cursor" a "artifacts" h "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
@@ -482,6 +482,7 @@ draw() {
     foot+=$A"v"$R$C" detail  "$A"x"$R$C" stop  "$A"r"$R$C" again  "
     [[ -s $d/agent-url ]] && foot+=$A"o"$R$C" Cursor  "$A"a"$R$C" artifacts  "$R
     [[ -s $d/verdict.json ]] && foot+=$A"h"$R$C" report  "$A"i"$R$C" act on the retro  "$R
+    [[ -n $(jq -r '.ask // empty' $d/retro.json 2>/dev/null) ]] && foot+=$A"m"$R$C" copy the note for infra  "$R
     [[ $(jq -r .accept $d/verdict-fix.json 2>/dev/null) == true ]] && foot+=$A"f"$R$C" the fix  "$R
     foot+=$A"?"$R$C" keys"$R
   fi
@@ -580,6 +581,7 @@ handle() {
     c) act --continue $d ;;
     r) act --again $d; (( code == 3 )) && quit 3 ;;
     i) act --improve $d ;;
+    m) act --ask $d ;;
     f) act --fix $d ;;
     l) screen_off; git-claude-view --less $d <&$tty >&$tty; screen_on ;;
     o) [[ -s $d/agent-url ]] && act --open "$(<$d/agent-url)" ;;

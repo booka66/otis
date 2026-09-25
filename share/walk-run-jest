@@ -1,0 +1,23 @@
+#!/bin/sh
+# walk-run-jest <spec...>: git-trace's runner when git config otis.walkRunner
+# names none. The spec files through Jest, from the nearest node_modules up
+# from each that has one, those under one in a single run, with the tracer
+# preloaded; run from the slot's top. Another runner does the same for its own
+# build: the specs' paths from the top, OTIS_TRACE_REQUIRE into the tests'
+# NODE_OPTIONS as --require, and OTIS_TRACE_TARGETS and OTIS_TRACE_OUT passed
+# through to them. Ahead of a review (OTIS_WALK_AHEAD), at a low priority.
+top=$(pwd)
+nice=; [ -n "$OTIS_WALK_AHEAD" ] && nice="nice -n 15"
+status=0
+for spec in "$@"; do
+  d=$(dirname "$spec")
+  while [ "$d" != . ] && [ ! -x "$d/node_modules/.bin/jest" ]; do d=$(dirname "$d"); done
+  [ -x "$d/node_modules/.bin/jest" ] || { echo "walk-run-jest: no jest in node_modules above $spec" >&2; status=2; continue; }
+  printf '%s\t%s\n' "$d" "$top/$spec"
+done | sort > "${TMPDIR:-/tmp}/walk-run-jest.$$"
+for d in $(cut -f1 "${TMPDIR:-/tmp}/walk-run-jest.$$" | sort -u); do
+  set -- $(awk -F'\t' -v d="$d" '$1 == d { print $2 }' "${TMPDIR:-/tmp}/walk-run-jest.$$")
+  (cd "$d" && NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require $OTIS_TRACE_REQUIRE" $nice node_modules/.bin/jest --ci --watchman=false --runInBand --runTestsByPath "$@") || status=1
+done
+rm -f "${TMPDIR:-/tmp}/walk-run-jest.$$"
+exit $status

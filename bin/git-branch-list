@@ -62,6 +62,9 @@ f=$st/list.$$
 trap 'rm -f "$f".*' EXIT
 git-mr-fix --marks > "$f.fixes" 2>/dev/null &
 git-verify --marks > "$f.verify" 2>/dev/null &
+git-walk --marks > "$f.walk" 2>/dev/null &
+# Your branches, traced for P before you open them (git-walk --ahead-branches).
+(git-walk --ahead-branches </dev/null >/dev/null 2>&1 &)
 git-test-files state > "$f.tests" 2>/dev/null &
 git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" > "$f.facts"
 wait
@@ -77,13 +80,19 @@ case $verify in
   '' | '{}') verify= ;;
   *) verify=$(jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' "$f.verify" 2>/dev/null) ;;
 esac
+# And the walks started from here (P, git-walk), by branch.
+read -r walk < "$f.walk" || walk=
+case $walk in
+  '' | '{}') walk= ;;
+  *) walk=$(jq -r 'to_entries[] | [.key, (.value.walking | tostring), .value.status, .value.head] | @tsv' "$f.walk" 2>/dev/null) ;;
+esac
 
 # The rows go to the list's file, for M, and to the picker.
-GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
+GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
      "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {
-    # Thirty-one columns of fixed zone, then the name takes the rest.
-    budget = gk_list_width(cols) - 31
+    # Thirty-seven columns of fixed zone, then the name takes the rest.
+    budget = gk_list_width(cols) - 37
     if (budget < 16) budget = 16
     # Through the environment, not -v: macOS awk refuses a newline inside a -v
     # value outright ("newline in string") and exits, which empties the list.
@@ -98,6 +107,11 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
       if (split(vrows[vi], vf, "\t") < 5) continue
       vgoing[vf[1]] = vf[2]; vstatus[vf[1]] = vf[3]; vverdict[vf[1]] = vf[4]; vhead[vf[1]] = vf[5]
     }
+    wn = split(ENVIRON["GK_WALK"], wrows, "\n")
+    for (i = 1; i <= wn; i++) {
+      split(wrows[i], wf, "\t")
+      wgoing[wf[1]] = wf[2]; wstatus[wf[1]] = wf[3]; whead[wf[1]] = wf[4]
+    }
   }
   # Two columns, as in gmr: Claude working, or something of its waiting on you,
   # and how much. A run from gb is filed under the branch and one from gmr
@@ -109,23 +123,24 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
     if (mrid != "" && fixes[mrid] + 0 > 0) return fixes[mrid] + 0
     return ""
   }
-  # Its two columns in the row, as gmr shows them.
-  function claude_glyph(w) {
-    if (w == "fixing") return GK_ATTENTION "\342\227\214 " GK_R
-    if (w != "") return GK_YOURS "\342\234\216" w GK_R
-    return "  "
-  }
-  # Its verification, as gmr shows it: going, the verdict at the tip of the branch,
-  # or that it broke. Filed under the MR when there is one.
-  function verify_glyph(b, mrid, tip,   k) {
+  # What AI is doing on it, or has left for it, in a word, as gmr says it:
+  # work going (what kind), what waits on you, what broke, what is ready.
+  # Verifications are filed under the MR when there is one; walks under the
+  # branch.
+  function ai_word(b, mrid, tip, cw,   k, c, w, n) {
     k = (mrid != "") ? mrid : "b-" b; gsub(/\//, "%", k)
-    if (vgoing[k] == "true") return GK_ATTENTION "\342\227\216 " GK_R
-    if (vstatus[k] == "failed") return GK_BAD "\342\227\213 " GK_R
-    if (vstatus[k] != "done" || vhead[k] != tip) return "  "
-    if (vverdict[k] == "pass") return GK_GOOD "\342\227\217 " GK_R
-    if (vverdict[k] == "fail") return GK_BAD "\342\227\217 " GK_R
-    if (vverdict[k] == "inconclusive") return GK_CONTEXT "\342\227\217 " GK_R
-    return "  "
+    if (cw == "fixing") { c = GK_ATTENTION; w = "fixing" }
+    else if (vgoing[k] == "true") { c = GK_ATTENTION; w = "verifying" }
+    else if (wgoing[b] == "true") { c = GK_ATTENTION; w = "tracing" }
+    else if (cw != "") { c = GK_YOURS; w = cw (cw == 1 ? " fix" : " fixes") }
+    else if (vstatus[k] == "failed" || (vstatus[k] == "done" && vhead[k] == tip && vverdict[k] == "fail")) { c = GK_BAD; w = "\342\234\227 verify"; n = 8 }
+    else if (wstatus[b] == "failed") { c = GK_BAD; w = "\342\234\227 trace"; n = 7 }
+    else if (vstatus[k] == "done" && vhead[k] == tip && vverdict[k] == "pass") { c = GK_GOOD; w = "verified" }
+    else if (wstatus[b] == "done" && whead[b] == tip) { c = GK_GOOD; w = "tour" }
+    else return sprintf("%10s", "")
+    # The cross is three bytes and one column: its words say their width.
+    if (n == "") n = length(w)
+    return c w GK_R sprintf("%" (10 - n) "s", "")
   }
   $1 == "MAIN"    { main = $2; next }
   $1 == "CURRENT" { current = $2; next }
@@ -166,7 +181,7 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
     name = gk_path(b, budget, GK_TEXT)
 
     cw = claude(b, $5)
-    head = mark claude_glyph(cw) verify_glyph(b, $5, $10) $4 " " iid " " drift "  "
+    head = mark ai_word(b, $5, $10, cw) $4 " " iid " " drift "  "
     tail = name where "  " GK_CONTEXT when GK_R "\t" b "\t" kind "\t" wt[b] "\t" $5 "\t" place "\t" $8 "\t" $9 "\t" cw
     if (kind == "main") pinned = head tail
     else {
@@ -204,6 +219,7 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
   printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
   printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R}      an agent is working \302\267 an agent has fixes waiting for you (C)\n"
   printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
+  printf "  ${GK_ATTENTION}\342\244\263${GK_R} ${GK_GOOD}\342\244\263${GK_R} ${GK_BAD}\342\244\263${GK_R}    walking inputs through it (P) \302\267 walked: P in gdm shows it \302\267 the walk broke\n"
   printf "  ${GK_ATTENTION}!1234${GK_R}    its merge request\n"
   printf "  ${GK_ATTENTION}\342\206\2213${GK_R} ${GK_CONTEXT}\342\206\22312${GK_R}  commits it has that origin/main does not, and the other way round\n"
   printf "\n${GK_CONTEXT}state${GK_R}\n"

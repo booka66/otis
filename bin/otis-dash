@@ -165,25 +165,29 @@ bar() {
 # in view.
 typeset -a L LI LU
 row() {
-  local i=$1 w=$2 on=0 vw=20 iw=7 tw rw=0 vb= t
-  (( i == cur )) && on=1 vb=$B
+  local i=$1 w=$2 on=0 vw=20 iw=7 tw rw=0 vb= t vc=$T tc=$C ic=$F
+  # One thing lit a row, so the eye runs down the verbs: what waits on you
+  # in full text, the rest a step back, the MR's number faint; the cursor's
+  # row all of it brought up.
+  [[ $sec[i] == waiting ]] || vc=$C tc=$F
+  (( i == cur )) && on=1 vb=$B vc=$T tc=$T ic=$A
   line= used=0
   # The cursor, else the branch you are on.
   if (( on )); then put "$A" "▌ "; elif [[ -n $mark[i] ]]; then put "$EL" "▸ "; else put "" "  "; fi
   put "${gc[i]:-$C}" "${(r:2:: :)glyph[i]}"; put "" " "
   if [[ $kind[i] == here ]]; then
     fit "${extra[i]:-${verb[i]}}" $(( w / 2 )); put "$B$EL" "$REPLY"; line+=$UB
-    [[ -n $iid[i] ]] && { put "" "  "; put "$A" "!$iid[i]"; }
+    [[ -n $iid[i] ]] && { put "" "  "; put "$ic" "!$iid[i]"; }
     put "" "    "
-    if [[ -n $note[i] ]]; then fit "$note[i]" $(( w - used - 1 )); put "$Y" "$REPLY"
+    if [[ -n $note[i] ]]; then fit "$note[i]" $(( w - used - 1 )); put "$tc" "$REPLY"
     else put "$G" "nothing to commit or push"; fi
   else
     # Columns, two apart: verb, MR, what it is about, then on the right a
     # pipeline's jobs and how long ago, both right-aligned to the edge.
-    fit "$verb[i]" $vw; put "$vb$T" "${(r:vw:: :)REPLY}"; line+=$UB
+    fit "$verb[i]" $vw; put "$vb$vc" "${(r:vw:: :)REPLY}"; line+=$UB
     put "" "  "
     # A verification's criteria as glyphs, where an MR's number goes.
-    if [[ -n $iid[i] ]]; then put "$A" "${(r:iw:: :)${:-!$iid[i]}}"
+    if [[ -n $iid[i] ]]; then put "$ic" "${(r:iw:: :)${:-!$iid[i]}}"
     elif [[ -n $dots[i] ]]; then fit "$dots[i]" $iw; put "$Y" "${(r:iw:: :)REPLY}"
     else put "" "${(l:iw:: :)}"; fi
     put "" "  "
@@ -194,12 +198,12 @@ row() {
       # Who, when it fits whole beside the title; else the title alone.
       t=$title[i]
       [[ -n $who[i] ]] && (( ${(m)#t} + 5 + ${(m)#who[i]} <= tw )) && t+="  ·  $who[i]"
-      fit "$t" $tw; put "$C" "$REPLY"
+      fit "$t" $tw; put "$tc" "$REPLY"
     fi
     pad $(( w - rw - 1 ))
     if [[ -n $prog[i] ]]; then
       put "" "  "; bar "$prog[i]"; line+=$REPLY; (( used += 10 ))
-      put "$C" " ${(l:5:: :)prog[i]}"
+      put "$F" " ${(l:5:: :)prog[i]}"
     fi
     [[ -n $when[i] ]] && { put "" "  "; put "$F" "${(l:3:: :)when[i]}"; }
   fi
@@ -211,7 +215,7 @@ row() {
   if [[ $kind[i] == run && -n $sub[i] ]]; then
     line= used=0
     put "" "      "; put "$F" "› "
-    fit "$sub[i]" $(( w - used - 1 )); put "$T" "$REPLY"
+    fit "$sub[i]" $(( w - used - 1 )); put "$F" "$REPLY"
     pad $w
     (( on )) && line=$BG${line//$R/$R$BG}
     line+=$R
@@ -236,7 +240,7 @@ card() {
   (( roomy )) && { boxline; boxend; }
   boxline; put "" "  "; put "$bc" "${(r:2:: :)glyph[i]}"; put "" " "
   fit "$verb[i]" $(( cw - 20 )); put "$B$bc" "$REPLY"; line+=$UB
-  [[ -n $iid[i] ]] && { pad $(( w - 5 - ${#iid[i]} - 1 )); put "$A" "!$iid[i]"; }
+  [[ -n $iid[i] ]] && { pad $(( w - 5 - ${#iid[i]} - 1 )); put "$F" "!$iid[i]"; }
   boxend
   if [[ -n $title[i] ]]; then
     boxline; put "" "     "; fit "$title[i]" $(( cw - 10 )); put "$T" "$REPLY"; boxend
@@ -277,10 +281,10 @@ left() {
   fi
   line= used=0; put "" "  "
   if (( n_wait == 0 )); then put "$B$G" "Nothing waiting on you"
-  elif (( n_wait == 1 )); then put "$B$Y" "1 thing waiting on you"
-  else put "$B$Y" "$n_wait things waiting on you"; fi
+  elif (( n_wait == 1 )); then put "$B$T" "1 thing waiting on you"
+  else put "$B$T" "$n_wait things waiting on you"; fi
   line+=$UB
-  (( n_go )) && { put "$C" "  ·  $n_go going"; }
+  (( n_go )) && { put "$F" "  ·  $n_go going"; }
   emit 0
   local stale=($st/stale.*(N))
   if (( $#stale )); then
@@ -422,7 +426,7 @@ draw() {
       P=("" "  ${B}${T}keys${R}" "")
       local k v
       for k v in enter "do what the row says" space "read its preview in a pager" j/k "move" g/G "top, bottom" \
-        m "every MR" b branches a "background runs" d deploys w worktrees c "otis settings" \
+        m "every MR" b branches a "background runs" d deploys w worktrees s Slack c "otis settings" \
         D "stop showing it (the agents' fixes and verdicts)" o "open the MR" y "copy the MR link (a run: its folder, for Claude)" \
         u refresh "ctrl-d/u" "scroll the preview" "?" "this, and back" q quit; do
         P+=("  ${A}${(r:9:: :)k}${R} ${C}$v${R}")
@@ -483,7 +487,7 @@ draw() {
   else
     enter_says
     [[ -n $REPLY ]] && foot+=$B$A"⏎ "$REPLY$UB$R$C"   ·   "$R
-    foot+=$A"m"$R$C" MRs  "$A"b"$R$C" branches  "$A"d"$R$C" deploys  "$A"a"$R$C" runs  "$A"w"$R$C" worktrees  "$A"?"$R$C" keys"$R
+    foot+=$A"m"$R$C" MRs  "$A"b"$R$C" branches  "$A"d"$R$C" deploys  "$A"a"$R$C" runs  "$A"w"$R$C" worktrees  "$A"s"$R$C" Slack  "$A"?"$R$C" keys"$R
   fi
   fr+=("$foot") fy+=($H)
   # No synchronized output (mode 2026) around it: a terminal under a
@@ -629,6 +633,9 @@ handle() {
     y) (( $#id )) && act copy ;;
     o) (( $#id )) && { fields; ask git-mr-do web "$reply[2]"; } ;;
     u) refresh --refresh; flash="refreshing from GitLab…" ;;
+    # Your workspace: git config otis.slackUrl, else Slack's own front door.
+    s) slackdrop &!; u=$(git config --get otis.slackUrl || print https://app.slack.com)
+       run_tty 't=$(ps -o tty= -p $$|tr -d " ");exec terminal-browser open '"${(q)u}"' <"/dev/$t" >"/dev/$t" 2>&1'; refresh ;;
     m|b|a|d|w|c)
       screen_off keep
       case $1 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac

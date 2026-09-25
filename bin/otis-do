@@ -28,10 +28,23 @@ pipeline=$1 start=$2
 
 if [ "$what" = copy ]; then
   case $extra in
-    */otis-verify/*|*/gmr-watch/*|*/gmr-fix/*|*/gmr-claude/*) ;;
+    */otis-verify/*|*/gmr-watch/*|*/gmr-fix/*|*/gmr-claude/*|*/otis-walk/*) ;;
     *) exec git-mr-do copy "$iid" ;;
   esac
   [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
+  # A walk: what it walked, each walk's point, and where the walk is.
+  case $extra in */otis-walk/*)
+    d=$extra key=$(cat "$d/key" 2>/dev/null) rev=$(cat "$d/rev" 2>/dev/null)
+    f=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-walk/$key.json
+    {
+      printf 'An otis walk of %s (%s in %s, git diff %s): inputs followed through the code, step by step, before and after the change. Check it against the code; the values are the model'"'"'s.\n\n' \
+        "$(cat "$d/what")" "$rev" "$(git rev-parse --show-toplevel)" "$(printf '%s' "$rev" | sed 's/\.\.\./ /; s/\.\./ /')"
+      [ -s "$f" ] && jq -r '.walks | to_entries[] | "Walk \(.key + 1): \(.value.title) (\(.value.kind))\n  point: \(.value.point // .value.verdict)\n  verdict: \(.value.verdict)\n  \(.value.steps | length) steps: \([.value.steps[] | .symbol] | join(" > "))\n"' "$f"
+      [ -s "$f" ] && printf 'Every step, with its values and what otis checked, as JSON: %s\n' "$f"
+      printf 'The run'"'"'s progress, every step as it happened: %s/events.jsonl\n' "$d"
+    } | otis-copy && exec git-fzf-note "copied the walk for Claude: what it walked, each walk's point, and where it is"
+    exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $d" ;;
+  esac
   d=$extra
   case $d in
     */otis-verify/*) noun=verification ;;
@@ -76,7 +89,7 @@ if [ "$what" = dismiss ]; then
     case $(cat "$extra/status" 2>/dev/null) in failed|'') echo "$confirm"; exit 0 ;; esac
   fi
   case $extra in
-    */gmr-fix/*|*/otis-verify/*|*/gmr-watch/*)
+    */gmr-fix/*|*/otis-verify/*|*/gmr-watch/*|*/otis-walk/*)
       [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
       echo "$confirm"; exit 0 ;;
     *)

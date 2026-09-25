@@ -186,13 +186,14 @@ if [ "$1" = --update ]; then
   p=$(plan "$name" 2> "$common/stack-plan.err") || { cat "$common/stack-plan.err"; rm -f "$common/stack-plan.err"; pause "nothing was changed"; }
   rm -f "$common/stack-plan.err"
   wt=$(printf '%s\n' "$p" | awk '$1 == "home" { print $2 }')
-  printf 'glab stack %s:\n' "$name"
-  layers "$name" | sed 's/^/  /'
-  show_plan "$p"
   git fetch --quiet origin "$main" || pause "could not fetch origin/$main"
   top=$(layers "$name" | tail -1)
-  printf '%s new commit(s) on origin/%s since the stack was based\n' "$(git rev-list --count "$top..origin/$main")" "$main"
-  git-confirm "rebase the whole stack onto origin/$main and force-push every layer?" || exit 0
+  git-confirm "$(printf 'glab stack %s:\n' "$name"
+    layers "$name" | sed 's/^/  /'
+    show_plan "$p"
+    printf '%s new commit(s) on origin/%s since the stack was based\n' "$(git rev-list --count "$top..origin/$main")" "$main")
+
+rebase the whole stack onto origin/$main and force-push every layer?" || exit 0
   do_plan "$p" || pause "could not clear the way; nothing was pushed"
   base=$(cat "$stacked/$name/BASE_BRANCH" 2>/dev/null || echo "$main")
   git -C "$wt" switch --quiet "$top" && git -C "$wt" rebase --quiet --update-refs "origin/$base" ||

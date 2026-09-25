@@ -9,12 +9,11 @@
 #            (git-ci-merged: merged, queued, deploying, live, rolled back),
 #            and Claude's production watch of it, if any (git-mr-watch)
 #
-# A row also says when Claude is working on it and what is waiting for you: a
-# review going, its drafts to submit, or a ⇢ when it found nothing to comment on
-# at the MR's current head (git-mr-claude), and on your own MRs a
-# fix run going or its fixes to fold in (git-mr-fix). A column of its own says
-# whether a verification in Cursor Cloud is going, and its verdict at the MR's
-# current head (git-verify).
+# A row also says, in a word, what AI is doing on it or has left for it:
+# reviewing, fixing, verifying or tracing while it goes; its notes or fixes
+# waiting on you; a verification or trace that failed; and, at the MR's current
+# head, verified, a tour to walk (P), or clean when a review found nothing to
+# say (git-mr-claude, git-mr-fix, git-verify, git-walk).
 # gci is gmr opened with yours first ($GMR_FIRST=mine). toggle switches to
 # every open MR in the project and back, the 100 most recently updated, since
 # a big project has thousands; --refresh (u) refetches now.
@@ -69,6 +68,7 @@ git-mr-watch --marks  > "$st/m.watch"  2>/dev/null &
 git-mr-claude --marks > "$st/m.claude" 2>/dev/null &
 git-mr-fix --marks    > "$st/m.fixes"  2>/dev/null &
 git-verify --marks    > "$st/m.verify" 2>/dev/null &
+git-walk --marks > "$st/m.walk" 2>/dev/null &
 git branch --show-current > "$st/current" 2>/dev/null &
 git worktree list --porcelain | awk '
   /^worktree / { n = split(substr($0, 10), parts, "/"); name = seen++ ? parts[n] : "main checkout" }
@@ -98,6 +98,7 @@ fetch() {
   printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
   printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R} ${GK_GOOD}\342\207\242${GK_R}    an agent is working \302\267 an agent has left something for you \302\267 an agent found nothing to comment on\n"
   printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
+  printf "  ${GK_ATTENTION}\342\244\263${GK_R} ${GK_GOOD}\342\244\263${GK_R} ${GK_BAD}\342\244\263${GK_R}    walking inputs through it (P) \302\267 walked: P in its review shows it \302\267 the walk broke\n"
   printf "  ${GK_ATTENTION}!1234${GK_R}    the merge request\n"
   printf "\n${GK_CONTEXT}pipeline${GK_R}\n"
   printf "  ${GK_GOOD}\342\234\223${GK_R} passed   ${GK_BAD}\342\234\227${GK_R} failed   ${GK_ATTENTION}\342\227\220${GK_R} running   ${GK_ATTENTION}\342\227\213${GK_R} pending\n"
@@ -153,9 +154,9 @@ fi
 wait
 jq -nc --argjson gates "$gates" \
   --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
-  --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
+  --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" --slurpfile walk "$st/m.walk" \
   '{gates: $gates, watch: ($watch[0] // {}), claude: ($claude[0] // {}),
-    fixes: ($fixes[0] // {}), verify: ($verify[0] // {})}' > "$st/marks.json"
+    fixes: ($fixes[0] // {}), verify: ($verify[0] // {}), walk: ($walk[0] // {})}' > "$st/marks.json"
 current=
 read -r current < "$st/current" 2>/dev/null
 
@@ -165,7 +166,7 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
   --slurpfile elsewhere "$st/elsewhere.json" --slurpfile marks "$st/marks.json" '
   include "otis";
   ($elsewhere[0] // {}) as $elsewhere |
-  $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify} |
+  $marks[0] as {gates: $gates, watch: $watch, claude: $claude, fixes: $fixes, verify: $verify, walk: $walk} |
   def mark:
     if . == $current then elsewhere + "▶ " + r
     else "  " end;
@@ -230,35 +231,31 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
     elif .reviewers and (.reviewers.nodes | length) == 0 then attention + "!"
     elif (.approvalsLeft // 0) > 0 then context + ((.approvalsLeft | tostring)[0:1])
     else " " end;
-  # What Claude is doing here, or has left for you, and how much of it: two
-  # columns in the fixed zone, so it is never the part that gets chopped. The
-  # sentence version lives in the preview, where there is room for it.
-  def attn_glyph($kind):
+  # What AI is doing on it, or has left for it, in a word: one column in the
+  # fixed zone, so it is never the part that gets chopped. Work going first
+  # (what kind), then what waits on you, then what broke, then what is ready.
+  # The sentence version lives in the preview, where there is room for it.
+  def ai_word($kind):
     ($fixes[.iid] // {}) as $f | ($claude[.iid] // {}) as $cl |
-    if $kind == "mine" and $f.fixing then attention + "◌ "
-    elif $kind == "mine" and ($f.fixes // 0) > 0 then yours + "✎" + ($f.fixes | tostring)
-    elif $cl.reviewing then attention + "◌ "
-    elif ($cl.drafts // 0) > 0 then yours + "✎" + ($cl.drafts | tostring)
-    elif $cl.clean != null and $cl.clean == .diffRefs.headSha then good + "⇢ "
-    else "  " end;
-
-  # Its verification in Cursor Cloud: going, or the verdict at the head of the MR
-  # (a push since makes it stale, so it goes), or that it broke.
-  def verify_glyph:
-    $verify[.iid] as $v |
-    if $v == null then " "
-    elif $v.verifying then attention + "◎"
-    elif $v.status == "failed" then bad + "○"
-    elif $v.status != "done" or $v.head != .diffRefs.headSha then " "
-    elif $v.verdict == "pass" then good + "●"
-    elif $v.verdict == "fail" then bad + "●"
-    elif $v.verdict == "inconclusive" then context + "●"
-    else " " end;
+    $verify[.iid] as $v | ($walk // {})[.iid] as $w | .diffRefs.headSha as $h |
+    def n($c; $one; $many): "\($c) " + (if $c == 1 then $one else $many end);
+    if $kind == "mine" and $f.fixing then attention + "fixing"
+    elif $cl.reviewing then attention + "reviewing"
+    elif $v.verifying then attention + "verifying"
+    elif $w.walking then attention + "tracing"
+    elif $kind == "mine" and ($f.fixes // 0) > 0 then yours + n($f.fixes; "fix"; "fixes")
+    elif ($cl.drafts // 0) > 0 then yours + n($cl.drafts; "note"; "notes")
+    elif $v != null and $v.status == "failed" then bad + "✗ verify"
+    elif $v != null and $v.status == "done" and $v.head == $h and $v.verdict == "fail" then bad + "✗ verify"
+    elif $w != null and $w.status == "failed" then bad + "✗ trace"
+    elif $v != null and $v.status == "done" and $v.head == $h and $v.verdict == "pass" then good + "verified"
+    elif $w != null and $w.status == "done" and $w.head == $h then good + "tour"
+    elif $cl.clean != null and $cl.clean == $h then good + "clean"
+    else "" end;
 
   def open_row($kind):
     [ (.sourceBranch | mark)
-        + attn_glyph($kind) + r
-        + verify_glyph + r + " "
+        + (ai_word($kind) as $a | $a + r + (" " * (10 - ($a | gsub("\u001b\\[[0-9;]*m"; "") | length))))
         + attention + ("!\(.iid)" | padr(6)) + r + " "
         + (.headPipeline | effective($gates) | pipe_glyph) + r + " "
         + (if $kind == "mine" then mine_glyph else review_glyph end) + r + " "
@@ -281,8 +278,7 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
 
   def merged_row:
     [ (.sourceBranch | mark)
-        + ($watch[.iid] as $w | if $w.watching then attention + "◌" else " " end) + r + " "
-        + "  "
+        + ($watch[.iid] as $w | if $w.watching then attention + "watching" + r + "  " else " " * 10 end)
         + attention + ("!\(.iid)" | padr(6)) + r + " "
         + (.state | deploy_glyph) + r + " "
         + ($watch[.iid] as $w |

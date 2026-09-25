@@ -145,12 +145,10 @@ fi
 
 if [ -n "$now" ]; then
   touch "$cache.tried"
-  waiting "refreshing from GitLab"
   if run "$@"; then
     mv "$new" "$cache"
     rm -f "$cache.err"
   fi
-  waited
   mark_stale
   [ -s "$cache" ] || { head -1 "$cache.err" >&2; exit 1; }
   echo "$cache"

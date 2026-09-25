@@ -125,10 +125,13 @@ stack-push() {
 # and opens the branch in a worktree of its own, or goes to the one it is in.
 # d deletes the marked branches, or the one under the cursor, and M marks the
 # ones that lose nothing (git-branch-delete); one checked out anywhere stays.
+# p force-pushes the branch with gp, asked first (git-branch-push). P walks
+# it (git-walk): its own tests run and traced where they can be (git-trace),
+# else inputs Claude follows through it; as V verifies it.
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),P=walk it: its tests traced line by line or inputs Claude picks,p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
@@ -140,6 +143,8 @@ gb() {
       --bind 'c:execute(git-branch-log {2})' \
       --bind 'C:execute(git-branch-fix {2} {5})' \
       --bind 'V:execute(git-verify --branch {2} {5})+refresh-preview' \
+      --bind 'P:execute(git-walk --branch {2})+execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
+      --bind 'p:execute(git-branch-push {2})+execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 't:execute-silent(git-test-files toggle; git-test-files state > "$GIT_FZF_STATE/footer")+refresh-preview' \
       --bind 'n:transform(git-mr-new --check {2} {5})' \
       --bind 'w:transform(git-mr-do web {5})' \
@@ -860,11 +865,13 @@ gd() {
 # Claude draft comments on an MR to review, or propose fixes on one of yours,
 # as C in the file picker does (git-mr-do claude); D, on a merged one, has
 # Claude watch production for it (git-mr-watch); V verifies one in Cursor
-# Cloud. The list reloads every 30s, keeping the cursor.
+# Cloud; P walks it (git-walk), a run like V's: its own tests traced line by
+# line where they can run (git-trace), else inputs Claude follows through it;
+# its progress while it goes, the walk once it has landed. The list reloads every 30s, keeping the cursor.
 _gmr() {
   _g_repo || return 1
   local out
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
+  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,r=rebase onto target,A=approve,d=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,R=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
     --keys-from 'otis-keys mr {6} {2} {9}' \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
@@ -891,6 +898,7 @@ _gmr() {
     --bind 'v:execute(glab ci view -b {5})' \
     --bind 'D:transform(git-mr-watch --check {6} {2})' \
     --bind 'V:transform(git-verify --check {6} {2})' \
+    --bind 'P:transform(git-walk --check {6} {2})+execute-silent(git-fzf-bg git-mr-list --refresh)' \
     --preview 'git-mr-preview {2} {6} {11}' </dev/null)
   # s and W print "switch" or "worktree" and the MR's row; anything else leaves out empty.
   local -a lines=("${(@f)out}")
@@ -971,7 +979,7 @@ gp() {
   local b=$(git branch --show-current) new=0
   [[ -n $b ]] && ! git show-ref --verify --quiet "refs/remotes/origin/$b" && new=1
   git push origin HEAD --force-with-lease --force-if-includes "$@" || return
-  (( new )) && _g_offer_mr "$b"
+  (( ! new )) || _g_offer_mr "$b"
 }
 
 # The branch an MR from $1 goes into: the nearest branch below it on a stack

@@ -176,7 +176,9 @@ jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} -
   '"$mr"' | (.iid | length) as $il |
   attention + "\u001b[1m!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r,
   context + ("\(.author.username)  ·  \(.sourceBranch) → \(.targetBranch)" | cut($w)) + r,
-  context + ("\(.detailedMergeStatus | ascii_downcase | gsub("_"; " "))  ·  updated \(.updatedAt | ago) ago" | cut($w)) + r
+  context + ("\(.detailedMergeStatus | ascii_downcase | gsub("_"; " "))  ·  updated \(.updatedAt | ago) ago" | cut($w)) + r,
+  (.diffStatsSummary | if . then good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
+     + context + "  ·  \(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else empty end)
 ' "$st/mrs.json"
 git-verify --preview "$iid"
 desc=$(jq -r --arg iid "$iid" "$mr"' | .description // ""' "$st/mrs.json" |

@@ -75,12 +75,18 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
-preview= startacts= hdr=0 searching=0
+preview= startacts= hdr=0 searching=0 watchfiles=()
+# --repeat j,k: keys cheap enough to act on every repeat of a key held down
+# (a debugger's step), which the rest do not (below).
+typeset -A repeat
 while (( $# )); do
   case $1 in
+    --repeat) for k in ${(s:,:)2}; do repeat[$k]=1; done; shift 2 ;;
     --bind) if [[ $2 == start:* ]]; then startacts+=${startacts:++}${2#start:}; else bind[${2%%:*}]=${2#*:}; fi; shift 2 ;;
     --preview) preview=$2; shift 2 ;;
     --header-from-state) hdr=1; shift ;;
+    # A file whose change reloads the rows and previews, as the cache's do.
+    --watch) watchfiles+=($2); shift 2 ;;
     --search) searching=1; shift ;;
     *) shift ;;
   esac
@@ -98,6 +104,7 @@ at_quit() { (( $#outq )) && print -rl -- $outq; }
 # the list's width, lh its height; the pane at column px, row py, pw wide
 # and ph high, its first two rows where the row is (phd).
 integer lw lh px py pw ph side phd=2
+typeset -a PH
 layout() {
   if (( W >= 120 )); then
     side=1; (( lw = W * 42 / 100, lw < 48 ? (lw = 48) : 0 ))
@@ -466,10 +473,24 @@ subst() {
   REPLY=$s
 }
 render() {
-  local w=$1 file=$2 i=$3
+  local w=$1 file=$2 i=$3 first
   subst "$preview" $i
-  FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null |
-    LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" > $file.tmp
+  FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null > $file.raw
+  IFS= read -r first < $file.raw
+  if [[ $first == $'\036'pin\ <-> ]]; then
+    # Pinned lines ("\036pin N" and N lines, draw): wrapped apart from the
+    # rest, and the marker written after, with how many lines they wrapped
+    # to, since the wrap drops the control character that marks it.
+    integer n=${first#*pin }
+    sed -n "2,$(( n + 1 ))p" $file.raw | LC_ALL=C awk -v w=$w -v cont=/dev/null "$wrap_awk" > $file.pin
+    { print -r -- $'\036'"pin ${$(wc -l < $file.pin)// /}"
+      cat $file.pin
+      sed -n "$(( n + 2 )),\$p" $file.raw | LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk"; } > $file.tmp
+    rm -f $file.pin
+  else
+    LC_ALL=C awk -v w=$w -v cont=$file.cont.tmp "$wrap_awk" < $file.raw > $file.tmp
+  fi
+  rm -f $file.raw
   mv -f $file.cont.tmp $file.cont 2>/dev/null
   mv -f $file.tmp $file
 }
@@ -641,7 +662,7 @@ draw() {
   (( lo > 0 && hi <= lrows )) && top=0
   # The pane: the preview, or ? its keys.
   local head=
-  if (( help )); then helplines; pfile=; head="  ${B}${T}keys, and what the glyphs say$R"
+  if (( help )); then helplines; pfile=; PH=() phd=2; head="  ${B}${T}keys, and what the glyphs say$R"
   elif (( cur )) && [[ -n $preview ]]; then
     # The preview read and split once when it lands, not every frame: a
     # frame of a scroll is then the lines it shows and nothing else.
@@ -649,12 +670,30 @@ draw() {
     if [[ $REPLY != $pfile || -z $pfile ]]; then
       pfile=$REPLY
       if [[ -n $REPLY ]]; then P=("${(@f)$(<$REPLY)}"); else P=("${F}…$R"); fi
+      # A preview's first lines can be pinned (a walk's step: "\036pin N"
+      # and N lines): held under where the row is while the rest scrolls,
+      # the pane's head that much taller. All but six rows of the pane at
+      # most, so there is always some code to scroll; what does not fit
+      # scrolls.
+      PH=() phd=2
+      integer pover=0
+      if [[ $P[1] == $'\036'pin\ <-> ]]; then
+        integer np=${P[1]#*pin } room=$(( ph - 2 - 6 ))
+        (( np > room )) && { pover=$(( np - room )); np=room; }
+        PH=("${(@)P[2,np+1]}") P=("${(@)P[np+2,-1]}") phd=$(( 2 + np ))
+      fi
+      # A preview can say where it opens (off.<row>: a walk's step), which a
+      # row not scrolled yet takes.
+      if [[ -n $REPLY ]] && (( ! ${+offs[$rid[cur]]} && poff == 0 )); then
+        key "$rid[cur]"
+        [[ -r $st/off.$REPLY ]] && { poff=$(( $(<$st/off.$REPLY) - 1 + pover )); (( poff < 0 )) && poff=0; offs[$rid[cur]]=$poff; }
+      fi
     fi
     # The preview a key asked for has landed: its scroll with it.
     (( pwant >= 0 )) && [[ -n $pfile ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
     if [[ $rid[cur] != $crumbfor ]]; then crumb; crumbline=$REPLY crumbfor=$rid[cur]; fi
     head=$crumbline
-  else P=() pfile=
+  else P=() pfile= PH=() phd=2
   fi
   plen=$#P
   local -a fr pr
@@ -679,7 +718,7 @@ draw() {
   fi
   for (( y = 1; y <= ph; y++ )); do
     if (( y == 1 )); then pr+=("$head")
-    elif (( y < phd + 1 )); then pr+=("")
+    elif (( y < phd + 1 )); then pr+=("${PH[y-2]}")
     else
       f=$(( y - phd + poff )) s=
       if (( f <= $#P )); then
@@ -784,7 +823,11 @@ landed() {
   (( cur )) || cur=$pcur
   (( cur > $#raw )) && cur=$#raw
   list; settle_cur
-  (( cur )) && poff=${offs[$rid[cur]]:-0}
+  # Still on the row it was on: its scroll as you left it a moment ago, not
+  # as it was when you came onto it (offs is kept when you leave a row), or
+  # every landing in the background sent the preview back to the top.
+  if (( cur )) && [[ $rid[cur] == $was ]]; then offs[$was]=$poff
+  elif (( cur )); then poff=${offs[$rid[cur]]:-0}; fi
   # The previews again once the rows are not the rows they were drawn for.
   [[ ${(j:\n:)raw} != $old ]] && { (( gen++ )); warm; }
   return 0
@@ -834,7 +877,9 @@ run() {
       transform)
         offout; out=$(zsh -fc "$arg" </dev/null 2>/dev/null); offin
         [[ -n $out ]] && run "$out" $row ;;
-      reload|reload-sync) pcur=$cur; reload "$arg" ;;
+      reload) pcur=$cur; reload "$arg" ;;
+      # Landed before the next action runs, for one that moves on the rows.
+      reload-sync) pcur=$cur; lastlist=$arg; zsh -fc "$arg" > $st/list.$(( ++rgen )) 2>/dev/null </dev/null; landed ;;
       refresh-preview) (( gen++ )) ;;
       pos) (( arg > 0 && arg <= $#raw )) && go $arg ;;
       first|top) (( $#vis )) && go $vis[1] ;;
@@ -1204,9 +1249,10 @@ handle() {
   [[ $n == esc ]] && (( chat )) && { chat=0; return; }
   # A picker's key held down is one press: its repeats, arriving while it
   # runs or within 0.3s of the last of them, are dropped. p held ran the
-  # peeks and a preview for every repeat, and the renders piled up.
+  # peeks and a preview for every repeat, and the renders piled up. Keys the
+  # picker says are cheap (--repeat) act on every repeat.
   if [[ -n $bind[$n] ]]; then
-    if (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
+    if [[ -z $repeat[$n] ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
     act $n; held[$n]=$EPOCHREALTIME
     return
   fi
@@ -1232,16 +1278,19 @@ handle() {
 }
 
 # --- landings --------------------------------------------------------------------
-# What background work leaves in the cache: Claude's gloss, tsgo's callers,
+# What background work leaves in the cache: Claude's gloss and walk, tsgo's callers,
 # Claude's fixes for them, the checkout's rechecked callers, and a review's
 # threads. A change in any reloads the rows, and the previews with them.
 wsig=
 watched() {
   local croot sig= f
   local -a tm
-  [[ -s $st/cache-root ]] || return 1
-  croot=$(<$st/cache-root)
-  local -a watch=($croot/{symbols-gloss,callers,callers-fix}(N/) $st/fixed(N))
+  local -a watch=($watchfiles)
+  if [[ -s $st/cache-root ]]; then
+    croot=$(<$st/cache-root)
+    watch+=($croot/{symbols-gloss,symbols-walk,callers,callers-fix}(N/) $st/fixed(N))
+  fi
+  (( $#watch )) || return 1
   [[ -n $GMR_IID ]] && watch+=($croot/mr-$GMR_IID-{threads,drafts}.json(N))
   for f in $watch; do
     zstat -A tm +mtime -- $f 2>/dev/null && sig+=$f$tm[1]
@@ -1258,7 +1307,9 @@ layout
 draw
 # The list's first rows, from the start binding (its reload is the list the
 # landings reload with).
-[[ $startacts == (#b)*reload\((*)\)* ]] && fulllist=$match[1]
+if [[ $startacts == (#b)(|*+)reload(|-sync)\((*) ]]; then
+  fulllist=$match[3]; [[ $fulllist == *\)+* ]] && fulllist=${fulllist%%\)+*} || fulllist=${fulllist%\)}
+fi
 run "$startacts" 0
 integer tmo=5 stick=0 wtick=0 rewidth=0
 while :; do
@@ -1284,6 +1335,8 @@ while :; do
       [[ -z $winch ]] && resize
       # The panel's clock, while Claude answers.
       (( chat )) && chat_busy && changed=1
+      # The walk's bar, while Claude walks (git-symbols-walk --show).
+      [[ -e $st/walk.pending && -e $st/walk ]] && { (( gen++ )); changed=1; }
     fi
     (( chat )) && chat_tick && changed=1
     landed && changed=1

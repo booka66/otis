@@ -55,13 +55,15 @@ iid=$1
 [ -n "$iid" ] || exit 0
 json=$(mr "?include_diverged_commits_count=true") || { pause "could not load !$iid"; exit 1; }
 old=$(printf '%s' "$json" | jq -r .sha)
-printf '%s' "$json" | jq -r '
+git-confirm "$(printf '%s' "$json" | jq -r '
   "!\(.iid)  \(.title)",
   "  \(.source_branch) onto \(.target_branch), \(.diverged_commits_count) new commit\(if .diverged_commits_count == 1 then "" else "s" end) there",
-  "  GitLab rewrites the branch and starts a new pipeline"'
-git-confirm "rebase it?" || exit 0
+  "  GitLab rewrites the branch and starts a new pipeline"')
+
+rebase it?" || exit 0
 out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/rebase" 2>&1) ||
-  { printf '%s\n' "$out" | head -3; pause "GitLab would not start the rebase"; exit 1; }
+  { pause "GitLab would not start the rebase
+$(printf '%s\n' "$out" | head -3)"; exit 1; }
 
 # The rebase runs in the background on GitLab; wait for it to say how it went.
 printf 'rebasing ...'

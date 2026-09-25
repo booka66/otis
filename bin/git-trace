@@ -1,0 +1,699 @@
+#!/bin/sh
+# git-trace --can <base> <head>   exit 0 when P can trace the change: a runner, and a spec file among
+#                                 what it changed
+# git-trace --run <dir>           the run, in the background: the change's spec files, each through
+#                                 the runner with the tracer on, at its head, in a slot
+# git-trace --view <dir>          P's screen: what runs the change, and what nothing runs
+# git-trace --list <dir>          that screen's list; --show <dir> <row id> its preview
+# git-trace --walk <dir> <test>   enter on a test: its walk, on a screen of its own
+# git-trace --walk-list <dir> <test>, --walk-show <dir> <test> <row id>   that screen's list (a row a
+#                                 call the test made) and preview (the line you are on in it)
+# git-trace --step <dir> <test> <over|into|out|back> <row id>   j, l, h and k there, as fzf actions
+# git-trace --side <dir> <test>   b there: the same test before the change, or back
+# git-trace --write <dir> <gap>   w on a gap: Claude writes an input that reaches it, and it is traced
+# git-trace --base <dir>          b on P's screen: the spec files again at the base, for before and after
+# git-trace --phase <dir> <what> [arg]   the background half of --run, --write and --base
+#
+# P in gmr and gb (git-walk) shows what the change does. When its own tests
+# can run, it runs them rather than asking a model: each spec file the change
+# touched goes through the runner with share/walk-trace.js preloaded, which
+# stops at every line of every changed definition and writes down the Jest
+# test, the calls it is in and the values there. That is the walk: what
+# actually ran, with what, in the order it ran. Claude's words are a caption
+# at most (the gloss, when there is one), marked as such.
+#
+# P's screen puts first the changed functions no test runs, each with why
+# (mocked in the spec that reaches it, a call in a caller that never runs,
+# nothing traced reaching it), and w has Claude write an input that reaches
+# one: a test that only has to run, added to a spec that already sets up
+# around it, in the slot and nowhere else. Then the tests, by how much of the
+# change each runs; enter walks one line by line, j the next line in the same
+# call, l into the call the line makes, h out to the caller, k back where you
+# were, and b the same test before the change (after b on P's screen, which
+# runs the head's spec files at the base).
+#
+# The runner is git config otis.walkRunner, a command given a spec file's
+# path from the repo's top, in the slot, with the tracer's environment:
+# OTIS_TRACE_REQUIRE (to go in the test's NODE_OPTIONS as --require),
+# OTIS_TRACE_TARGETS and OTIS_TRACE_OUT, which it hands the test's node. It
+# exits 0 when the spec passed; OTIS_WALK_AHEAD is set when nobody is waiting
+# on it (git-walk --ahead), for a runner to take less of the machine. Without
+# one, share/walk-run-jest runs Jest
+# from the slot's node_modules. git config otis.walkTrace off leaves P to
+# Claude's walk.
+#
+# Slots are worktrees kept between runs so their builds stay warm: walk-1
+# and on (otis.walkSlotCount, else 2) under otis.walkSlots, else
+# ~/.cache/otis/slots/<repo>. A run takes a free one, checks out the head
+# (and puts back the inputs Claude wrote), and gives it back.
+#
+# The run's state is git-walk's (<git dir>/otis-walk/<key>), with engine
+# trace in it, so gag, the dashboard and gmr's marks read it as they read a
+# walk. Here: shas, table, specs, targets.json, trace/<i>.jsonl and ran/<i>
+# (the head's), base/ (the base's), inputs.json and inputs.patch (w's), and
+# cover.json (share/walk.mjs cover).
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/claude-run.sh"
+. "$share/palette.sh"
+walk="node $share/walk.mjs"
+note() { git-fzf-note "$1" >/dev/null; }
+
+# runner: the command that runs a spec, or nothing.
+runner() {
+  r=$(git config --get otis.walkRunner) && { printf '%s\n' "$r"; return 0; }
+  top=$(git rev-parse --show-toplevel)
+  [ -x "$top/node_modules/.bin/jest" ] && printf '%s\n' "$share/walk-run-jest"
+}
+specs_of() { git diff --name-only --no-renames --diff-filter=d "$1" "$2" | git-test-files kinds | awk -F'\t' '$2 == "tests" && $1 ~ /\.[cm]?[jt]sx?$/ { print $1 }'; }
+
+case $1 in
+  --can)
+    [ "$(git config --get otis.walkTrace)" != off ] && [ -n "$(runner)" ] || exit 1
+    git cat-file -e "$3^{commit}" 2>/dev/null || exit 0
+    [ -n "$(specs_of "$2" "$3")" ]; exit ;;
+  --list) exec $walk rows "$2" ;;
+  --walk-list) exec $walk walk-rows "$2" "$3" "$(cat "$GIT_FZF_STATE/side" 2>/dev/null || echo head)" ;;
+esac
+
+# --- the walk's screen, fast ------------------------------------------------------
+# Everything a key or a preview needs is rendered once, by walk-prep, for the
+# pane's width: here it is looked up and printed, never worked out again.
+# prepared <dir> <test> <side>: $b the walk's files, rendered for this width.
+prepared() {
+  w=${FZF_PREVIEW_COLUMNS:-100}
+  b=$1/walks/$2-$3
+  [ -e "$b-$w.done" ] && return 0
+  mkdir -p "$1/walks"
+  # The pane draws the rows around the cursor at once: one renders, the rest wait.
+  if mkdir "$b-$w.lock" 2>/dev/null; then
+    $walk walk-prep "$1" "$2" "$3" "$w" && : > "$b-$w.done"
+    rmdir "$b-$w.lock"
+  else
+    i=0; while [ ! -e "$b-$w.done" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+  fi
+}
+# shown <row id>: the step the row's preview shows: the one you are on, when
+# it is in this call, else the call's first.
+shown() {
+  cur=$(cat "$GIT_FZF_STATE/cur" 2>/dev/null)
+  awk -v vi="${1#v:}" -v k="$cur" '$2 == vi { if ($1 == k) { f = k; exit } if (first == "") first = $1 } END { print (f != "" ? f : first) }' "$b.nav"
+}
+side() { cat "$GIT_FZF_STATE/side" 2>/dev/null || echo head; }
+# toured <dir>: the tour drawn for this width (walk.mjs tour-prep).
+toured() {
+  w=${FZF_PREVIEW_COLUMNS:-100}
+  [ -e "$1/tour-$w.done" ] && return 0
+  [ -s "$1/tour.json" ] || return 1
+  if mkdir "$1/tour-$w.lock" 2>/dev/null; then
+    $walk tour-prep "$1" "$w" 2>>"$1/log" && : > "$1/tour-$w.done"
+    rmdir "$1/tour-$w.lock"
+  else
+    i=0; while [ ! -e "$1/tour-$w.done" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  fi
+  [ -e "$1/tour-$w.done" ]
+}
+case $1 in
+  --walk-show)
+    case $4 in v:*) ;; *) exit 0 ;; esac
+    prepared "$2" "$3" "$(side)"
+    k=$(shown "$4")
+    [ -n "$k" ] && cat "$b-$w/$k"
+    exit 0 ;;
+  --walk-line)
+    # enter: the line the preview is on, as path and line.
+    prepared "$2" "$3" "$(side)"
+    k=$(shown "$4")
+    jq -r --argjson k "$k" '.steps[$k] | "\(.path) \(.line)"' "$b.json" 2>/dev/null || jq -r --argjson k "$k" '.steps[$k] | "\(.path) \(.line)"' "$2/walks/$3-$(side).json"
+    exit 0 ;;
+  --show)
+    # P's screen: the previews rendered once a width, as the walk's are.
+    w=${FZF_PREVIEW_COLUMNS:-100} e=$2/entry-$w
+    if [ ! -e "$e.done" ]; then
+      if mkdir "$e.lock" 2>/dev/null; then
+        FZF_PREVIEW_COLUMNS=$w $walk previews "$2" "$e" && : > "$e.done"; rmdir "$e.lock"
+      else i=0; while [ ! -e "$e.done" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done; fi
+    fi
+    f=$e/$(printf '%s' "$3" | tr ':' '_')
+    if [ -e "$f" ]; then cat "$f"; else exec $walk preview "$2" "$3"; fi
+    exit 0 ;;
+  # The tour's screen, drawn the same way: once a width, then looked up.
+  --tour-list) toured "$2" && cat "$2/tour.rows"; exit 0 ;;
+  --tour-show) toured "$2" && cat "$2/tour-$w/${3#tour:}" 2>/dev/null; exit 0 ;;
+  --tour-open)
+    toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "enter opens a stop's line; this one is the overview"; exit 0; }
+    echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)"; exit 0 ;;
+  --tour-step)
+    toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "s steps through a stop's test; this one is the overview"; exit 0; }
+    [ "$ti" -ge 0 ] || { note "no test stops here, so there is nothing to step through"; exit 0; }
+    echo "execute(git-trace --walk '$2' $ti $k)"; exit 0 ;;
+esac
+
+# --- slots ------------------------------------------------------------------------
+# Worktrees kept warm between runs (walk-1 and on), each locked by the run
+# using it (a directory with its pid). A run takes as many as are free, one
+# less when it is ahead of your review, and runs a package's spec files in
+# each at once: a package's tests start its databases once, not once a file.
+#
+# With git config otis.walkRemote <ssh host>, the slots are on that host
+# instead (a Coder workspace after coder config-ssh), worktrees of its
+# checkout of the repo (otis.remotePath) under otis.walkRemoteSlots, else
+# /var/tmp/otis-walk/<repo>: the change's commits are pushed there (never to
+# origin), the runner and the tracer go with each run, and the trace comes back;
+# the rest is done here. Their locks stay here, since this is what takes them.
+# The runner is told OTIS_WALK_SCRATCH, a directory beside the slots for what a
+# build keeps, since a workspace's home is often small. Claude's inputs (w)
+# are written in a slot here, which only needs the files.
+remote=$(git config --get otis.walkRemote)
+rpath=$(git config --get otis.remotePath)
+slots_dir() {
+  repo=$(basename "$(git rev-parse --show-toplevel)")
+  if [ -n "$remote" ]; then
+    sd=$HOME/.cache/otis/slots/$remote/$repo
+    rsd=$(git config --get otis.walkRemoteSlots || echo "/var/tmp/otis-walk/$repo")
+  else
+    sd=$(git config --get otis.walkSlots) || sd=$HOME/.cache/otis/slots/$repo
+    sd=$(eval echo "$sd")
+  fi
+  mkdir -p "$sd"
+  sn=$(git config --get otis.walkSlotCount || echo 2)
+}
+# remote_trace <slot> <sha> <side> <out> <spec...>: a slot's spec files run on
+# otis.walkRemote, as a slot here runs them; its trace in <out>.jsonl.
+remote_trace() {
+  rs=$rsd/$(basename "$1") sha=$2 rside=$3 o=$4; shift 4
+  t=$(mktemp -d) || return 2
+  git push -q -f "ssh://$remote$rpath" "$sha:refs/otis/walk/$(basename "$rs")" "$head:refs/otis/walk/$(basename "$rs")-head" 2>&1 ||
+    { echo "could not push the change to $remote:$rpath (is the workspace running?)"; rm -rf "$t"; return 2; }
+  cp "$share/walk-trace.js" "$t/"; cp "$tg" "$t/targets.json"
+  [ -s "$d/inputs.patch" ] && cp "$d/inputs.patch" "$t/"
+  r=$(runner); f=$(eval printf '%s' "$r")
+  if [ -f "$f" ]; then cp "$f" "$t/runner"; else printf '%s "$@"\n' "$r" > "$t/runner"; fi
+  printf '%s\n' "$@" > "$t/specs"
+  q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  {
+    printf 'slot=%s repo=%s sha=%s head=%s side=%s scratch=%s\n' "$(q "$rs")" "$(q "$rpath")" "$sha" "$head" "$rside" "$(q "$(dirname "$rs")/scratch")"
+    cat <<'REMOTE'
+here=$(cd "$(dirname "$0")" && pwd)
+set --; while read -r f; do set -- "$@" "$f"; done < "$here/specs"
+mkdir -p "$(dirname "$slot")" "$scratch"
+if [ ! -e "$slot/.git" ]; then
+  echo "making a slot for the walks: $slot (its first build is cold)"
+  git -C "$repo" worktree prune
+  git -C "$repo" worktree add -q --detach -f "$slot" "$sha" || exit 2
+fi
+git -C "$slot" reset -q --hard
+git -C "$slot" checkout -q --detach -f "$sha" || exit 2
+[ "$side" = base ] && git -C "$slot" checkout -q "$head" -- "$@"
+[ -s "$here/inputs.patch" ] && { git -C "$slot" apply "$here/inputs.patch" || echo "the inputs Claude wrote no longer apply; running without them"; }
+cd "$slot" && OTIS_WALK_SCRATCH=$scratch OTIS_TRACE_REQUIRE=$here/walk-trace.js OTIS_TRACE_TARGETS=$here/targets.json OTIS_TRACE_OUT=$here/out.jsonl sh "$here/runner" "$@"
+REMOTE
+  } > "$t/run.sh"
+  rd=/var/tmp/otis-walk/run-$(basename "$rs")-$$
+  tar -czf - -C "$t" . | ssh -o BatchMode=yes -o ConnectTimeout=20 "$remote" "mkdir -p $rd && tar -xzf - -C $rd && sh $rd/run.sh"
+  st=$?
+  ssh -o BatchMode=yes -o ConnectTimeout=20 "$remote" "cat $rd/out.jsonl 2>/dev/null; rm -rf $rd" > "$o.jsonl"
+  rm -rf "$t"
+  return $st
+}
+# slot_lock <slot>: take it if it is free (or its holder died).
+slot_lock() {
+  mkdir "$1.lock" 2>/dev/null || { ! kill -0 "$(cat "$1.lock/pid" 2>/dev/null)" 2>/dev/null && rm -rf "$1.lock" && mkdir "$1.lock" 2>/dev/null; } || return 1
+  echo $$ > "$1.lock/pid"
+}
+# slot_ready <slot> <sha>: the slot at sha, Claude's inputs on it.
+slot_ready() {
+  if [ ! -e "$1/.git" ]; then
+    say "making a slot for the walks: $1 (its first build is cold)"
+    git worktree add --detach -f "$1" "$2" >/dev/null 2>>"$d/log" || return 1
+  fi
+  git -C "$1" reset -q --hard 2>>"$d/log"
+  git -C "$1" checkout -q --detach -f "$2" 2>>"$d/log" || return 1
+  # A slot has no packages of its own; the checkout's serve a runner that wants them.
+  top=$(git rev-parse --show-toplevel)
+  [ -d "$top/node_modules" ] && [ ! -e "$1/node_modules" ] && ln -s "$top/node_modules" "$1/node_modules"
+  return 0
+}
+# take_slots <want>: up to want free slots, their paths in $slots; waits for
+# one unless ahead of a review, which gives up (and says so by returning 1).
+take_slots() {
+  slots_dir
+  while :; do
+    free=0 i=1
+    while [ "$i" -le "$sn" ]; do
+      { [ ! -e "$sd/walk-$i.lock" ] || ! kill -0 "$(cat "$sd/walk-$i.lock/pid" 2>/dev/null)" 2>/dev/null; } && free=$((free + 1))
+      i=$((i + 1))
+    done
+    can=$free; [ -e "$d/ahead" ] && can=$((free - 1))
+    [ "$can" -gt "$1" ] && can=$1
+    if [ "$can" -ge 1 ]; then
+      slots= i=1 got=0
+      while [ "$i" -le "$sn" ] && [ "$got" -lt "$can" ]; do
+        slot_lock "$sd/walk-$i" && { slots="$slots $sd/walk-$i"; got=$((got + 1)); }
+        i=$((i + 1))
+      done
+      [ "$got" -ge 1 ] && { trap 'for s in $slots; do rm -rf "$s.lock"; done; rm -rf "$d/.phase"' EXIT; return 0; }
+    fi
+    [ -e "$d/ahead" ] && return 1
+    say "every slot is busy; waiting for one"; sleep 5; stopping
+  done
+}
+
+# pkg_of <spec>: its package: the nearest directory up with a BUILD.bazel or
+# a package.json at the head.
+pkg_of() {
+  p=$(dirname "$1")
+  while [ "$p" != . ] && ! git cat-file -e "$head:$p/BUILD.bazel" 2>/dev/null && ! git cat-file -e "$head:$p/package.json" 2>/dev/null; do p=$(dirname "$p"); done
+  printf '%s\n' "$p"
+}
+
+# trace_specs <sha> <out dir> <targets> <spec index...>: those spec files
+# through the runner, traced, a package's at once, across the slots there are;
+# then each slot's trace split back a spec (walk.mjs split). With base, the
+# head's spec files go onto the base first.
+trace_specs() {
+  sha=$1 sub=$2 tg=$3; shift 3
+  [ "$sha" = "$base" ] && side=base || side=head
+  mkdir -p "$sub"; rm -f "$sub"/w*
+  # The packages, biggest first, each to the slot with the least so far.
+  for i in "$@"; do printf '%s\t%s\n' "$(pkg_of "$(sed -n "$((i + 1))p" "$d/specs")")" "$i"; done > "$sub/groups"
+  np=$(cut -f1 "$sub/groups" | sort -u | wc -l | tr -d ' ')
+  take_slots "$np" || { rm -rf "$d"; exit 0; }
+  k=0; for s in $slots; do k=$((k + 1)); done
+  cut -f1 "$sub/groups" | sort | uniq -c | sort -rn | awk -v k="$k" '{ best = 0; for (w = 1; w < k; w++) if (load[w] < load[best]) best = w; load[best] += $1; print $2 "\t" best }' > "$sub/assign"
+  awk -F'\t' 'NR == FNR { w[$1] = $2; next } { print $2 > (dir "/w" w[$1] ".specs") }' dir="$sub" "$sub/assign" "$sub/groups"
+  say "running $# spec file$( [ $# = 1 ] || echo s) in $np package$( [ "$np" = 1 ] || echo s), on $k slot$( [ "$k" = 1 ] || echo s) at once"
+  ahead=; [ -e "$d/ahead" ] && ahead=1
+  w=0
+  for slot in $slots; do
+    if [ -s "$sub/w$w.specs" ]; then
+      (
+        set --; while read -r i; do set -- "$@" "$(sed -n "$((i + 1))p" "$d/specs")"; done < "$sub/w$w.specs"
+        if [ -n "$remote" ]; then
+          remote_trace "$slot" "$sha" "$side" "$sub/w$w" "$@" >> "$d/log" 2>&1
+          echo $? > "$sub/w$w.status"
+          say "  $(basename "$slot") on $remote: $# spec file$( [ $# = 1 ] || echo s) done, $(cat "$sub/w$w.jsonl" 2>/dev/null | wc -l | tr -d ' ') pauses"
+          exit 0
+        fi
+        slot_ready "$slot" "$sha" || { echo 2 > "$sub/w$w.status"; exit 0; }
+        if [ "$side" = base ]; then sed 's/.*/&/' "$sub/w$w.specs" | while read -r i; do sed -n "$((i + 1))p" "$d/specs"; done | xargs git -C "$slot" checkout -q "$head" -- 2>>"$d/log"; fi
+        [ -s "$d/inputs.patch" ] && { git -C "$slot" apply "$d/inputs.patch" 2>>"$d/log" || say "the inputs Claude wrote no longer apply; running without them"; }
+        (cd "$slot" && OTIS_WALK_AHEAD=$ahead OTIS_TRACE_REQUIRE=$share/walk-trace.js OTIS_TRACE_TARGETS=$tg OTIS_TRACE_OUT=$sub/w$w.jsonl \
+          sh -c "$(runner) \"\$@\"" runner "$@" >> "$d/log" 2>&1)
+        echo $? > "$sub/w$w.status"
+        say "  $(basename "$slot"): $# spec file$( [ $# = 1 ] || echo s) done, $(cat "$sub/w$w.jsonl" 2>/dev/null | wc -l | tr -d ' ') pauses"
+      ) &
+    fi
+    w=$((w + 1))
+  done
+  wait
+  $walk split "$d" "$side" 2>>"$d/log"
+}
+
+finish() {
+  printf '%s\n' "$1" > "$d/status"
+  date +%s > "$d/ended"
+  rm -rf "$d/.phase"
+  say "$2"
+  # One traced ahead of your review (git-walk --ahead) waits to be opened.
+  [ "$1" != stopped ] && [ ! -e "$d/ahead" ] && alert "Walked $(cat "$d/what")" "$2" "$1"
+  exit 0
+}
+
+cover() {
+  rm -rf "$d/walks" "$d"/entry-*
+  $walk cover "$d" 2>>"$d/log" || finish failed "could not read the traces (see $d/log)"
+}
+# tour: Claude's tour of the change (share/walk.mjs has what it is given and
+# the files it keeps). A big change is split into chapters first; each is
+# written side by side, and lands on the screen as it does. Then each is read
+# the way you read it: a second model given only that chapter as it is drawn,
+# start to finish, and its files' lines no stop shows, says what it still
+# cannot answer from it (a name used before it is explained, a jump, a
+# question left open, code left out), and that stays on the chapter as its
+# open questions. Writing it again against them was tried: on a big chapter
+# it dropped as much as it fixed, at twice the cost. Each is one turn with no
+# tools, everything in the prompt. Nothing without an agent, or with
+# otis.walkModel off; the tests' walk is still there. otis.walkReaderModel is
+# the reader's model.
+tour() {
+  [ "$(git config --get otis.walkModel)" != off ] && otis-agent-run --ready >/dev/null 2>&1 || return 0
+  model=$(git config --get otis.walkModel || echo claude-opus-5-5)
+  rm -f "$d"/tour.*; rm -rf "$d"/tour-*
+  : > "$d/tour.state"
+  tassemble
+  if [ "$($walk tour-size "$d" 2>>"$d/log" || echo 0)" -gt 40000 ]; then
+    say "Claude is splitting the change into chapters"
+    $walk tour-plan-prompt "$d" > "$d/tour.plan.prompt" 2>>"$d/log"
+    ask "$model" '{"type":"object","additionalProperties":false,"required":["intent","chapters"],"properties":{"intent":{"type":"string"},"chapters":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","files","tests"],"properties":{"title":{"type":"string"},"files":{"type":"array","items":{"type":"string"}},"tests":{"type":"array","items":{"type":"string"}}}}}}}' \
+      "$d/tour.plan.prompt" "splitting the change into chapters" > "$d/tour.plan.new"
+    jq -e '.chapters | length > 0' "$d/tour.plan.new" >/dev/null 2>&1 && mv "$d/tour.plan.new" "$d/tour.plan.json"
+  fi
+  [ -s "$d/tour.plan.json" ] || $walk tour-plan-default "$d" > "$d/tour.plan.json"
+  n=$(jq '.chapters | length' "$d/tour.plan.json")
+  i=0; while [ "$i" -lt "$n" ]; do echo writing > "$d/tour.c$i.state"; i=$((i + 1)); done
+  rm -f "$d/tour.state"; tassemble
+  i=0; while [ "$i" -lt "$n" ]; do chapter "$i" & i=$((i + 1)); done
+  wait
+}
+tassemble() { $walk tour-assemble "$d" 2>>"$d/log"; }
+stops='{"type":"object","additionalProperties":false,"required":["intent","stops"],"properties":{"intent":{"type":"string"},"stops":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","says","path","start","end","focus","test","proves"],"properties":{"title":{"type":"string"},"says":{"type":"string"},"path":{"type":"string"},"start":{"type":"integer"},"end":{"type":"integer"},"focus":{"type":"integer"},"test":{"type":"string"},"proves":{"type":"string"}}}}}}'
+gaps='{"type":"object","additionalProperties":false,"required":["clear","gaps"],"properties":{"clear":{"type":"boolean"},"gaps":{"type":"array","items":{"type":"string"}}}}'
+# chapter <i>: one chapter written, then read.
+chapter() {
+  i=$1 c=$d/tour.c$1
+  what=$([ "$n" -gt 1 ] && echo "chapter $(($1 + 1))" || echo "the tour")
+  $walk tour-prompt "$d" "$i" > "$c.prompt" 2>>"$d/log" || { rm -f "$c.state"; tassemble; return; }
+  say "Claude is writing $what"
+  ask "$model" "$stops" "$c.prompt" "writing $what" > "$c.new"
+  jq -e '.stops | length > 0' "$c.new" >/dev/null 2>&1 || { rm -f "$c.new" "$c.state"; tassemble; say "no tour came back for $what"; return; }
+  mv "$c.new" "$c.json"; echo checking > "$c.state"; tassemble
+  reader "$i" > "$c.read.prompt"
+  ask "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" "$gaps" "$c.read.prompt" "reading $what" > "$c.read.json"
+  jq '{questions: (if .clear then [] else .gaps end)}' "$c.read.json" > "$c.q.json" 2>/dev/null || rm -f "$c.q.json"
+  rm -f "$c.state"; tassemble
+}
+# reader <i>: what a chapter's reader is given: the chapter as it is drawn,
+# start to finish, and its files' lines no stop shows.
+reader() {
+  cat <<'EOF'
+You are a reviewer who has never seen this code. Below is everything a tour of a merge request (or of one part of it) shows you, in the order you read it: a summary, then stops, each a title, a few sentences, the lines of code it picked and, where a test ran them, the values that test had. You get nothing else: you cannot open a file or search.
+
+Read it once, start to finish. Then list what keeps you from understanding what it covers and how from the tour alone, each concrete (the stop's number and the word or line):
+- a name (type, helper, table, flag, constant) used before the tour explains it;
+- a stop that leans on something not shown yet, or a jump you cannot follow from the stop before;
+- a question the tour leaves open about what the code does;
+- a claim the lines or values shown contradict;
+- changed code you need but the tour leaves out (the changed lines no stop shows are listed at the end; say which of them matter).
+Judge understanding of this change, not of what it uses: a name from outside the change that the tour says what it is in a phrase is fine, and you need no library's internals. A branch without test values is fine when its lines are shown. A pointer to another chapter for something outside this one is fine. Leave out taste and style. clear is true when nothing on the list gets in the way.
+
+EOF
+  $walk tour-text "$d" "$1" 2>>"$d/log"
+  printf '\nChanged lines no stop shows:\n'
+  $walk tour-missing "$d" "$1" 2>>"$d/log" | head -60
+}
+# ask <model> <schema> <prompt file> <what>: one turn, its answer's JSON on
+# stdout, its progress in the run's events.
+ask() {
+  (cd "$d" && otis-agent-run -p --model "$1" --restricted --tools "" \
+    --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none \
+    --output-format stream-json --verbose --json-schema "$2" < "$3" 2>>"$d/log" |
+    tee "$3.events" | git-claude-view --events "$4" >> "$d/events.jsonl")
+  jq -c 'select(.type == "result") | .structured_output // empty' "$3.events" | tail -1
+}
+summary() {
+  jq -r '"\(.tests | length) tests run \(.callable - (.gaps | map(select(.input == null or (.input.reached | not))) | length)) of the change'"'"'s \(.callable) functions" + (if (.gaps | length) > 0 then "; \(.gaps | length) no test runs" else "" end)' "$d/cover.json"
+}
+
+# --- the background half --------------------------------------------------------
+if [ "$1" = --phase ]; then
+  d=$2 what=$3
+  # One phase at a time on a run: a second (P again, the prefetch) leaves it be.
+  if ! mkdir "$d/.phase" 2>/dev/null; then
+    kill -0 "$(cat "$d/.phase/pid" 2>/dev/null)" 2>/dev/null && exit 0
+    rm -rf "$d/.phase"; mkdir "$d/.phase" 2>/dev/null || exit 0
+  fi
+  echo $$ > "$d/.phase/pid"
+  note_signal
+  read -r base head < "$d/shas"
+  case $what in
+    run)
+      say "reading the change by symbol"
+      t=$(git-symbols --table "$(cat "$d/rev")" 2>>"$d/log") || finish failed "seam could not read the change"
+      cp "$t" "$d/table"
+      specs_of "$base" "$head" > "$d/specs.new"
+      [ -s "$d/inputs.json" ] && jq -r '.[].spec' "$d/inputs.json" | while read -r s; do grep -qxF "$s" "$d/specs.new" || echo "$s" >> "$d/specs.new"; done
+      mv "$d/specs.new" "$d/specs"
+      [ -s "$d/specs" ] || finish failed "the change has no spec file to trace"
+      $walk targets "$d/table" > "$d/targets.json"
+      rm -rf "$d/trace" "$d/ran"; mkdir -p "$d/trace" "$d/ran"
+      stopping
+      trace_specs "$head" "$d/trace" "$d/targets.json" $(awk '{ print NR - 1 }' "$d/specs")
+      cover
+      tour
+      finish done "$(summary)" ;;
+    tour)
+      tour
+      [ -s "$d/tour.json" ] && finish done "$(jq '.stops | length' "$d/tour.json") stops through $(cat "$d/what")" || finish failed "no tour came back" ;;
+    base)
+      $walk targets "$d/table" base > "$d/targets-base.json"
+      rm -rf "$d/base"
+      trace_specs "$base" "$d/base" "$d/targets-base.json" $(awk '{ print NR - 1 }' "$d/specs")
+      cover
+      finish done "before and after: $(jq '[.tests[] | select(.before > 0)] | length' "$d/cover.json") of the tests ran the old code too" ;;
+    write)
+      g=$4
+      gap=$(jq -c --argjson g "$g" '.gaps[$g]' "$d/cover.json")
+      name=$(printf '%s' "$gap" | jq -r .name) gid=$(printf '%s' "$gap" | jq -r .id)
+      # A spec that reaches it: one whose tests run the call's caller, else any
+      # of its callers, else the first.
+      spec=$(jq -r --argjson g "$gap" '
+        ([$g.call.id // empty] + $g.callers) as $want
+        | first(.tests[] | select(.ids as $ids | $want | any(. as $w | $ids | index($w))) | .spec) // 0
+        | . as $i | $i' "$d/cover.json")
+      spec=$(sed -n "$((spec + 1))p" "$d/specs")
+      near=$(jq -r --argjson g "$gap" '[.tests[] | select(.ids as $ids | ([$g.call.id // empty] + $g.callers) | any(. as $w | $ids | index($w))) | .name][0:3] | join("\n")' "$d/cover.json")
+      # Here, even with the slots elsewhere: Claude edits files, it builds nothing.
+      remote0=$remote remote=
+      take_slots 1 || finish failed "no slot free"
+      slot=${slots# }
+      slot_ready "$slot" "$head" || finish failed "could not check out $head in $slot"
+      [ -s "$d/inputs.patch" ] && git -C "$slot" apply "$d/inputs.patch" 2>>"$d/log"
+      say "Claude is writing an input that reaches $name, in $spec"
+      schema='{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string","description":"the it() name you added, exactly"}}}'
+      cat > "$d/write.prompt" <<EOF
+A reviewer is reading a code change by running its tests under a tracer that records every line of the change they run. No test runs $name ($(printf '%s' "$gap" | jq -r '.path + ":" + (.start | tostring)')): $(printf '%s' "$gap" | jq -r .why).
+
+Add one test to $spec that makes the code reach $name$(printf '%s' "$gap" | jq -r 'if .call then " through the call at \(.call.path):\(.call.line)" else "" end'). Put it inside the describe that holds tests that already get close$( [ -n "$near" ] && printf ', such as:\n%s\n' "$near" || echo .)
+Rules:
+- Name it "walk: " and a few words saying what input it gives, e.g. it("walk: START by a merchant keyword", ...).
+- It only has to run: it needs no assertions, and failing an expectation is fine. It must not skip, and it must reach the line.
+- Reuse the file's own helpers, fixtures and mocks. If the file mocks the module $name is in, reaching it is impossible: say so in the name and add nothing.
+- Change nothing else in the file and no other file. Read the code under test to work out an input that takes the branch.
+Answer with the test's name, exactly as you wrote it.
+EOF
+      set -m
+      (cd "$slot" && otis-agent-run -p --model "$(git config --get otis.walkModel || echo claude-opus-5-5)" --restricted --tools "Read,Grep,Glob,Edit" \
+        --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none --permission-mode acceptEdits \
+        --output-format stream-json --verbose --json-schema "$schema" < "$d/write.prompt" 2>>"$d/log" |
+        tee "$d/write.events" | git-claude-view --events "writing" >> "$d/events.jsonl")
+      set +m
+      stopping
+      tname=$(jq -r 'select(.type == "result") | .structured_output.name // empty' "$d/write.events" | tail -1)
+      [ -n "$tname" ] || finish failed "Claude wrote no input"
+      git -C "$slot" diff -- "$spec" | grep -q '^+' || finish failed "Claude added nothing: $tname"
+      git -C "$slot" diff > "$d/inputs.patch"
+      jq --arg gap "$gid" --arg spec "$spec" --arg name "$tname" '[.[] | select(.gap != $gap)] + [{gap: $gap, spec: $spec, name: $name}]' "$d/inputs.json" 2>/dev/null > "$d/inputs.new" ||
+        jq -n --arg gap "$gid" --arg spec "$spec" --arg name "$tname" '[{gap: $gap, spec: $spec, name: $name}]' > "$d/inputs.new"
+      mv "$d/inputs.new" "$d/inputs.json"
+      i=$(grep -nxF "$spec" "$d/specs" | cut -d: -f1)
+      [ -n "$i" ] || { echo "$spec" >> "$d/specs"; i=$(wc -l < "$d/specs" | tr -d ' '); }
+      i=$((i - 1))
+      # The slot back, and the spec traced again with the input in it.
+      rm -rf "$slot.lock"; trap - EXIT
+      remote=$remote0
+      say "tracing $spec with it"
+      trace_specs "$head" "$d/trace" "$d/targets.json" "$i"
+      cover
+      if jq -e --arg gap "$gid" '.gaps[] | select(.id == $gap) | .input.reached' "$d/cover.json" >/dev/null; then
+        finish done "\"$tname\" reaches $name: it is in the tests now"
+      else
+        finish done "\"$tname\" ran, but did not reach $name"
+      fi ;;
+  esac
+  exit 0
+fi
+
+# quiet_phase <dir> <what>: the background half, left to itself (the tour's
+# screen shows its progress as it lands).
+quiet_phase() {
+  d=$1
+  rm -f "$d/status" "$d/ended" "$d/stopping"
+  printf '%s\n' git-trace --phase "$d" "$2" > "$d/cmd"
+  pwd > "$d/cwd"
+  date +%s > "$d/started"
+  otis-detach git-trace --phase "$d" "$2" </dev/null >> "$d/log" 2>&1 &
+  echo $! > "$d/pid"
+}
+
+# --- starting one, and watching it ----------------------------------------------
+# phase <dir> <what> [arg]: the background half, its progress shown (q leaves it
+# going), then back.
+phase() {
+  d=$1
+  rm -f "$d/status" "$d/ended" "$d/stopping"
+  printf '%s\n' git-trace --phase "$d" "$2" ${3:+"$3"} > "$d/cmd"
+  pwd > "$d/cwd"
+  date +%s > "$d/started"
+  otis-detach git-trace --phase "$d" "$2" ${3:+"$3"} </dev/null >> "$d/log" 2>&1 &
+  echo $! > "$d/pid"
+  git-claude-view "$d"
+}
+
+case $1 in
+  --run) d=$2; exec git-trace --phase "$d" run ;;
+  --view)
+    d=$2
+    # The tour first. One not there yet (a run from before tours) is started
+    # now, in the background, where an agent can: the screen opens on it at
+    # once, and its chapters land as they are written.
+    if [ ! -s "$d/tour.json" ] && [ "$(git config --get otis.walkModel)" != off ] && otis-agent-run --ready >/dev/null 2>&1; then
+      quiet_phase "$d" tour
+      i=0; while [ ! -s "$d/tour.json" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    fi
+    [ -s "$d/tour.json" ] || exec git-trace --tests "$d"
+    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,a=every test and what none runs,h=the tour as a page,p=post the page to the MR,T=write the tour again,R=run the tests again,q=back' \
+      --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
+      --bind "start:reload(git-trace --tour-list '$d')" \
+      --bind "enter:transform(git-trace --tour-open '$d' {12})" \
+      --bind "s:transform(git-trace --tour-step '$d' {12})" \
+      --bind "a:execute(git-trace --tests '$d')" \
+      --bind "T:execute-silent(git-trace --retour '$d')" \
+      --bind "h:execute-silent(git-trace --page '$d' && otis-open '$d/tour.html')" \
+      --bind "p:execute(git-trace --attach '$d')" \
+      --bind "R:execute(git-trace --again '$d')+reload(git-trace --tour-list '$d')" \
+      --watch "$d/tour.json" \
+      --preview "git-trace --tour-show '$d' {12}" </dev/null >/dev/null
+    exit 0 ;;
+  --tests)
+    d=$2 st=${GIT_FZF_STATE:-}
+    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test,w=Claude writes an input for a gap,b=run it at the base too,R=run the tests again,q=back' \
+      --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
+      --bind "start:reload(git-trace --list '$d')" \
+      --bind "enter:transform(git-trace --open '$d' {12})" \
+      --bind "w:transform(git-trace --gap-key '$d' {12})" \
+      --bind "b:execute(git-trace --base '$d')+reload(git-trace --list '$d')" \
+      --bind "R:execute(git-trace --again '$d')+reload(git-trace --list '$d')" \
+      --preview "git-trace --show '$d' {12}" </dev/null >/dev/null
+    exit 0 ;;
+  --open)
+    case $3 in
+      t:*) echo "execute(git-trace --walk '$2' ${3#t:})" ;;
+      g:*) f=$(jq -r --argjson g "${3#g:}" '.gaps[$g] | "\(.path) \(.start)"' "$2/cover.json"); read -r p l <<EOF
+$f
+EOF
+           echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)" ;;
+    esac
+    exit 0 ;;
+  --gap-key)
+    case $3 in
+      g:*) if jq -e --argjson g "${3#g:}" '.gaps[$g].mocked' "$2/cover.json" >/dev/null; then note "that one is mocked out: no input can reach it"
+           else echo "execute(git-trace --write '$2' ${3#g:})+reload(git-trace --list '$2')"; fi ;;
+      *) note "w is for the changed code no test runs, at the top" ;;
+    esac
+    exit 0 ;;
+  --write)
+    d=$2
+    git-confirm "Claude writes a test input that reaches $(jq -r --argjson g "$3" '.gaps[$g].name' "$d/cover.json"), in a spec in the slot, and P traces it (a minute or two)?" || exit 0
+    phase "$d" write "$3"; exit 0 ;;
+  --base) d=$2; phase "$d" base; exit 0 ;;
+  --again) d=$2; phase "$d" run; exit 0 ;;
+  --retour) d=$2; quiet_phase "$d" tour; exit 0 ;;
+  --page)
+    # The tour as one HTML page, <dir>/tour.html (walk.mjs tour-html), its MR's
+    # title and link at the top when it has one. The theme's colors become
+    # marker codes the page turns into its own.
+    d=$2 key=${2##*/} title= url=
+    case $key in
+      *[!0-9]*) title=$(printf '%s' "${key#b-}" | tr '%' '/') ;;
+      *) mr=$(glab api "projects/:fullpath/merge_requests/$key" 2>/dev/null) && title=$(printf '%s' "$mr" | jq -r .title) url=$(printf '%s' "$mr" | jq -r .web_url) ;;
+    esac
+    OTIS_T_ATTENTION="38;5;201" OTIS_T_GOOD="38;5;202" OTIS_T_BAD="38;5;203" OTIS_T_YOURS="38;5;204" OTIS_T_TEXT="38;5;205" \
+      OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_BAT= \
+      $walk tour-html "$d" "$title" "$url" > "$d/tour.html.new" 2>>"$d/log" && mv "$d/tour.html.new" "$d/tour.html"
+    exit $? ;;
+  --attach)
+    # p: the page posted to the MR, after a confirm, as a verification's
+    # report is: uploaded to the project (GitLab offers HTML as a download,
+    # which opens in the browser), then linked at the end of the description
+    # of an MR of yours, in place of the one a last post left there, or in a
+    # comment on someone else's, whose description is theirs. A branch's
+    # tour links from the MR the branch has since opened.
+    d=$2 iid=${2##*/}
+    case $iid in
+      b-*)
+        b=$(printf '%s' "${iid#b-}" | tr '%' '/')
+        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        [ -n "$iid" ] || { note "$b has no open MR to post it to; gb's n opens one"; exit 0; } ;;
+    esac
+    [ -s "$d/tour.json" ] || { note "no tour yet"; exit 0; }
+    mr=$(glab api "projects/:fullpath/merge_requests/$iid") || { note "could not read !$iid from GitLab"; exit 0; }
+    me=$(glab api user 2>/dev/null | jq -r .username)
+    mine=; [ "$(printf '%s' "$mr" | jq -r .author.username)" = "$me" ] && mine=1
+    ask="Upload the walkthrough to !$iid and $([ -n "$mine" ] && echo "link it at the end of its description" || echo "link it in a comment")?"
+    [ "$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)" = "$(cut -d' ' -f2 "$d/shas")" ] ||
+      ask="!$iid has moved on since this tour was written. $ask"
+    git-confirm "$ask" || exit 0
+    git-trace --page "$d" || { note "could not write the page"; exit 0; }
+    tmp=$(mktemp -d) && cp "$d/tour.html" "$tmp/walkthrough-$iid.html" || exit 1
+    up=$(glab api "projects/:fullpath/uploads" --form "file=@$tmp/walkthrough-$iid.html" 2>&1)
+    rm -rf "$tmp"
+    link=$(printf '%s' "$up" | jq -r '.url // empty' 2>/dev/null)
+    [ -n "$link" ] || { note "the upload failed: $(printf '%s' "$up" | head -c 200)"; exit 0; }
+    if [ -n "$mine" ]; then
+      printf '%s' "$mr" | jq --arg url "$link" '{description: ((.description // "")
+        | sub("\\s*\\[walkthrough\\]\\(/uploads/[^)]*\\)\\s*$"; "")
+        | if . == "" then "" else . + "\n\n" end + "[walkthrough](\($url))")}' > "$d/attach.json"
+      glab api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+        { note "uploaded, but the description was not changed: $(head -c 200 "$d/attach.err")"; exit 0; }
+    else
+      jq -n --arg url "$link" '{body: "A walkthrough of this change, stop by stop, with the values its tests really had: [walkthrough](\($url))"}' > "$d/attach.json"
+      glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+        { note "uploaded, but the comment was not posted: $(head -c 200 "$d/attach.err")"; exit 0; }
+    fi
+    rm -f "$d/attach.json" "$d/attach.err"
+    note "posted to !$iid"; exit 0 ;;
+  --walk)
+    d=$2 ti=$3 at=${4:-}
+    name=$(jq -r --argjson t "$ti" '.tests[$t].name' "$d/cover.json")
+    # The name as a title, cut to fit: a long one ran into the preview.
+    [ ${#name} -gt 56 ] && name="$(printf '%s' "$name" | cut -c1-55)…"
+    otis-symbols "$name " 'j=next line,l=step into,h=step out,k=back,b=before the change,enter=open the line,q=back' \
+      --ansi --delimiter='\t' --with-nth=1 --id-nth=12 --repeat j,k,l,h \
+      --bind "start:reload${at:+-sync}(git-trace --walk-list '$d' $ti)${at:++transform(git-trace --walk-at '$d' $ti $at)}" \
+      --bind "j:transform(git-trace --step '$d' $ti over {12})" \
+      --bind "l:transform(git-trace --step '$d' $ti into {12})" \
+      --bind "h:transform(git-trace --step '$d' $ti out {12})" \
+      --bind "k:transform(git-trace --step '$d' $ti back {12})" \
+      --bind "b:execute-silent(git-trace --side '$d' $ti)+reload(git-trace --walk-list '$d' $ti)+first" \
+      --bind "enter:execute(git-commit-open \$(git-trace --rev '$d') \$(git-trace --walk-line '$d' $ti {12}))" \
+      --preview "git-trace --walk-show '$d' $ti {12}" </dev/null >/dev/null
+    exit 0 ;;
+  --walk-at)
+    # From a tour's stop: its step, and the row of its call.
+    prepared "$2" "$3" head
+    echo "$4" > "$GIT_FZF_STATE/cur"
+    vi=$(awk -v k="$4" '$1 == k { print $2; exit }' "$b.nav")
+    [ -n "$vi" ] && echo "pos($((vi + 1)))+refresh-preview"
+    exit 0 ;;
+  --rev) side=$(cat "$GIT_FZF_STATE/side" 2>/dev/null); read -r b h < "$2/shas"; [ "$side" = base ] && echo "$b" || echo "$h"; exit 0 ;;
+  --side)
+    d=$2 st=$GIT_FZF_STATE
+    if [ "$(cat "$st/side" 2>/dev/null)" = base ]; then echo head > "$st/side"; : > "$st/hist"; rm -f "$st/cur"
+    elif [ "$(jq -r '.based' "$d/cover.json")" = true ]; then echo base > "$st/side"; : > "$st/hist"; rm -f "$st/cur"
+    else note "no run at the base yet: b on P's screen runs the tests there"; fi
+    exit 0 ;;
+  --step)
+    d=$2 ti=$3 how=$4 st=$GIT_FZF_STATE
+    case $5 in v:*) ;; *) exit 0 ;; esac
+    prepared "$d" "$ti" "$(side)"
+    k=$(shown "$5")
+    if [ "$how" = back ]; then
+      j=$(tail -1 "$st/hist" 2>/dev/null)
+      [ -n "$j" ] || { note "nowhere to go back to"; exit 0; }
+      sed '$d' "$st/hist" > "$st/hist.new"; mv "$st/hist.new" "$st/hist"
+    else
+      j=$(awk -v k="$k" -v how="$how" '$1 == k { print (how == "over" ? $3 : how == "into" ? $4 : $5); exit }' "$b.nav")
+      if [ "${j:--1}" = -1 ]; then
+        case $how in over) note "that was its last line in this call; h goes out" ;; into) note "this line calls nothing the change made" ;; out) note "the test called this one" ;; esac
+        exit 0
+      fi
+      echo "$k" >> "$st/hist"
+    fi
+    echo "$j" > "$st/cur"
+    vi=$(awk -v k="$j" '$1 == k { print $2; exit }' "$b.nav")
+    # A row a call, in order: call i is row i + 1.
+    echo "pos($((vi + 1)))+refresh-preview"
+    exit 0 ;;
+esac
+echo "git-trace: see its head for what it takes" >&2
+exit 2
