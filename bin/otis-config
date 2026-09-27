@@ -5,6 +5,8 @@
 # the deploy jobs are decided in one place, and another project changes them
 # with git config alone.
 #
+#   forge        where the repo's MRs live, gitlab or github: otis.forge, else github when origin is on
+#                github.com, else gitlab. On GitHub an MR is a pull request (git-forge)
 #   host         the GitLab host: otis.host, else the origin remote's host, else gitlab.com
 #   url          https://<host>
 #   project      the project's path on GitLab (group/repo): otis.project, else the origin remote's path
@@ -166,7 +168,7 @@ cfg_bool() {
   esac
 }
 
-keys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommands engine sideBySide worktrees editor terminalBrowser lessons gitlab'
+keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommands engine sideBySide worktrees editor terminalBrowser lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -205,6 +207,10 @@ main() {
 
 one() {
   case $1 in
+    forge)
+      case $(cfg forge) in github) echo github; return ;; gitlab) echo gitlab; return ;; esac
+      origin_parts && case $host in github.com | *.github.com) echo github; return ;; esac
+      echo gitlab ;;
     host) host ;;
     url) printf 'https://%s\n' "$(host)" ;;
     project) cfg project || { origin_parts && printf '%s\n' "$path"; } ;;
@@ -278,7 +284,7 @@ one() {
 # that differs between branches checked out there is the one thing this would
 # miss. A worktree asked on its own, with no environment from above, reads its
 # own .otis into its own cache (repo_facts).
-envkeys='host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons gitlab'
+envkeys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons gitlab'
 boolkeys='verifyRetro verifyFix verifyBreak terminalBrowser lessons gitlab'
 cachename=otis-config-cache
 tab='	'
@@ -529,8 +535,10 @@ $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
         grep -v -e '^#' -e '^$' "$f" | while IFS= read -r v; do git config "--$scope" --add "otis.$n" "$v"; done
         rm -f "$f" ;;
       # One of a few values: picked from them, not typed.
-      agent | engine | sideBySide | verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons)
+      forge | agent | engine | sideBySide | verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons)
         case $n in
+          forge) c='gitlab	merge requests on GitLab, through glab
+github	pull requests on GitHub, through gh' ;;
           agent) c='claude	Claude Code
 codex	Codex
 cursor	Cursor'"'"'s agent' ;;

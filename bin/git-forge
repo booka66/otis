@@ -1,0 +1,44 @@
+#!/bin/sh
+# git-forge: the one place otis talks to where a repo's MRs live
+# (otis-config forge). The rest of otis asks in GitLab's terms, its REST paths
+# and the JSON they answer with, since that is what it was written against.
+# On GitLab that is glab itself, word for word; on GitHub share/forge/github
+# answers the same questions from gh, in the same shapes, so nothing that
+# reads the answers knows the difference.
+#
+#   git-forge api <glab api args>   a GitLab API call: glab api, or its GitHub equivalent
+#   git-forge mrs <review|mine|all> the MR lists (share/mr-query.sh): to review, yours, every open one
+#   git-forge head-ref <iid>        the ref an MR's head is fetched from, forks included
+#   git-forge mr-url <iid>          an MR's web link, built from the origin remote (no request)
+#   git-forge can <what>            exit 0 when the forge has it; what GitHub lacks
+#                                   (github_lacks, share/forge/github) is left off its keys
+share=$(cd "$(dirname "$0")/../share" && pwd)
+forge=$(otis-config forge)
+[ "$forge" = github ] && exec "$share/forge/github" "$@"
+
+case $1 in
+  api) shift; exec glab api "$@" ;;
+  mrs)
+    . "$share/mr-query.sh"
+    case $2 in
+      review) q=$mr_review_query ;;
+      mine) q=$mr_mine_query ;;
+      all) q=$mr_all_query ;;
+      *) echo "git-forge mrs: review, mine or all" >&2; exit 2 ;;
+    esac
+    exec glab api graphql -f query="$q" -f repo="$(otis-config project)" ;;
+  head-ref) printf 'refs/merge-requests/%s/head\n' "$2" ;;
+  mr-url)
+    [ -n "$2" ] || exit 1
+    url=$(git remote get-url origin) || exit 1
+    case $url in
+      *://*) rest=${url#*://}; rest=${rest#*@} ;;
+      *@*:*) rest=${url#*@}; rest=$(printf '%s' "$rest" | sed 's#:#/#') ;;
+      *) exit 1 ;;
+    esac
+    host=${rest%%/*}; host=${host%%:*}
+    repo=${rest#*/}; repo=${repo%.git}
+    printf 'https://%s/%s/-/merge_requests/%s\n' "$host" "$repo" "$2" ;;
+  can) exit 0 ;;
+  *) echo "usage: git-forge api|mrs|head-ref|mr-url|can ..." >&2; exit 2 ;;
+esac

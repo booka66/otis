@@ -863,13 +863,22 @@ function diffLabel(g) {
   if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} different values: ${g.counts.map((c) => `${counted(c)} ${c.x}→${c.y}`).join(", ")}`;
   return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
 }
+// written: the code a patch Claude wrote adds (a test t wrote), under a rule,
+// whole, for reading before c posts it.
+function written(patch, w) {
+  if (!existsSync(patch)) return [];
+  const add = readFileSync(patch, "utf8").split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1));
+  if (!add.length) return [];
+  return ["", C.faint + "── the tests " + "─".repeat(Math.max(0, w - 13)) + C.r, "",
+    ...add.flatMap((l) => { const ind = (l.match(/^\s*/) || [""])[0]; return l.trim() ? wrap(l.trim(), w - ind.length).map((x, i) => (i ? ind + "  " : ind) + x) : [""]; }).map((l) => C.text + l + C.r)];
+}
 // pinned: the test Claude wrote for change i (git-trace's pin), and how it ran.
 function pinned(r, g, w) {
   const p = readJson(join(r.dir, `pin.${g.id}.json`), null);
   if (!p) return wrap("t writes a test that passes before the change and fails with it", w).map((l) => C.faint + l + C.r);
   if (!p.ok) return [...wrap(`✗ "${p.name}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}`, w).map((l) => C.at + l + C.r), C.faint + "t tries again" + C.r];
   return [...wrap(`✓ "${p.name}"`, w).map((l) => C.good + l + C.r), C.good + "  passes before the change, fails with it" + C.r,
-    ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts it to the MR" + C.r];
+    ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts it to the MR · the test itself is at the end of this part" + C.r];
 }
 function diffPreview(r, g, w) {
   const out = [], v = g.verdict;
@@ -915,6 +924,7 @@ function diffPreview(r, g, w) {
   // The tests the change leaves alone first, marked ◦: behavior an old test sees differently.
   for (const t of [...g.untouched, ...g.tests.filter((t) => !g.untouched.includes(t))].slice(0, 3)) line("", (g.untouched.includes(t) ? "◦ " : "• ") + t, C.faint);
   out.push("", C.faint + "enter opens where it happens" + C.r);
+  out.push(...written(join(r.dir, `pin.${g.id}.patch`), w));
   return out;
 }
 
@@ -941,8 +951,9 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     // The tests t wrote for it (git-trace's cover), and how they ran.
     const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
     if (!wt) out.push(...wrap("t writes tests for it, set up like tests of the same kind of code in the repository, and runs them", w).map((l) => C.faint + l + C.r), "");
-    else if (wt.ok) out.push(C.good + `✓ ${wt.names.length} ${wt.kind ? wt.kind + " " : ""}test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...(wt.why ? wrap(wt.why, w - 2).map((l) => "  " + C.text + l + C.r) : []), ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts them to the MR" + C.r, "");
-    else out.push(C.at + `✗ not all pass: ${wt.failing.join(", ") || "they did not run"}` + C.r, ...wt.fails.split("\n").filter(Boolean).slice(0, 8).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "t tries again" + C.r, "");
+    const code = wt ? written(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.patch`), w) : [];
+    if (wt && wt.ok) out.push(C.good + `✓ ${wt.names.length} ${wt.kind ? wt.kind + " " : ""}test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...(wt.why ? wrap(wt.why, w - 2).map((l) => "  " + C.text + l + C.r) : []), ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts them to the MR · the tests themselves are at the end of this preview" + C.r, "");
+    else if (wt) out.push(C.at + `✗ not all pass: ${wt.failing.join(", ") || "they did not run"}` + C.r, ...wt.fails.split("\n").filter(Boolean).slice(0, 8).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "t tries again" + C.r, "");
     // The call no test makes, else the function itself: each line as the
     // traces saw it, ● run by some test.
     const at = g.call || { path: g.path, line: g.start };
@@ -959,6 +970,7 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
       out.push(`${C.yours}✦ Claude's input${C.r}${C.ctx}, in ${g.input.spec}: ${C.r}${C.text}${g.input.name}${C.r}`);
       out.push(g.input.reached ? `${C.good}it reaches ${g.name}: it is in the tests below${C.r}` : `${C.at}it ran, but did not reach ${g.name}${g.input.error ? ": " + g.input.error : ""}${C.r}`);
     } else if (!g.mocked) out.push(`${C.faint}i: Claude writes an input into a spec that reaches this, and P traces it. It only has to run.${C.r}`);
+    out.push(...code);
   }
   return out.join("\n") + "\n";
 }
