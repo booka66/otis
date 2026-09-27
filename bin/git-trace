@@ -682,12 +682,12 @@ if [ "$1" = --phase ]; then
       tname=$(printf '%s' "$gj" | jq -r '(.untouched + .tests)[0]')
       spec=$(jq -r --arg t "$tname" 'first(.tests[] | select(.name == $t) | .spec)' "$d/cover.json")
       spec=$(sed -n "$((spec + 1))p" "$d/specs")
-      [ -n "$spec" ] || finish failed "no spec to write it in"
+      [ -n "$spec" ] || finish done "no spec to write a test in"
       rm -f "$p".*
       remote0=$remote remote=
-      take_slots 1 || finish failed "no slot free"
+      take_slots 1 || finish done "no slot free to write a test in"
       wslot=${slots# }
-      slot_ready "$wslot" "$head" || finish failed "could not check out $head in $wslot"
+      slot_ready "$wslot" "$head" || finish done "could not check out $head to write a test in"
       schema='{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string","description":"the it() name you added, exactly"}}}'
       {
         cat <<EOF
@@ -715,7 +715,7 @@ EOF
         stopping
         name=$(jq -r 'select(.type == "result") | .structured_output.name // empty' "$p.events" | tail -1)
         git -C "$wslot" diff -- "$spec" > "$p.patch"
-        [ -n "$name" ] && [ -s "$p.patch" ] || { rm -rf "$wslot.lock"; finish failed "Claude wrote no test"; }
+        [ -n "$name" ] && [ -s "$p.patch" ] || { rm -rf "$wslot.lock"; finish done "Claude wrote no test"; }
         rm -rf "$wslot.lock"; remote=$remote0
         say "running it before the change"
         OTIS_TEST_NAME=$name run_spec "$base" base "$p.patch" "$spec" "$p.base.out"; bs=$(verdict "$p.base.out" $? "$name")
@@ -740,12 +740,14 @@ $(sed 's/\x1b\[[0-9;]*m//g' "$( [ "$bs" != 0 ] && echo "$p.base.out" || echo "$p
 Fix that test (it is in the file already) so it passes before the change and fails with it.
 EOF
         remote0=$remote remote=
-        take_slots 1 || finish failed "no slot free"
+        take_slots 1 || finish done "no slot free to write a test in"
         wslot=${slots# }
       done
       rm -rf "$d"/entry-* "$d"/tour-[0-9]*; [ -e "$d/tour.json" ] && touch "$d/tour.json"
       if [ "$(jq .ok "$p.json")" = true ]; then finish done "\"$name\" passes before the change and fails with it: c posts it to the MR"
-      else finish failed "\"$name\" did not pin it: $(jq -r 'if .base != 0 then "it failed before the change" elif .head == 0 then "it passed with the change" else "it did not run" end' "$p.json")"; fi ;;
+      # Not pinned is an answer, not a walk that failed: the walk's status is
+      # this, and failed would keep its tour from opening.
+      else finish done "\"$name\" did not pin it: $(jq -r 'if .base != 0 then "it failed before the change" elif .head == 0 then "it passed with the change" else "it did not run" end' "$p.json")"; fi ;;
     write)
       g=$4
       gap=$(jq -c --argjson g "$g" '.gaps[$g]' "$d/cover.json")
