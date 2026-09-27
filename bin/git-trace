@@ -73,13 +73,15 @@ runner() {
 # specs_of <base> <head>: the specs the change touched, the spec beside each
 # source file it touched (foo.ts's foo.spec.ts): a change that leaves a
 # file's tests alone is still tested by them; and specs that import one.
-specs_of() {
-  { git diff --name-only --no-renames --diff-filter=d "$1" "$2" | git-test-files kinds | awk -F'\t' '$1 ~ /\.[cm]?[jt]sx?$/ && ($2 == "tests" || $2 == "")' |
-      while IFS=$(printf '\t') read -r f k; do
-        if [ "$k" = tests ]; then echo "$f"; continue; fi
-        for s in "${f%.*}".spec."${f##*.}" "${f%.*}".test."${f##*.}"; do git cat-file -e "$2:$s" 2>/dev/null && echo "$s"; done
-      done
-    callers_of "$1" "$2"; } | awk '!seen[$0]++'
+specs_of() { { own_specs "$1" "$2"; callers_of "$1" "$2"; } | awk '!seen[$0]++'; }
+# own_specs <base> <head>: the change's own spec files and those beside what
+# it changed, without searching the repository: what --can asks first.
+own_specs() {
+  git diff --name-only --no-renames --diff-filter=d "$1" "$2" | git-test-files kinds | awk -F'\t' '$1 ~ /\.[cm]?[jt]sx?$/ && ($2 == "tests" || $2 == "")' |
+    while IFS=$(printf '\t') read -r f k; do
+      if [ "$k" = tests ]; then echo "$f"; continue; fi
+      for s in "${f%.*}".spec."${f##*.}" "${f%.*}".test."${f##*.}"; do git cat-file -e "$2:$s" 2>/dev/null && echo "$s"; done
+    done
 }
 # callers_of <base> <head>: up to 8 spec files the change leaves alone that
 # import a file it changed, nearest the file first: the tests that were
@@ -101,7 +103,10 @@ case $1 in
   --can)
     [ "$(git config --get otis.walkTrace)" != off ] && [ -n "$(runner)" ] || exit 1
     git cat-file -e "$3^{commit}" 2>/dev/null || exit 0
-    [ -n "$(specs_of "$2" "$3")" ]; exit ;;
+    # Its own specs first, which is instant; searching the repository for
+    # specs that import what it changed (callers_of) took P eleven seconds
+    # before anything showed, and is needed only when it has none.
+    [ -n "$(own_specs "$2" "$3" | head -1)" ] || [ -n "$(callers_of "$2" "$3")" ]; exit ;;
   --list) exec $walk rows "$2" ;;
   --walk-list) exec $walk walk-rows "$2" "$3" "$(cat "$GIT_FZF_STATE/side" 2>/dev/null || echo head)" ;;
 esac

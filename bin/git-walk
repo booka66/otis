@@ -84,7 +84,7 @@ case $1 in
     if [ -s "$d/iid" ]; then
       iid=$(cat "$d/iid") head=$(cat "$d/head") base=$(cat "$d/base") start=$(cat "$d/start" 2>/dev/null)
       git cat-file -e "$head^{commit}" 2>/dev/null ||
-        GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin "+refs/merge-requests/$iid/head:refs/mr/$iid" 2>>"$d/log"
+        GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin "+$(git-forge head-ref "$iid"):refs/mr/$iid" 2>>"$d/log"
       git cat-file -e "$base^{commit}" 2>/dev/null || GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin 2>>"$d/log"
       git cat-file -e "$head^{commit}" 2>/dev/null || finish failed "could not fetch $what's commits"
       [ -n "$start" ] && ! git cat-file -e "$start^{commit}" 2>/dev/null && start=
@@ -246,7 +246,9 @@ d=$top/$key
 # Traced when the change's own tests can run (git-trace): nothing to pay for,
 # and no model to have. Else Claude's walk.
 trace=
-if [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/null)" "$head" && trace=1
+# A walk of this very head that traced says so: nothing to ask again.
+if [ -n "$head" ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ "$(cat "$d/head" 2>/dev/null)" = "$head" ]; then trace=1
+elif [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/null)" "$head" && trace=1
 elif [ -n "$head" ]; then git-trace --can "$base" "$head" && trace=1
 else [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && trace=1; fi
 if [ -z "$trace" ]; then
