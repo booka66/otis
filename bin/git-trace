@@ -226,13 +226,14 @@ remote_trace() {
     sleep 15
   done
   cp "$share/walk-trace.js" "$t/"; cp "$tg" "$t/targets.json"
-  [ -s "$d/inputs.patch" ] && cp "$d/inputs.patch" "$t/"
+  [ -s "${patch:-$d/inputs.patch}" ] && cp "${patch:-$d/inputs.patch}" "$t/inputs.patch"
   r=$(runner); f=$(eval printf '%s' "$r")
   if [ -f "$f" ]; then cp "$f" "$t/runner"; else printf '%s "$@"\n' "$r" > "$t/runner"; fi
   printf '%s\n' "$@" > "$t/specs"
   q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
   {
     printf 'slot=%s repo=%s sha=%s head=%s side=%s scratch=%s\n' "$(q "$rs")" "$(q "$rpath")" "$sha" "$head" "$rside" "$(q "$(dirname "$rs")/scratch")"
+    [ -n "${OTIS_TEST_NAME:-}" ] && printf 'OTIS_TEST_NAME=%s; export OTIS_TEST_NAME\n' "$(q "$OTIS_TEST_NAME")"
     cat <<'REMOTE'
 here=$(cd "$(dirname "$0")" && pwd)
 set --; while read -r f; do set -- "$@" "$f"; done < "$here/specs"
@@ -331,6 +332,38 @@ take_slots() {
 
 # pkg_of <spec>: its package: the nearest directory up with a BUILD.bazel or
 # a package.json at the head.
+# verdict <out> <status> <name>: how the test named ran: 0 passed, 1 failed,
+# 2 never ran. Its own line in the runner's output, not the file's status:
+# a spec the change touched has the change's own tests in it, which fail
+# before it, and it can have others failing with it. A run that passed
+# whole passed it; a runner may print nothing of a file that passed.
+verdict() {
+  [ "$2" = 0 ] && { echo 0; return; }
+  sed 's/\x1b\[[0-9;]*m//g' "$1" | awk -v n="$3" '
+    index($0, n) && /(×|✕|✗|FAIL)/ { f = 1 } index($0, n) && /(✓|√)/ { p = 1 }
+    END { print f ? 1 : p ? 0 : 2 }'
+}
+# run_spec <sha> <side> <patch> <spec> <out>: one spec file through the
+# runner with the patch on it and nothing traced, in a slot here or on the
+# workspace: its output in <out>, its exit status returned (2: it never ran).
+# OTIS_TEST_NAME, when set, is the one test a runner may run alone.
+run_spec() {
+  sha=$1 side=$2 patch=$3 o=$5
+  tg=$d/no-targets.json; echo '[]' > "$tg"
+  take_slots 1 || return 2
+  slot=${slots# }
+  if [ -n "$remote" ]; then
+    remote_trace "$slot" "$sha" "$side" "$o.w" "$4" > "$o" 2>&1; st=$?
+  elif slot_ready "$slot" "$sha"; then
+    [ "$side" = base ] && git -C "$slot" checkout -q "$head" -- "$4" 2>>"$o"
+    if git -C "$slot" apply "$patch" 2>>"$o"; then
+      (cd "$slot" && export OTIS_TEST_NAME && OTIS_TRACE_REQUIRE=$share/walk-trace.js OTIS_TRACE_TARGETS=$tg OTIS_TRACE_OUT=$o.w.jsonl sh -c "$(runner) \"\$@\"" runner "$4") >> "$o" 2>&1; st=$?
+    else st=2; fi
+  else st=2; fi
+  for s in $slots; do rm -rf "$s.lock"; done
+  slots= patch=; trap 'rm -rf "$d/.phase"' EXIT
+  return "$st"
+}
 # said <slot>: a runner's output into the log, and each of its lines that
 # starts "otis: " said as it comes, under the slot: a run of a dozen spec
 # files is minutes with nothing else to show.
@@ -631,6 +664,82 @@ if [ "$1" = --phase ]; then
     base)
       behave
       finish done "before and after: $(jq '[.tests[] | select(.before > 0)] | length' "$d/cover.json") of the tests ran the old code too$( [ -s "$d/diff.json" ] && jq -r '", and behave differently in \(.groups | length) way\(if (.groups | length) == 1 then "" else "s" end)"' "$d/diff.json")" ;;
+    pin)
+      # A change in behavior pinned by a test: one that passes before the
+      # change and fails with it, written by Claude beside the test that saw
+      # it, from what the trace has (the values before and after, where the
+      # changed value is passed in). Written in a slot here (writing builds
+      # nothing), then its spec run untraced at the base and at the head, and
+      # given back once with what went wrong when it does not do both.
+      g=$4 p=$d/pin.$4
+      gj=$(jq -c --argjson g "$g" '.groups[$g]' "$d/diff.json")
+      tname=$(printf '%s' "$gj" | jq -r '(.untouched + .tests)[0]')
+      spec=$(jq -r --arg t "$tname" 'first(.tests[] | select(.name == $t) | .spec)' "$d/cover.json")
+      spec=$(sed -n "$((spec + 1))p" "$d/specs")
+      [ -n "$spec" ] || finish failed "no spec to write it in"
+      rm -f "$p".*
+      remote0=$remote remote=
+      take_slots 1 || finish failed "no slot free"
+      wslot=${slots# }
+      slot_ready "$wslot" "$head" || finish failed "could not check out $head in $wslot"
+      schema='{"type":"object","additionalProperties":false,"required":["name"],"properties":{"name":{"type":"string","description":"the it() name you added, exactly"}}}'
+      {
+        cat <<EOF
+A reviewer compared what a change's tests do before and after it, and found this, which the change's description does not account for:
+$(printf '%s' "$gj" | jq -r .says)
+$(printf '%s' "$gj" | jq -r 'if .from then "The changed value is passed in at \(.from.path):\(.from.line)." else "It happens in \(.fns[0].path):\(.fns[0].line)." end')
+Before the change: $(printf '%s' "$gj" | jq -r '[.values[] | split(" → ")[0]] | unique | join("; ")')
+The test that saw it: "$tname", in $spec. It is below, from its first line; read the rest of the file only for the helpers it uses.
+
+$(git show "$head:$spec" | awk -v n="$(printf '%s' "$tname" | sed 's/.* > //')" 'index($0, n) && /it\(|test\(/ { on = 1 } on { print; if (++k == 90) exit }')
+
+Add one test to $spec, next to that one and reusing its setup, that asserts the behavior before the change. It must pass on the code before the change and fail on the code as it is now (your working directory). Assert on what that test can already observe: a value returned, a record stored, a call to a mock. Name it for the behavior it keeps, e.g. it("keeps sentViaHumanQueue false for an SMS send", ...). Change nothing else in the file and no other file. Answer with the test's name.
+EOF
+      } > "$p.prompt"
+      for try in 1 2; do
+        git -C "$wslot" reset -q --hard; git -C "$wslot" checkout -q --detach -f "$head"
+        [ -s "$p.patch" ] && git -C "$wslot" apply "$p.patch" 2>>"$d/log"
+        say "Claude is writing a test that pins it, in $(basename "$spec")"
+        set -m
+        (cd "$wslot" && otis-agent-run -p --model "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" --restricted --tools "Read,Grep,Glob,Edit" \
+          --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none --permission-mode acceptEdits \
+          --output-format stream-json --verbose --json-schema "$schema" < "$p.prompt" 2>>"$d/log" |
+          tee "$p.events" | git-claude-view --events "writing the test" >> "$d/events.jsonl")
+        set +m
+        stopping
+        name=$(jq -r 'select(.type == "result") | .structured_output.name // empty' "$p.events" | tail -1)
+        git -C "$wslot" diff -- "$spec" > "$p.patch"
+        [ -n "$name" ] && [ -s "$p.patch" ] || { rm -rf "$wslot.lock"; finish failed "Claude wrote no test"; }
+        rm -rf "$wslot.lock"; remote=$remote0
+        say "running it before the change"
+        OTIS_TEST_NAME=$name run_spec "$base" base "$p.patch" "$spec" "$p.base.out"; bs=$(verdict "$p.base.out" $? "$name")
+        stopping
+        say "and with it"
+        OTIS_TEST_NAME=$name run_spec "$head" head "$p.patch" "$spec" "$p.head.out"; hs=$(verdict "$p.head.out" $? "$name")
+        stopping
+        ok=false; [ "$bs" = 0 ] && [ "$hs" = 1 ] && ok=true
+        # What failed, as the runner put it: the assertion and what it got,
+        # under this test's own FAIL line (the file can have others).
+        fails=$(sed 's/\x1b\[[0-9;]*m//g' "$p.head.out" | awk -v n="$name" 'index($0, n) && /FAIL/ { on = 1; next } /⎯|node_modules|rules_|chunk-/ { next } on && NF { print; if (++k == 8) exit }')
+        jq -n --arg name "$name" --arg spec "$spec" --argjson base "$bs" --argjson head "$hs" --argjson ok $ok --arg fails "$fails" \
+          '{name: $name, spec: $spec, base: $base, head: $head, ok: $ok, fails: $fails}' > "$p.json"
+        [ "$ok" = true ] && break
+        [ "$try" = 2 ] && break
+        why=$( [ "$bs" != 0 ] && echo "It failed before the change, where it must pass" || echo "It passed with the change, where it must fail")
+        cat >> "$p.prompt" <<EOF
+
+You wrote "$name", and it did not do both. $why. The run's last lines:
+$(sed 's/\x1b\[[0-9;]*m//g' "$( [ "$bs" != 0 ] && echo "$p.base.out" || echo "$p.head.out")" | grep -v '^\[' | tail -40)
+
+Fix that test (it is in the file already) so it passes before the change and fails with it.
+EOF
+        remote0=$remote remote=
+        take_slots 1 || finish failed "no slot free"
+        wslot=${slots# }
+      done
+      rm -rf "$d"/entry-* "$d"/tour-[0-9]*; [ -e "$d/tour.json" ] && touch "$d/tour.json"
+      if [ "$(jq .ok "$p.json")" = true ]; then finish done "\"$name\" passes before the change and fails with it: c posts it to the MR"
+      else finish failed "\"$name\" did not pin it: $(jq -r 'if .base != 0 then "it failed before the change" elif .head == 0 then "it passed with the change" else "it did not run" end' "$p.json")"; fi ;;
     write)
       g=$4
       gap=$(jq -c --argjson g "$g" '.gaps[$g]' "$d/cover.json")
@@ -732,12 +841,14 @@ case $1 in
       i=0; while [ ! -s "$d/tour.json" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     fi
     [ -s "$d/tour.json" ] || exec git-trace --tests "$d"
-    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,a=what behaves differently and every test,w=the tour as a page in the browser,p=post the page to the MR,T=write the tour again,r=run the tests again,q=back' \
+    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,t=a test that passes before a change in behavior and fails with it,c=post that test to the MR,a=what behaves differently and every test,w=the tour as a page in the browser,p=post the page to the MR,T=write the tour again,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --tour-list '$d')" \
       --bind "enter:transform(git-trace --tour-open '$d' {12})" \
       --bind "s:transform(git-trace --tour-step '$d' {12})" \
       --bind "a:execute(git-trace --tests '$d')" \
+      --bind "t:transform(git-trace --pin-key '$d' t {12})" \
+      --bind "c:transform(git-trace --pin-key '$d' c {12})" \
       --bind "T:execute-silent(git-trace --retour '$d')" \
       --bind "w:execute-silent(git-trace --page '$d' && otis-open '$d/tour.html')" \
       --bind "p:execute(git-trace --attach '$d')" \
@@ -747,11 +858,13 @@ case $1 in
     exit 0 ;;
   --tests)
     d=$2 st=${GIT_FZF_STATE:-}
-    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test or open where a change in behavior happens,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
+    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test or open where a change in behavior happens,t=a test that passes before a change in behavior and fails with it,c=post that test to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --list '$d')" \
       --bind "enter:transform(git-trace --open '$d' {12})" \
       --bind "i:transform(git-trace --gap-key '$d' {12})" \
+      --bind "t:transform(git-trace --pin-key '$d' t {12})+reload(git-trace --list '$d')" \
+      --bind "c:transform(git-trace --pin-key '$d' c {12})" \
       --bind "b:execute(git-trace --base '$d')+reload(git-trace --list '$d')" \
       --bind "r:execute(git-trace --again '$d')+reload(git-trace --list '$d')" \
       --preview "git-trace --show '$d' {12}" </dev/null >/dev/null
@@ -781,6 +894,38 @@ EOF
     git-confirm "Claude writes a test input that reaches $(jq -r --argjson g "$3" '.gaps[$g].name' "$d/cover.json"), in a spec in the slot, and P traces it (a minute or two)?" || exit 0
     phase "$d" write "$3"; exit 0 ;;
   --base) d=$2; phase "$d" base; exit 0 ;;
+  --pin-key)
+    # t and c on a change in behavior, from a's list (d:<i>) or the tour's
+    # stop (tour:d<n>, the nth of those the tour shows): the change's index.
+    d=$2 key=$3 row=$4
+    case $row in
+      d:*) g=${row#d:} ;;
+      tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select(.value.verdict == null or .value.verdict.surprise > 0) | .key][$n - 1] // empty' "$d/diff.json") ;;
+      *) note "$key is for a change in behavior: the list's first rows, or the tour's first stops"; exit 0 ;;
+    esac
+    [ -n "$g" ] || exit 0
+    if [ "$key" = t ]; then echo "execute(git-trace --pin '$d' $g)"
+    elif [ "$(jq .ok "$d/pin.$g.json" 2>/dev/null)" = true ]; then echo "execute(git-trace --pin-post '$d' $g)"
+    else note "no test pins it yet: t writes one"; fi
+    exit 0 ;;
+  --pin) d=$2; phase "$d" pin "$3"; exit 0 ;;
+  --pin-post)
+    # c: the test posted to the MR as a comment, after a confirm: the lines
+    # it adds, and what it says on the branch.
+    d=$2 p=$2/pin.$3 iid=${2##*/}
+    case $iid in
+      b-*)
+        b=$(printf '%s' "${iid#b-}" | tr '%' '/')
+        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        [ -n "$iid" ] || { note "$b has no open MR to post it to"; exit 0; } ;;
+    esac
+    git-confirm "Comment on !$iid with the test that passes before this change and fails with it?" || exit 0
+    jq -n --arg spec "$(jq -r .spec "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" --arg fails "$(jq -r .fails "$p.json")" \
+      --arg says "$(jq -r --argjson g "$3" '.groups[$g].says' "$d/diff.json")" \
+      '{body: "Running this change'"'"'s tests before and after it: \($says)\n\nThis test, added to `\($spec)`, passes on the target branch and fails on this one:\n\n```ts\n\($code)\n```\n" + (if $fails != "" then "\nOn this branch:\n\n```\n\($fails)\n```\n" else "" end)}' > "$p.post"
+    glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
+      { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }
+    note "posted to !$iid"; exit 0 ;;
   --again) d=$2; phase "$d" run; exit 0 ;;
   --retour) d=$2; quiet_phase "$d" tour; exit 0 ;;
   --page)

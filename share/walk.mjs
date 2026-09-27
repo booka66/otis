@@ -760,6 +760,15 @@ function diffLabel(g) {
   if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} values: ${g.counts.map((c) => `${c.field} ${c.x}→${c.y}`).join(", ")}`;
   return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
 }
+// pinned: the test Claude wrote for change i (git-trace's pin), and how it ran.
+function pinned(r, g, w) {
+  const i = readJson(join(r.dir, "diff.json"), { groups: [] }).groups.findIndex((x) => x.says === g.says);
+  const p = readJson(join(r.dir, `pin.${i}.json`), null);
+  if (!p) return [C.faint + "t writes a test that passes before the change and fails with it" + C.r];
+  if (!p.ok) return [C.at + `✗ "${cut(p.name, w - 20)}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}` + C.r, C.faint + "t tries again" + C.r];
+  return [C.good + `✓ "${cut(p.name, w - 6)}"` + C.r, C.good + "  passes before the change, fails with it" + C.r,
+    ...p.fails.split("\n").filter(Boolean).slice(0, 4).map((l) => "  " + C.ctx + cut(l, w - 4) + C.r), C.faint + "c posts it to the MR" + C.r];
+}
 function diffPreview(r, g, w) {
   const out = [C.text + "\x1b[1m" + cut(diffLabel(g), w) + C.r, ""];
   const line = (k, v, c = C.text) => out.push(`${C.faint}${k.padEnd(11)}${C.r}${c}${cut(v, w - 11)}${C.r}`);
@@ -781,7 +790,7 @@ function diffPreview(r, g, w) {
     if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).slice(0, 2).map((l) => "  " + C.ctx + l + C.r));
     if (v.why) { const ws = wrap(v.why, w - 2); out.push(...ws.slice(0, 3).map((l, j) => "  " + C.text + l + (j === 2 && ws.length > 3 ? "…" : "") + C.r)); }
   }
-  out.push("", C.faint + "enter opens where it happens" + C.r);
+  out.push("", ...pinned(r, g, w), "", C.faint + "enter opens where it happens" + C.r);
   return out;
 }
 
