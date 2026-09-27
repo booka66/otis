@@ -773,8 +773,8 @@ gundo() {
 # the jobs of a failed pipeline, the stage panel for what is uncommitted here
 # (otis-do).
 #
-# m, b, a, d and w open the full list behind a section (gmr, gb, gag, gd, gw),
-# c otis's own settings (otis-config), and q there comes back here, so the
+# m, b, a, d and gw open the full list behind a section (gmr, gb, gag, gd, gw),
+# gc otis's own settings (otis-config), and q there comes back here, so the
 # dashboard is a hub rather than a detour; they are run here, since gb and gw
 # may move you, which otis-dash cannot. q here goes back to the shell. A
 # picker that moved you, though, hands you to the shell instead: gb switching

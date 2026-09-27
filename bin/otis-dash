@@ -44,7 +44,7 @@ trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 
 . ${0:A:h:h}/share/screen.zsh
-keys_open otis 'enter=do what the row says,space=read its preview in a pager,x=stop showing it,y=copy the MR link,w=open the MR in the browser,u=refresh,s=Slack,gm=every MR,gb=branches,ga=background runs,gd=deploys,gw=worktrees,gc=otis settings,?=keys'
+keys_open otis 'enter=do what the row says,space=read its preview in a pager,x=stop showing it,y=copy the MR link,w=open the MR in the browser,u=refresh,s=Slack,m=every MR,b=branches,a=background runs,d=deploys,gw=worktrees,gc=otis settings,?=keys'
 screen_start
 # A window being dragged is a resize a step: each is drawn at once, and the
 # previews wait until the size has held for 0.3s (settle), so a drag draws
@@ -427,7 +427,7 @@ draw() {
       P=("" "  ${B}${T}keys${R}" "")
       local k v
       for k v in enter "do what the row says" space "read its preview in a pager" j/k "move" gg/G "top, bottom" \
-        gm "every MR" gb branches ga "background runs" gd deploys gw worktrees gc "otis settings" s Slack \
+        m "every MR" b branches a "background runs" d deploys gw worktrees gc "otis settings" s Slack \
         x "stop showing it (the agents' fixes and verdicts)" w "open the MR in the browser" y "copy the MR link (a run: its folder, for Claude)" \
         u refresh "ctrl-d/u" "scroll the preview" "?" "this, and back" q quit; do
         P+=("  ${A}${(r:9:: :)k}${R} ${C}$v${R}")
@@ -488,7 +488,7 @@ draw() {
   else
     enter_says
     [[ -n $REPLY ]] && foot+=$B$A"⏎ "$REPLY$UB$R$C"   ·   "$R
-    foot+=$A"gm"$R$C" MRs  "$A"gb"$R$C" branches  "$A"gd"$R$C" deploys  "$A"ga"$R$C" runs  "$A"gw"$R$C" worktrees  "$A"s"$R$C" Slack  "$A"?"$R$C" keys"$R
+    foot+=$A"m"$R$C" MRs  "$A"b"$R$C" branches  "$A"d"$R$C" deploys  "$A"a"$R$C" runs  "$A"gw"$R$C" worktrees  "$A"s"$R$C" Slack  "$A"?"$R$C" keys"$R
   fi
   fr+=("$foot") fy+=($H)
   # No synchronized output (mode 2026) around it: a terminal under a
@@ -616,6 +616,15 @@ mouse() {
   fi
 }
 
+# hub: leave for the full list behind a section, which otis runs; $1 the
+# key as pressed (m or gm), $2 its letter.
+hub() {
+  keys_used $1
+  screen_off keep
+  case $2 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac
+  at_leave; rm -rf -- $st; exit 0
+}
+
 # handle: one key. 1 to quit.
 handle() {
   [[ $1 == $e'[<'* ]] && { pre=; mouse "$1"; return; }
@@ -629,11 +638,7 @@ handle() {
     [[ $flash == "g…" ]] && flash=
     case $1 in
       g) cur=1 poff=0; return ;;
-      m|b|a|d|w|c)
-        keys_used g$1
-        screen_off keep
-        case $1 in m) print gmr ;; b) print gb ;; a) print gag ;; d) print gd ;; w) print gw ;; c) print otis-config ;; esac
-        at_leave; rm -rf -- $st; exit 0 ;;
+      m|b|a|d|w|c) hub g$1 $1 ;;
     esac
   fi
   pre=
@@ -641,8 +646,10 @@ handle() {
     j|$e'[B') (( cur < $#id )) && (( cur++ )); poff=0 ;;
     k|$e'[A') (( cur > 1 )) && (( cur-- )); poff=0 ;;
     # g starts a two-key name: gg the top, and gm, gb, ga, gd, gw and gc
-    # the lists the shell's commands of those names open.
+    # the lists the shell's commands of those names open. m, b, a and d
+    # open theirs bare too; w is the browser here as everywhere.
     g) pre=$EPOCHREALTIME flash="g…" ;;
+    m|b|a|d) hub $1 $1 ;;
     G) cur=$#id poff=0 ;;
     # ctrl-c is a key here (-isig), since a signal's trap would never run.
     q|$e|$'\x03') quit ;;

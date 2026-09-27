@@ -811,17 +811,21 @@ EOF
   # of the test it names, and s from it to that test's step. One chapter is
   # stops alone; more are headed each by its title, and a chapter still being
   # written says so.
-  printf '%s' '{"intent":"grows things","planning":false,"chapters":[{"title":"","files":["lib.ts"],"intent":"grows things","state":"","questions":["what does shrink do?"],"stops":[{"title":"runs it","says":"`run` reads MY_FLAG and o.a","path":"lib.ts","start":2,"end":4,"focus":3,"test":"lib steps","proves":"o.a is 1"},{"title":"shrinks it","says":"nothing runs it","path":"lib.ts","start":10,"end":12,"focus":11,"test":"","proves":""}]}]}' > "$td/tour.json"
+  printf '%s' '{"intent":"grows things","planning":false,"chapters":[{"title":"","files":["lib.ts"],"intent":"grows things","state":"","questions":["what does shrink do?",{"stop":2,"says":"shrink can drop o.a"}],"stops":[{"title":"runs it","says":"`run` reads MY_FLAG and o.a","path":"lib.ts","start":2,"end":4,"focus":3,"test":"lib steps","proves":"o.a is 1"},{"title":"shrinks it","says":"nothing runs it","path":"lib.ts","start":10,"end":12,"focus":11,"test":"","proves":""}]}]}' > "$td/tour.json"
   export FZF_PREVIEW_COLUMNS=100
   expect trace/tour-rows "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | tr '\n' ';')" "what it sets out to do|tour:0; 1 runs it|tour:1-1; 2 shrinks it|tour:1-2;"
   expect trace/tour-stop "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | strip | grep -E '✓|▶' | sed 's/ *$//' | tr -s ' ' | tr '\n' '|')" "✓ o.a is 1| 3 ▶ return o.a; o = { a: 1 }|"
   # Its sentences: a symbol drawn as code, backticks or not, the backticks dropped.
   expect trace/tour-prose "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | grep 'reads' | sed -E "s/$(printf '\033')\\[[0-9;]*m/|/g" | tr -s '|')" "|run| reads |MY_FLAG| and |o.a|"
-  # The page: its stops, their sentences' symbols as code, their code as rows with the stop's line marked.
-  expect trace/tour-page "$(git-trace --page "$td" && grep -o '<h3>runs it</h3><p><code>run</code> reads <code>MY_FLAG</code>\|class="row bg-here">' "$td/tour.html" | sort -u | tr '\n' '|')" '<h3>runs it</h3><p><code>run</code> reads <code>MY_FLAG</code>|class="row bg-here">|'
+  # The page: the screen's own panes, gzipped into it: a stop's title, its
+  # sentences' symbols as code, its line marked; and each test's walk, a
+  # pane a step.
+  expect trace/tour-page "$(git-trace --page "$td" && sed -n 's/.*id="data">\([^<]*\)<.*/\1/p' "$td/tour.html" | base64 -d | gunzip | jq -r '. as $d | [.tour.pages["1-1"].b[] | numbers | $d.S[.]] as $r | [($r | any(test("runs it"))), ($r | any(test("reads .*m-else\">MY_FLAG"))), ($r | any(test("bg-here"))), (.walks | map(.pages | length) | join(","))] | join("|")')" 'true|true|true|3,1,1'
   expect trace/tour-no-test "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-2 | strip | grep -c 'no test stops here')" "1"
   expect trace/tour-step "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-step "$td" tour:1-1)" "execute(git-trace --walk '$td' 0 2)"
   expect trace/tour-questions "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:0 | strip | grep -c '? what does shrink do')" "1"
+  # One about a stop is listed with its number, and shown at that stop too.
+  expect trace/tour-question-stop "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:0 | strip | grep -c '? Stop 2: shrink can drop')|$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-2 | strip | grep -c '? shrink can drop')|$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | strip | grep -c 'shrink can drop')" "1|1|0"
   # The tour's screen (otis-symbols --panes), in a pty: j and k bring each
   # row's pane, drawn ahead, up with the cursor.
   TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob; zpty -b s "stty rows 40 cols 180; git-trace --view $1"; out=

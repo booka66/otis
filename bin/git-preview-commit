@@ -211,6 +211,17 @@ else
     *) summary "$@" ;;
   esac
   set -f
-  changes "$sha" "$@"
+  # The first 2000 lines of the patch: delta takes about a second for every
+  # 35 000, and the picker reads the whole preview in before it draws it, so
+  # a big commit (a catalog of translations, a regenerated lockfile) froze
+  # the list you were scrolling. The shape above already counts all of it.
+  # delta would read a note as part of the last hunk, so it goes after.
+  changes "$sha" "$@" | awk -v cut="${TMPDIR:-/tmp}/otis-cut.$$" 'NR > 2000 { printf "" > cut; exit } 1'
 fi 2>/dev/null |
   gk_delta
+cut=${TMPDIR:-/tmp}/otis-cut.$$
+if [ -e "$cut" ]; then
+  rm -f "$cut"
+  . "$share/palette.sh"
+  printf "\n  ${GK_CONTEXT}the diff stops here, 2000 lines in${GK_R}\n"
+fi

@@ -22,8 +22,10 @@
 // A hit is a pause before its line runs, so what changed since the last hit
 // in the same call was set by that one's line, and is shown there.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { gzipSync } from "node:zlib";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -187,8 +189,7 @@ const width = (s) => [...s.replace(/\x1b\[[0-9;]*m/g, "")].length;
 // the change's, the line it is on) as spaces to width w instead, since the
 // screens' wrap drops every erase (share/pane-wrap.awk): so every such line
 // is the pane's width whatever its code, and the code sits in a block of
-// one width rather than bars as ragged as the lines. For what the screens
-// read alone: the page (ansiHtml) takes the erase as a row's ground.
+// one width rather than bars as ragged as the lines.
 const solid = (text, w) => text.split("\n").map((l) => {
   const i = l.indexOf("\x1b[0K");
   if (i < 0) return l;
@@ -452,6 +453,10 @@ function cover(r) {
 // The picker's fields: the row, then path, line, side, start, end, and the id at 12.
 const row = (show, path, line, id) => [show, path, line, "new", line, line, "", "", "", "", "", id].join("\t");
 function rows(r) {
+  console.log(testRows(r).join("\n"));
+}
+// testRows: P's screen's rows: the changed code no test runs, then the tests.
+function testRows(r) {
   const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
   const out = [];
   if (c.gaps.length) {
@@ -475,7 +480,7 @@ function rows(r) {
   if (blind.length) out.push(`${C.ctx}traced nothing from ${blind.map((s) => s.path.split("/").pop()).join(", ")}: it ran, but none of its tests reached the change${C.r}` + "\t".repeat(11) + "gk-blind");
   const failed = c.specs.filter((s) => s.status && s.status !== "0");
   if (failed.length) out.push(`${C.bad}${failed.length} spec file${failed.length === 1 ? "" : "s"} failed to run: ${failed.map((s) => s.path.split("/").pop()).join(", ")}${C.r}` + "\t".repeat(11) + "gk-failed");
-  console.log(out.join("\n"));
+  return out;
 }
 
 // --- a row's preview ------------------------------------------------------------------
@@ -971,18 +976,23 @@ function prose(t, w, base, names) {
   if (line) lines.push(base + line + C.r);
   return lines;
 }
-// tourPrep: the tour's rows and each row's preview, for a pane w wide.
-function tourPrep(r, w) {
+// tourPrep: the tour's rows and each row's preview, for a pane w wide, in
+// out (the run's directory, else the page's own: tour-html).
+function tourPrep(r, w, out = r.dir) {
   const tour = readTour(r);
   const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
-  const dir = join(r.dir, `tour-${w}`);
+  const dir = join(out, `tour-${w}`);
   mkdirSync(dir, { recursive: true });
   const many = tour.chapters.length > 1, rows = [];
   const names = new Set(defs(r.rows).map((d) => d.name).filter(Boolean));
   const para = (t, c = C.text, ww = w - 2) => prose(t, ww, c, names);
   const one = (t, c) => para(t, c, 10000)[0] || "";
   const state = (c) => c.state === "writing" ? "Claude is writing it; it lands here by itself." : c.state === "checking" ? "A reader is checking it; what it cannot answer lands here as open questions." : "";
-  const questions = (c) => c.questions && c.questions.length ? ["", C.at + "Still open after a close read" + C.r, ...c.questions.flatMap((q) => para(q, C.text, w - 4).map((l, j) => (j ? "  " : C.at + "? " + C.r) + l))] : [];
+  // The reader's questions: {stop, says}, or a string from before they
+  // had a stop; each is listed on the chapter and again at its stop.
+  const ask = (q) => typeof q === "string" ? { stop: 0, says: q } : q;
+  const asked = (qs) => qs.flatMap((q) => para(q.says, C.text, w - 4).map((l, j) => (j ? "  " : C.at + "? " + C.r) + l));
+  const questions = (c) => c.questions && c.questions.length ? ["", C.at + "Still open after a close read" + C.r, ...asked(c.questions.map(ask).map((q) => q.stop ? { says: `Stop ${q.stop}: ${q.says}` } : q))] : [];
   // The first page: what it sets out to do, and every chapter's stops.
   rows.push(row(`${C.at}\x1b[1mwhat it sets out to do${C.r}`, "", "", "tour:0"));
   const intro = [C.at + "\x1b[1m" + "What it sets out to do" + C.r, ""];
@@ -1019,6 +1029,8 @@ function tourPrep(r, w) {
       if (k >= 0 && x.proves) head.push(...para(x.proves, C.text, w - 4).map((l, j) => (j ? "  " : C.good + "✓ " + C.r) + l), ...wrap(`from the test "${cover.tests[ti].name}"`, w - 4).map((l) => C.faint + "  " + l + C.r));
       else if (k >= 0) head.push(C.faint + `values from the test "${cover.tests[ti].name}"` + C.r);
       else head.push(C.faint + "no test stops here, so no values" + C.r);
+      const here = (c.questions || []).map(ask).filter((q) => q.stop === si + 1);
+      if (here.length) head.push("", ...asked(here));
       head.push(C.faint + "─".repeat(w) + C.r);
       writeFileSync(join(dir, id), `\x1epin ${head.length} at ${at}\n` + head.join("\n") + "\n" + solid(body, w));
       // What enter and s need: where it is, and the test and step to step from.
@@ -1030,7 +1042,7 @@ function tourPrep(r, w) {
   mkdirSync(join(dir, "files"), { recursive: true });
   for (const p of new Set(tour.chapters.flatMap((c) => c.stops.map((x) => x.path))))
     writeFileSync(join(dir, "files", p.replace(/\//g, "%")), fileView(r, "head", p, w));
-  writeFileSync(join(r.dir, "tour.rows"), rows.join("\n") + "\n");
+  writeFileSync(join(out, "tour.rows"), rows.join("\n") + "\n");
 }
 // stops: a stop's lines as the walk draws them, with the values of the test
 // it names (else the first that stops on its line): {ti, k, body}, k -1 and
@@ -1058,147 +1070,736 @@ function stops(r, cover) {
 }
 // --- the tour as a page ------------------------------------------------------------
 // tour-html: the tour as one HTML page, to post on the MR (git-trace
-// --attach) or open in a browser: what it sets out to do, its chapters and
-// stops in order, each stop's sentences and its code as the walk draws it,
-// values and all, and what is still open. One file, nothing loaded from
-// elsewhere, light or dark as the reader's system is. The code is drawn by
-// the same code as the screen, with the theme's colors swapped for marker
-// codes (git-trace sets them: OTIS_T_* as 38;5;201 and on) that become the
-// page's classes here.
+// --attach) or open in a browser: P's screens themselves. The tour's rows
+// and panes are the ones tour-prep draws for the screen, a's are git-trace
+// --tests's, and a test's walk is walk-prep's, all at PAGE_W columns; the
+// page moves between them as otis-symbols does: the head holding still while
+// its words change a row at a time, the code scrolling through the file to
+// another line of it (what hangs under the old line folding first, what
+// hangs under the new unfolding after), and pushing to another file. The
+// address names the screen and the row or step, so a link opens on it. One
+// file, nothing loaded from elsewhere. The theme's colors are marker codes
+// here (git-trace sets them: OTIS_T_* as 38;5;201 and on) that become the
+// page's classes, light or dark as the reader's system is.
 const esc = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-function proseHtml(t, names) {
-  return String(t || "").split("`").map((part, i) => i % 2 ? `<code>${esc(part)}</code>` : esc(part).split(/(\s+)/).map((word) => {
-    const m = /^([^\w$]*)(.*?)([^\w$()]*)$/.exec(word);
-    const core = m[2].replace(/&amp;|&lt;|&gt;|&quot;/g, "x");
-    return core && !/^(e\.g|i\.e|etc)$/i.test(core) && (SYMBOL.test(core) || (core.length > 3 && names.has(core.replace(/\(\)$/, "")))) ? `${m[1]}<code>${m[2]}</code>${m[3]}` : word;
-  }).join("")).join("");
-}
 const MARK = { 201: "at", 202: "good", 203: "bad", 204: "yours", 205: "text", 206: "ctx", 207: "faint", 208: "else" };
-function ansiHtml(text) {
-  return text.split("\n").map((line) => {
-    let out = "", open = false, fill = "";
-    const st = { fg: "", bg: "", b: false, dim: false, it: false };
-    const span = () => { if (open) out += "</span>"; const cls = [st.fg, st.bg, st.b && "b", st.dim && "dim", st.it && "it"].filter(Boolean); open = cls.length > 0; if (open) out += `<span class="${cls.join(" ")}">`; };
-    for (const m of line.matchAll(/\x1b\[([0-9;]*)([mK])|([^\x1b]+)/g)) {
-      if (m[3]) { out += esc(m[3]); continue; }
-      if (m[2] === "K") { fill = st.bg; continue; }
-      const c = (m[1] || "0").split(";").map(Number);
-      for (let i = 0; i < c.length; i++) {
-        const n = c[i];
-        if (n === 0) Object.assign(st, { fg: "", bg: "", b: false, dim: false, it: false });
-        else if (n === 1) st.b = true; else if (n === 2) st.dim = true; else if (n === 3) st.it = true;
-        else if (n === 22) { st.b = false; st.dim = false; } else if (n === 23) st.it = false; else if (n === 39) st.fg = ""; else if (n === 49) st.bg = "";
-        else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) st.fg = "c" + n;
-        else if (n === 38 && c[i + 1] === 5) { st.fg = MARK[c[i + 2]] ? "m-" + MARK[c[i + 2]] : ""; i += 2; }
-        else if (n === 38 && c[i + 1] === 2) { st.fg = ""; i += 4; }
-        else if (n === 48 && c[i + 1] === 2) { st.bg = c[i + 2] === 1 ? "bg-add" : c[i + 2] === 4 ? "bg-del" : ""; i += 4; }
-        else if (n === 48 && c[i + 1] === 5) { st.bg = c[i + 2] === 58 ? "bg-here" : ""; i += 2; }
-      }
-      span();
+// ansiRow: one drawn line as HTML spans.
+function ansiRow(line) {
+  let out = "", open = false;
+  const st = { fg: "", bg: "", b: false, dim: false, it: false };
+  const span = () => { if (open) out += "</span>"; const cls = [st.fg, st.bg, st.b && "b", st.dim && "dim", st.it && "it"].filter(Boolean); open = cls.length > 0; if (open) out += `<span class="${cls.join(" ")}">`; };
+  for (const m of line.matchAll(/\x1b\[([0-9;]*)([mK])|([^\x1b]+)/g)) {
+    if (m[3]) { out += esc(m[3]); continue; }
+    if (m[2] === "K") continue;
+    const c = (m[1] || "0").split(";").map(Number);
+    for (let i = 0; i < c.length; i++) {
+      const n = c[i];
+      if (n === 0) Object.assign(st, { fg: "", bg: "", b: false, dim: false, it: false });
+      else if (n === 1) st.b = true; else if (n === 2) st.dim = true; else if (n === 3) st.it = true;
+      else if (n === 22) { st.b = false; st.dim = false; } else if (n === 23) st.it = false; else if (n === 39) st.fg = ""; else if (n === 49) st.bg = "";
+      else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) st.fg = "c" + n;
+      else if (n === 38 && c[i + 1] === 5) { st.fg = MARK[c[i + 2]] ? "m-" + MARK[c[i + 2]] : ""; i += 2; }
+      else if (n === 38 && c[i + 1] === 2) { st.fg = ""; i += 4; }
+      else if (n === 48 && c[i + 1] === 2) { st.bg = c[i + 2] === 1 ? "bg-add" : c[i + 2] === 4 ? "bg-del" : ""; i += 4; }
+      else if (n === 48 && c[i + 1] === 5) { st.bg = c[i + 2] === 58 ? "bg-here" : ""; i += 2; }
     }
-    if (open) out += "</span>";
-    return fill ? `<span class="row ${fill}">${out}</span>` : `<span class="row">${out}</span>`;
-  }).join("");
+    span();
+  }
+  return open ? out + "</span>" : out;
 }
+// A line of code's gutter, as otis-symbols's xkeys reads it: L<n> a line
+// of code, R<n> a line the change removed.
+const GUTTER = /^(?:\x1b\[[0-9;]*m)*( *)(\d+)\x1b\[0m(?:\x1b\[[0-9;]*m)* (.*)$/;
+const PAGE_W = 110;
 function tourHtml(r, title, url) {
-  const tour = readTour(r);
-  const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
-  const names = new Set(defs(r.rows).map((d) => d.name).filter(Boolean));
-  const P = (t) => proseHtml(t, names);
-  const many = tour.chapters.length > 1, stopOf = stops(r, cover), W = 104;
-  const what = /^\d+$/.test(r.dir.split("/").pop()) ? "!" + r.dir.split("/").pop() : r.dir.split("/").pop().replace(/^b-/, "").replace(/%/g, "/");
-  const items = (c, ci) => c.stops.map((x, si) => `<li><a href="#s${ci + 1}-${si + 1}">${P(x.title)}</a></li>`).join("");
-  const toc = many ? tour.chapters.map((c, ci) => `<li><a href="#c${ci + 1}"><b>${P(c.title)}</b></a><ol>${items(c, ci)}</ol></li>`).join("") : items(tour.chapters[0], 0);
-  const chapters = tour.chapters.map((c, ci) => {
-    const stopsHtml = c.stops.map((x, si) => {
-      const { ti, k, body } = stopOf(x, W);
-      const proof = k >= 0 && x.proves ? `<div class="proof"><span class="tick">✓</span><div>${P(x.proves)}<div class="from">from the test “${esc(cover.tests[ti].name)}”</div></div></div>`
-        : k >= 0 ? `<div class="from">values from the test “${esc(cover.tests[ti].name)}”</div>` : `<div class="from">no test stops here, so no values</div>`;
-      return `<section class="stop" id="s${ci + 1}-${si + 1}">
-<div class="num">${many ? `${ci + 1}.${si + 1}` : si + 1}</div>
-<div class="body"><h3>${P(x.title)}</h3><p>${P(x.says)}</p>${proof}
-<figure class="code"><figcaption><span>${esc(x.path)}</span><span>lines ${x.start}–${x.end}</span></figcaption><pre>${ansiHtml(body.replace(/\n+$/, ""))}</pre></figure></div></section>`;
-    }).join("\n");
-    const open = c.questions && c.questions.length ? `<div class="open"><b>Still open after a close read</b><ul>${c.questions.map((q) => `<li>${P(q)}</li>`).join("")}</ul></div>` : "";
-    return (many ? `<h2 id="c${ci + 1}"><span>Chapter ${ci + 1}</span>${P(c.title)}</h2>${c.intent ? `<p class="lede">${P(c.intent)}</p>` : ""}` : "") + stopsHtml + open;
-  }).join("\n");
-  const gaps = cover.gaps.length ? `<h2>No test runs these</h2><ul class="gaps">${cover.gaps.map((g) => `<li><code>${esc(g.name)}</code> <span>${esc(g.path)}:${g.start} · ${esc(g.why)}</span></li>`).join("")}</ul>` : "";
-  const date = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  return `<!doctype html>
+  const out = mkdtempSync(join(tmpdir(), "otis-tour-")), cols = process.env.FZF_PREVIEW_COLUMNS;
+  process.env.FZF_PREVIEW_COLUMNS = String(PAGE_W);
+  try {
+    tourPrep(r, PAGE_W, out);
+    const dir = join(out, `tour-${PAGE_W}`);
+    // Every drawn row once (S, and SK its gutter's key), the rows and panes
+    // as indexes into it.
+    const S = [], SK = [], seen = new Map(), raw = new Map();
+    const s = (line) => {
+      let i = raw.get(line);
+      if (i !== undefined) return i;
+      const h = ansiRow(line);
+      i = seen.get(h);
+      if (i === undefined) {
+        const m = GUTTER.exec(line);
+        i = S.length; S.push(h); seen.set(h, i);
+        SK.push(m ? (/^(?:\x1b\[[0-9;]*m)*-/.test(m[3]) ? "R" : "L") + m[2] : 0);
+      }
+      raw.set(line, i);
+      return i;
+    };
+    const lines = (t) => t.replace(/\n$/, "").split("\n");
+    const listOf = (rows) => rows.map((l) => { const f = l.split("\t"); return { show: s(f[0]), id: f[11] || "" }; });
+    // Each file a pane shows, whole, which the scroll goes through.
+    const files = {}, fileAt = {};
+    const file = (path) => {
+      if (!files[path]) {
+        files[path] = lines(fileView(r, "head", path, PAGE_W)).map(s);
+        fileAt[path] = new Map();
+        files[path].forEach((i, g) => { if (SK[i] && !fileAt[path].has(SK[i])) fileAt[path].set(SK[i], g); });
+      }
+      return files[path];
+    };
+    // page: a pane as drawn: h its pinned rows (-1 none), at the row of its
+    // line, b its rows, where it shows its file's own rows as they are in
+    // the file a run [from, count]; path and line where its code is, open
+    // the line ⏎ opens.
+    const page = (text, at0) => {
+      let ls = lines(text), h = -1, at = 0;
+      const m = /^\x1epin (\d+)(?: at (\d+))?/.exec(ls[0]);
+      if (m) { h = +m[1]; at = +(m[2] || 0); ls = ls.slice(1); }
+      // A line of words over the code wider than the pane wrapped, as the
+      // screen's wrap does, in its first color: the page's rows are one row
+      // high.
+      ls = ls.flatMap((l, i) => {
+        if (width(l) <= PAGE_W || GUTTER.test(l) || (h >= 0 && i >= h)) return [l];
+        const pre = (/^(?:\x1b\[[0-9;]*m)*/.exec(l) || [""])[0], lead = /^ */.exec(l.replace(/\x1b\[[0-9;]*m/g, ""))[0];
+        const parts = wrap(l.replace(/\x1b\[[0-9;]*m/g, "").trim(), PAGE_W, lead).map((x) => pre + x + C.r);
+        if (i < h) h += parts.length - 1;
+        return parts;
+      });
+      const ids = ls.map(s), b = [], p = { h, b };
+      const F = at0 && at0.path ? file(at0.path) : null, fat = F && fileAt[at0.path];
+      for (let i = 0; i < ids.length;) {
+        const g = F && SK[ids[i]] ? fat.get(SK[ids[i]]) : undefined;
+        let n = 0;
+        if (g !== undefined) while (i + n < ids.length && F[g + n] === ids[i + n]) n++;
+        if (n >= 2) { b.push([g, n]); i += n; } else { b.push(ids[i]); i++; }
+      }
+      if (at) p.at = at;
+      if (at0) Object.assign(p, at0);
+      return p;
+    };
+    // The tour.
+    const tour = { list: listOf(lines(readFileSync(join(out, "tour.rows"), "utf8"))), pages: {} };
+    for (const x of tour.list) {
+      x.id = x.id.replace(/^tour:/, "");
+      const f = join(dir, x.id + ".at");
+      let at0 = null;
+      if (existsSync(f)) { const [path, line, ti, k] = readFileSync(f, "utf8").trim().split(" "); at0 = { path, line: +line, open: [path, +line], ti: +ti, k: +k }; }
+      tour.pages[x.id] = page(readFileSync(join(dir, x.id), "utf8"), at0);
+    }
+    // a: the changed code no test runs, and every test.
+    const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
+    const tests = { list: listOf(testRows(r)), pages: {} };
+    for (const { id } of tests.list) {
+      if (id.startsWith("g:")) { const g = c.gaps[+id.slice(2)]; tests.pages[id] = page(preview(r, id, c), { open: [g.path, g.start] }); }
+      else if (id.startsWith("t:")) tests.pages[id] = page(preview(r, id, c), { open: [c.specs[c.tests[+id.slice(2)].spec].path, 1] });
+    }
+    // Each test's walk: its calls down the side, a pane a step, and where
+    // j (over), l (into) and h (out) go from each: nav, [call, j, l, h].
+    const walks = c.tests.map((t, ti) => {
+      const { t: tt, steps } = walk(r, ti, "head");
+      const { vs, out: calls } = callRows(steps);
+      const list = listOf(calls);
+      if (!steps.length) list.push({ show: s(C.at + "this test ran none of the change" + C.r), id: "gk-none" });
+      const ctx = steps.length ? context(r, tt, steps, vs, "head") : null;
+      const nav = steps.map((st, k) => {
+        let over = -1, into = -1, outk = -1;
+        for (let i = k + 1; i < steps.length; i++) if (steps[i].depth <= st.depth) { over = i; break; }
+        if (k + 1 < steps.length && steps[k + 1].depth > st.depth) into = k + 1;
+        for (let i = k + 1; i < steps.length; i++) if (steps[i].depth < st.depth) { outk = i; break; }
+        return [vs.findIndex((v) => k >= v.first && k <= v.last), over, into, outk];
+      });
+      const pages = steps.map((st, k) => page(solid(render(ctx, k, PAGE_W, null, AROUND), PAGE_W), { path: st.path, line: st.line, open: [st.path, st.line] }));
+      return { name: t.name, list, nav, pages };
+    });
+    const key = r.dir.split("/").pop();
+    const what = /^\d+$/.test(key) ? "!" + key : key.replace(/^b-/, "").replace(/%/g, "/");
+    const blob = url ? url.replace(/\/-\/merge_requests\/\d+.*$/, "") + "/-/blob/" + r.rev.head : "";
+    const listW = Math.min(64, Math.max(36, ...[...tour.list, ...tests.list].map((x) => [...S[x.show].replace(/<[^>]*>/g, "")].length + 4)));
+    const data = { S, SK, files, tour, tests, walks, blank: s(""), seam: s("  " + C.faint + "─".repeat(PAGE_W - 4) + C.r), W: PAGE_W, blob, what, title, url, listW };
+    return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title || "Walkthrough of " + what)}</title>
-<style>${TOUR_CSS}</style></head><body><main>
-<header><p class="meta">Walkthrough of ${url ? `<a href="${esc(url)}">${esc(what)}</a>` : `<code>${esc(what)}</code>`} at <code>${r.rev.head.slice(0, 10)}</code> · ${date}</p>
-<h1>${esc(title || what)}</h1>
-<div class="lede">${P(tour.intent)}</div>
-<p class="how">Read top to bottom: each stop is one place in the code, in the order it runs. <span class="m-at b">▶</span> marks the line the stop is about, <span class="m-good">●</span> lines a test ran, <span class="m-faint">○</span> lines it skipped; the values beside the code are what a real test run had there.</p>
-<nav><h2>${many ? `${tour.chapters.length} chapters` : `${tour.chapters[0].stops.length} stops`}</h2><ol class="toc">${toc}</ol></nav>
-</header>
-${chapters}
-${gaps}
-<p class="foot">Made by otis from the change's own tests, run with a tracer: every value shown is one the code really had.</p>
-</main><script>
-// j and k: the next stop and the one before.
-const stops = [...document.querySelectorAll(".stop")];
-document.addEventListener("keydown", (e) => {
-  if (e.target.closest("input, textarea") || !/^[jk]$/.test(e.key)) return;
-  const y = window.scrollY + 8, i = stops.findIndex((s) => s.offsetTop > y);
-  const to = e.key === "j" ? stops[i < 0 ? stops.length - 1 : i] : stops[Math.max(0, (i < 0 ? stops.length : i) - 2)];
-  if (to) window.scrollTo({ top: to.offsetTop - 12, behavior: "smooth" });
-});
-</script></body></html>
+<style>${TOUR_CSS}</style></head><body>
+<div id="screen">
+<div id="list"><div class="lh"></div><div id="rows"></div></div>
+<div id="pane"><div id="crumb"></div><div id="stage"><div id="head"></div><div id="code"></div></div></div>
+<div id="foot"><span id="keys"></span><span id="flash" class="m-good"></span></div>
+</div>
+<script type="application/octet-stream" id="data">${gzipSync(JSON.stringify(data), { level: 9 }).toString("base64")}</script>
+<script>${TOUR_JS}</script></body></html>
 `;
+  } finally {
+    if (cols === undefined) delete process.env.FZF_PREVIEW_COLUMNS; else process.env.FZF_PREVIEW_COLUMNS = cols;
+    rmSync(out, { recursive: true, force: true });
+  }
 }
+// The screens in the page: otis-symbols's transitions (xpush, xcode, xhead,
+// xwhen, xmerge, xspread), done again over the same panes, with the rows
+// moving smoothly rather than a whole row at a time.
+const TOUR_JS = String.raw`
+// The data comes gzipped (it is mostly the same rows over and over).
+(async function () {
+const bytes = Uint8Array.from(atob(document.getElementById("data").textContent), function (c) { return c.charCodeAt(0); });
+const D = JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text());
+const S = D.S, SK = D.SK, XFW = 0.22;
+const LINE = /^[LR]\d+(#\d+)?$/;
+const $ = function (q) { return document.querySelector(q); };
+const rowsEl = $("#rows"), headEl = $("#head"), codeEl = $("#code"), crumbEl = $("#crumb"), flashEl = $("#flash");
+const clamp = function (x) { return x < 0 ? 0 : x > 1 ? 1 : x; };
+const ease = function (t) { return (1 - Math.cos(Math.PI * clamp(t))) / 2; };
+const esc = function (t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+let rowPx = 20, ph = 40, X = null, raf = 0, scr = null;
+const stack = [];
+
+// --- the geometry: a terminal's, sized to the window --------------------------------
+function measure() {
+  const probe = document.createElement("span");
+  probe.textContent = "0".repeat(100);
+  probe.style.cssText = "position:absolute;visibility:hidden;font:100px var(--mono);white-space:pre";
+  document.body.appendChild(probe);
+  const ratio = probe.getBoundingClientRect().width / 100 / 100;
+  probe.remove();
+  let font = innerWidth / (D.listW + 3 + D.W + 2) / ratio;
+  const narrow = font < 10.5;
+  if (narrow) font = Math.min(13, Math.max(8, innerWidth / (D.W + 4) / ratio));
+  font = Math.min(15, Math.floor(font * 4) / 4);
+  rowPx = Math.round(font * 1.5);
+  ph = Math.max(12, Math.floor(innerHeight / rowPx) - 2);
+  const st = document.documentElement.style;
+  st.setProperty("--font", font + "px");
+  st.setProperty("--row", rowPx + "px");
+  st.setProperty("--listw", D.listW + "ch");
+  st.setProperty("--w", D.W + "ch");
+  st.setProperty("--ph", ph);
+  document.body.classList.toggle("narrow", narrow);
+}
+
+// --- panes ---------------------------------------------------------------------------
+// keysOf: a key a row, as xkeys: a line's gutter, what hangs under a line
+// that line's key and the row, a row over the code h: and the row; a row
+// there twice gets #2 and on.
+function keysOf(rows) {
+  let last = "";
+  const seen = new Map();
+  return rows.map(function (i) {
+    const k = SK[i] ? (last = SK[i]) : last ? last + "+" + i : "h:" + i;
+    const n = (seen.get(k) || 0) + 1;
+    seen.set(k, n);
+    return n > 1 ? k + "#" + n : k;
+  });
+}
+const fileKeys = {};
+function fileOf(path) {
+  if (!fileKeys[path]) fileKeys[path] = keysOf(D.files[path]);
+  return { rows: D.files[path], keys: fileKeys[path] };
+}
+// rowsOf: a page's rows, its runs of its file taken from the file.
+function rowsOf(p) {
+  if (!p._rows) {
+    const F = p.path ? D.files[p.path] : null, rows = [];
+    p.b.forEach(function (t) { if (typeof t === "number") rows.push(t); else for (let j = 0; j < t[1]; j++) rows.push(F[t[0] + j]); });
+    p._rows = rows; p._keys = keysOf(rows);
+  }
+  return p;
+}
+const EMPTY = { h: -1, b: [] };
+// headpad: a head as tall as most heads of the screen, blank rows over its rule.
+function headpad(rows, hfix) {
+  const want = Math.min(hfix, ph - 2 - 6);
+  if (rows.length >= want) return rows;
+  const pad = [];
+  for (let i = rows.length; i < want; i++) pad.push(D.blank);
+  const last = rows[rows.length - 1];
+  return last !== undefined && S[last].indexOf("─") >= 0 ? rows.slice(0, -1).concat(pad, [last]) : rows.concat(pad);
+}
+// split: a page as the screen shows it: its head, its code (body, keys),
+// the row of the code its line is on (NK), and where it lands (NL), that
+// line a third of the way down.
+function split(p, hfix) {
+  rowsOf(p);
+  if (p.h < 0) return { p: p, head: [], body: p._rows, keys: p._keys, NK: 0, NL: 0 };
+  const np = Math.min(p.h, ph - 2 - 6), head = headpad(p._rows.slice(0, np), hfix);
+  const NK = p.at ? p.at + p.h - np : 0, F = Math.floor((ph - 2 - head.length) / 3);
+  return { p: p, head: head, body: p._rows.slice(np), keys: p._keys.slice(np), NK: NK, NL: Math.max(0, NK - 1 - F) };
+}
+function crumbOf(p) {
+  if (!p.open) return "";
+  const path = p.open[0], cut = path.lastIndexOf("/");
+  return '<span class="m-faint">' + esc(path.slice(0, cut + 1)) + '</span><span class="m-text">' + esc(path.slice(cut + 1)) + '</span><span class="m-faint">:' + p.open[1] + "</span>";
+}
+
+// --- screens -------------------------------------------------------------------------
+// A screen: its rows down the side, the row the cursor is on, and the page
+// the pane shows. The tour's and a's move a row at a time; a walk's moves
+// a step at a time, its cursor on the step's call.
+// hfixOf: the height most heads pad to, the median (otis-symbols's hfixof).
+function hfixOf(pages) {
+  const hs = [];
+  for (const k in pages) if (pages[k].h >= 0) hs.push(pages[k].h);
+  hs.sort(function (a, b) { return a - b; });
+  return hs.length ? hs[(hs.length + 1 >> 1) - 1] : 0;
+}
+const hint = function (k, t) { return '<span class="m-at">' + k + '</span> <span class="m-faint">' + t + "</span>"; };
+const DOT = '   <span class="m-faint">·</span>   ';
+function tourScreen(row) {
+  return { kind: "tour", list: D.tour.list, row: row, poff: -1, hfix: hfixOf(D.tour.pages),
+    title: '<span class="m-text">tour ' + esc(D.what) + "</span>" + (D.title ? '  <span class="m-faint">' + esc(D.title) + "</span>" : ""),
+    keys: (D.blob ? hint("⏎", "open the line on GitLab") + DOT : "") + hint("j", "next stop") + "  " + hint("k", "back") + "  " + hint("s", "step through its test line by line") + "  " + hint("a", "every test and what none runs") + "  " + hint("y", "copy a link"),
+    page: function () { return D.tour.pages[this.list[this.row].id]; },
+    cursor: function () { return this.row; },
+    hash: function () { return this.list[this.row].id; } };
+}
+function testsScreen(row) {
+  return { kind: "tests", list: D.tests.list, row: row, poff: -1, hfix: 0,
+    title: '<span class="m-text">walk ' + esc(D.what) + "</span>",
+    keys: hint("⏎", "walk the test") + "  " + hint("j", "down") + "  " + hint("k", "up") + "  " + hint("q", "back to the tour") + "  " + hint("y", "copy a link"),
+    page: function () { return D.tests.pages[this.list[this.row].id] || EMPTY; },
+    cursor: function () { return this.row; },
+    hash: function () { return "a:" + this.list[this.row].id; } };
+}
+function walkScreen(ti, k) {
+  const w = D.walks[ti];
+  if (!w.hfix) w.hfix = hfixOf(w.pages);
+  return { kind: "walk", w: w, ti: ti, k: k, hist: [], poff: -1, hfix: w.hfix, list: w.list,
+    title: '<span class="m-text b">' + esc(w.name) + "</span>",
+    keys: (D.blob ? hint("⏎", "open the line on GitLab") + DOT : "") + hint("j", "next line") + "  " + hint("l", "step into") + "  " + hint("h", "step out") + "  " + hint("k", "back") + "  " + hint("q", "back") + "  " + hint("y", "copy a link"),
+    page: function () { return this.w.pages[this.k] || EMPTY; },
+    cursor: function () { return this.w.nav[this.k] ? this.w.nav[this.k][0] : 0; },
+    hash: function () { return "w" + this.ti + ":" + this.k; } };
+}
+const selectable = function (x) { return x.id && x.id.indexOf("gk-") !== 0; };
+let lrs = [];
+function showList() {
+  $(".lh").innerHTML = scr.title;
+  $("#keys").innerHTML = scr.keys;
+  rowsEl.innerHTML = scr.list.map(function (x, i) { return '<div class="lr' + (selectable(x) ? "" : " gk") + '" data-i="' + i + '"><span class="bar">▌</span> ' + S[x.show] + "</div>"; }).join("");
+  lrs = Array.prototype.slice.call(rowsEl.children);
+  rowsEl.scrollTop = 0;
+}
+function cursor() {
+  const c = scr.cursor();
+  lrs.forEach(function (d, i) { d.classList.toggle("on", i === c); });
+  const d = lrs[c];
+  if (d) {
+    const box = rowsEl.getBoundingClientRect(), r = d.getBoundingClientRect();
+    if (r.top < box.top) rowsEl.scrollTop -= box.top - r.top;
+    else if (r.bottom > box.bottom) rowsEl.scrollTop += r.bottom - box.bottom;
+  }
+  history.replaceState(null, "", "#" + scr.hash());
+}
+
+// --- drawing -------------------------------------------------------------------------
+// A frame: {crumb: [[html, alpha]...], head: [{i, a}], hr: the head's rows,
+// code: [{i, y, a, bar}]}, y in rows from the top of the code.
+const pools = { head: [], code: [] };
+function rowDiv(pool, parent, n) {
+  while (pool.length <= n) { const d = document.createElement("div"); d.className = "r"; parent.appendChild(d); pool.push(d); }
+  return pool[n];
+}
+const stripped = {};
+function barHtml(i) {
+  if (stripped[i] === undefined) stripped[i] = S[i].replace(/\bbg-(here|add|del)\b/g, "");
+  return stripped[i];
+}
+function groundOf(i) { return S[i].indexOf("bg-add") >= 0 ? "var(--add)" : S[i].indexOf("bg-del") >= 0 ? "var(--del)" : "transparent"; }
+function paint(pool, parent, items) {
+  let n = 0;
+  for (const it of items) {
+    if (!it) { n++; continue; }
+    const d = rowDiv(pool, parent, n++);
+    const k = it.bar === undefined ? "" + it.i : "b" + it.i;
+    if (d._k !== k) { d._k = k; d.innerHTML = it.bar === undefined ? S[it.i] : barHtml(it.i); }
+    d.style.transform = "translateY(" + (it.y * rowPx).toFixed(2) + "px)";
+    d.style.opacity = it.a >= 0.999 ? "" : it.a.toFixed(3);
+    d.style.background = it.bar === undefined ? "" : "color-mix(in srgb, var(--here) " + (it.bar * 100).toFixed(1) + "%, " + (it.ground || "transparent") + ")";
+    d.style.display = "";
+  }
+  for (; n < pool.length; n++) if (pool[n].style.display !== "none") pool[n].style.display = "none";
+}
+let crumbK = "";
+function draw(f) {
+  const k = f.crumb.map(function (c) { return c[0]; }).join("\u0000");
+  if (k !== crumbK) { crumbK = k; crumbEl.innerHTML = f.crumb.map(function (c) { return '<div class="c">' + c[0] + "</div>"; }).join(""); }
+  Array.prototype.forEach.call(crumbEl.children, function (c, j) { c.style.opacity = f.crumb[j][1]; });
+  paint(pools.head, headEl, f.head.map(function (h, j) { return h && { i: h.i, a: h.a, y: j }; }));
+  codeEl.style.top = (f.hr * rowPx).toFixed(2) + "px";
+  paint(pools.code, codeEl, f.code.filter(function (c) { return c.y > -1 && c.y < ph; }));
+}
+// landed: the pane at rest, scrolled as the screen is.
+function landed() {
+  const p = scr.page(), v = split(p, scr.hfix), H = ph - 2 - v.head.length;
+  if (scr.poff < 0) scr.poff = v.NL;
+  return { crumb: [[crumbOf(p), 1]], head: v.head.map(function (i) { return { i: i, a: 1 }; }), hr: v.head.length,
+    code: v.body.slice(scr.poff, scr.poff + H + 1).map(function (i, j) { return { i: i, y: j, a: 1 }; }) };
+}
+
+// --- transitions ---------------------------------------------------------------------
+// headFrame: the head's words changing a row at a time, top down, each row
+// out and its new words in; it grows before the new words come, or shrinks
+// after the old have gone, so the code under it never jumps.
+function headFrame(HO, HN, xh) {
+  const ho = HO.length, hn = HN.length, n = Math.max(ho, hn);
+  const hr = hn < ho ? (xh < 0.8 ? ho : ho + (hn - ho) * (xh - 0.8) * 5) : (xh >= 0.2 ? hn : ho + (hn - ho) * xh * 5);
+  const out = [];
+  for (let i = 0; i < Math.ceil(hr); i++) {
+    const tl = clamp((xh - 0.5 * i / (n > 1 ? n - 1 : 1)) / 0.3), o = HO[i], w = HN[i];
+    if (o !== undefined && o === w) out.push({ i: w, a: 1 });
+    else if (tl < 0.5) out.push(o === undefined ? null : { i: o, a: 1 - tl * 2 });
+    else out.push(w === undefined ? null : { i: w, a: tl * 2 - 1 });
+  }
+  return { head: out, hr: hr };
+}
+function crumbFrame(a, b, xh) {
+  return a === b ? [[b, 1]] : [[a, xh < 0.5 ? 1 - xh * 2 : 0], [b, xh < 0.5 ? 0 : xh * 2 - 1]];
+}
+// push: to another file or a page with no code. When both have a head it
+// holds while its words change and the code under it goes up and away, the
+// new code following it in, a rule between (down with k); else the whole
+// pane goes and the new one follows, head and all.
+function push(from, to, dir, ca, cb) {
+  let H = ph - 2, HO = [], HN = [], old, nu;
+  if (from.head.length && to.head.length) {
+    HO = from.head; HN = to.head; H -= to.head.length;
+    old = from.body.slice(from.poff); nu = to.body.slice(to.poff);
+  } else {
+    old = from.head.concat(from.body.slice(from.poff)); nu = to.head.concat(to.body.slice(to.poff));
+  }
+  old = old.slice(0, H); nu = nu.slice(0, H);
+  const XK = dir > 0 ? old.concat([D.seam], nu) : nu.concat([D.seam], old);
+  const a0 = dir > 0 ? 0 : nu.length + 1, a1 = dir > 0 ? old.length + 1 : 0;
+  return { dur: 0.6, frame: function (t) {
+    const xe = ease(t / 0.6), pos = a0 + (a1 - a0) * xe, h = headFrame(HO, HN, xe);
+    return { crumb: crumbFrame(ca, cb, xe), head: h.head, hr: h.hr, code: XK.map(function (i, j) { return { i: i, y: j - pos, a: 1 }; }) };
+  } };
+}
+// spread: the file whole from its row g0 to g1 with a pane's rows in place
+// of its lines there.
+function spread(R, K, F, g0, g1) {
+  const at = new Map();
+  K.forEach(function (k, i) { if (LINE.test(k)) at.set(k, i); });
+  const rows = [], keys = [];
+  let own = false;
+  for (let g = g0; g <= g1; g++) {
+    const fk = F.keys[g];
+    if (LINE.test(fk)) {
+      if (at.has(fk)) {
+        own = true;
+        let i = at.get(fk);
+        rows.push(R[i]); keys.push(K[i]);
+        for (i++; i < K.length && !at.has(K[i]); i++) { rows.push(R[i]); keys.push(K[i]); }
+      } else { own = false; rows.push(F.rows[g]); keys.push(fk); }
+    } else if (!own) { rows.push(F.rows[g]); keys.push(fk); }
+  }
+  return { rows: rows, keys: keys };
+}
+// merge: the two as one list: K the keys, O and N each one's row, F 0
+// both, 1 the old alone, 2 the new alone. A line of code only one has is
+// the same file around it, so it stays: only what hangs under lines folds.
+function merge(o, n) {
+  const inN = new Map();
+  n.keys.forEach(function (k, j) { inN.set(k, j); });
+  const M = { K: [], O: [], N: [], F: [] };
+  let i = 0, j = 0;
+  const add = function (k, a, b, f) { M.K.push(k); M.O.push(a); M.N.push(b); M.F.push(f); };
+  while (i < o.keys.length || j < n.keys.length) {
+    if (i < o.keys.length && j < n.keys.length && o.keys[i] === n.keys[j]) { add(o.keys[i], o.rows[i], n.rows[j], 0); i++; j++; }
+    else if (i < o.keys.length && (j >= n.keys.length || !inN.has(o.keys[i]) || inN.get(o.keys[i]) < j)) { add(o.keys[i], o.rows[i], null, 1); i++; }
+    else { add(n.keys[j], null, n.rows[j], 2); j++; }
+  }
+  for (let k = 0; k < M.K.length; k++) {
+    if (!M.F[k] || !LINE.test(M.K[k])) continue;
+    if (M.F[k] === 1) M.N[k] = M.O[k]; else M.O[k] = M.N[k];
+    M.F[k] = 0;
+  }
+  return M;
+}
+// when: when each row folds or unfolds: a wave out from the anchor, those
+// within a pane of it spread evenly over the whole, the rest at the end.
+function when(M, anchor) {
+  const H = ph - 2, T = M.K.map(function () { return 0; }), near = [];
+  for (let i = 0; i < M.K.length; i++) {
+    if (!M.F[i]) continue;
+    const d = Math.abs(i - anchor);
+    if (d <= H) near.push([d, i]); else T[i] = 1 - XFW;
+  }
+  near.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+  near.forEach(function (x, k) {
+    const r = near.length > 1 ? k / (near.length - 1) : 0;
+    T[x[1]] = M.F[x[1]] === 1 ? XFW + (1 - XFW) * r : (1 - XFW) * r;
+  });
+  return T;
+}
+// held: the row to hold still, from row a at y: the nearest row both show,
+// counting the rows only this side shows (side 1 the old, 2 the new).
+function held(M, a, y, side) {
+  while (a < M.K.length && M.F[a] !== 0) { if (M.F[a] === side) y++; a++; }
+  return [a, y];
+}
+// code: the scroll to another line of the same file, as an editor would,
+// one thing at a time: what hangs under the old lines fades and folds away
+// (A), the lines move together to where the new line lands, the bar going
+// off the old line and on to the new as they pass (B), and what hangs under
+// the new lines unfolds while the lines' marks change in place (C).
+function code(from, to, la, lb, ca, cb) {
+  const F = fileOf(to.p.path), H = ph - 2 - to.head.length;
+  const LA = "L" + la, LB = "L" + lb;
+  if (from.keys.indexOf(LA) < 0 || to.keys.indexOf(LB) < 0 || F.keys.indexOf(LA) < 0 || F.keys.indexOf(LB) < 0) return null;
+  const ok = from.keys.filter(function (k) { return LINE.test(k); }), nk = to.keys.filter(function (k) { return LINE.test(k); });
+  const gi = function (k) { return F.keys.indexOf(k); };
+  const gs = [ok[0], ok[ok.length - 1], nk[0], nk[nk.length - 1], LA, LB].map(gi).filter(function (g) { return g >= 0; });
+  const g0 = Math.min.apply(null, gs), g1 = Math.max.apply(null, gs);
+  const M = merge(spread(from.body, from.keys, F, g0, g1), spread(to.body, to.keys, F, g0, g1));
+  const fa = M.K.indexOf(LA), fb = M.K.indexOf(LB);
+  if (fa < 0 || fb < 0) return null;
+  // Held rows: the old line where it is shown (else the top row), the new
+  // line where it lands (else the top row).
+  let yA = from.keys.indexOf(LA) - from.poff, A0 = fa;
+  if (yA < 0 || yA >= H) { A0 = M.K.indexOf(from.keys[from.poff]); yA = 0; }
+  let yB = to.keys.indexOf(LB) - to.poff, A1 = fb;
+  if (yB < 0 || yB >= H) { A1 = M.K.indexOf(to.keys[to.poff]); yB = 0; }
+  if (A0 < 0 || A1 < 0) return null;
+  const h0 = held(M, A0, yA, 1), h1 = held(M, A1, yB, 2);
+  A0 = h0[0]; yA = h0[1]; A1 = h1[0]; yB = h1[1];
+  if (A0 >= M.K.length || A1 >= M.K.length) return null;
+  const TA = when(M, A0), TC = when(M, A1);
+  const V = [];
+  for (let i = 0; i < M.K.length; i++) if (!M.F[i]) V.push(i);
+  const top0 = V.indexOf(A0) - yA, top1 = V.indexOf(A1) - yB, dist = Math.abs(top1 - top0);
+  const nold = M.F.filter(function (f) { return f === 1; }).length, nnew = M.F.filter(function (f) { return f === 2; }).length;
+  // Folding and unfolding as long as there is to fold; a few rows go
+  // quickly, a long way at a pace to follow.
+  const dA = nold ? 0.2 + Math.min(nold, 12) * 0.025 : 0;
+  let dB = 0.5 + Math.min(dist, 900) / 700;
+  if (dist && 0.1 + 0.06 * dist < dB) dB = 0.1 + 0.06 * dist;
+  if (dist === 0) dB = fa !== fb ? 0.3 : 0;
+  const dC = 0.3 + Math.min(nnew, 12) * 0.02, dur = dA + dB + dC;
+  const gA = groundOf(F.rows[gi(LA)]), gB = groundOf(F.rows[gi(LB)]);
+  return { dur: dur, frame: function (t) {
+    let ph_, xe;
+    if (t < dA) { ph_ = "A"; xe = ease(t / dA); }
+    else if (t < dA + dB) { ph_ = "B"; xe = ease((t - dA) / dB); }
+    else { ph_ = "C"; xe = ease((t - dA - dB) / dC); }
+    const xh = ease(t / Math.min(dur || 1, 0.6)), hd = headFrame(from.head, to.head, xh);
+    // Row i now: its content, alpha, height and bar.
+    const row = function (i) {
+      const f = M.F[i];
+      let r;
+      if (f === 1) {
+        if (ph_ !== "A") return null;
+        r = { i: M.O[i], a: clamp((TA[i] - XFW * 0.4 - xe) / (XFW * 0.6)), h: clamp((TA[i] - xe) / (XFW * 0.4)) };
+      } else if (f === 2) {
+        if (ph_ !== "C") return null;
+        r = { i: M.N[i], a: clamp((xe - TC[i] - XFW * 0.4) / (XFW * 0.6)), h: clamp((xe - TC[i]) / (XFW * 0.4)) };
+      } else if (ph_ === "C" && M.O[i] !== M.N[i]) {
+        r = xe < 0.5 ? { i: M.O[i], a: 1 - 0.25 * clamp((xe - 0.25) / 0.25), h: 1 } : { i: M.N[i], a: 0.75 + 0.25 * clamp((xe - 0.5) / 0.25), h: 1 };
+      } else r = { i: ph_ === "C" ? M.N[i] : M.O[i], a: 1, h: 1 };
+      if (i === fa || i === fb) {
+        let b;
+        if (fa === fb) b = 1;
+        else if (i === fa) b = ph_ === "A" ? 1 : ph_ === "B" ? clamp(1 - 2 * xe) : 0;
+        else b = ph_ === "A" ? 0 : ph_ === "B" ? clamp(2 * xe - 1) : 1;
+        r.bar = b; r.ground = i === fa ? gA : gB;
+      }
+      return r.h > 0 ? r : null;
+    };
+    const out = [], Hc = ph - 2 - hd.hr;
+    if (ph_ === "B") {
+      const top = top0 + (top1 - top0) * xe;
+      for (let k = Math.max(0, Math.floor(top) - 1); k < V.length && k - top < Hc + 1; k++) { const r = row(V[k]); if (r) { r.y = k - top; out.push(r); } }
+    } else {
+      const A = ph_ === "A" ? A0 : A1, yH = ph_ === "A" ? yA : yB;
+      const a = row(A) || { i: M.N[A], a: 1, h: 1 };
+      a.y = yH; out.push(a);
+      let y = yH;
+      for (let i = A - 1; i >= 0 && y > -1; i--) { const r = row(i); if (!r) continue; y -= r.h; r.y = y; out.push(r); }
+      y = yH + a.h;
+      for (let i = A + 1; i < M.K.length && y < Hc + 1; i++) { const r = row(i); if (!r) continue; r.y = y; y += r.h; out.push(r); }
+    }
+    return { crumb: crumbFrame(ca, cb, xh), head: hd.head, hr: hd.hr, code: out };
+  } };
+}
+
+// --- moving --------------------------------------------------------------------------
+function tick(now) {
+  raf = 0;
+  if (!X) return;
+  const t = (now - X.t0) / 1000;
+  if (t >= X.dur) { land(); return; }
+  draw(X.frame(t));
+  raf = requestAnimationFrame(tick);
+}
+function land() {
+  if (!X) return;
+  X = null;
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+  draw(landed());
+}
+// move: change: the cursor, the step or the screen, at once; the pane
+// moving there from what it shows, forward (1) or back (-1).
+function move(change, dir) {
+  land();
+  const was = scr, fp = scr.page(), from = split(fp, scr.hfix);
+  from.poff = scr.poff;
+  change();
+  const tp = scr.page();
+  if (scr === was && tp === fp) return;
+  if (scr !== was) showList();
+  cursor();
+  const to = split(tp, scr.hfix);
+  if (scr.poff < 0) scr.poff = to.NL;
+  to.poff = scr.poff;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { draw(landed()); return; }
+  X = (fp.path && tp.path && fp.path === tp.path && code(from, to, fp.line, tp.line, crumbOf(fp), crumbOf(tp))) || push(from, to, dir, crumbOf(fp), crumbOf(tp));
+  X.t0 = performance.now();
+  raf = requestAnimationFrame(tick);
+}
+// row: the cursor down (1) or up (-1) to the next row it can be on.
+function row(dir, to) {
+  let i = to === undefined ? scr.row + dir : to;
+  while (i >= 0 && i < scr.list.length && !selectable(scr.list[i])) i += dir;
+  if (i < 0 || i >= scr.list.length || i === scr.row) return;
+  move(function () { scr.row = i; scr.poff = -1; }, i > scr.row ? 1 : -1);
+}
+// step: a walk's j (over), l (into), h (out) and k (back).
+function step(key) {
+  const n = scr.w.nav[scr.k];
+  if (!n) return;
+  const j = key === "j" ? n[1] : key === "l" ? (n[2] >= 0 ? n[2] : n[1]) : key === "h" ? n[3] : scr.hist.length ? scr.hist[scr.hist.length - 1] : -1;
+  if (j < 0) {
+    flash({ j: "that was its last line in this call; h goes out", l: "that was its last line in this call; h goes out", h: "the test called this one", k: "nowhere to go back to" }[key], true);
+    return;
+  }
+  move(function () { if (key === "k") scr.hist.pop(); else scr.hist.push(scr.k); scr.k = j; scr.poff = -1; }, key === "j" || key === "l" ? 1 : -1);
+}
+function enter(s) { move(function () { stack.push(scr); scr = s; }, 1); }
+function back() { if (stack.length) move(function () { scr = stack.pop(); }, -1); }
+function scroll(n) {
+  if (X) land();
+  const v = split(scr.page(), scr.hfix), max = Math.max(0, v.body.length - (ph - 2 - v.head.length));
+  const p = Math.max(0, Math.min(max, scr.poff + n));
+  if (p !== scr.poff) { scr.poff = p; draw(landed()); }
+}
+let flashT = 0;
+function flash(t, warn) {
+  flashEl.textContent = "   " + t;
+  flashEl.className = warn ? "m-at" : "m-good";
+  clearTimeout(flashT);
+  flashT = setTimeout(function () { flashEl.textContent = ""; }, 2000);
+}
+function openLine() {
+  const p = scr.page();
+  if (D.blob && p.open) open(D.blob + "/" + p.open[0] + "#L" + p.open[1], "_blank");
+}
+document.addEventListener("keydown", function (e) {
+  if (e.metaKey || e.altKey || (e.ctrlKey && !/^[du]$/.test(e.key))) return;
+  const half = Math.floor((ph - 2) / 2), k = e.key, walk = scr.kind === "walk";
+  let done = true;
+  if (e.ctrlKey) scroll(k === "d" ? half : -half);
+  else if (walk && /^[jklh]$/.test(k)) step(k);
+  else if (walk && (k === "ArrowDown" || k === "ArrowUp")) step(k === "ArrowDown" ? "j" : "k");
+  else if (!walk && (k === "j" || k === "ArrowDown")) row(1);
+  else if (!walk && (k === "k" || k === "ArrowUp")) row(-1);
+  else if (!walk && (k === "g" || k === "Home")) row(1, 0);
+  else if (!walk && (k === "G" || k === "End")) row(-1, scr.list.length - 1);
+  else if (k === "PageDown") scroll(half);
+  else if (k === "PageUp") scroll(-half);
+  else if (k === "q" || k === "Escape") back();
+  else if (k === "y") navigator.clipboard.writeText(location.href).then(function () { flash("a link to this is copied"); });
+  else if (scr.kind === "tour" && k === "a") enter(testsScreen(firstRow(D.tests.list, 0)));
+  else if (scr.kind === "tour" && k === "s") {
+    const p = scr.page();
+    if (p.ti === undefined) flash("s steps through a stop's test; this one is the overview", true);
+    else if (p.ti < 0) flash("no test stops here, so there is nothing to step through", true);
+    else enter(walkScreen(p.ti, p.k));
+  } else if (k === "Enter") {
+    const id = scr.kind === "tests" ? scr.list[scr.row].id : "";
+    if (id.indexOf("t:") === 0) enter(walkScreen(+id.slice(2), 0));
+    else openLine();
+  } else done = false;
+  if (done) e.preventDefault();
+});
+rowsEl.addEventListener("click", function (e) {
+  const d = e.target.closest(".lr");
+  if (!d) return;
+  const i = +d.dataset.i;
+  if (scr.kind !== "walk") { if (selectable(scr.list[i]) && i !== scr.row) row(i > scr.row ? 1 : -1, i); return; }
+  const k = scr.w.nav.findIndex(function (n) { return n[0] === i; });
+  if (k >= 0 && k !== scr.k) move(function () { scr.hist.push(scr.k); scr.k = k; scr.poff = -1; }, k > scr.k ? 1 : -1);
+});
+let wheel = 0;
+$("#pane").addEventListener("wheel", function (e) {
+  e.preventDefault();
+  wheel += e.deltaY;
+  const n = Math.trunc(wheel / rowPx);
+  if (n) { wheel -= n * rowPx; scroll(n); }
+}, { passive: false });
+addEventListener("resize", function () { land(); measure(); scr.poff = -1; draw(landed()); });
+function firstRow(list, i) { while (i < list.length && !selectable(list[i])) i++; return i < list.length ? i : 0; }
+// Where the address says: a tour row (its id), a's row (a:<id>), a step of
+// a test's walk (w<test>:<step>), each with what q goes back to under it.
+function open0() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  const tr = D.tour.list.findIndex(function (x) { return x.id === h; });
+  scr = tourScreen(tr >= 0 ? tr : 0);
+  let m = /^a:(.*)$/.exec(h);
+  if (m) { const i = D.tests.list.findIndex(function (x) { return x.id === m[1]; }); stack.push(scr); scr = testsScreen(i >= 0 ? i : firstRow(D.tests.list, 0)); }
+  m = /^w(\d+):(\d+)$/.exec(h);
+  if (m && D.walks[+m[1]]) {
+    const ti = +m[1], i = D.tests.list.findIndex(function (x) { return x.id === "t:" + ti; });
+    stack.push(scr); stack.push(testsScreen(i >= 0 ? i : firstRow(D.tests.list, 0)));
+    scr = walkScreen(ti, Math.min(+m[2], Math.max(0, D.walks[ti].pages.length - 1)));
+  }
+}
+measure();
+open0();
+showList();
+cursor();
+draw(landed());
+})();
+`;
 const TOUR_CSS = `
-:root { --ground: #f6f7f8; --surface: #ffffff; --ink: #15181d; --soft: #525a66; --faint: #8a919c; --rule: #e2e5e9; --code: #eef0f3;
-  --pass: #17784a; --pass-bg: #e2f3e9; --fail: #bb2d23; --fail-bg: #fbe8e5; --open: #8a5f00; --open-bg: #f9efd6; --link: #1f5fbf;
-  --pre: #fbfbfc; --add: #e6f4ea; --del: #fbe9e7; --here: #fdf0cc; --else: #0b6e79; --yours: #7b3fb3;
-  --k1: #b3261e; --k2: #1b7a3a; --k3: #8a5f00; --k4: #1f5fbf; --k5: #8f3db8; --k6: #0b6e79; --k7: #6f7682; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --ground: #121418; --surface: #1a1d22; --ink: #e8eaee; --soft: #a3aab5; --faint: #6f7682; --rule: #2a2e35; --code: #242830;
-  --pass: #5cc98e; --pass-bg: #163326; --fail: #f07b70; --fail-bg: #3a1c19; --open: #e2b24a; --open-bg: #362a10; --link: #86b1f5;
-  --pre: #16191e; --add: #15301f; --del: #3a1c19; --here: #3a2f10; --else: #6fd0d8; --yours: #c79bf2;
-  --k1: #f07b70; --k2: #7fd49b; --k3: #e2b24a; --k4: #86b1f5; --k5: #d59cf5; --k6: #6fd0d8; --k7: #8a919c; } }
+:root { --ground: #f7f7f5; --ink: #1d2126; --soft: #4d5560; --faint: #8a919c; --rule: #d9dcdf; --sel: #ebe7da;
+  --pass: #1b7a47; --fail: #bb2d23; --open: #946300; --link: #1f5fbf; --else: #0b6e79; --yours: #7b3fb3;
+  --add: #e3f1e5; --del: #f8e5e2; --here: #f6e2a8;
+  --k1: #b3261e; --k2: #1b7a3a; --k3: #8a5f00; --k4: #1f5fbf; --k5: #8f3db8; --k6: #0b6e79; --k7: #6f7682;
+  --mono: "SF Mono", ui-monospace, Menlo, "JetBrains Mono", Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root {
+  --ground: #16181b; --ink: #e3e1da; --soft: #a9adb4; --faint: #6c717a; --rule: #2c3036; --sel: #2a2a25;
+  --pass: #8fc47a; --fail: #ef7a6c; --open: #e0b24e; --link: #86b1f5; --else: #6fc6cf; --yours: #c79bf2;
+  --add: #1d2e22; --del: #3a211e; --here: #4a3a12;
+  --k1: #ef7a6c; --k2: #9fcf7c; --k3: #e0b24e; --k4: #86b1f5; --k5: #d59cf5; --k6: #6fc6cf; --k7: #8a919c; } }
 * { box-sizing: border-box; }
-html { background: var(--ground); scroll-behavior: smooth; }
-body { margin: 0; background: var(--ground); color: var(--ink); font: 16px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
-main { max-width: 900px; margin: 0 auto; padding: 56px 20px 96px; }
-a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
-p { margin: 0 0 10px; }
-code { font: 0.86em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
-.meta { color: var(--soft); font-size: 14px; margin: 0 0 8px; }
-h1 { font-size: 30px; line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 20px; text-wrap: balance; }
-.lede { font-size: 17px; margin-bottom: 12px; }
-.how { color: var(--soft); font-size: 14px; }
-h2 { font-size: 13px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.08em; color: var(--soft); margin: 56px 0 12px; }
-h2 span { display: block; color: var(--faint); font-size: 12px; }
-h2[id] { text-transform: none; letter-spacing: -0.01em; font-size: 24px; color: var(--ink); }
-h2[id] span { text-transform: uppercase; letter-spacing: 0.08em; }
-nav h2 { margin-top: 32px; }
-.toc { padding-left: 20px; margin: 0; } .toc ol { padding-left: 22px; margin: 4px 0 12px; } .toc li { margin: 2px 0; } .toc a { text-decoration: none; }
-.stop { display: grid; grid-template-columns: 36px 1fr; gap: 12px; margin: 36px 0; scroll-margin-top: 12px; }
-.num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; background: var(--open-bg); color: var(--open); margin-top: 2px; }
-.body { min-width: 0; }
-h3 { font-size: 19px; line-height: 1.35; margin: 2px 0 8px; }
-.proof { display: flex; gap: 10px; background: var(--pass-bg); border-radius: 8px; padding: 10px 14px; margin: 12px 0; font-size: 15px; }
-.tick { color: var(--pass); font-weight: 700; }
-.from { color: var(--faint); font-size: 13px; margin-top: 2px; }
-.code { margin: 14px 0 0; background: var(--pre); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; }
-.code figcaption { display: flex; justify-content: space-between; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--rule); font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--soft); }
-.code figcaption span:last-child { color: var(--faint); font-family: -apple-system, system-ui, sans-serif; }
-pre { margin: 0; padding: 8px 0; overflow-x: auto; font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-pre .row { display: block; padding: 0 12px; white-space: pre; min-height: 1.55em; }
-.open { background: var(--open-bg); border-radius: 8px; padding: 12px 16px; margin: 24px 0 0 48px; font-size: 15px; }
-.open b { color: var(--open); } .open ul { margin: 6px 0 0; padding-left: 18px; }
-.gaps { padding-left: 18px; } .gaps span { color: var(--soft); font-size: 14px; }
-.foot { color: var(--faint); font-size: 13px; margin-top: 64px; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ground); color: var(--ink); }
+body { font: var(--font, 13px)/var(--row, 20px) var(--mono); font-variant-ligatures: none; -webkit-font-smoothing: antialiased; }
+#screen { position: fixed; inset: 0; display: grid; grid-template: calc(var(--row) * var(--ph)) 1fr / calc(var(--listw) + 2ch) 1fr; }
+#list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--rule); }
+.lh { height: calc(var(--row) * 2); padding: calc(var(--row) * 0.5) 2ch 0; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+#rows { flex: 1; min-height: 0; overflow: hidden; padding-top: var(--row); }
+.lr { height: var(--row); white-space: pre; overflow: hidden; cursor: pointer; padding-right: 1ch; }
+.lr .bar { visibility: hidden; color: var(--open); }
+.lr.on { background: var(--sel); }
+.lr.on .bar { visibility: visible; }
+.lr.gk { cursor: default; }
+.lr:hover:not(.on):not(.gk) { background: color-mix(in srgb, var(--sel) 45%, transparent); }
+#pane { position: relative; min-width: 0; overflow: hidden; padding-left: 2ch; }
+#crumb { position: relative; height: var(--row); }
+#crumb .c { position: absolute; inset: 0; white-space: pre; }
+#stage { position: absolute; left: 2ch; top: calc(var(--row) * 2); height: calc(var(--row) * (var(--ph) - 2)); width: var(--w); overflow: hidden; }
+#head, #code { position: absolute; left: 0; right: 0; }
+#head { top: 0; height: 100%; }
+#code { bottom: 0; overflow: hidden; }
+.r { position: absolute; top: 0; left: 0; width: var(--w); height: var(--row); white-space: pre; will-change: transform, opacity; }
+.r > span { display: inline-block; height: 100%; vertical-align: top; }
+#foot { grid-column: 1 / -1; border-top: 1px solid var(--rule); padding: calc(var(--row) * 0.25) 2ch 0; white-space: pre; overflow: hidden; }
+#foot a { text-decoration: none; } #foot a:hover { text-decoration: underline; }
 .b { font-weight: 700; } .dim { opacity: 0.55; } .it { font-style: italic; }
 .bg-add { background: var(--add); } .bg-del { background: var(--del); } .bg-here { background: var(--here); }
 .m-at { color: var(--open); } .m-good { color: var(--pass); } .m-bad { color: var(--fail); } .m-yours { color: var(--yours); }
 .m-text { color: var(--ink); } .m-ctx { color: var(--soft); } .m-faint { color: var(--faint); } .m-else { color: var(--else); }
 .c31, .c91 { color: var(--k1); } .c32, .c92 { color: var(--k2); } .c33, .c93 { color: var(--k3); } .c34, .c94 { color: var(--k4); }
 .c35, .c95 { color: var(--k5); } .c36, .c96 { color: var(--k6); } .c30, .c90, .c37, .c97 { color: var(--k7); }
-@media (max-width: 640px) { main { padding: 32px 16px 64px; } h1 { font-size: 24px; } .stop { grid-template-columns: 1fr; } .open { margin-left: 0; } }
+body.narrow #screen { grid-template-columns: 0 1fr; }
+body.narrow #list { display: none; }
+body.narrow #pane { overflow-x: auto; }
 `;
 // tourText: a chapter as its reader sees it, stop after stop, plain.
 function tourText(r, ci) {

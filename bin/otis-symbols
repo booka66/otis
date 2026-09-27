@@ -844,7 +844,9 @@ xframe() {
   # The head's words change over the whole of a scroll, not each step of it.
   xh=$xe
   if [[ $xmode == code ]]; then
-    (( xh = xgdur > 0 ? (EPOCHREALTIME - xg0) / xgdur : 1, xh > 1 ? (xh = 1) : 0 ))
+    # Done in the first 0.6s at most: a head half one stop and half the
+    # next for long reads as noise.
+    (( xh = (EPOCHREALTIME - xg0) / (xgdur < 0.6 ? (xgdur > 0 ? xgdur : 1) : 0.6), xh > 1 ? (xh = 1) : 0 ))
     (( xh = (1 - cos(3.14159265 * xh)) / 2 ))
   fi
   # The head's words change a row at a time, top down, each row out and its
@@ -864,7 +866,7 @@ xframe() {
     else xfade "$XHN[i]" $(( tl * 2 - 1 )); fi
     P+=("$REPLY")
   done
-  if [[ $xmode == code ]]; then xframe_code; else xframe_anchor; fi
+  if [[ $xmode == code ]]; then xcodeat; xframe_code; else xframe_anchor; fi
   PH=() phd=2 poff=0 pfile=
 }
 # xframe_anchor: the code under the head around the anchor row, which goes
@@ -894,9 +896,11 @@ xstop() {
   draw
 }
 
-# headpad <rows...>: a pinned head as tall as every head of the walk or tour
-# (hfix, the tallest), blank rows over its rule, so the code under it starts
-# on the same row whatever it says and only its words change (reply).
+# headpad <rows...>: a pinned head as tall as most heads of the walk or
+# tour (hfix, the median), blank rows over its rule, so the code under most
+# of them starts on the same row and only their words change (reply). A
+# taller head is its own height: padding every head to the tallest left a
+# short one a gap of a dozen rows where code could be.
 integer hfix=0
 headpad() {
   reply=("$@")
@@ -908,15 +912,17 @@ headpad() {
   if [[ $reply[-1] == *─* ]]; then reply=("${(@)reply[1,-2]}" "${(@)pad}" "$reply[-1]")
   else reply+=("${(@)pad}"); fi
 }
-# hfixof <dir> <names...>: hfix, the tallest head of those previews.
+# hfixof <dir> <names...>: hfix, the median head of those previews.
 hfixof() {
   local d=$1 f l; shift
+  local -a hs
   hfix=0
   for f in "$@"; do
     [[ -r $d/$f ]] || continue
     IFS= read -r l < $d/$f
-    [[ $l == (#b)$'\036'pin\ (<->)* ]] && (( match[1] > hfix )) && hfix=$match[1]
+    [[ $l == (#b)$'\036'pin\ (<->)* ]] && hs+=($match[1])
   done
+  (( $#hs )) && { hs=(${(on)hs}); hfix=$hs[$(( ($#hs + 1) / 2 ))]; }
 }
 # xsplit <file>: a preview drawn ahead as the pane will show it: its head
 # (NH, as many rows as the pane pins, padded as every head is: headpad) and
@@ -967,11 +973,14 @@ xpush() {
     old=("${(@)PH}" "${(@)P[xpo+1,-1]}") new=("${(@)NH}" "${(@)NB[NL+1,-1]}")
   fi
   old=("${(@)old[1,H]}") new=("${(@)new[1,H]}")
+  # Between them a rule, so where one file ends and the next begins reads
+  # as that, not as lines of one skipped.
+  local seam="  $F${(l:pw-4::─:)}$R"
   if (( $1 > 0 )); then
-    XK=("${(@)old}" "" "${(@)new}")
+    XK=("${(@)old}" "$seam" "${(@)new}")
     xa0=1 xa1=$(( $#old + 2 ))
   else
-    XK=("${(@)new}" "" "${(@)old}")
+    XK=("${(@)new}" "$seam" "${(@)old}")
     xa0=$(( $#new + 2 )) xa1=1
   fi
   xsame "${(@)XK}"; XT=()
@@ -1052,17 +1061,30 @@ xcode() {
   for (( i = 1; i <= $#XK; i++ )); do (( XF[i] )) || XV+=($i); done
   (( xtop0 = ${XV[(ie)$xA0]} - 1 - xY0, xtop1 = ${XV[(ie)$xA1]} - 1 - xY1 ))
   integer nold=${#${(M)XF:#1}} nnew=${#${(M)XF:#2}} dist=$(( xtop1 > xtop0 ? xtop1 - xtop0 : xtop0 - xtop1 ))
-  (( xdA = nold ? 0.4 : 0 ))
-  (( xdB = dist || xfa != xfb ? 0.5 + (dist > 900 ? 900 : dist) / 700.0 : 0 ))
-  (( xdC = 0.45 ))
+  # Folding and unfolding as long as there is to fold: a row or three
+  # quickly, a box of a dozen at a pace to follow.
+  (( xdA = nold ? 0.2 + (nold > 12 ? 12 : nold) * 0.025 : 0 ))
+  # A few rows go quickly, row after row at an even beat; a terminal moves
+  # whole rows, so a short scroll drawn out reads as steps, not motion.
+  (( xdB = 0.5 + (dist > 900 ? 900 : dist) / 700.0, dist && 0.1 + 0.06 * dist < xdB ? (xdB = 0.1 + 0.06 * dist) : 0 ))
+  (( dist == 0 )) && (( xdB = xfa != xfb ? 0.3 : 0 ))
+  (( xdC = 0.3 + (nnew > 12 ? 12 : nnew) * 0.02 ))
   XHO=("${(@)PH}") XHN=("${(@)NH}"); xhead
   xland=$NL xmode=code
   xg0=$EPOCHREALTIME xgdur=$(( xdA + xdB + xdC ))
-  xcodeA
+  xstart $xgdur ""
 }
-xcodeA() { xphase=A; (( xdA > 0 )) && { xstart $xdA xcodeB; return; }; xcodeB; }
-xcodeB() { xphase=B; (( xdB > 0 )) && { xstart $xdB xcodeC; return; }; xcodeC; }
-xcodeC() { xphase=C; xstart $xdC ""; }
+# xcodeat: which of the three this moment is in (xphase), and how far
+# through it, eased (xe): each starts and settles gently, one straight
+# after another.
+xcodeat() {
+  float t=$(( EPOCHREALTIME - xt0 ))
+  (( t > xgdur )) && t=$xgdur
+  if (( t < xdA )); then xphase=A; (( xe = t / xdA ))
+  elif (( t < xdA + xdB )); then xphase=B; (( xe = (t - xdA) / xdB ))
+  else xphase=C; (( xe = (t - xdA - xdB) / xdC )); fi
+  (( xe = (1 - cos(3.14159265 * xe)) / 2 ))
+}
 # xcrow <i>: merged row i at this moment of the scroll (REPLY).
 xcrow() {
   integer n=$1
@@ -1143,14 +1165,15 @@ steps_key() {
   local k=$REPLY j
   case $1 in
     j) j=$nover[k+1] ;;
-    l) j=$ninto[k+1] ;;
+    # Nothing to step into: over, as a debugger's step does.
+    l) j=$ninto[k+1]; (( j < 0 )) && j=$nover[k+1] ;;
     h) j=$nout[k+1] ;;
     k) j=${shist[-1]:--1} ;;
   esac
   if (( j < 0 )); then
     case $1 in
       j) flash="that was its last line in this call; h goes out" ;;
-      l) flash="this line calls nothing the change made" ;;
+      l) flash="that was its last line in this call; h goes out" ;;
       h) flash="the test called this one" ;;
       k) flash="nowhere to go back to" ;;
     esac

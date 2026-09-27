@@ -159,10 +159,11 @@ for (const im of job.importers || []) {
 const pkgs = [...byPkg.values()].sort((a, b) => new Set(b.flatMap((f) => f.of || [])).size - new Set(a.flatMap((f) => f.of || [])).size);
 // A change to a file the whole monorepo imports is a thousand projects to
 // load, most of an hour of them. The count of packages says nothing about
-// how long they take, so the run is given a quarter of an hour and stops
-// between batches once it is spent, keeping what it found; the packages it
-// never reached are its last line, for the reader to be told of.
-const BUDGET = 900000;
+// how long they take, so the run is given five minutes (it runs unasked,
+// behind whatever you are doing) and stops between batches once they are
+// spent, keeping what it found; the packages it never reached are its last
+// line, for the reader to be told of.
+const BUDGET = 300000;
 const started = Date.now();
 const seenRefs = new Set();
 const checked = new Set();
@@ -179,17 +180,26 @@ const finish = () => {
 };
 // The budget is looked at between batches, and one batch can be most of the
 // machine for longer than anyone would give it: a batch of big packages
-// holding half the memory, swapping everything else out, or still going
-// well past the budget. Either is the run's end mid-batch, keeping what it
-// found and counting the batch among the packages it never reached.
-const HEAVY = totalmem() / 2, HEAVY_FOR = 120000, OVER = BUDGET + 300000;
+// holding a quarter of the memory, swapping everything else out, or still
+// going well past the budget. Either is the run's end mid-batch, keeping
+// what it found and counting the batch among the packages it never reached.
+// Its memory as Activity Monitor counts it (top's MEM, what it has
+// compressed and swapped too): ps's RSS on macOS leaves those out, and read
+// 10 GB of a tsgo holding 29.
+const HEAVY = totalmem() / 4, HEAVY_FOR = 30000, OVER = BUDGET + 120000;
+const UNIT = { B: 1, K: 2 ** 10, M: 2 ** 20, G: 2 ** 30, T: 2 ** 40 };
+const memOf = (cb) => process.platform === "darwin"
+  ? execFile("top", ["-l", "1", "-pid", String(lsp.pid), "-stats", "mem"], (err, stdout) => {
+      const m = !err && /([\d.]+)([BKMGT])[+-]?\s*$/.exec(stdout.trim());
+      cb(m ? Number(m[1]) * UNIT[m[2]] : 0);
+    })
+  : execFile("ps", ["-o", "rss=", "-p", String(lsp.pid)], (err, stdout) => cb(err ? 0 : Number(stdout.trim()) * 1024));
 let batchAt = 0, heavySince = 0;
 const watch = setInterval(() => {
-  execFile("ps", ["-o", "rss=", "-p", String(lsp.pid)], (err, stdout) => {
-    const rss = err ? 0 : Number(stdout.trim()) * 1024;
+  memOf((rss) => {
     heavySince = rss > HEAVY ? heavySince || Date.now() : 0;
-    const why = heavySince && Date.now() - heavySince > HEAVY_FOR ? `tsgo held ${Math.round(rss / 2 ** 30)} GB for over two minutes`
-      : Date.now() - started > OVER ? "tsgo ran five minutes past its budget" : "";
+    const why = heavySince && Date.now() - heavySince > HEAVY_FOR ? `tsgo held ${Math.round(rss / 2 ** 30)} GB for over half a minute`
+      : Date.now() - started > OVER ? "tsgo ran two minutes past its budget" : "";
     if (!why) return;
     process.stderr.write(`${why}: stopped, keeping what it found\n`);
     left = pkgs.length - batchAt;

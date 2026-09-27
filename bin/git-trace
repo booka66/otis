@@ -64,7 +64,16 @@ runner() {
   top=$(git rev-parse --show-toplevel)
   [ -x "$top/node_modules/.bin/jest" ] && printf '%s\n' "$share/walk-run-jest"
 }
-specs_of() { git diff --name-only --no-renames --diff-filter=d "$1" "$2" | git-test-files kinds | awk -F'\t' '$2 == "tests" && $1 ~ /\.[cm]?[jt]sx?$/ { print $1 }'; }
+# specs_of <base> <head>: the specs the change touched, and the spec beside
+# each source file it touched (foo.ts's foo.spec.ts): a change that leaves a
+# file's tests alone is still tested by them.
+specs_of() {
+  git diff --name-only --no-renames --diff-filter=d "$1" "$2" | git-test-files kinds | awk -F'\t' '$1 ~ /\.[cm]?[jt]sx?$/ && ($2 == "tests" || $2 == "")' |
+    while IFS=$(printf '\t') read -r f k; do
+      if [ "$k" = tests ]; then echo "$f"; continue; fi
+      for s in "${f%.*}".spec."${f##*.}" "${f%.*}".test."${f##*.}"; do git cat-file -e "$2:$s" 2>/dev/null && echo "$s"; done
+    done | awk '!seen[$0]++'
+}
 
 case $1 in
   --can)
@@ -335,12 +344,17 @@ cover() {
 # the files it keeps). A big change is split into chapters first; each is
 # written side by side, and lands on the screen as it does. Then each is read
 # the way you read it: a second model given only that chapter as it is drawn,
-# start to finish, and its files' lines no stop shows, says what it still
-# cannot answer from it (a name used before it is explained, a jump, a
-# question left open, code left out), and that stays on the chapter as its
-# open questions. Writing it again against them was tried: on a big chapter
-# it dropped as much as it fixed, at twice the cost. Each is one turn with no
-# tools, everything in the prompt. Nothing without an agent, or with
+# start to finish, and its files' lines no stop shows, says what a reviewer
+# should still check about the code (a claim the values contradict, a case
+# that looks wrong, two places that disagree, a leftover), and that stays on
+# the chapter as its open questions, and on the stop each is about. Only
+# what it labels a bug is kept: told to leave out untested paths and stale
+# comments, it listed them anyway, but labels them honestly. Asked
+# instead what the tour failed to explain, half of what it said was that a
+# line was not shown, which is nothing to act on. Writing the tour again
+# against its gaps was tried: on a big chapter it dropped as much as it
+# fixed, at twice the cost. Each is one turn with no tools, everything in
+# the prompt. Nothing without an agent, or with
 # otis.walkModel off; the tests' walk is still there. otis.walkReaderModel is
 # the reader's model.
 tour() {
@@ -365,7 +379,7 @@ tour() {
 }
 tassemble() { $walk tour-assemble "$d" 2>>"$d/log"; }
 stops='{"type":"object","additionalProperties":false,"required":["intent","stops"],"properties":{"intent":{"type":"string"},"stops":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","says","path","start","end","focus","test","proves"],"properties":{"title":{"type":"string"},"says":{"type":"string"},"path":{"type":"string"},"start":{"type":"integer"},"end":{"type":"integer"},"focus":{"type":"integer"},"test":{"type":"string"},"proves":{"type":"string"}}}}}}'
-gaps='{"type":"object","additionalProperties":false,"required":["clear","gaps"],"properties":{"clear":{"type":"boolean"},"gaps":{"type":"array","items":{"type":"string"}}}}'
+gaps='{"type":"object","additionalProperties":false,"required":["clear","gaps"],"properties":{"clear":{"type":"boolean"},"gaps":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","stop","says"],"properties":{"kind":{"type":"string","enum":["bug","untested","doc","other"]},"stop":{"type":"integer"},"says":{"type":"string"}}}}}}'
 # chapter <i>: one chapter written, then read.
 chapter() {
   i=$1 c=$d/tour.c$1
@@ -377,8 +391,31 @@ chapter() {
   mv "$c.new" "$c.json"; echo checking > "$c.state"; tassemble
   reader "$i" > "$c.read.prompt"
   ask "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" "$gaps" "$c.read.prompt" "reading $what" > "$c.read.json"
-  jq '{questions: (if .clear then [] else .gaps end)}' "$c.read.json" > "$c.q.json" 2>/dev/null || rm -f "$c.q.json"
+  jq '[.gaps[] | select(.kind == "bug") | {stop, says}]' "$c.read.json" > "$c.bugs.json" 2>/dev/null || { rm -f "$c.state"; tassemble; return; }
+  [ "$(jq length "$c.bugs.json")" -gt 0 ] && check "$i"
+  jq '{questions: .}' "$c.bugs.json" > "$c.q.json"
   rm -f "$c.state"; tassemble
+}
+checked='{"type":"object","additionalProperties":false,"required":["checks"],"properties":{"checks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["n","real","why"],"properties":{"n":{"type":"integer"},"real":{"type":"boolean"},"why":{"type":"string"}}}}}}'
+# check <i>: the reader's bugs, each checked against the code at the head,
+# and only those it finds are kept. The reader has only the tour, so what it
+# gets wrong it gets wrong about what the tour leaves out: a parameter's type,
+# a guard in the caller. Its first bug that got through was a property read
+# "with no guard", on a parameter whose type makes it always there. A check
+# that cannot get a worktree keeps them all.
+check() {
+  mkdir -p "$d/check-$1"; echo $$ > "$d/check-$1/pid"
+  wt=$(git-claude-worktree take review "$d/check-$1" "$head" 2>>"$d/log") || return 0
+  { cat <<'EOF'
+A reviewer read a tour of a change, with no access to the code, and reported the problems below. The code at the change's head is your working directory: read what each one turns on (the function, its parameters' types, its callers, the guard it says is missing) and say whether it is real. real is true only when the code does the wrong thing in the case it names; false when the code shows otherwise (a type that rules the case out, a guard elsewhere, a caller that never passes it) or when it is not a wrong result at all. n is its index, from 0. why is one sentence, with the path:line that settles it.
+
+EOF
+    jq . "$c.bugs.json"; } > "$c.check.prompt"
+  adir=$wt atools=Read,Grep,Glob ask "$model" "$checked" "$c.check.prompt" "checking $what" > "$c.check.json"
+  git-claude-worktree release "$wt"
+  jq -e '.checks' "$c.check.json" >/dev/null 2>&1 &&
+    jq --slurpfile k "$c.check.json" '[to_entries[] | select(.key as $n | $k[0].checks | any(.n == $n and .real)) | .value]' "$c.bugs.json" > "$c.bugs.new" &&
+    mv "$c.bugs.new" "$c.bugs.json"
 }
 # reader <i>: what a chapter's reader is given: the chapter as it is drawn,
 # start to finish, and its files' lines no stop shows.
@@ -386,13 +423,12 @@ reader() {
   cat <<'EOF'
 You are a reviewer who has never seen this code. Below is everything a tour of a merge request (or of one part of it) shows you, in the order you read it: a summary, then stops, each a title, a few sentences, the lines of code it picked and, where a test ran them, the values that test had. You get nothing else: you cannot open a file or search.
 
-Read it once, start to finish. Then list what keeps you from understanding what it covers and how from the tour alone, each concrete (the stop's number and the word or line):
-- a name (type, helper, table, flag, constant) used before the tour explains it;
-- a stop that leans on something not shown yet, or a jump you cannot follow from the stop before;
-- a question the tour leaves open about what the code does;
-- a claim the lines or values shown contradict;
-- changed code you need but the tour leaves out (the changed lines no stop shows are listed at the end; say which of them matter).
-Judge understanding of this change, not of what it uses: a name from outside the change that the tour says what it is in a phrase is fine, and you need no library's internals. A branch without test values is fine when its lines are shown. A pointer to another chapter for something outside this one is fine. Leave out taste and style. clear is true when nothing on the list gets in the way.
+Read it once, start to finish. Then list the problems in the code: places where, for some input or state, the lines shown do the wrong thing. Each has a kind:
+- bug: the code shown gives a wrong result, drops or corrupts data, or throws, for a case you can name from the lines and values in front of you: two returns of one function that disagree, a branch that skips what its siblings do, a caller still on the old shape, a value of the wrong kind, a claim the values contradict. says names the case and what goes wrong in it.
+- untested: a path no test ran, or ran only with the value that skips it.
+- doc: a comment, name or message that no longer matches the code.
+- other: anything else (taste, style, what the tour fails to show or explain).
+Only bug reaches the reviewer; the rest is dropped, so label honestly rather than dress an untested path up as a bug. A bug is established by what is in front of you: when it turns on something you cannot see (a caller, a lock, another file, what a library does, how often a case happens), it is not one. Say which stop it is most about (stop, its number; 0 when it is about none); says does not start with the stop's number, and is one or two sentences. The changed lines no stop shows are listed at the end: use them as evidence too. Most chapters have no bug, and an empty list is the usual answer. clear is true when there is no bug.
 
 EOF
   $walk tour-text "$d" "$1" 2>>"$d/log"
@@ -401,8 +437,9 @@ EOF
 }
 # ask <model> <schema> <prompt file> <what>: one turn, its answer's JSON on
 # stdout, its progress in the run's events.
+# With adir and atools set, it runs there with those tools.
 ask() {
-  (cd "$d" && otis-agent-run -p --model "$1" --restricted --tools "" \
+  (cd "${adir:-$d}" && otis-agent-run -p --model "$1" --restricted --tools "${atools:-}" \
     --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none \
     --output-format stream-json --verbose --json-schema "$2" < "$3" 2>>"$d/log" |
     tee "$3.events" | git-claude-view --events "$4" >> "$d/events.jsonl")

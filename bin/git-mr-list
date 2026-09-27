@@ -237,7 +237,7 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
   # The sentence version lives in the preview, where there is room for it.
   def ai_word($kind):
     ($fixes[.iid] // {}) as $f | ($claude[.iid] // {}) as $cl |
-    $verify[.iid] as $v | ($walk // {})[.iid] as $w | .diffRefs.headSha as $h |
+    $verify[.iid] as $v | .iid as $iid | (.sourceBranch // "") as $src | (($walk // {}) | .[$iid] // .[$src]) as $w | .diffRefs.headSha as $h |
     def n($c; $one; $many): "\($c) " + (if $c == 1 then $one else $many end);
     if $kind == "mine" and $f.fixing then attention + "fixing"
     elif $cl.reviewing then attention + "reviewing"
