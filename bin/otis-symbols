@@ -336,7 +336,7 @@ headline() {
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
   L+=("") LI+=(0)
-  if (( ! loaded )); then loader; for l in "${reply[@]}"; do L+=("$l") LI+=(0); done; return; fi
+  if (( ! loaded )); then L+=("  ${C}reading the change…$R") LI+=(0); return; fi
   # Claude's sentence, the list's header, wrapped to the list.
   if (( hdr )) && [[ -s $st/header ]]; then
     plain "$(<$st/header)"; words=(${=REPLY}); s=
@@ -457,28 +457,6 @@ go() {
 # there from where it was, shared by the two rows it is between. lpos is
 # where it is, for a move that starts before this one ends.
 integer lon=0
-# loader: while the list has not landed, its title scrambles into place,
-# as deque's scramble does (noise in the muted color settling a character
-# at a time into the accent), and a highlight runs along a rule under
-# "reading the change": something moving says it is working.
-float lt0=0
-loader() {
-  local ttl=${title%% } out= ch noise='█▓▒░╔╗╚╝═║╬▀▄'
-  float t
-  (( lt0 )) || lt0=$EPOCHREALTIME
-  (( t = EPOCHREALTIME - lt0 ))
-  integer i n=${#ttl} k=$(( int(t * 30) ))
-  for (( i = 1; i <= n; i++ )); do
-    ch=${ttl[i]}
-    # Each character settles at its own moment within the first 0.6s.
-    if [[ $ch != ' ' ]] && (( t < (i * 7919 % 97) / 97.0 * 0.6 )); then out+=$F${noise[(i + k) % ${#noise} + 1]}$R
-    else out+=$A$B$ch$R; fi
-  done
-  integer bw=24 at=$(( int(t * 18) % (bw + 6) - 3 )) j
-  local bar=
-  for (( j = 0; j < bw; j++ )); do (( j >= at && j < at + 3 )) && bar+=$A━$R || bar+=$F━$R; done
-  reply=("" "" "    $out" "" "    ${C}reading the change…$R" "    $bar")
-}
 float lt0=0 lfrom=0 lpos=0
 typeset -a LITI LITA
 litrow() {
@@ -2200,7 +2178,7 @@ while :; do
   reply=()
   # A transition draws a frame every 20ms (zselect counts hundredths): at
   # 10ms a frame of the whole pane, under a multiplexer, came out in bursts.
-  zselect -t $(( xon || lon || ! loaded ? 2 : tmo )) -r $tty ${winch:+-r} $winch
+  zselect -t $(( xon || lon ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize
@@ -2215,7 +2193,6 @@ while :; do
     changed=0
     (( xon )) && xtick && changed=1
     (( lon )) && changed=1
-    (( ! loaded )) && changed=1 dirty=1
     # Once a second: whatever opened this is still there (else it goes,
     # rather than read keys under a shell's prompt), and, without perl, the size.
     if (( EPOCHSECONDS != stick )); then
