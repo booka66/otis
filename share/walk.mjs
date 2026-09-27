@@ -6,6 +6,11 @@
 //   walk.mjs cover <dir>               <dir>/cover.json: the tests the traces saw, the changed
 //                                      definitions each ran, and the callable ones none ran, each
 //                                      with why
+//   walk.mjs diff <dir>                <dir>/diff.json: what the tests do differently at the base
+//                                      and the head, grouped (below)
+//   walk.mjs reached <dir>             the specs whose tests reached the change, a line each
+//   walk.mjs diff-prompt <dir> <i>     change i put to a model against the change's description
+//   walk.mjs diff-verdicts <dir>       the model's verdicts (diff.<i>.json) onto diff.json
 //   walk.mjs rows <dir>                P's list: those gaps, then the tests
 //   walk.mjs preview <dir> <row id>    a row's preview
 //   walk.mjs walk-rows <dir> <test> <side>        a test's walk, a row a call it made
@@ -14,8 +19,9 @@
 //                                      line's preview (git-trace cats them)
 //
 // <dir> is the run's (git-trace): table (git-symbols --table), shas (base and
-// head), specs (a path a line), trace/<i>.jsonl the head's hits for spec i
-// and base/<i>.jsonl the base's, ran/<i> and base/<i>.status how each ran,
+// head), specs (a path a line), trace/<i>.jsonl the head's hits for spec i,
+// base/<i>.jsonl the base's and again/<i>.jsonl the head's once more, ran/<i>
+// and base/<i>.status how each ran, about what the change says it does,
 // inputs.json the inputs Claude wrote (w). <test> is its index in cover.json,
 // <side> head or base.
 //
@@ -94,8 +100,11 @@ function run(dir) {
   const specs = existsSync(join(dir, "specs")) ? readFileSync(join(dir, "specs"), "utf8").split("\n").filter(Boolean) : [];
   return { dir, rev: { base, head }, specs, rows: table(join(dir, "table")) };
 }
+// A side's traces: the head's in trace/, the base's in base/, and the head's
+// run again (for the behavior diff's noise) in again/.
+const subOf = (side) => side === "base" || side === "again" ? side : "trace";
 function hits(dir, side, i) {
-  const f = join(dir, side === "base" ? "base" : "trace", i + ".jsonl");
+  const f = join(dir, subOf(side), i + ".jsonl");
   if (!existsSync(f)) return [];
   return lines(f).filter((h) => h.at);
 }
@@ -124,7 +133,7 @@ function breakable(r, side, path) {
 // for src/, .js for .ts), so it is matched by its name, then by the most
 // directories in common.
 function split(r, side) {
-  const sub = join(r.dir, side === "base" ? "base" : "trace");
+  const sub = join(r.dir, subOf(side));
   const stem = (p) => p.split("/").pop().replace(/\.[cm]?[jt]sx?$/, "");
   const of = new Map();
   const spec = (file) => {
@@ -162,15 +171,15 @@ function split(r, side) {
   const all = [...new Set([...had, ...marks])];
   writeFileSync(bf, all.join("\n") + (all.length ? "\n" : ""));
   // How each spec's run ended: its slot's.
-  const ranDir = side === "base" ? sub : join(r.dir, "ran");
+  const ranDir = side === "head" ? join(r.dir, "ran") : sub;
   mkdirSync(ranDir, { recursive: true });
   for (const f of readdirSync(sub).filter((x) => /^w\d+\.specs$/.test(x))) {
     const st = existsSync(join(sub, f.replace("specs", "status"))) ? readFileSync(join(sub, f.replace("specs", "status")), "utf8").trim() : "";
-    for (const i of readFileSync(join(sub, f), "utf8").split("\n").filter(Boolean)) writeFileSync(join(ranDir, side === "base" ? i + ".status" : i), st + "\n");
+    for (const i of readFileSync(join(sub, f), "utf8").split("\n").filter(Boolean)) writeFileSync(join(ranDir, side === "head" ? String(i) : i + ".status"), st + "\n");
   }
 }
 function status(dir, side, i) {
-  const f = join(dir, side === "base" ? "base" : "ran", side === "base" ? i + ".status" : String(i));
+  const f = side === "head" ? join(dir, "ran", String(i)) : join(dir, subOf(side), i + ".status");
   return existsSync(f) ? readFileSync(f, "utf8").trim() : "";
 }
 // mocks: the modules a spec replaces with jest.mock, as paths without extensions.
@@ -449,16 +458,271 @@ function cover(r) {
   writeFileSync(join(r.dir, "cover.json"), JSON.stringify(out));
 }
 
+// --- what behaves differently --------------------------------------------------------
+// The same tests traced at the base and at the head, and the values the
+// change's code had in each compared: what a test still passing does
+// differently. Per test, function and local, the distinct values it took
+// (lines are left out, so the base's code and the head's line up), each
+// value normalized: times and paths go, and the ids a run makes up are
+// renamed in the order a test first sees them (ac_AhUhZTkbenH is ac#1), so
+// the same id in two places still matches and a fresh one does not count.
+// What two runs of the head differ by on their own is noise wherever it is:
+// a database handing rows back in another order. On the first real change
+// this ran on, 156 of 3,977 values differed between two runs of the head
+// before this, and 3 after, all from row order.
+const MADE = [
+  [/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z?/g, "<time>"],
+  [/\w{3} \w{3} \d\d \d{4} \d\d:\d\d:\d\d GMT[+-]\d{4}( \([^)]*\))?/g, "<time>"],
+  [/\b1[67]\d{11}\b/g, "<epoch>"],
+  [/\/var\/tmp\/otis-walk\/[^"\s,}]*/g, "<path>"],
+  // An ObjectId or a Buffer past the depth the tracer opens: its bytes, as text.
+  [/\b(ObjectId|Buffer|ArrayBuffer)(\(\d+\))? \{[^{}]*?(\}|…)/g, "<$1>"],
+];
+// An id: a prefix and a token with a digit or a capital in it (not an enum
+// like checkout_abandoned), 24 hex, 15 digits or more, or a UUID.
+// A UUID first, prefixed or not (call_<uuid> is one id, not call_ and a tail).
+// Last, a string that is nothing but 10 to 32 letters and digits of both
+// cases (a discount code a test makes up, FCjHaOBcrTSR4kpV): the whole
+// string only, so a piece of base64 in a URL, which can carry a real change,
+// is left as it is.
+const MADE_ID = /\b(?:(?:([a-z][a-z_]{0,15})_)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|([a-z][a-z_]{0,15})_(?=[A-Za-z0-9]*[0-9A-Z])[A-Za-z0-9]{8,}|[0-9a-f]{24}|\d{15,}n?|(?<=")(?=[A-Za-z0-9]{0,31}[A-Z])(?=[A-Za-z0-9]{0,31}[a-z])(?=[A-Za-z0-9]{0,31}[0-9])[A-Za-z0-9]{10,32}(?="))\b/g;
+function normalizer() {
+  const ids = new Map(), n = new Map();
+  const leaf = (s) => MADE.reduce((s, [re, to]) => s.replace(re, to), s).replace(MADE_ID, (m, pu, pre) => {
+    if (!ids.has(m)) { const p = pu || pre || (/^\d+n?$/.test(m) ? "n" : /^[0-9a-f]+$/.test(m) ? "hex" : "made"); n.set(p, (n.get(p) || 0) + 1); ids.set(m, `${p}#${n.get(p)}`); }
+    return ids.get(m);
+  });
+  const walk = (v) => !isObj(v) ? leaf(String(v))
+    : ["ObjectId", "Buffer", "ArrayBuffer"].includes(v.c) ? `<${v.c}>`
+    : { ...v, p: v.p.map(([k, x]) => [k, walk(x)]) };
+  return walk;
+}
+// bags: {test|path|function|local: {values, line, fn}} for a side, every
+// spec's hits, "=" (as it was at the function's last pause) filled in. Only
+// what crosses the function's edge counts: its parameters, and what it
+// returns (as "returns"; an async function's is a promise, left out, and
+// shows as what its caller passes on). The names it uses on the way are the
+// code's own business: a refactor that kept a name for something else
+// (threadFields, the whole lookup before and its fields after) read as the
+// function's output changing shape. The
+// function is the one the tracer paused in, since one definition (a class, a
+// service) holds many, each with its own rows; it is named for the
+// definition when it has no name of its own.
+const ANON = /^(\(anonymous\)|Object\.<anonymous>|)$/;
+function bags(r, side, ds) {
+  const out = new Map(), per = new Map();
+  r.specs.forEach((spec, i) => {
+    const carry = new Map();
+    for (const h of hits(r.dir, side, i)) {
+      if (h.test == null || h.at.line == null) continue;
+      const ck = `${h.test}|${h.at.src}|${h.at.fn}|${h.stack.length}`;
+      const prev = carry.get(ck) || {};
+      const locals = Object.fromEntries(Object.entries(h.locals || {}).map(([k, v]) => [k, v === "=" ? prev[k] : v]));
+      carry.set(ck, locals);
+      const sd = side === "again" ? "head" : side;
+      const o = owner(ds, h.at.src, h.at.line, sd);
+      if (!o) continue;
+      if (!per.has(h.test)) per.set(h.test, normalizer());
+      const norm = per.get(h.test);
+      const param = edge(r, o, h, sd);
+      const crossed = Object.entries(locals).filter(([name]) => param(name));
+      if (h.ret !== undefined && !(isObj(h.ret) ? h.ret.c === "Promise" : /^Promise\b/.test(h.ret))) crossed.push(["returns", h.ret]);
+      for (const [name, v] of crossed) {
+        if (v === undefined || v === "ƒ" || NOISE.test(name) || (typeof v === "string" && API.test(v))) continue;
+        const k = `${h.test}|${o.d.path}|${o.d.name}.${h.at.fn}|${name}`;
+        // from: the traced line that called it, where what it was given was made.
+        if (!out.has(k)) out.set(k, { values: new Map(), line: h.at.line, spec: i, fn: ANON.test(h.at.fn) ? o.d.name : h.at.fn.replace(/^.*\./, ""),
+          from: h.stack[0] && h.stack[0].line != null && name !== "returns" ? { path: h.stack[0].src, line: h.stack[0].line, fn: h.stack[0].fn } : null });
+        const nv = norm(v);
+        out.get(k).values.set(full(nv), nv);
+      }
+    }
+  });
+  return out;
+}
+// edge: whether a local is a parameter of the function a hit is in (the
+// definition, or a callback in it), from its signature at that side.
+const edges = new Map();
+function edge(r, o, h, side) {
+  const src = text(side === "base" ? r.rev.base : r.rev.head, o.d.path);
+  const cb = inner(src, o.r, h.at.line, h.at.fn, o.d.name);
+  const start = cb ? cb.start : o.r[0], k = `${side}|${o.d.path}|${start}`;
+  if (!edges.has(k)) {
+    const sig = params(src, start, Math.min(o.r[1], start + 30), !!cb);
+    edges.set(k, (name) => new RegExp("(^|[^\\w$.])" + name.replace(/\$/g, "\\$") + "\\b").test(sig));
+  }
+  return edges.get(k);
+}
+// changes between two values, at paths into them.
+const methods = (v) => isObj(v) ? !v.a && v.p.length > 0 && v.p.every(([, x]) => x === "ƒ") : API.test(String(v));
+function delta(x, y, path, out) {
+  if (methods(x) && methods(y)) return;
+  if (!isObj(x) || !isObj(y) || !!x.a !== !!y.a) {
+    if (full(x) !== full(y)) out.push({ kind: "changed", path, x: full(x), y: full(y) });
+    return;
+  }
+  if (x.a) {
+    if (x.p.length !== y.p.length) out.push({ kind: "count", path, x: x.p.length, y: y.p.length });
+    for (let i = 0; i < Math.min(x.p.length, y.p.length); i++) delta(x.p[i][1], y.p[i][1], path, out);
+    return;
+  }
+  const X = new Map(x.p), Y = new Map(y.p);
+  // A field past what the tracer kept is not gone.
+  for (const [k, v] of Y) if (!X.has(k) && !x.m) out.push({ kind: "added", path: path + "." + k, y: full(v) });
+  for (const [k, v] of X) if (!Y.has(k) && !y.m) out.push({ kind: "removed", path: path + "." + k, x: full(v) });
+  for (const [k, v] of X) if (Y.has(k)) delta(v, Y.get(k), path + "." + k, out);
+}
+function changes(A, B) {
+  const out = [];
+  for (const [k, a] of A) {
+    const b = B.get(k);
+    if (!b) continue;
+    const [test, path, , name] = k.split("|");
+    const xs = [...a.values.values()], ys = [...b.values.values()], found = [];
+    // Different counts are the change; pairing the values up by the order
+    // they came in would then pair unrelated ones.
+    if (xs.length !== ys.length) found.push({ kind: "count", path: name, x: xs.length, y: ys.length });
+    else for (let i = 0; i < xs.length; i++) delta(xs[i], ys[i], name, found);
+    for (const c of found) out.push({ ...c, key: k, test, file: path, fn: b.fn, line: b.line, spec: b.spec, from: b.from });
+  }
+  return out;
+}
+// diff: <dir>/diff.json, the changes grouped by what changed wherever it
+// did (a field added is one change, not one a function it passes through;
+// the counts one test's values changed by are one change), each with where,
+// in which tests, and how many of those tests are in spec files the change
+// leaves alone: behavior an old test sees differently.
+function diff(r) {
+  const ds = defs(r.rows);
+  const base = bags(r, "base", ds), head = bags(r, "head", ds);
+  let all = changes(base, head), masked = 0;
+  // The specs with any change, masked or not: what the head is run again for.
+  const changed = [...new Set(all.map((c) => c.spec))].sort((a, b) => a - b);
+  const again = r.specs.some((s, i) => hits(r.dir, "again", i).some((h) => h.test != null));
+  if (again) {
+    const noisy = new Set(changes(head, bags(r, "again", ds)).map((c) => c.key + c.path));
+    const kept = all.filter((c) => !noisy.has(c.key + c.path));
+    masked = all.length - kept.length; all = kept;
+  }
+  const touched = new Set(git("diff", "--name-only", "--no-renames", r.rev.base, r.rev.head).split("\n"));
+  const field = (p) => p.split(".").pop();
+  const renumbered = (v) => /^"?[a-z]+#\d+"?$/.test(v);
+  const groups = new Map();
+  for (const c of all) {
+    // Ids renumbered because more or fewer were made say what a count beside them does.
+    if (c.kind === "changed" && renumbered(c.x) && renumbered(c.y)) continue;
+    const k = c.kind === "count" ? `count|${c.test}|${Math.sign(c.y - c.x)}`
+      : `${c.kind}|${field(c.path)}`;
+    if (!groups.has(k)) groups.set(k, { kind: c.kind, field: field(c.path), x: c.x ?? null, y: c.y ?? null, values: [], counts: [], fns: [], tests: [], untouched: [], from: null });
+    const g = groups.get(k);
+    // A field's values, or how they changed: undefined → true going in and
+    // false → true once stored are one change.
+    const v = c.kind === "added" ? c.y : c.kind === "removed" ? c.x : c.kind === "changed" ? `${cut(c.x, 60)} → ${cut(c.y, 60)}` : null;
+    if (v !== null && !g.values.includes(v)) g.values.push(v);
+    if (c.kind === "count" && !g.counts.some((x) => x.field === field(c.path))) g.counts.push({ field: field(c.path), x: c.x, y: c.y });
+    if (!g.fns.some((f) => f.name === c.fn && f.path === c.file)) g.fns.push({ name: c.fn, path: c.file, line: c.line });
+    // Where a changed value was handed in: the first call site seen passing
+    // one, which is the line to read, not the function it arrived in; on the
+    // line in its arguments that names the field, when one does (the
+    // planted sentViaHumanQueue: input.sentViaHumanQueue ?? true, not the
+    // create( eight lines above it).
+    if (!g.from && c.from) {
+      const t = text(r.rev.head, c.from.path), o = owner(ds, c.from.path, c.from.line, "head");
+      let line = c.from.line;
+      if (c.kind !== "count") for (let n = c.from.line; n <= Math.min(t.length, c.from.line + 40); n++) if (new RegExp("\\b" + field(c.path) + "\\b").test(t[n - 1] || "")) { line = n; break; }
+      g.from = { path: c.from.path, line, fn: o ? o.d.name : c.from.fn };
+    }
+    if (!g.tests.includes(c.test)) {
+      g.tests.push(c.test);
+      if (!touched.has(r.specs[c.spec])) g.untouched.push(c.test);
+    }
+  }
+  // Fields added and removed in the same places and tests are one object
+  // changing shape (a nested one made flat), not a change a field.
+  const merged = [];
+  for (const g of groups.values()) {
+    const at = (x) => JSON.stringify([x.fns.map((f) => f.name + f.path).sort(), [...x.tests].sort()]);
+    const into = (g.kind === "added" || g.kind === "removed") && merged.find((m) => (m.kind === "shape" || m.kind === "added" || m.kind === "removed") && at(m) === at(g));
+    if (!into) { merged.push(g); continue; }
+    if (into.kind !== "shape") Object.assign(into, { kind: "shape", added: into.kind === "added" ? [into.field] : [], removed: into.kind === "removed" ? [into.field] : [] });
+    into[g.kind].push(g.field);
+  }
+  // Changes, and no run of the head again to tell which are noise: said on the list.
+  const out = { raw: all.length + masked, masked, changed, unmasked: changed.length > 0 && !again, groups: merged.map((g) => ({ ...g, says: says(g) })) };
+  out.groups.sort((a, b) => b.untouched.length - a.untouched.length || b.tests.length - a.tests.length);
+  writeFileSync(join(r.dir, "diff.json"), JSON.stringify(out));
+}
+// reached: the specs whose tests reached the change at the head, a line
+// each: the ones worth running again. One that only imports the changed
+// file leaves hits from loading it, with no test.
+function reached(r) {
+  const out = r.specs.map((s, i) => i).filter((i) => hits(r.dir, "head", i).some((h) => h.test != null));
+  if (out.length) console.log(out.join("\n"));
+}
+// says: a change in a sentence, for the model. Which of its tests the change
+// leaves alone is not in it: told a new column showed up in five untouched
+// spec files, the model called the column the description promises a thing
+// to look at. That ranks the list instead.
+function says(g) {
+  const where = g.fns.slice(0, 3).map((f) => f.name).join(", ") + (g.fns.length > 3 ? ` and ${g.fns.length - 3} more` : "");
+  const tests = `${g.tests.length} test${g.tests.length === 1 ? "" : "s"}`;
+  const v = (s) => cut(s, 80);
+  const vals = g.values.slice(0, 3).map((x) => v(x)).join(", ") + (g.values.length > 3 ? ", …" : "");
+  if (g.kind === "added") return `A field \`${g.field}\` is there after the change and not before (${vals}), in ${where}, in ${tests}.`;
+  if (g.kind === "removed") return `The field \`${g.field}\` (${vals}) is gone after the change, in ${where}, in ${tests}.`;
+  if (g.kind === "shape") return `What ${where} works with changed shape after the change: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(", ")}, in ${tests}.`;
+  if (g.kind === "count") return `In the test "${g.tests[0]}", ${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} distinct values go through ${where} after the change: ${g.counts.map((c) => `${c.field} ${c.x} → ${c.y}`).join(", ")}.`;
+  return `\`${g.field}\` in ${where} changed: ${g.values.slice(0, 3).join(", ")}${g.values.length > 3 ? ", …" : ""} (before → after), in ${tests}.`;
+}
+// diffPrompt: one change put to a model against the change's own words
+// (<dir>/about), which it must quote before it judges: asked plainly, it
+// read "doesn't take the thread away" as promising what it forbids; made to
+// quote the sentence first, it read it right every time.
+function diffPrompt(r, i) {
+  const g = JSON.parse(readFileSync(join(r.dir, "diff.json"), "utf8")).groups[i];
+  const about = existsSync(join(r.dir, "about")) ? readFileSync(join(r.dir, "about"), "utf8").trim() : "";
+  return `You have no tools and cannot read code; judge only from what is below. You review a code change. Here is what its author says it does:
+
+<description>
+${about || "(no description)"}
+</description>
+
+Its tests were run before and after the change under a tracer, and this is what they did differently:
+${g.says}
+
+First quote, word for word, the sentence of the description that bears most on this. Then say whether that sentence promises it, forbids it, or says nothing about it. surprise is 0 when it is what the description says, 1 for a plausible side effect of it, 2 when a reviewer should look. why is one short sentence a reviewer reads.
+`;
+}
+// diffVerdicts: each change's verdict (<dir>/diff.<i>.json) onto it, those
+// to look at first.
+function diffVerdicts(r) {
+  const f = join(r.dir, "diff.json"), d = JSON.parse(readFileSync(f, "utf8"));
+  d.groups.forEach((g, i) => { g.verdict = readJson(join(r.dir, `diff.${i}.json`), null); });
+  d.groups.sort((a, b) => (b.verdict ? b.verdict.surprise : 1) - (a.verdict ? a.verdict.surprise : 1) || b.untouched.length - a.untouched.length);
+  d.judged = true;
+  writeFileSync(f, JSON.stringify(d));
+}
+
 // --- P's list -----------------------------------------------------------------------
 // The picker's fields: the row, then path, line, side, start, end, and the id at 12.
 const row = (show, path, line, id) => [show, path, line, "new", line, line, "", "", "", "", "", id].join("\t");
 function rows(r) {
   console.log(testRows(r).join("\n"));
 }
-// testRows: P's screen's rows: the changed code no test runs, then the tests.
+// testRows: P's screen's rows: what the tests do differently before and
+// after, the changed code no test runs, then the tests.
 function testRows(r) {
   const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
   const out = [];
+  const bd = readJson(join(r.dir, "diff.json"), null);
+  if (bd && bd.groups.length) {
+    const look = bd.groups.filter((g) => g.verdict && g.verdict.surprise === 2).length;
+    out.push(`${look ? C.bad : C.at}behavior that changed · ${bd.groups.length}${look ? ` · ${look} to look at` : ""}${C.r}${bd.unmasked ? `${C.faint} · not checked for noise${C.r}` : ""}` + "\t".repeat(11) + "gk-diff");
+    bd.groups.forEach((g, i) => {
+      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}`;
+      out.push(row(`${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}  ${n}`, g.fns[0].path, g.fns[0].line, "d:" + i));
+    });
+  }
   if (c.gaps.length) {
     out.push(`${C.at}changed code no test runs · ${c.gaps.length}${C.r}` + "\t".repeat(11) + "gk-gaps");
     c.gaps.forEach((g, i) => {
@@ -483,10 +747,48 @@ function testRows(r) {
   return out;
 }
 
+// A change in behavior on a row: its glyph for Claude's verdict (! look, ?
+// maybe, ✓ what the change says, · not judged), and what changed, short.
+const verdictMark = (g) => !g.verdict ? C.faint + "·" + C.r : g.verdict.surprise === 2 ? C.bad + "!" + C.r : g.verdict.surprise === 1 ? C.at + "?" + C.r : C.good + "✓" + C.r;
+function diffLabel(g) {
+  if (g.kind === "added") return `+ ${g.field}`;
+  if (g.kind === "removed") return `− ${g.field}`;
+  if (g.kind === "shape") return `reshaped: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(" ")}`;
+  if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} values: ${g.counts.map((c) => `${c.field} ${c.x}→${c.y}`).join(", ")}`;
+  return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
+}
+function diffPreview(r, g, w) {
+  const out = [C.text + "\x1b[1m" + cut(diffLabel(g), w) + C.r, ""];
+  const line = (k, v, c = C.text) => out.push(`${C.faint}${k.padEnd(11)}${C.r}${c}${cut(v, w - 11)}${C.r}`);
+  if (g.kind === "added") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "new, as", v));
+  else if (g.kind === "removed") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "gone, was", v));
+  else if (g.kind === "shape") { line("added", g.added.join(", ")); line("removed", g.removed.join(", ")); }
+  else if (g.kind === "count") g.counts.slice(0, 6).forEach((c, i) => line(i ? "" : "values", `${c.field}  ${c.x} before, ${c.y} after`));
+  else g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "was → is", v));
+  if (g.from) line("passed by", `${g.from.fn} at ${g.from.path.split("/").pop()}:${g.from.line}`, C.at);
+  line("where", g.fns.map((f) => f.name).join(", "), C.ctx);
+  line("in", `${g.tests.length} test${g.tests.length === 1 ? "" : "s"}` + (g.untouched.length ? `, ${g.untouched.length} in spec files the change leaves alone` : ""), C.ctx);
+  // The tests the change leaves alone first, marked ◦: behavior an old test sees differently.
+  for (const t of [...g.untouched, ...g.tests.filter((t) => !g.untouched.includes(t))].slice(0, 3)) line("", (g.untouched.includes(t) ? "◦ " : "• ") + t, C.faint);
+  out.push("");
+  const v = g.verdict;
+  if (!v) out.push(C.faint + "not judged: Claude reads each change against what the change says it does, when an agent is here" + C.r);
+  else {
+    out.push(v.surprise === 2 ? C.bad + "! a reviewer should look" + C.r : v.surprise === 1 ? C.at + "? a plausible side effect" + C.r : C.good + "✓ what the change says it does" + C.r);
+    if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).slice(0, 2).map((l) => "  " + C.ctx + l + C.r));
+    if (v.why) { const ws = wrap(v.why, w - 2); out.push(...ws.slice(0, 3).map((l, j) => "  " + C.text + l + (j === 2 && ws.length > 3 ? "…" : "") + C.r)); }
+  }
+  out.push("", C.faint + "enter opens where it happens" + C.r);
+  return out;
+}
+
 // --- a row's preview ------------------------------------------------------------------
 function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"))) {
   const w = W(), out = [];
-  if (id.startsWith("t:")) {
+  if (id.startsWith("d:")) {
+    const g = readJson(join(r.dir, "diff.json"), { groups: [] }).groups[+id.slice(2)];
+    if (g) out.push(...diffPreview(r, g, w));
+  } else if (id.startsWith("t:")) {
     const ti = +id.slice(2), t = c.tests[ti];
     const { steps } = walk(r, ti, "head");
     out.push(...wrap(t.name, w).map((l) => C.text + "\x1b[1m" + l + C.r));
@@ -523,7 +825,8 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
 function previews(r, out) {
   const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
   mkdirSync(out, { recursive: true });
-  const ids = [...c.gaps.map((g, i) => "g:" + i), ...c.tests.map((t, i) => "t:" + i)];
+  const bd = readJson(join(r.dir, "diff.json"), { groups: [] });
+  const ids = [...bd.groups.map((g, i) => "d:" + i), ...c.gaps.map((g, i) => "g:" + i), ...c.tests.map((t, i) => "t:" + i)];
   for (const id of ids) writeFileSync(join(out, id.replace(":", "_")), preview(r, id, c));
 }
 
@@ -1006,8 +1309,41 @@ function tourPrep(r, w, out = r.dir) {
     if (!many) { if (c.stops.length && state(c)) intro.push("", C.faint + state(c) + C.r); intro.push(...questions(c)); }
   });
   if (cover.gaps.length) intro.push("", ...para(`${cover.gaps.length} changed function${cover.gaps.length === 1 ? "" : "s"} no test runs: ` + cover.gaps.map((g) => "`" + g.name + "`").join(", "), C.at));
+  const bd = readJson(join(r.dir, "diff.json"), null);
+  if (bd && bd.groups.length) {
+    const look = bd.groups.filter((g) => g.verdict && g.verdict.surprise === 2);
+    intro.push("", ...para(`Its tests behave differently in ${bd.groups.length} way${bd.groups.length === 1 ? "" : "s"}` + (look.length ? `, ${look.length} to look at: ` + look.map((g) => g.kind === "count" ? `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} values in "${cut(g.tests[0], 40)}"` : "`" + g.field + "`").join(", ") : "") + ". a lists them.", look.length ? C.bad : C.at));
+  }
   writeFileSync(join(dir, "0"), intro.join("\n") + "\n");
   const stopOf = stops(r, cover);
+  // What the tests do differently, before the chapters: a stop a change
+  // Claude did not find in what the change says it does (all of them, when
+  // nothing judged them), the ones to look at first. Each is the function
+  // where it happens, with the values of a test that saw it (one the change
+  // leaves alone first), the value before and after, and the sentence of the
+  // description it was held against; s steps through that test, and b in the
+  // step there shows the same test before the change.
+  const said = bd ? bd.groups.filter((g) => !g.verdict || g.verdict.surprise > 0) : [];
+  if (said.length) {
+    rows.push(row(`${said.some((g) => g.verdict && g.verdict.surprise === 2) ? C.bad : C.at}\x1b[1mwhat the tests do differently${C.r}`, "", "", "tour:d"));
+    const page = [C.at + "\x1b[1m" + "What the tests do differently" + C.r, "", ...para(`The tests were run before the change and after it, and what went into and came out of the changed functions compared. ${said.length === bd.groups.length ? "These" : `These ${said.length} of the ${bd.groups.length}`} are not what the change says it does:`, C.text), ""];
+    if (bd.unmasked) page.splice(2, 0, ...para("The second run at the head, which tells a change from what moves between two runs of the same code, brought nothing back: some of these may be that.", C.at), "");
+    said.forEach((g, i) => page.push(`${C.faint}${String(i + 1).padStart(3)}${C.r}  ${verdictMark(g)} ${C.text}${cut(diffLabel(g), w - 10)}${C.r}`));
+    writeFileSync(join(dir, "d"), page.join("\n") + "\n");
+    const ds = defs(r.rows);
+    said.forEach((g, i) => {
+      const f = g.from || g.fns[0], o = owner(ds, f.path, f.line, "head");
+      const x = { path: f.path, focus: f.line, start: o ? o.r[0] : f.line, end: o ? o.r[1] : f.line, test: [...g.untouched, ...g.tests][0] };
+      rows.push(row(`${C.faint}${String(i + 1).padStart(2)}${C.r}  ${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}`, f.path, f.line, `tour:d${i + 1}`));
+      const { ti, k, body, at } = stopOf(x, w, AROUND);
+      const head = [C.faint + `behavior ${i + 1} of ${said.length}  ·  ${f.path.split("/").pop()}:${f.line}` + (g.from ? `  ·  where it is passed in` : "") + C.r, ""];
+      head.push(...diffPreview(r, g, w).slice(0, -2));
+      head.push(k >= 0 ? C.faint + `values from the test "${cover.tests[ti].name}"; s steps through it, b there shows it before the change` + C.r : C.faint + "no test stops on this line, so no values" + C.r);
+      head.push(C.faint + "─".repeat(w) + C.r);
+      writeFileSync(join(dir, `d${i + 1}`), `\x1epin ${head.length} at ${at}\n` + head.join("\n") + "\n" + solid(body, w));
+      writeFileSync(join(dir, `d${i + 1}.at`), `${f.path} ${f.line} ${k >= 0 ? ti : -1} ${k}\n`);
+    });
+  }
   tour.chapters.forEach((c, ci) => {
     const n = c.stops.length;
     if (many) {
@@ -1857,6 +2193,10 @@ function targets(tbl, side) {
 switch (cmd) {
   case "targets": targets(args[0], args[1]); break;
   case "cover": cover(run(args[0])); break;
+  case "diff": diff(run(args[0])); break;
+  case "reached": reached(run(args[0])); break;
+  case "diff-prompt": process.stdout.write(diffPrompt(run(args[0]), +args[1] || 0)); break;
+  case "diff-verdicts": diffVerdicts(run(args[0])); break;
   case "split": split(run(args[0]), args[1] || "head"); break;
   case "rows": rows(run(args[0])); break;
   case "preview": process.stdout.write(preview(run(args[0]), args[1] || "")); break;

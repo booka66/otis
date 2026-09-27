@@ -807,6 +807,39 @@ EOF
   echo '{"test":"lib walk: fresh","at":{"fn":"fresh","src":"lib.ts","line":16},"stack":[],"locals":{"o":"{ b: \"x\" }"}}' >> "$td/trace/0.jsonl"
   node "$share/walk.mjs" cover "$td"
   expect trace/written "$(jq -c '[(.gaps[] | select(.name == "fresh") | .input.reached), (.tests[] | select(.written) | .name)]' "$td/cover.json")" '[true,"lib walk: fresh"]'
+  # What the tests do differently (walk.mjs diff): the same tests at the
+  # base, and at the head once more. Only what crosses a function's edge
+  # counts: run returns 0 there and 1 here; the id and the code it is
+  # given are made up fresh each run, renamed away; grow's return moves between two runs of the head,
+  # so it is noise; sum, a name run uses on the way, is its own business.
+  bd=$tmp/behave; cp -R "$td" "$bd"; rm -rf "$bd/walks" "$bd"/entry-*; mkdir -p "$bd/base" "$bd/again"
+  cat > "$bd/trace/0.jsonl" <<'EOF'
+{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":2},"stack":[],"locals":{"o":"{ a: 1, id: \"ac_Hd82kQ0zPw\", code: \"FCjHaOBcrTSR4kpV\" }","twice":"true","sum":"2"}}
+{"test":"lib steps","at":{"fn":"grow","src":"lib.ts","line":8},"stack":[{"fn":"run","src":"lib.ts","line":3}],"locals":{},"ret":"7"}
+{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":3},"stack":[],"locals":{"o":"=","twice":"=","sum":"="},"ret":"1"}
+EOF
+  sed 's/ac_Hd82kQ0zPw/ac_Zz19xQ7mTe/; s/"ret":"7"/"ret":"8"/' "$bd/trace/0.jsonl" > "$bd/again/0.jsonl"
+  cat > "$bd/base/0.jsonl" <<'EOF'
+{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":2},"stack":[],"locals":{"o":"{ a: 1, id: \"ac_Pp03nB5vYc\", code: \"mXGaFoSVRvJx7GGP\" }","sum":"1"}}
+{"test":"lib steps","at":{"fn":"grow","src":"lib.ts","line":11},"stack":[{"fn":"run","src":"lib.ts","line":3}],"locals":{},"ret":"6"}
+{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":3},"stack":[],"locals":{"o":"=","sum":"="},"ret":"0"}
+EOF
+  node "$share/walk.mjs" diff "$bd"
+  expect trace/diff "$(jq -c '[.masked, [.groups[] | [.kind, .field, .values, .fns[0].name]]]' "$bd/diff.json")" '[1,[["changed","returns",["0 → 1"],"run"]]]'
+  # The specs whose tests reached the change, and those with a change: what
+  # the base runs, and what the head runs again.
+  # With no run of the head again to mask what moves on its own, the list says so.
+  expect trace/diff-unmasked "$(jq .unmasked "$bd/diff.json"):$(mv "$bd/again" "$bd/again.x"; node "$share/walk.mjs" diff "$bd"; jq .unmasked "$bd/diff.json"; mv "$bd/again.x" "$bd/again"; node "$share/walk.mjs" diff "$bd")" "false:true"
+  expect trace/diff-reached "$(node "$share/walk.mjs" reached "$bd"):$(jq -c .changed "$bd/diff.json")" "0:[0]"
+  expect trace/diff-row "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1|· returns 0 → 1 1 test, 1 untouched|"
+  expect trace/diff-preview "$(FZF_PREVIEW_COLUMNS=80 node "$share/walk.mjs" preview "$bd" d:0 | strip | grep -c 'was → is *0 → 1\|not judged')" "2"
+  echo "Grow the box by two" > "$bd/about"
+  expect trace/diff-prompt "$(node "$share/walk.mjs" diff-prompt "$bd" 0 | grep -c 'Grow the box by two\|returns. in run changed: 0 → 1\|First quote, word for word')" "3"
+  # Claude's verdict: to look at, first on the list, and counted on the tour.
+  echo '{"quote":"Grow the box by two","relation":"silent","surprise":2,"why":"it grows by one"}' > "$bd/diff.0.json"
+  node "$share/walk.mjs" diff-verdicts "$bd"
+  expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1 · 1 to look at|! returns 0 → 1 1 test, 1 untouched|"
+  expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-commit-open $head 'lib.ts' 3)"
   # The tour: what it sets out to do, then a stop a row, each with the values
   # of the test it names, and s from it to that test's step. One chapter is
   # stops alone; more are headed each by its title, and a chapter still being
@@ -814,6 +847,11 @@ EOF
   printf '%s' '{"intent":"grows things","planning":false,"chapters":[{"title":"","files":["lib.ts"],"intent":"grows things","state":"","questions":["what does shrink do?",{"stop":2,"says":"shrink can drop o.a"}],"stops":[{"title":"runs it","says":"`run` reads MY_FLAG and o.a","path":"lib.ts","start":2,"end":4,"focus":3,"test":"lib steps","proves":"o.a is 1"},{"title":"shrinks it","says":"nothing runs it","path":"lib.ts","start":10,"end":12,"focus":11,"test":"","proves":""}]}]}' > "$td/tour.json"
   export FZF_PREVIEW_COLUMNS=100
   expect trace/tour-rows "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | tr '\n' ';')" "what it sets out to do|tour:0; 1 runs it|tour:1-1; 2 shrinks it|tour:1-2;"
+  # A change the tests see that the description does not say comes first, a
+  # stop of its own, on the line it happens.
+  cp "$bd/diff.json" "$td/"; rm -rf "$td"/tour-[0-9]*
+  expect trace/tour-behavior "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | sed -n '2,3p' | tr '\n' ';')" "what the tests do differently|tour:d; 1 ! returns 0 → 1|tour:d1;"
+  rm -f "$td/diff.json"; rm -rf "$td"/tour-[0-9]*
   expect trace/tour-stop "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | strip | grep -E '✓|▶' | sed 's/ *$//' | tr -s ' ' | tr '\n' '|')" "✓ o.a is 1| 3 ▶ return o.a; o = { a: 1 }|"
   # Its sentences: a symbol drawn as code, backticks or not, the backticks dropped.
   expect trace/tour-prose "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-1 | grep 'reads' | sed -E "s/$(printf '\033')\\[[0-9;]*m/|/g" | tr -s '|')" "|run| reads |MY_FLAG| and |o.a|"
@@ -1171,7 +1209,7 @@ expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing waiting on you')" 
 expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
 # Nothing uncommitted and nothing past the base: enter has nothing to do,
 # so the footer offers only the keys that open the rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c 'gm MRs')" "0:1"
+expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c ' m MRs')" "0:1"
 # The last thing it writes, after the screen is put back.
 expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
 

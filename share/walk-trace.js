@@ -173,13 +173,19 @@ s.on("Debugger.scriptParsed", ({ params }) => {
   // Where V8 can stop, as source lines, written down after: a line a test
   // skipped is told from one nothing could stop on (a parameter, a key of an
   // object literal).
+  // And a breakpoint at each place a target function returns, where the
+  // pause has the value it returns (P's behavior diff compares what goes
+  // into a function and what comes out, not the names it uses on the way).
   post("Debugger.getPossibleBreakpoints", { start: { scriptId: params.scriptId, lineNumber: 0, columnNumber: 0 }, restrictToFunction: false }).then(({ locations }) => {
     for (const [t, si] of mine) {
       const want = new Set(t.lines), can = new Set();
       for (const loc of locations) {
         let seg = null;
         for (const x of byLine.get(loc.lineNumber) || []) if (x[1] <= (loc.columnNumber || 0) && (!seg || x[1] > seg[1])) seg = x;
-        if (seg && seg[3] === si && want.has(seg[2] + 1)) can.add(seg[2] + 1);
+        if (seg && seg[3] === si && want.has(seg[2] + 1)) {
+          can.add(seg[2] + 1);
+          if (loc.type === "return") post("Debugger.setBreakpoint", { location: { scriptId: params.scriptId, lineNumber: loc.lineNumber, columnNumber: loc.columnNumber } }).catch(() => {});
+        }
       }
       fs.writeSync(out, JSON.stringify({ breakable: t.src, lines: [...can].sort((a, b) => a - b) }) + "\n");
     }
@@ -213,6 +219,8 @@ s.on("Debugger.paused", async ({ params }) => {
       // An object opened three levels (then previews), when it moved.
       if (before[p.name] !== pv) todo.push(value(p.value, 3).then((v) => { locals[p.name] = v; }));
     }
+    // At a return, what it returns.
+    const ret = f.returnValue ? await value(f.returnValue, 3) : undefined;
     await Promise.all(todo);
     lap("values");
     seen.set(fk, now);
@@ -238,7 +246,7 @@ s.on("Debugger.paused", async ({ params }) => {
     const frames = params.callFrames.slice();
     for (let a = params.asyncStackTrace; a; a = a.parent) frames.push(...a.callFrames);
     const stack = frames.filter((c) => back.has(url(c))).map(where);
-    fs.writeSync(out, JSON.stringify({ test: test ?? null, file: file ?? null, at: where(f), stack: stack.slice(1), locals }) + "\n");
+    fs.writeSync(out, JSON.stringify({ test: test ?? null, file: file ?? null, at: where(f), stack: stack.slice(1), locals, ...(ret !== undefined ? { ret } : {}) }) + "\n");
   } finally {
     await post("Debugger.resume");
     lap("resume"); stat.all += ms() - t0;
