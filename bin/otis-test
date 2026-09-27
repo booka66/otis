@@ -778,7 +778,11 @@ EOF
   expect trace/cover-tests "$(jq -c '[.tests[] | [.name, .defs]]' "$td/cover.json")" '[["lib steps",2],["lib alone",1]]'
   expect trace/cover-gap "$(jq -r '.gaps[] | select(.name == "fresh") | .why' "$td/cover.json")" "nothing traced reaches it"
   expect trace/rows-gap "$(node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 ~ /^g:/ && $1 ~ /fresh +nothing traced reaches it/' | wc -l | tr -d ' ')" "1"
-  expect trace/rows-test "$(node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 == "t:0" { print $1 }' | tr -s ' ')" "▇▇▇▇▇▇ 2 lib steps"
+  # The tests fold under a line of their own; enter on it shows them.
+  expect trace/rows-folded "$(GIT_FZF_STATE=$tmp/tst node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 == "t:0" || $12 == "open:tests" { print $1 }' | tr -s ' ')" "▸ 2 tests ran the change"
+  expect trace/open-tests "$(GIT_FZF_STATE=$tmp/tst git-trace --open "$td" open:tests)" "reload(git-trace --list '$td')"
+  expect trace/rows-test "$(GIT_FZF_STATE=$tmp/tst node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 == "t:0" { print $1 }' | tr -s ' ')" "▇▇▇▇▇▇ 2 lib steps"
+  GIT_FZF_STATE=$tmp/tst git-trace --open "$td" open:tests >/dev/null
   expect trace/preview-test "$(FZF_PREVIEW_COLUMNS=80 node "$share/walk.mjs" preview "$td" t:0 | strip | grep -c '└ grow')" "1"
   # A test's walk: a row a call it made (the second call of run marked as a
   # return to it), the line within a call the preview's, rendered once.
@@ -835,14 +839,14 @@ EOF
   # ? on P's screens reads how: the legend its list leaves in the picker's state.
   expect trace/diff-legend "$(GIT_FZF_STATE=$tmp/tst node "$share/walk.mjs" rows "$bd" >/dev/null; strip < "$tmp/tst/legend" | grep -c 'what the tests do differently\|tests changed too\|b there shows the same test before the change')|$(jq '.groups[0].testsChanged' "$bd/diff.json")" "3|false"
   expect trace/diff-reached "$(node "$share/walk.mjs" reached "$bd"):$(jq -c .changed "$bd/diff.json")" "0:[0]"
-  expect trace/diff-row "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1|· returns 0 → 1 1 test, 1 untouched|"
+  expect trace/diff-row "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "look at these · 1|· returns 0 → 1|"
   expect trace/diff-preview "$(FZF_PREVIEW_COLUMNS=80 node "$share/walk.mjs" preview "$bd" d:0 | strip | grep -c 'was → is *0 → 1\|not judged')" "2"
   echo "Grow the box by two" > "$bd/about"
   expect trace/diff-prompt "$(node "$share/walk.mjs" diff-prompt "$bd" 0 | grep -c 'Grow the box by two\|returns. in run changed: 0 → 1\|First quote, word for word')" "3"
   # Claude's verdict: to look at, first on the list, and counted on the tour.
   echo '{"quote":"Grow the box by two","relation":"silent","surprise":2,"why":"it grows by one"}' > "$bd/diff.0.json"
   node "$share/walk.mjs" diff-verdicts "$bd"
-  expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1 · 1 to look at|! returns 0 → 1 1 test, 1 untouched|"
+  expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "look at these · 1|! returns 0 → 1|"
   expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-commit-open $head 'lib.ts' 3)"
   # t on a change writes a test that pins it; c posts one that did.
   # t on changed code no test runs writes tests for it; c posts them once they pass.

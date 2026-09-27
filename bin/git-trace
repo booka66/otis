@@ -595,7 +595,7 @@ behave() {
 about() {
   case ${d##*/} in
     *[!0-9]*) git log --no-color --format='# %s%n%n%b' "$base..$head" ;;
-    *) glab api "projects/:fullpath/merge_requests/${d##*/}" 2>/dev/null | jq -r '"# \(.title)\n\n\(.description // "")"' ;;
+    *) git-forge api "projects/:fullpath/merge_requests/${d##*/}" 2>/dev/null | jq -r '"# \(.title)\n\n\(.description // "")"' ;;
   esac
 }
 verdict='{"type":"object","additionalProperties":false,"required":["quote","relation","surprise","why","plain"],"properties":{"quote":{"type":"string"},"relation":{"type":"string","enum":["promises","forbids","silent"]},"surprise":{"type":"integer","enum":[0,1,2]},"why":{"type":"string"},"plain":{"type":"string"}}}'
@@ -951,7 +951,7 @@ case $1 in
     exit 0 ;;
   --tests)
     d=$2 st=${GIT_FZF_STATE:-}
-    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test or open where a change in behavior happens,t=a test that pins a change in behavior, or tests for code no test runs,c=post those tests to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
+    otis-symbols "walk $(cat "$d/what") " 'enter=open it (a folded line: show or hide what is under it),t=write tests for this row,c=post them to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --list '$d')" \
       --bind "enter:transform(git-trace --open '$d' {12})" \
@@ -965,6 +965,11 @@ case $1 in
   --open)
     case $3 in
       t:*) echo "execute(git-trace --walk '$2' ${3#t:})" ;;
+      open:*)
+        # A folded line: what is under it shown, or hidden again.
+        o=${GIT_FZF_STATE:-/tmp}/open k=${3#open:}
+        if grep -qxF "$k" "$o" 2>/dev/null; then grep -vxF "$k" "$o" > "$o.new"; mv "$o.new" "$o"; else echo "$k" >> "$o"; fi
+        echo "reload(git-trace --list '$2')" ;;
       d:*) f=$(jq -r --argjson g "${3#d:}" '.groups[$g] | (.from // .fns[0]) | "\(.path) \(.line)"' "$2/diff.json"); read -r p l <<EOF
 $f
 EOF
@@ -1018,13 +1023,13 @@ EOF
     case $iid in
       b-*)
         b=$(printf '%s' "${iid#b-}" | tr '%' '/')
-        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        iid=$(git-forge api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
         [ -n "$iid" ] || { note "$b has no open MR to post them to"; exit 0; } ;;
     esac
     git-confirm "Comment on !$iid with the tests written for $(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")?" || exit 0
     jq -n --arg name "$(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")" --arg spec "$(jq -r .spec "$p.json")" --arg kind "$(jq -r '.kind // "unit"' "$p.json")" --arg why "$(jq -r '.why // ""' "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" \
       '{body: "No test runs `\($name)`. These \($kind) tests, in `\($spec)`, pass on this branch. \($why)\n\n```ts\n\($code)\n```\n"}' > "$p.post"
-    glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
+    git-forge api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
       { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }
     note "posted to !$iid"; exit 0 ;;
   --pin-post)
@@ -1034,14 +1039,14 @@ EOF
     case $iid in
       b-*)
         b=$(printf '%s' "${iid#b-}" | tr '%' '/')
-        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        iid=$(git-forge api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
         [ -n "$iid" ] || { note "$b has no open MR to post it to"; exit 0; } ;;
     esac
     git-confirm "Comment on !$iid with the test that passes before this change and fails with it?" || exit 0
     jq -n --arg spec "$(jq -r .spec "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" --arg fails "$(jq -r .fails "$p.json")" \
       --arg says "$(jq -r --arg g "$3" 'first(.groups[] | select(.id == $g)) | .says' "$d/diff.json")" \
       '{body: "Running this change'"'"'s tests before and after it: \($says)\n\nThis test, added to `\($spec)`, passes on the target branch and fails on this one:\n\n```ts\n\($code)\n```\n" + (if $fails != "" then "\nOn this branch:\n\n```\n\($fails)\n```\n" else "" end)}' > "$p.post"
-    glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
+    git-forge api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
       { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }
     note "posted to !$iid"; exit 0 ;;
   --again) d=$2; phase "$d" run; exit 0 ;;
@@ -1053,7 +1058,7 @@ EOF
     d=$2 key=${2##*/} title= url=
     case $key in
       *[!0-9]*) title=$(printf '%s' "${key#b-}" | tr '%' '/') ;;
-      *) mr=$(glab api "projects/:fullpath/merge_requests/$key" 2>/dev/null) && title=$(printf '%s' "$mr" | jq -r .title) url=$(printf '%s' "$mr" | jq -r .web_url) ;;
+      *) mr=$(git-forge api "projects/:fullpath/merge_requests/$key" 2>/dev/null) && title=$(printf '%s' "$mr" | jq -r .title) url=$(printf '%s' "$mr" | jq -r .web_url) ;;
     esac
     OTIS_T_ATTENTION="38;5;201" OTIS_T_GOOD="38;5;202" OTIS_T_BAD="38;5;203" OTIS_T_YOURS="38;5;204" OTIS_T_TEXT="38;5;205" \
       OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_BAT= \
@@ -1070,12 +1075,13 @@ EOF
     case $iid in
       b-*)
         b=$(printf '%s' "${iid#b-}" | tr '%' '/')
-        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        iid=$(git-forge api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
         [ -n "$iid" ] || { note "$b has no open MR to post it to; gb's n opens one"; exit 0; } ;;
     esac
     [ -s "$d/tour.json" ] || { note "no tour yet"; exit 0; }
-    mr=$(glab api "projects/:fullpath/merge_requests/$iid") || { note "could not read !$iid from GitLab"; exit 0; }
-    me=$(glab api user 2>/dev/null | jq -r .username)
+    git-forge can upload || { note "GitHub takes no uploads to link a page from; w opens it to share"; exit 0; }
+    mr=$(git-forge api "projects/:fullpath/merge_requests/$iid") || { note "could not read !$iid from GitLab"; exit 0; }
+    me=$(git-forge api user 2>/dev/null | jq -r .username)
     mine=; [ "$(printf '%s' "$mr" | jq -r .author.username)" = "$me" ] && mine=1
     ask="Upload the walkthrough to !$iid and $([ -n "$mine" ] && echo "link it at the end of its description" || echo "link it in a comment")?"
     [ "$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)" = "$(cut -d' ' -f2 "$d/shas")" ] ||
@@ -1083,7 +1089,7 @@ EOF
     git-confirm "$ask" || exit 0
     git-trace --page "$d" || { note "could not write the page"; exit 0; }
     tmp=$(mktemp -d) && cp "$d/tour.html" "$tmp/walkthrough-$iid.html" || exit 1
-    up=$(glab api "projects/:fullpath/uploads" --form "file=@$tmp/walkthrough-$iid.html" 2>&1)
+    up=$(git-forge api "projects/:fullpath/uploads" --form "file=@$tmp/walkthrough-$iid.html" 2>&1)
     rm -rf "$tmp"
     link=$(printf '%s' "$up" | jq -r '.url // empty' 2>/dev/null)
     [ -n "$link" ] || { note "the upload failed: $(printf '%s' "$up" | head -c 200)"; exit 0; }
@@ -1091,11 +1097,11 @@ EOF
       printf '%s' "$mr" | jq --arg url "$link" '{description: ((.description // "")
         | sub("\\s*\\[walkthrough\\]\\(/uploads/[^)]*\\)\\s*$"; "")
         | if . == "" then "" else . + "\n\n" end + "[walkthrough](\($url))")}' > "$d/attach.json"
-      glab api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+      git-forge api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
         { note "uploaded, but the description was not changed: $(head -c 200 "$d/attach.err")"; exit 0; }
     else
       jq -n --arg url "$link" '{body: "A walkthrough of this change, stop by stop, with the values its tests really had: [walkthrough](\($url))"}' > "$d/attach.json"
-      glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+      git-forge api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
         { note "uploaded, but the comment was not posted: $(head -c 200 "$d/attach.err")"; exit 0; }
     fi
     rm -f "$d/attach.json" "$d/attach.err"

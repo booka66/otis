@@ -435,7 +435,12 @@ function cover(r) {
   const mocked = new Map();
   r.specs.forEach((spec) => { for (const m of mocks(spec, r.rev.head)) mocked.set(m, [...(mocked.get(m) || []), spec.split("/").pop()]); });
   const byId = new Map(ds.map((d) => [d.id, d]));
-  const gaps = ds.filter((d) => callable(d) && d.side !== "old" && !ran.has(d.id)).map((d) => {
+  // A definition that only hands on to one of the same name elsewhere in the
+  // change (a lazy re-export, index.ts's import(...).then(m => m.x)) is not
+  // untested when that one runs: tests import the real module, not the
+  // wrapper, and it read as the change's heart having no test.
+  const ranNames = new Set([...ran].map((id) => id.split("#").pop().split(".").pop()));
+  const gaps = ds.filter((d) => callable(d) && d.side !== "old" && !ran.has(d.id) && !ranNames.has(d.name)).map((d) => {
     const by = mocked.get(stem(d.path));
     const callers = ds.filter((c) => c.id !== d.id && c.rest.split(/[\t|]/).includes(d.id));
     const live = callers.find((c) => ran.has(c.id));
@@ -807,45 +812,53 @@ function rows(r) {
 function testRows(r) {
   legend();
   const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
-  const out = [];
-  const bd = readJson(join(r.dir, "diff.json"), null);
-  if (bd && bd.groups.length) {
-    const look = bd.groups.filter((g) => g.verdict && g.verdict.surprise === 2).length;
-    out.push(`${look ? C.bad : C.at}behavior that changed · ${bd.groups.length}${look ? ` · ${look} to look at` : ""}${C.r}${bd.unmasked ? `${C.faint} · not checked for noise${C.r}` : ""}` + "\t".repeat(11) + "gk-diff");
-    // What changed first; how many values went through what, the usual
-    // side effect of a refactor, under a heading of its own after.
-    const drow = (g, i) => {
-      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}${g.testsChanged ? `${C.faint} · likely the refactor${C.r}` : ""}`;
-      out.push(row(`${verdictMark(g)} ${C.text}${g.verdict && g.verdict.plain ? cut(g.verdict.plain, 90) : diffLabel(g)}${C.r}  ${n}`, g.fns[0].path, g.fns[0].line, "d:" + i));
-    };
-    bd.groups.forEach((g, i) => g.kind !== "count" && drow(g, i));
-    const nc = bd.groups.filter((g) => g.kind === "count").length;
-    if (nc) {
-      out.push(`${C.faint}call patterns · ${nc}: more or fewer values through a function in a test${C.r}` + "\t".repeat(11) + "gk-counts");
-      bd.groups.forEach((g, i) => g.kind === "count" && drow(g, i));
-    }
+  const out = [], bd = readJson(join(r.dir, "diff.json"), null), groups = bd ? bd.groups : [];
+  // What is open of what folds (enter on its row): the rest of the changes, the tests.
+  const st = process.env.GIT_FZF_STATE, open = new Set(st && existsSync(join(st, "open")) ? readFileSync(join(st, "open"), "utf8").split("\n") : []);
+  const head = (t, id) => out.push(t + "\t".repeat(11) + id);
+  const fold = (t, id, n) => out.push(row(`${C.faint}${open.has(id) ? "▾" : "▸"} ${t}${C.r}`, "", "", "open:" + id));
+  const drow = (g, i) => out.push(row(`${verdictMark(g)} ${C.text}${g.verdict && g.verdict.plain ? g.verdict.plain : diffLabel(g)}${C.r}`, g.fns[0].path, g.fns[0].line, "d:" + i));
+  // Only what is worth a look is open: a change the description does not
+  // account for that is not the refactor's. The rest folds into a line.
+  const worth = (g) => g.kind !== "count" && !g.testsChanged && (!g.verdict || g.verdict.surprise > 0);
+  const look = groups.map((g, i) => [g, i]).filter(([g]) => worth(g)), rest = groups.map((g, i) => [g, i]).filter(([g]) => !worth(g));
+  head(`${look.length ? C.at : C.good}\x1b[1m${look.length ? `look at these · ${look.length}` : groups.length ? "nothing to look at: every change is what the MR says, or its refactor" : "no change in what the tests do"}${C.r}${bd && bd.unmasked ? `${C.faint} · not checked for noise${C.r}` : ""}`, "gk-diff");
+  for (const [g, i] of look) drow(g, i);
+  if (rest.length) {
+    fold(`${rest.length} more change${rest.length === 1 ? "" : "s"}: what the MR says, or its refactor`, "rest");
+    if (open.has("rest")) for (const [g, i] of rest) drow(g, i);
   }
   if (c.gaps.length) {
-    out.push(`${C.at}changed code no test runs · ${c.gaps.length}${C.r}` + "\t".repeat(11) + "gk-gaps");
+    out.push("");
+    head(`${C.at}\x1b[1mcode no test runs · ${c.gaps.length}${C.r}`, "gk-gaps");
     c.gaps.forEach((g, i) => {
-      const mark = g.input ? (g.input.reached ? `${C.good}✦ ` : `${C.yours}✦ `) : `${C.at}⚠ `;
-      out.push(row(`${mark}${C.r}${C.text}${g.name}${C.r}  ${C.ctx}${g.why}${C.r}`, g.path, g.start, "g:" + i));
+      const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
+      const mark = wt ? (wt.ok ? `${C.good}✓ ` : `${C.bad}✗ `) : `${C.at}⚠ `;
+      const what = wt ? (wt.ok ? `${wt.names.length} ${wt.kind || ""} tests written` : "tests written, failing") : g.why;
+      out.push(row(`${mark}${C.r}${C.text}${g.name}${C.r}  ${C.ctx}${what}${C.r}`, g.path, g.start, "g:" + i));
     });
   }
-  const n = c.tests.length, max = Math.max(1, ...c.tests.map((t) => t.defs));
-  out.push(`${C.faint}tests, by how much of the change they run · ${n}${C.r}` + "\t".repeat(11) + "gk-tests");
-  c.tests.forEach((t, i) => {
-    const bar = "▇".repeat(Math.max(1, Math.round(6 * t.defs / max)));
-    const w = t.written ? `${C.yours}✦ ${C.r}` : "";
-    const b = t.before === null ? "" : t.before ? "" : `  ${C.faint}new at head${C.r}`;
-    out.push(row(`${C.faint}${bar.padEnd(6)}${C.r} ${C.ctx}${String(t.defs).padStart(2)}${C.r}  ${w}${C.text}${t.name}${C.r}${b}`, c.specs[t.spec].path, 1, "t:" + i));
-  });
+  out.push("");
+  fold(`${c.tests.length} tests ran the change`, "tests");
+  if (open.has("tests")) {
+    const max = Math.max(1, ...c.tests.map((t) => t.defs));
+    c.tests.forEach((t, i) => {
+      const bar = "▇".repeat(Math.max(1, Math.round(6 * t.defs / max)));
+      const w = t.written ? `${C.yours}✦ ${C.r}` : "";
+      const b = t.before === null ? "" : t.before ? "" : `  ${C.faint}new at head${C.r}`;
+      out.push(row(`${C.faint}${bar.padEnd(6)}${C.r} ${C.ctx}${String(t.defs).padStart(2)}${C.r}  ${w}${C.text}${t.name}${C.r}${b}`, c.specs[t.spec].path, 1, "t:" + i));
+    });
+  }
   // A spec that ran and left no hits: another runner than Jest (Vitest), or
   // tests that never reach the change. Either way P has nothing from it.
   const blind = c.specs.filter((s) => s.status === "0" && !s.hits);
-  if (blind.length) out.push(`${C.ctx}traced nothing from ${blind.map((s) => s.path.split("/").pop()).join(", ")}: it ran, but none of its tests reached the change${C.r}` + "\t".repeat(11) + "gk-blind");
+  if (blind.length) head(`${C.ctx}traced nothing from ${blind.map((s) => s.path.split("/").pop()).join(", ")}: it ran, but none of its tests reached the change${C.r}`, "gk-blind");
+  // Folded like the rest: a list of them ran off the edge.
   const failed = c.specs.filter((s) => s.status && s.status !== "0");
-  if (failed.length) out.push(`${C.bad}${failed.length} spec file${failed.length === 1 ? "" : "s"} failed to run: ${failed.map((s) => s.path.split("/").pop()).join(", ")}${C.r}` + "\t".repeat(11) + "gk-failed");
+  if (failed.length) {
+    fold(`${failed.length} spec file${failed.length === 1 ? "" : "s"} had a failing run`, "failed");
+    if (open.has("failed")) for (const s of failed) out.push(row(`  ${C.bad}✗${C.r} ${C.text}${s.path}${C.r}`, s.path, 1, "f:" + s.path));
+  }
   return out;
 }
 
@@ -863,14 +876,26 @@ function diffLabel(g) {
   if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} different values: ${g.counts.map((c) => `${counted(c)} ${c.x}→${c.y}`).join(", ")}`;
   return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
 }
-// written: the code a patch Claude wrote adds (a test t wrote), under a rule,
-// whole, for reading before c posts it.
+// written: the code a patch Claude wrote adds (a test t wrote), a block for
+// each place it went, headed by its file and line, each line as written
+// (a line wider than the pane runs on under its own indent).
 function written(patch, w) {
   if (!existsSync(patch)) return [];
-  const add = readFileSync(patch, "utf8").split("\n").filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1));
-  if (!add.length) return [];
-  return ["", C.faint + "── the tests " + "─".repeat(Math.max(0, w - 13)) + C.r, "",
-    ...add.flatMap((l) => { const ind = (l.match(/^\s*/) || [""])[0]; return l.trim() ? wrap(l.trim(), w - ind.length).map((x, i) => (i ? ind + "  " : ind) + x) : [""]; }).map((l) => C.text + l + C.r)];
+  const out = [];
+  let file = "", at = 0, block = [];
+  const flush = () => { if (block.length) out.push("", C.faint + `${file.split("/").pop()}:${at}` + C.r, ...block); block = []; };
+  for (const l of readFileSync(patch, "utf8").split("\n")) {
+    if (l.startsWith("+++ ")) { flush(); file = l.replace(/^\+\+\+ b\//, ""); continue; }
+    const h = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
+    if (h) { flush(); at = +h[1]; continue; }
+    if (l.startsWith("+")) {
+      const code = l.slice(1), ind = (code.match(/^\s*/) || [""])[0];
+      if (!code.trim()) { block.push(""); continue; }
+      wrap(code.trim(), w - ind.length).forEach((x, i) => block.push(C.text + (i ? ind + "    " : ind) + x + C.r));
+    } else if (block.length && !l.startsWith("-")) flush();
+  }
+  flush();
+  return out.length ? ["", C.faint + "── the tests " + "─".repeat(Math.max(0, w - 13)) + C.r, ...out] : [];
 }
 // pinned: the test Claude wrote for change i (git-trace's pin), and how it ran.
 function pinned(r, g, w) {
@@ -944,14 +969,24 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     out.push("");
     if (t.before !== null) out.push(t.before ? `${C.ctx}before the change it ran too: b in its walk shows that run${C.r}` : `${C.at}at the base it ran none of the change's old code, or did not load${C.r}`);
     out.push(`${C.faint}enter walks it, line by line, with the values it ran with${C.r}`);
+  } else if (id.startsWith("open:")) {
+    out.push(C.faint + (id === "open:tests" ? "every test that ran the change, by how much of it; enter shows or hides them" : "the rest of what the tests do differently: what the MR says it does, or its refactor; enter shows or hides them") + C.r);
   } else if (id.startsWith("g:")) {
     const g = c.gaps[+id.slice(2)];
     out.push(C.text + "\x1b[1m" + g.name + C.r, C.ctx + g.path + ":" + g.start + C.r, "");
+    const done = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
+    // Tests written for it: what they are, why there, and them; nothing else.
+    if (done && done.ok) {
+      out.push(C.good + `✓ ${done.names.length} ${done.kind ? done.kind + " " : ""}tests, passing, in ${done.spec.split("/").pop()}` + C.r);
+      if (done.why) out.push(...wrap(done.why, w).map((l) => C.ctx + l + C.r));
+      out.push("", ...done.names.flatMap((n) => wrap("• " + n, w)).map((l) => C.text + l + C.r), "", C.faint + "c posts them to the MR · t writes them again" + C.r);
+      out.push(...written(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.patch`), w));
+      return out.join("\n") + "\n";
+    }
     out.push(...wrap(g.why, w).map((l) => C.at + l + C.r), "");
     // The tests t wrote for it (git-trace's cover), and how they ran.
     const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
     if (!wt) out.push(...wrap("t writes tests for it, set up like tests of the same kind of code in the repository, and runs them", w).map((l) => C.faint + l + C.r), "");
-    const code = wt ? written(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.patch`), w) : [];
     if (wt && wt.ok) out.push(C.good + `✓ ${wt.names.length} ${wt.kind ? wt.kind + " " : ""}test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...(wt.why ? wrap(wt.why, w - 2).map((l) => "  " + C.text + l + C.r) : []), ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts them to the MR · the tests themselves are at the end of this preview" + C.r, "");
     else if (wt) out.push(C.at + `✗ not all pass: ${wt.failing.join(", ") || "they did not run"}` + C.r, ...wt.fails.split("\n").filter(Boolean).slice(0, 8).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "t tries again" + C.r, "");
     // The call no test makes, else the function itself: each line as the
@@ -970,7 +1005,6 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
       out.push(`${C.yours}✦ Claude's input${C.r}${C.ctx}, in ${g.input.spec}: ${C.r}${C.text}${g.input.name}${C.r}`);
       out.push(g.input.reached ? `${C.good}it reaches ${g.name}: it is in the tests below${C.r}` : `${C.at}it ran, but did not reach ${g.name}${g.input.error ? ": " + g.input.error : ""}${C.r}`);
     } else if (!g.mocked) out.push(`${C.faint}i: Claude writes an input into a spec that reaches this, and P traces it. It only has to run.${C.r}`);
-    out.push(...code);
   }
   return out.join("\n") + "\n";
 }
