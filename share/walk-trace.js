@@ -192,6 +192,19 @@ s.on("Debugger.scriptParsed", ({ params }) => {
   }).catch(() => {});
 });
 
+// settled: once the pause has resumed, the promise's value, when it settles,
+// for pause id (a hit's ret, walk.mjs puts it there). One that never settles
+// before the test ends is left out.
+let pauses = 0;
+function settled(objectId, id, test, file) {
+  setImmediate(async () => {
+    try {
+      const { result, exceptionDetails } = await post("Runtime.awaitPromise", { promiseObjectId: objectId, generatePreview: true });
+      if (!exceptionDetails) fs.writeSync(out, JSON.stringify({ test, file, retOf: id, ret: await value(result, 3) }) + "\n");
+    } catch {}
+    post("Runtime.releaseObject", { objectId }).catch(() => {});
+  });
+}
 s.on("Debugger.paused", async ({ params }) => {
   const t0 = ms(); let t = t0;
   const lap = (k) => { const x = ms(); stat[k] += x - t; t = x; };
@@ -219,8 +232,15 @@ s.on("Debugger.paused", async ({ params }) => {
       // An object opened three levels (then previews), when it moved.
       if (before[p.name] !== pv) todo.push(value(p.value, 3).then((v) => { locals[p.name] = v; }));
     }
-    // At a return, what it returns.
-    const ret = f.returnValue ? await value(f.returnValue, 3) : undefined;
+    // At a return, what it returns. An async function's is the promise it
+    // will settle, whose value is not there yet: it is kept past the pause
+    // (a pause's objects go when it resumes) and its value written once it
+    // settles, as a line of its own naming this pause (retOf).
+    const rv = f.returnValue;
+    const later = rv && rv.subtype === "promise" ? await post("Runtime.callFunctionOn", { objectId: rv.objectId, functionDeclaration: "function () { return this; }", objectGroup: "otis-returns" }).catch(() => null) : null;
+    const ret = rv && !later ? await value(rv, 3) : undefined;
+    // Unique in the trace, which several test processes write to.
+    const id = `${process.pid}.${++pauses}`;
     await Promise.all(todo);
     lap("values");
     seen.set(fk, now);
@@ -246,7 +266,8 @@ s.on("Debugger.paused", async ({ params }) => {
     const frames = params.callFrames.slice();
     for (let a = params.asyncStackTrace; a; a = a.parent) frames.push(...a.callFrames);
     const stack = frames.filter((c) => back.has(url(c))).map(where);
-    fs.writeSync(out, JSON.stringify({ test: test ?? null, file: file ?? null, at: where(f), stack: stack.slice(1), locals, ...(ret !== undefined ? { ret } : {}) }) + "\n");
+    fs.writeSync(out, JSON.stringify({ test: test ?? null, file: file ?? null, at: where(f), stack: stack.slice(1), locals, ...(ret !== undefined ? { ret } : {}), ...(later ? { id } : {}) }) + "\n");
+    if (later) settled(later.result.objectId, id, test ?? null, file ?? null);
   } finally {
     await post("Debugger.resume");
     lap("resume"); stat.all += ms() - t0;

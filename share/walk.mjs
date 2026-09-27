@@ -106,7 +106,10 @@ const subOf = (side) => side === "base" || side === "again" ? side : "trace";
 function hits(dir, side, i) {
   const f = join(dir, subOf(side), i + ".jsonl");
   if (!existsSync(f)) return [];
-  return lines(f).filter((h) => h.at);
+  // What an async function returned comes after its pause, once it settled
+  // (retOf names the pause): it is put on the pause.
+  const all = lines(f), rets = new Map(all.filter((l) => l.retOf).map((l) => [l.retOf, l.ret]));
+  return all.filter((h) => h.at).map((h) => h.id && rets.has(h.id) ? { ...h, ret: rets.get(h.id) } : h);
 }
 // A trace file is read once a process, however many tests ask for it.
 const read = new Map();
@@ -500,8 +503,8 @@ function normalizer() {
 // bags: {test|path|function|local: {values, line, fn}} for a side, every
 // spec's hits, "=" (as it was at the function's last pause) filled in. Only
 // what crosses the function's edge counts: its parameters, and what it
-// returns (as "returns"; an async function's is a promise, left out, and
-// shows as what its caller passes on). The names it uses on the way are the
+// returns (as "returns"; an async function's once it settled, and one that
+// never did is left out). The names it uses on the way are the
 // code's own business: a refactor that kept a name for something else
 // (threadFields, the whole lookup before and its fields after) read as the
 // function's output changing shape. The

@@ -548,6 +548,8 @@ behave() {
       [ "$try" = 1 ] && say "that run brought nothing back; once more" || say "it brought nothing back again: what moves on its own between runs is not masked"
     done
   fi
+  # A tour being written reads cover.json: rewritten once it is done.
+  wait
   cover
   judge
 }
@@ -614,11 +616,14 @@ if [ "$1" = --phase ]; then
       stopping
       trace_specs "$head" "$d/trace" "$d/targets.json" $(awk '{ print NR - 1 }' "$d/specs")
       cover
-      tour
+      # The tour is written while the tests run at the base: it needs no
+      # slot, and each took minutes one after the other.
+      ( tour ) &
       stopping
       # Nothing to compare when the head's run traced nothing (the push to a
       # workspace failed, or no test reaches the change).
       [ "$(jq '.tests | length' "$d/cover.json")" -gt 0 ] && behave
+      wait
       finish done "$(summary)" ;;
     tour)
       tour

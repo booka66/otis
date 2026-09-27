@@ -812,11 +812,13 @@ EOF
   # counts: run returns 0 there and 1 here; the id and the code it is
   # given are made up fresh each run, renamed away; grow's return moves between two runs of the head,
   # so it is noise; sum, a name run uses on the way, is its own business.
+  # run's return comes as an async function's does, on a line after, once it settled.
   bd=$tmp/behave; cp -R "$td" "$bd"; rm -rf "$bd/walks" "$bd"/entry-*; mkdir -p "$bd/base" "$bd/again"
   cat > "$bd/trace/0.jsonl" <<'EOF'
 {"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":2},"stack":[],"locals":{"o":"{ a: 1, id: \"ac_Hd82kQ0zPw\", code: \"FCjHaOBcrTSR4kpV\" }","twice":"true","sum":"2"}}
 {"test":"lib steps","at":{"fn":"grow","src":"lib.ts","line":8},"stack":[{"fn":"run","src":"lib.ts","line":3}],"locals":{},"ret":"7"}
-{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":3},"stack":[],"locals":{"o":"=","twice":"=","sum":"="},"ret":"1"}
+{"test":"lib steps","at":{"fn":"run","src":"lib.ts","line":3},"stack":[],"locals":{"o":"=","twice":"=","sum":"="},"id":"9.3"}
+{"test":"lib steps","file":null,"retOf":"9.3","ret":"1"}
 EOF
   sed 's/ac_Hd82kQ0zPw/ac_Zz19xQ7mTe/; s/"ret":"7"/"ret":"8"/' "$bd/trace/0.jsonl" > "$bd/again/0.jsonl"
   cat > "$bd/base/0.jsonl" <<'EOF'
