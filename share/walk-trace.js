@@ -247,7 +247,7 @@ s.on("Debugger.paused", async ({ params }) => {
     // The test, and its file: one run can hold several spec files.
     let test = null, file = null;
     try {
-      const r = await post("Debugger.evaluateOnCallFrame", { callFrameId: f.callFrameId, expression: "(() => { const s = expect.getState(); return [s.currentTestName, s.testPath]; })()", silent: true, returnByValue: true });
+      const r = await post("Debugger.evaluateOnCallFrame", { callFrameId: f.callFrameId, expression: "(() => { const s = (globalThis.expect ?? globalThis[Symbol.for('expect-global')]).getState(); return [s.currentTestName, s.testPath]; })()", silent: true, returnByValue: true });
       [test, file] = r.result.value || [];
     } catch {}
     lap("test");

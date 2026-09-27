@@ -43,8 +43,8 @@
 # exits 0 when the spec passed; OTIS_WALK_AHEAD is set when nobody is waiting
 # on it (git-walk --ahead), for a runner to take less of the machine. Without
 # one, share/walk-run-jest runs Jest
-# from the slot's node_modules. git config otis.walkTrace off leaves P to
-# Claude's walk.
+# from the slot's node_modules, or share/walk-run-vitest Vitest. git config
+# otis.walkTrace off leaves P to Claude's walk.
 #
 # Slots are worktrees kept between runs so their builds stay warm: walk-1
 # and on (otis.walkSlotCount, else 2) under otis.walkSlots, else
@@ -67,7 +67,8 @@ note() { git-fzf-note "$1" >/dev/null; }
 runner() {
   r=$(git config --get otis.walkRunner) && { printf '%s\n' "$r"; return 0; }
   top=$(git rev-parse --show-toplevel)
-  [ -x "$top/node_modules/.bin/jest" ] && printf '%s\n' "$share/walk-run-jest"
+  if [ -x "$top/node_modules/.bin/jest" ]; then printf '%s\n' "$share/walk-run-jest"
+  elif [ -x "$top/node_modules/.bin/vitest" ]; then printf '%s\n' "$share/walk-run-vitest"; fi
 }
 # specs_of <base> <head>: the specs the change touched, the spec beside each
 # source file it touched (foo.ts's foo.spec.ts): a change that leaves a
@@ -690,7 +691,7 @@ if [ "$1" = --phase ]; then
       take_slots 1 || finish done "no slot free to write tests in"
       wslot=${slots# }
       slot_ready "$wslot" "$head" || finish done "could not check out $head to write tests in"
-      schema='{"type":"object","additionalProperties":false,"required":["names"],"properties":{"names":{"type":"array","items":{"type":"string"},"description":"the it() names you added, exactly"}}}'
+      schema='{"type":"object","additionalProperties":false,"required":["spec","kind","why","names"],"properties":{"spec":{"type":"string","description":"the spec file the tests are in, from the top of the repository"},"kind":{"type":"string","enum":["integration","unit"]},"why":{"type":"string","description":"one sentence: why there, and what they run for real"},"names":{"type":"array","items":{"type":"string"},"description":"the it() names you added, exactly"}}}'
       {
         cat <<EOF
 A reviewer is reading a code change, and no test runs $name ($src:$(printf '%s' "$gap" | jq -r .start)): $(printf '%s' "$gap" | jq -r .why).
@@ -700,11 +701,13 @@ What the change says it does:
 $(cat "$d/about")
 </description>
 
-Write tests for $name in $spec$(git cat-file -e "$head:$spec" 2>/dev/null && echo " (it exists: add to it, in its style)" || echo " (a new file: create it)"). They are real tests: assert what $name must do by the description and by its code, the path that succeeds and the ways it can fail. The working directory is the change's code.
+Write tests for $name. They are real tests: assert what $name must do by the description and by its code, the path that succeeds and the ways it can fail. The working directory is the change's code.
 
-How to set them up: read $name and what it calls first. Use the helpers, fixtures and mocks the tests beside it use. When nothing near it shows how to test this kind of code (a Temporal workflow or activity, a queue consumer, a database repository), search the repository for tests of the same kind (for example grep for MockActivityEnvironment, TestWorkflowEnvironment, or other files that test code built the same way) and copy how they set it up. Do not invent a harness.
+Where they go matters more than how many there are. First find the tests that already exercise what calls $name, or the workflow, job or endpoint it is part of (for a Temporal activity, its workflow's tests, often named "integration"). $(printf '%s' "$gap" | jq -r 'if (.callers | length) > 0 then "Its callers here: " + (.callers | join(", ")) + ". " else "" end')Prefer adding to those tests, running $name for real inside what calls it and faking only the outside world the way those tests already do (a database, a provider, a queue): that shows the pieces fit together, which is what a change like this can break. Existing tests that replace $name with a fake are the ones to extend, with $name real. Only when $name cannot run for real there, write unit tests in the spec beside it ($spec$(git cat-file -e "$head:$spec" 2>/dev/null && echo ", which exists" || echo ", a new file")).
 
-Put them in one describe named "$name". Change no other file, and nothing but tests. Answer with the it() names you added.
+How to set them up: read $name and what it calls first. Use the helpers, fixtures and fakes the tests you add to already use. When nothing near it shows how to test this kind of code (a Temporal workflow or activity, a queue consumer, a database repository), search the repository for tests of the same kind (for example grep for TestWorkflowEnvironment, MockActivityEnvironment, or other files that test code built the same way) and copy how they set it up. Do not invent a harness.
+
+Put them in one describe named "$name". Change no other file, and nothing but tests. Answer with the spec file, whether they are integration or unit tests, one sentence on why there and what they run for real, and the it() names you added.
 EOF
       } > "$p.prompt"
       for try in 1 2; do
@@ -719,6 +722,11 @@ EOF
         set +m
         stopping
         names=$(jq -c 'select(.type == "result") | .structured_output.names // empty' "$p.events" | tail -1)
+        # Where Claude put them: an integration spec it chose, else the one beside.
+        chosen=$(jq -r 'select(.type == "result") | .structured_output.spec // empty' "$p.events" | tail -1)
+        [ -n "$chosen" ] && spec=$chosen
+        kind=$(jq -r 'select(.type == "result") | .structured_output.kind // "unit"' "$p.events" | tail -1)
+        why=$(jq -r 'select(.type == "result") | .structured_output.why // ""' "$p.events" | tail -1)
         # A new spec file too: added, so the patch carries it.
         git -C "$wslot" add -A -- "$spec" 2>/dev/null; git -C "$wslot" diff --cached -- "$spec" > "$p.patch"; git -C "$wslot" reset -q
         [ -n "$names" ] && [ "$names" != "[]" ] && [ -s "$p.patch" ] || { rm -rf "$wslot.lock"; finish done "Claude wrote no tests for $name"; }
@@ -730,7 +738,7 @@ EOF
         bad=$(printf '%s' "$names" | jq -r '.[]' | while IFS= read -r n; do v=$(verdict "$p.head.out" $st "$n"); [ "$v" = 0 ] || echo "$n"; done)
         ok=false; [ -z "$bad" ] && [ "$st" != 2 ] && ok=true
         fails=$(sed 's/\x1b\[[0-9;]*m//g' "$p.head.out" | awk '/FAIL|✕|×|Error:/ { on = 1 } /⎯|node_modules|rules_|chunk-/ { next } on && NF { print; if (++k == 12) exit }')
-        jq -n --argjson names "$names" --arg spec "$spec" --argjson ok $ok --arg fails "$fails" --arg bad "$bad" '{names: $names, spec: $spec, ok: $ok, fails: $fails, failing: ($bad | split("\n") | map(select(. != "")))}' > "$p.json"
+        jq -n --argjson names "$names" --arg spec "$spec" --arg kind "$kind" --arg why "$why" --argjson ok $ok --arg fails "$fails" --arg bad "$bad" '{names: $names, spec: $spec, kind: $kind, why: $why, ok: $ok, fails: $fails, failing: ($bad | split("\n") | map(select(. != "")))}' > "$p.json"
         [ "$ok" = true ] && break
         [ "$try" = 2 ] && break
         cat >> "$p.prompt" <<EOF
@@ -745,7 +753,7 @@ EOF
         wslot=${slots# }
       done
       rm -rf "$d"/entry-*
-      if [ "$(jq .ok "$p.json")" = true ]; then finish done "$(jq '.names | length' "$p.json") tests for $name pass: c posts them to the MR"
+      if [ "$(jq .ok "$p.json")" = true ]; then finish done "$(jq -r '"\(.names | length) \(.kind) tests"' "$p.json") for $name pass, in $(basename "$spec"): c posts them to the MR"
       else finish done "the tests for $name did not all pass: $(jq -r '.failing | join(", ")' "$p.json")"; fi ;;
     pin)
       # A change in behavior pinned by a test: one that passes before the
@@ -1014,8 +1022,8 @@ EOF
         [ -n "$iid" ] || { note "$b has no open MR to post them to"; exit 0; } ;;
     esac
     git-confirm "Comment on !$iid with the tests written for $(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")?" || exit 0
-    jq -n --arg name "$(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")" --arg spec "$(jq -r .spec "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" \
-      '{body: "No test runs `\($name)`. These, in `\($spec)`, pass on this branch:\n\n```ts\n\($code)\n```\n"}' > "$p.post"
+    jq -n --arg name "$(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")" --arg spec "$(jq -r .spec "$p.json")" --arg kind "$(jq -r '.kind // "unit"' "$p.json")" --arg why "$(jq -r '.why // ""' "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" \
+      '{body: "No test runs `\($name)`. These \($kind) tests, in `\($spec)`, pass on this branch. \($why)\n\n```ts\n\($code)\n```\n"}' > "$p.post"
     glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
       { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }
     note "posted to !$iid"; exit 0 ;;
