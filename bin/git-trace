@@ -177,7 +177,9 @@ case $1 in
   --tour-list) toured "$2" && cat "$2/tour.rows"; $walk legend 2>/dev/null; exit 0 ;;
   --tour-show) toured "$2" && cat "$2/tour-$w/${3#tour:}" 2>/dev/null; exit 0 ;;
   # Where the tour's previews are drawn for this width, for its screen (otis-symbols --panes).
-  --tour-panes) toured "$2" && printf '%s\n' "$2/tour-$w"; exit 0 ;;
+  # Only once drawn: drawing is the list's (--tour-list, in the background),
+  # and doing it here held the screen before its loader could move.
+  --tour-panes) w=${FZF_PREVIEW_COLUMNS:-100}; [ -e "$2/tour-$w.$drawn" ] && printf '%s\n' "$2/tour-$w"; exit 0 ;;
   --tour-open)
     toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "enter opens a stop's line; this one is the overview"; exit 0; }
     echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)"; exit 0 ;;
@@ -1005,7 +1007,7 @@ EOF
         else note "no tests for it yet: t writes them"; fi
         exit 0 ;;
       d:*) g=${row#d:} ;;
-      tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select((.value.verdict == null or .value.verdict.surprise > 0) and .value.kind != "count") | .key][$n - 1] // empty' "$d/diff.json") ;;
+      tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select((.value.verdict == null or .value.verdict.surprise > 0) and .value.kind != "count" and (.value.testsChanged | not)) | .key][$n - 1] // empty' "$d/diff.json") ;;
       *) note "$key is for a change in behavior: the list's first rows, or the tour's first stops"; exit 0 ;;
     esac
     [ -n "$g" ] || exit 0

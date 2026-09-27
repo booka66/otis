@@ -27,7 +27,7 @@
 //
 // A hit is a pause before its line runs, so what changed since the last hit
 // in the same call was set by that one's line, and is shown there.
-import { execFileSync } from "node:child_process";
+import { execFileSync, execFile } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -250,6 +250,63 @@ const HERE = (() => {
 })();
 // painted: a file's lines colored as code by bat, once; plain without it.
 const paintedCache = new Map();
+// warm: every file of the change at both sides read, its changed lines
+// worked out and its colors laid on, before anything is drawn: one git
+// cat-file for the texts and one git diff for the lines, where each file
+// was a git show and two git diffs of its own, and bat for all of them
+// eight at once, where it was one after another. Drawing a tour of 47
+// files spent 5.6 of its 6.4 seconds starting those one by one.
+async function warm(r) {
+  const files = git("diff", "--name-only", "--no-renames", r.rev.base, r.rev.head).split("\n").filter(Boolean);
+  if (!files.length) return;
+  const want = files.flatMap((f) => [[r.rev.base, f], [r.rev.head, f]]).filter(([rv, f]) => !texts.has(rv + ":" + f));
+  if (want.length) {
+    const buf = execFileSync("git", ["cat-file", "--batch"], { input: want.map(([rv, f]) => rv + ":" + f).join("\n") + "\n", maxBuffer: 1 << 30, stdio: ["pipe", "pipe", "ignore"] });
+    let at = 0;
+    for (const [rv, f] of want) {
+      const nl = buf.indexOf(10, at), head = buf.toString("utf8", at, nl);
+      at = nl + 1;
+      const m = /^\S+ (\w+) (\d+)$/.exec(head);
+      if (!m) { texts.set(rv + ":" + f, [""]); continue; }
+      const n = +m[2];
+      texts.set(rv + ":" + f, buf.toString("utf8", at, at + n).split("\n"));
+      at += n + 1;
+    }
+  }
+  // The changed lines of every file from one diff, as changed and hunks read them.
+  const d = git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", r.rev.base, r.rev.head);
+  for (const part of d.split(/^diff --git /m).slice(1)) {
+    const f = (/^\+\+\+ b\/(.*)$/m.exec(part) || /^--- a\/(.*)$/m.exec(part) || [])[1];
+    if (!f) continue;
+    const sb = new Set(), sh = new Set(), before = new Map(), added = new Set(), removed = new Set();
+    let o = 0, n = 0, at = 0;
+    for (const l of part.split("\n")) {
+      const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(l);
+      if (m) {
+        for (let i = +m[1]; i < +m[1] + (m[2] === undefined ? 1 : +m[2]); i++) sb.add(i);
+        for (let i = +m[3]; i < +m[3] + (m[4] === undefined ? 1 : +m[4]); i++) sh.add(i);
+        o = +m[1]; n = +m[3]; at = m[4] === "0" ? n + 1 : n; continue;
+      }
+      if (l.startsWith("-") && !l.startsWith("---")) { if (!before.has(at)) before.set(at, []); before.get(at).push([o, l.slice(1)]); removed.add(o); o++; }
+      else if (l.startsWith("+") && !l.startsWith("+++")) { added.add(n); n++; }
+    }
+    if (!changedCache.has("base" + f)) changedCache.set("base" + f, sb);
+    if (!changedCache.has("head" + f)) changedCache.set("head" + f, sh);
+    if (!hunksCache.has(f)) hunksCache.set(f, { before, added, removed });
+  }
+  // Colors, eight files at a time.
+  const todo = files.flatMap((f) => [[r.rev.head, f], [r.rev.base, f]]).filter(([rv, f]) => !paintedCache.has(rv + ":" + f) && text(rv, f).length > 1);
+  const one = ([rv, f]) => new Promise((ok) => {
+    const t = text(rv, f);
+    const p = execFile("bat", ["--color=always", "--style=plain", "--paging=never", "-l", f.replace(/.*\./, "")],
+      { encoding: "utf8", env: { ...process.env, BAT_THEME: process.env.OTIS_T_BAT || "ansi" }, maxBuffer: 1 << 28 }, (e, out) => {
+        const o = !e && out ? out.split("\n") : null;
+        paintedCache.set(rv + ":" + f, o && o.length >= t.length - 1 ? o : t); ok();
+      });
+    p.stdin.on("error", () => {}); p.stdin.end(t.join("\n"));
+  });
+  for (let i = 0; i < todo.length; i += 8) await Promise.all(todo.slice(i, i + 8).map(one));
+}
 function painted(rev, path) {
   const k = rev + ":" + path;
   if (!paintedCache.has(k)) {
@@ -1044,12 +1101,22 @@ function walkRows(r, ti, side) {
   console.log(out.join("\n"));
 }
 
+// glossOf: Claude's line on each symbol, read once a process: every test's
+// walk asks, and asking git where the cache is each time was 185 git runs
+// in drawing one tour.
+const glossCache = new Map();
 function glossOf(r) {
-  try {
-    const croot = git("rev-parse", "--path-format=absolute", "--git-common-dir").trim() + "/git-alias-cache";
-    const g = JSON.parse(readFileSync(`${croot}/symbols-gloss/${r.rev.base}-${r.rev.head}.json`, "utf8"));
-    return new Map(g.symbols.map((s) => [s.id, s.does]));
-  } catch { return new Map(); }
+  const k = r.rev.base + "-" + r.rev.head;
+  if (!glossCache.has(k)) {
+    let m = new Map();
+    try {
+      const croot = git("rev-parse", "--path-format=absolute", "--git-common-dir").trim() + "/git-alias-cache";
+      const g = JSON.parse(readFileSync(`${croot}/symbols-gloss/${k}.json`, "utf8"));
+      m = new Map(g.symbols.map((s) => [s.id, s.does]));
+    } catch {}
+    glossCache.set(k, m);
+  }
+  return glossCache.get(k);
 }
 
 // render: step k's preview: where it is and what it was called with, pinned,
@@ -1511,7 +1578,9 @@ function tourPrep(r, w, out = r.dir) {
   // description it was held against; s steps through that test, and b in the
   // step there shows the same test before the change.
   // Stops for what changed; call patterns (counts) stay on a's list.
-  const said = bd ? bd.groups.filter((g) => (!g.verdict || g.verdict.surprise > 0) && g.kind !== "count") : [], saidPaths = [];
+  // Only what a's list says is worth a look: not the refactor's (every test
+  // that saw it rewritten), not a count, not what the description says.
+  const said = bd ? bd.groups.filter((g) => (!g.verdict || g.verdict.surprise > 0) && g.kind !== "count" && !g.testsChanged) : [], saidPaths = [];
   if (said.length) {
     rows.push(row(`${said.some((g) => g.verdict && g.verdict.surprise === 2) ? C.bad : C.at}\x1b[1mwhat the tests do differently${C.r}`, "", "", "tour:d"));
     const page = [C.at + "\x1b[1m" + "What the tests do differently" + C.r, "", ...para(`The tests were run before the change and after it, and what went into and came out of the changed functions compared. ${said.length === bd.groups.length ? "These" : `These ${said.length} of the ${bd.groups.length}`} are not what the change says it does:`, C.text), ""];
@@ -1526,7 +1595,7 @@ function tourPrep(r, w, out = r.dir) {
       // holding it can be a whole service (an Effect.Service class is its
       // file), and a pane of 1,900 lines made each j wait a third of a second.
       const x = { path: f.path, focus: f.line, start: Math.max(o ? o.r[0] : 1, f.line - 20), end: Math.min(o ? o.r[1] : f.line, f.line + 20), test: [...g.untouched, ...g.tests][0] };
-      rows.push(row(`${C.faint}${String(i + 1).padStart(2)}${C.r}  ${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}`, f.path, f.line, `tour:d${i + 1}`));
+      rows.push(row(`${C.faint}${String(i + 1).padStart(2)}${C.r}  ${verdictMark(g)} ${C.text}${g.verdict && g.verdict.plain ? g.verdict.plain : diffLabel(g)}${C.r}`, f.path, f.line, `tour:d${i + 1}`));
       const { ti, k, body, at } = stopOf(x, w, AROUND);
       const head = [C.faint + `behavior ${i + 1} of ${said.length}  ·  ${f.path.split("/").pop()}:${f.line}` + (g.from ? `  ·  where it is passed in` : "") + C.r, ""];
       head.push(...diffPreview(r, g, w).slice(0, -2));
@@ -2403,7 +2472,7 @@ switch (cmd) {
   case "tour-plan-default": process.stdout.write(tourPlanDefault(run(args[0]))); break;
   case "tour-prompt": process.stdout.write(tourPrompt(run(args[0]), +args[1] || 0)); break;
   case "tour-assemble": tourAssemble(run(args[0])); break;
-  case "tour-prep": tourPrep(run(args[0]), +args[1] || 100); break;
+  case "tour-prep": { const r = run(args[0]); await warm(r); tourPrep(r, +args[1] || 100); break; }
   case "tour-html": process.stdout.write(tourHtml(run(args[0]), args[1] || "", args[2] || "")); break;
   case "tour-text": process.stdout.write(tourText(run(args[0]), +args[1] || 0)); break;
   case "tour-missing": process.stdout.write(tourMissing(run(args[0]), +args[1] || 0)); break;
