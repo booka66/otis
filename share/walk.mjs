@@ -938,6 +938,11 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     const g = c.gaps[+id.slice(2)];
     out.push(C.text + "\x1b[1m" + g.name + C.r, C.ctx + g.path + ":" + g.start + C.r, "");
     out.push(...wrap(g.why, w).map((l) => C.at + l + C.r), "");
+    // The tests t wrote for it (git-trace's cover), and how they ran.
+    const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
+    if (!wt) out.push(...wrap("t writes tests for it, set up like tests of the same kind of code in the repository, and runs them", w).map((l) => C.faint + l + C.r), "");
+    else if (wt.ok) out.push(C.good + `✓ ${wt.names.length} test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts them to the MR" + C.r, "");
+    else out.push(C.at + `✗ not all pass: ${wt.failing.join(", ") || "they did not run"}` + C.r, ...wt.fails.split("\n").filter(Boolean).slice(0, 8).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "t tries again" + C.r, "");
     // The call no test makes, else the function itself: each line as the
     // traces saw it, ● run by some test.
     const at = g.call || { path: g.path, line: g.start };

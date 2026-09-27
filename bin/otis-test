@@ -845,6 +845,9 @@ EOF
   expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1 · 1 to look at|! returns 0 → 1 1 test, 1 untouched|"
   expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-commit-open $head 'lib.ts' 3)"
   # t on a change writes a test that pins it; c posts one that did.
+  # t on changed code no test runs writes tests for it; c posts them once they pass.
+  gi=$(jq '[.gaps[].name] | index("fresh")' "$bd/cover.json")
+  expect trace/cover-key "$(git-trace --pin-key "$bd" t g:$gi)|$(GIT_FZF_STATE=$tmp/tst git-trace --pin-key "$bd" c g:$gi; cat "$tmp/tst/note")" "execute(git-trace --cover '$bd' $gi)|no tests for it yet: t writes them"
   # A pinned test is kept by the change's id, not its place on the list.
   pid=$(jq -r '.groups[0].id' "$bd/diff.json")
   expect trace/pin-key "$(git-trace --pin-key "$bd" t d:0)|$(GIT_FZF_STATE=$tmp/tst git-trace --pin-key "$bd" c d:0; cat "$tmp/tst/note")" "execute(git-trace --pin '$bd' $pid)|no test pins it yet: t writes one"

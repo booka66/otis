@@ -670,6 +670,83 @@ if [ "$1" = --phase ]; then
     base)
       behave
       finish done "before and after: $(jq '[.tests[] | select(.before > 0)] | length' "$d/cover.json") of the tests ran the old code too$( [ -s "$d/diff.json" ] && jq -r '", and behave differently in \(.groups | length) way\(if (.groups | length) == 1 then "" else "s" end)"' "$d/diff.json")" ;;
+    cover)
+      # Tests for changed code no test runs, written by Claude to what the
+      # change says it does, where its tests would live: the spec beside it,
+      # else a new one; its setup copied from tests of the same kind of code
+      # elsewhere in the repo when nothing near it shows how (a Temporal
+      # activity's, say). Written in a slot here, then the spec run at the
+      # head, every test it wrote passing; given back once with the failures.
+      gi=$4
+      gap=$(jq -c --argjson g "$gi" '.gaps[$g]' "$d/cover.json")
+      name=$(printf '%s' "$gap" | jq -r .name) src=$(printf '%s' "$gap" | jq -r .path)
+      p=$d/cover.$(printf '%s' "$gap" | jq -r .id | shasum | cut -c1-10)
+      spec=
+      for s in "${src%.*}".spec."${src##*.}" "${src%.*}".test."${src##*.}"; do git cat-file -e "$head:$s" 2>/dev/null && { spec=$s; break; }; done
+      [ -n "$spec" ] || spec=${src%.*}.spec.${src##*.}
+      about > "$d/about"
+      rm -f "$p".*
+      remote0=$remote remote=
+      take_slots 1 || finish done "no slot free to write tests in"
+      wslot=${slots# }
+      slot_ready "$wslot" "$head" || finish done "could not check out $head to write tests in"
+      schema='{"type":"object","additionalProperties":false,"required":["names"],"properties":{"names":{"type":"array","items":{"type":"string"},"description":"the it() names you added, exactly"}}}'
+      {
+        cat <<EOF
+A reviewer is reading a code change, and no test runs $name ($src:$(printf '%s' "$gap" | jq -r .start)): $(printf '%s' "$gap" | jq -r .why).
+
+What the change says it does:
+<description>
+$(cat "$d/about")
+</description>
+
+Write tests for $name in $spec$(git cat-file -e "$head:$spec" 2>/dev/null && echo " (it exists: add to it, in its style)" || echo " (a new file: create it)"). They are real tests: assert what $name must do by the description and by its code, the path that succeeds and the ways it can fail. The working directory is the change's code.
+
+How to set them up: read $name and what it calls first. Use the helpers, fixtures and mocks the tests beside it use. When nothing near it shows how to test this kind of code (a Temporal workflow or activity, a queue consumer, a database repository), search the repository for tests of the same kind (for example grep for MockActivityEnvironment, TestWorkflowEnvironment, or other files that test code built the same way) and copy how they set it up. Do not invent a harness.
+
+Put them in one describe named "$name". Change no other file, and nothing but tests. Answer with the it() names you added.
+EOF
+      } > "$p.prompt"
+      for try in 1 2; do
+        git -C "$wslot" reset -q --hard; git -C "$wslot" clean -qfd; git -C "$wslot" checkout -q --detach -f "$head"
+        [ -s "$p.patch" ] && git -C "$wslot" apply "$p.patch" 2>>"$d/log"
+        say "Claude is writing tests for $name, in $(basename "$spec")"
+        set -m
+        (cd "$wslot" && otis-agent-run -p --model "$(git config --get otis.walkModel || echo claude-opus-5-5)" --restricted --tools "Read,Grep,Glob,Edit,Write" \
+          --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none --permission-mode acceptEdits \
+          --output-format stream-json --verbose --json-schema "$schema" < "$p.prompt" 2>>"$d/log" |
+          tee "$p.events" | git-claude-view --events "writing tests" >> "$d/events.jsonl")
+        set +m
+        stopping
+        names=$(jq -c 'select(.type == "result") | .structured_output.names // empty' "$p.events" | tail -1)
+        # A new spec file too: added, so the patch carries it.
+        git -C "$wslot" add -A -- "$spec" 2>/dev/null; git -C "$wslot" diff --cached -- "$spec" > "$p.patch"; git -C "$wslot" reset -q
+        [ -n "$names" ] && [ "$names" != "[]" ] && [ -s "$p.patch" ] || { rm -rf "$wslot.lock"; finish done "Claude wrote no tests for $name"; }
+        rm -rf "$wslot.lock"; remote=$remote0
+        say "running them"
+        OTIS_TEST_NAME=$name run_spec "$head" head "$p.patch" "$spec" "$p.head.out"; st=$?
+        stopping
+        # Each test by its own line: every one it wrote must pass.
+        bad=$(printf '%s' "$names" | jq -r '.[]' | while IFS= read -r n; do v=$(verdict "$p.head.out" $st "$n"); [ "$v" = 0 ] || echo "$n"; done)
+        ok=false; [ -z "$bad" ] && [ "$st" != 2 ] && ok=true
+        fails=$(sed 's/\x1b\[[0-9;]*m//g' "$p.head.out" | awk '/FAIL|✕|×|Error:/ { on = 1 } /⎯|node_modules|rules_|chunk-/ { next } on && NF { print; if (++k == 12) exit }')
+        jq -n --argjson names "$names" --arg spec "$spec" --argjson ok $ok --arg fails "$fails" --arg bad "$bad" '{names: $names, spec: $spec, ok: $ok, fails: $fails, failing: ($bad | split("\n") | map(select(. != "")))}' > "$p.json"
+        [ "$ok" = true ] && break
+        [ "$try" = 2 ] && break
+        cat >> "$p.prompt" <<EOF
+
+You wrote $names, and $( [ "$st" = 2 ] && echo "they did not run" || echo "not all of them pass"). The run's last lines:
+$(sed 's/\x1b\[[0-9;]*m//g' "$p.head.out" | grep -v '^\[' | tail -60)
+
+Fix them (they are in the file already) so they run and pass, still asserting what $name must do.
+EOF
+        remote0=$remote remote=
+        take_slots 1 || finish done "no slot free to write tests in"
+        wslot=${slots# }
+      done
+      rm -rf "$d"/entry-*
+      if [ "$(jq .ok "$p.json")" = true ]; then finish done "$(jq '.names | length' "$p.json") tests for $name pass: c posts them to the MR"
+      else finish done "the tests for $name did not all pass: $(jq -r '.failing | join(", ")' "$p.json")"; fi ;;
     pin)
       # A change in behavior pinned by a test: one that passes before the
       # change and fails with it, written by Claude beside the test that saw
@@ -866,7 +943,7 @@ case $1 in
     exit 0 ;;
   --tests)
     d=$2 st=${GIT_FZF_STATE:-}
-    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test or open where a change in behavior happens,t=a test that passes before a change in behavior and fails with it,c=post that test to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
+    otis-symbols "walk $(cat "$d/what") " 'enter=walk the test or open where a change in behavior happens,t=a test that pins a change in behavior, or tests for code no test runs,c=post those tests to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --list '$d')" \
       --bind "enter:transform(git-trace --open '$d' {12})" \
@@ -907,6 +984,13 @@ EOF
     # stop (tour:d<n>, the nth of those the tour shows): the change's id.
     d=$2 key=$3 row=$4
     case $row in
+      g:*)
+        # On changed code no test runs: t writes tests for it; c posts them.
+        gi=${row#g:} gid=$(jq -r --argjson g "$gi" '.gaps[$g].id' "$d/cover.json" | shasum | cut -c1-10)
+        if [ "$key" = t ]; then echo "execute(git-trace --cover '$d' $gi)"
+        elif [ "$(jq .ok "$d/cover.$gid.json" 2>/dev/null)" = true ]; then echo "execute(git-trace --cover-post '$d' $gi)"
+        else note "no tests for it yet: t writes them"; fi
+        exit 0 ;;
       d:*) g=${row#d:} ;;
       tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select((.value.verdict == null or .value.verdict.surprise > 0) and .value.kind != "count") | .key][$n - 1] // empty' "$d/diff.json") ;;
       *) note "$key is for a change in behavior: the list's first rows, or the tour's first stops"; exit 0 ;;
@@ -918,6 +1002,23 @@ EOF
     else note "no test pins it yet: t writes one"; fi
     exit 0 ;;
   --pin) d=$2; phase "$d" pin "$3"; exit 0 ;;
+  --cover) d=$2; phase "$d" cover "$3"; exit 0 ;;
+  --cover-post)
+    # c on a function t wrote tests for: them, as a comment, after a confirm.
+    d=$2 gi=$3 iid=${2##*/}
+    gid=$(jq -r --argjson g "$gi" '.gaps[$g].id' "$d/cover.json" | shasum | cut -c1-10) p=$d/cover.$gid
+    case $iid in
+      b-*)
+        b=$(printf '%s' "${iid#b-}" | tr '%' '/')
+        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        [ -n "$iid" ] || { note "$b has no open MR to post them to"; exit 0; } ;;
+    esac
+    git-confirm "Comment on !$iid with the tests written for $(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")?" || exit 0
+    jq -n --arg name "$(jq -r --argjson g "$gi" '.gaps[$g].name' "$d/cover.json")" --arg spec "$(jq -r .spec "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" \
+      '{body: "No test runs `\($name)`. These, in `\($spec)`, pass on this branch:\n\n```ts\n\($code)\n```\n"}' > "$p.post"
+    glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
+      { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }
+    note "posted to !$iid"; exit 0 ;;
   --pin-post)
     # c: the test posted to the MR as a comment, after a confirm: the lines
     # it adds, and what it says on the branch.
