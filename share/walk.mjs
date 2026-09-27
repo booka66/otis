@@ -499,8 +499,14 @@ function normalizer() {
     if (!ids.has(m)) { const p = pu || pre || (/^\d+n?$/.test(m) ? "n" : /^[0-9a-f]+$/.test(m) ? "hex" : "made"); n.set(p, (n.get(p) || 0) + 1); ids.set(m, `${p}#${n.get(p)}`); }
     return ids.get(m);
   });
-  const walk = (v) => !isObj(v) ? leaf(String(v))
+  // An Effect a function returns is a description of work, not its result:
+  // its insides (_op, effect_instruction_i0) change with how it is composed
+  // and say nothing of what it does, which what it passes on and returns
+  // when run shows.
+  const effect = (v) => /^(Effect\w*|Exit\w*|Fiber\w*)$/.test(v.c || "") || (!v.a && v.p.some(([k]) => k === "_op" || k === "effect_instruction_i0"));
+  const walk = (v) => !isObj(v) ? (/^(Effect\w*|Exit\w*) \{/.test(String(v)) || /^\{ _op: /.test(String(v)) ? "<Effect>" : leaf(String(v)))
     : ["ObjectId", "Buffer", "ArrayBuffer"].includes(v.c) ? `<${v.c}>`
+    : effect(v) ? "<Effect>"
     : { ...v, p: v.p.map(([k, x]) => [k, walk(x)]) };
   return walk;
 }
