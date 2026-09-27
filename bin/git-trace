@@ -173,7 +173,7 @@ case $1 in
     if [ -e "$f" ]; then cat "$f"; else exec $walk preview "$2" "$3"; fi
     exit 0 ;;
   # The tour's screen, drawn the same way: once a width, then looked up.
-  --tour-list) toured "$2" && cat "$2/tour.rows"; exit 0 ;;
+  --tour-list) toured "$2" && cat "$2/tour.rows"; $walk legend 2>/dev/null; exit 0 ;;
   --tour-show) toured "$2" && cat "$2/tour-$w/${3#tour:}" 2>/dev/null; exit 0 ;;
   # Where the tour's previews are drawn for this width, for its screen (otis-symbols --panes).
   --tour-panes) toured "$2" && printf '%s\n' "$2/tour-$w"; exit 0 ;;

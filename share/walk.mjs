@@ -610,8 +610,9 @@ function diff(r) {
   const touched = new Set(git("diff", "--name-only", "--no-renames", r.rev.base, r.rev.head).split("\n"));
   const field = (p) => p.split(".").pop();
   const renumbered = (v) => /^"?[a-z]+#\d+"?$/.test(v);
-  const groups = new Map();
+  const groups = new Map(), specOf = new Map();
   for (const c of all) {
+    specOf.set(c.test, c.spec);
     // Ids renumbered because more or fewer were made say what a count beside them does.
     if (c.kind === "changed" && renumbered(c.x) && renumbered(c.y)) continue;
     const k = c.kind === "count" ? `count|${c.test}|${Math.sign(c.y - c.x)}`
@@ -651,9 +652,55 @@ function diff(r) {
     into[g.kind].push(g.field);
   }
   // Changes, and no run of the head again to tell which are noise: said on the list.
+  // The tests changed too: every test that saw it is new in the change or
+  // edited by it. The base runs the change's spec files, so old code meets
+  // the tests' new setup (a mock that now returns the new shape) and can do
+  // what it never did outside them. A test the change left alone in a file
+  // it edits is not one: the planted bug's tests were those.
+  const edited = new Map();
+  const testEdited = (name, spec) => {
+    const k = spec + "|" + name;
+    if (!edited.has(k)) {
+      const leaf = name.split(" > ").pop();
+      const block = (rev) => {
+        const t = text(rev, spec), at = t.findIndex((l) => l.includes(leaf) && /\b(it|test)(\.\w+)?\(/.test(l));
+        if (at < 0) return null;
+        let end = at + 1;
+        while (end < t.length && end - at < 150 && !/^\s*(it|test)(\.\w+)?\(/.test(t[end])) end++;
+        return t.slice(at, end).join("\n");
+      };
+      const b = block(r.rev.base);
+      edited.set(k, b === null || b !== block(r.rev.head));
+    }
+    return edited.get(k);
+  };
+  for (const g of merged) g.testsChanged = !g.untouched.length && g.tests.every((t) => testEdited(t, r.specs[specOf.get(t)]));
   const out = { raw: all.length + masked, masked, changed, unmasked: changed.length > 0 && !again, groups: merged.map((g) => ({ ...g, says: says(g) })) };
   out.groups.sort((a, b) => b.untouched.length - a.untouched.length || b.tests.length - a.tests.length);
   writeFileSync(join(r.dir, "diff.json"), JSON.stringify(out));
+}
+// legend: what P's screens mean, for ? (the picker shows <state>/legend under the keys).
+function legend() {
+  const st = process.env.GIT_FZF_STATE;
+  if (!st) return;
+  const b = (t) => "  " + C.text + "\x1b[1m" + t + C.r;
+  writeFileSync(join(st, "legend"), [
+    b("what the tests do differently"),
+    `  The tests ran before the change and after it; what went into and came out of each changed function is compared.`,
+    `  Ids and codes a run makes up are renamed, and what differs between two runs of the same code is masked.`,
+    `  ${C.bad}!${C.r} a reviewer should look: the description does not account for it   ${C.at}?${C.r} a plausible side effect   ${C.good}✓${C.r} what the description says   ${C.faint}·${C.r} not judged`,
+    `  ${C.text}◦${C.r} a test in a file the change leaves alone: old behavior that changed, the strongest sign   ${C.text}•${C.r} a test in a file it edits`,
+    `  ${C.at}tests changed too${C.r}: every test that saw it was written or edited in the change; old code given their new setup can differ in ways nothing outside the tests would`,
+    "",
+    b("reading one"),
+    `  The line with ${C.at}▶${C.r} is where the changed value is passed in; the box under it is that value whole, from the test named above the code.`,
+    `  If that line plainly does what the description says, a ? is usually the tests, not the code.`,
+    `  s steps through the test line by line; b there shows the same test before the change, to see where they part.`,
+    `  t writes a test that passes before the change and fails with it (a few minutes); c posts it to the MR.`,
+    "",
+    b("worth a look first"),
+    `  a default that flipped, a field gone or now null, a value going somewhere new; anything a ◦ test saw.`,
+  ].join("\n") + "\n");
 }
 // reached: the specs whose tests reached the change at the head, a line
 // each: the ones worth running again. One that only imports the changed
@@ -693,7 +740,7 @@ ${about || "(no description)"}
 Its tests were run before and after the change under a tracer, and this is what they did differently:
 ${g.says}
 
-First quote, word for word, the sentence of the description that bears most on this. Then say whether that sentence promises it, forbids it, or says nothing about it. surprise is 0 when it is what the description says, 1 for a plausible side effect of it, 2 when a reviewer should look. why is one short sentence a reviewer reads.
+${g.testsChanged ? "Every test that saw this was itself written or edited by this change, so part of the difference may come from the tests' new setup (a mock or fixture that now has the new shape) rather than from the code.\n\n" : ""}First quote, word for word, the sentence of the description that bears most on this. Then say whether that sentence promises it, forbids it, or says nothing about it. surprise is 0 when it is what the description says, 1 for a plausible side effect of it, 2 when a reviewer should look. why is one short sentence a reviewer reads.
 `;
 }
 // diffVerdicts: each change's verdict (<dir>/diff.<i>.json) onto it, those
@@ -715,6 +762,7 @@ function rows(r) {
 // testRows: P's screen's rows: what the tests do differently before and
 // after, the changed code no test runs, then the tests.
 function testRows(r) {
+  legend();
   const c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
   const out = [];
   const bd = readJson(join(r.dir, "diff.json"), null);
@@ -722,7 +770,7 @@ function testRows(r) {
     const look = bd.groups.filter((g) => g.verdict && g.verdict.surprise === 2).length;
     out.push(`${look ? C.bad : C.at}behavior that changed · ${bd.groups.length}${look ? ` · ${look} to look at` : ""}${C.r}${bd.unmasked ? `${C.faint} · not checked for noise${C.r}` : ""}` + "\t".repeat(11) + "gk-diff");
     bd.groups.forEach((g, i) => {
-      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}`;
+      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}${g.testsChanged ? `${C.faint} · tests changed too${C.r}` : ""}`;
       out.push(row(`${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}  ${n}`, g.fns[0].path, g.fns[0].line, "d:" + i));
     });
   }
@@ -780,6 +828,7 @@ function diffPreview(r, g, w) {
   if (g.from) line("passed by", `${g.from.fn} at ${g.from.path.split("/").pop()}:${g.from.line}`, C.at);
   line("where", g.fns.map((f) => f.name).join(", "), C.ctx);
   line("in", `${g.tests.length} test${g.tests.length === 1 ? "" : "s"}` + (g.untouched.length ? `, ${g.untouched.length} in spec files the change leaves alone` : ""), C.ctx);
+  if (g.testsChanged) line("", "the tests changed too: each was written or edited here, so their new setup may be part of it", C.at);
   // The tests the change leaves alone first, marked ◦: behavior an old test sees differently.
   for (const t of [...g.untouched, ...g.tests.filter((t) => !g.untouched.includes(t))].slice(0, 3)) line("", (g.untouched.includes(t) ? "◦ " : "• ") + t, C.faint);
   out.push("");
@@ -2207,6 +2256,7 @@ switch (cmd) {
   case "cover": cover(run(args[0])); break;
   case "diff": diff(run(args[0])); break;
   case "reached": reached(run(args[0])); break;
+  case "legend": legend(); break;
   case "diff-prompt": process.stdout.write(diffPrompt(run(args[0]), +args[1] || 0)); break;
   case "diff-verdicts": diffVerdicts(run(args[0])); break;
   case "split": split(run(args[0]), args[1] || "head"); break;

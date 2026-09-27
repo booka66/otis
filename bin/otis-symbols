@@ -1383,6 +1383,27 @@ helplines() {
     "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
     "  ${G}●$R$C in a review, the agent's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
+  # Each line in the pane's width, not cut at its edge: broken at spaces,
+  # colors kept, what runs on under the line's own text (a key's, under its
+  # words; the rest, two in from where it starts).
+  local -a out words
+  local l cur wd
+  integer w=$(( pw - 2 )) n ind wl lead first
+  for l in "${P[@]}"; do
+    vw "$l"; (( REPLY <= w )) && { out+=("$l"); continue; }
+    plain "$l"
+    if [[ $REPLY == (#b)([[:space:]]#[^[:space:]]##[[:space:]][[:space:]]##)[^[:space:]]* ]]; then ind=${#match[1]}; else ind=$(( ${#${REPLY%%[^ ]*}} + 2 )); fi
+    lead=${#${REPLY%%[^[:space:]]*}}
+    cur=${(l:lead:: :)} n=$lead first=1 words=("${(@s: :)${l#${(l:lead:: :)}}}")
+    for wd in "${words[@]}"; do
+      vw "$wd"; wl=$REPLY
+      if (( ! first && n + 1 + wl > w )); then out+=("$cur$R"); cur=${(l:ind:: :)}$wd; n=$(( ind + wl ))
+      else (( first )) || { cur+=" "; (( n++ )); }; cur+=$wd; (( n += wl )); fi
+      first=0
+    done
+    out+=("$cur")
+  done
+  P=("${out[@]}")
 }
 draw() {
   local t0=$EPOCHREALTIME
