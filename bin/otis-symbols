@@ -1146,15 +1146,18 @@ xgo() {
   xpush $dir
 }
 # panes_go <row it was on> <1|-1>: from that row's preview to this one's: a
-# scroll when both say where they are (<name>.at) in the same file and the
-# directory has it whole (files/), else a push.
+# scroll when both say where they are (<name>.at) in the same file, within
+# 300 lines, and the directory has it whole (files/), else a push.
 panes_go() {
   local a=${rid[$1]#*:} b=${rid[cur]#*:} pa pb fv= np=/dev/null
   integer la=0 lb=0
   [[ -e $pdir/$b ]] && { wrapped $pdir $pwdir $pw $b; np=$REPLY; }
   if [[ -r $pdir/$a.at && -r $pdir/$b.at ]]; then
     read -r pa la _ < $pdir/$a.at; read -r pb lb _ < $pdir/$b.at
-    [[ $pa == $pb && -e $pdir/files/${pa//\//%} ]] && { wrapped $pdir $pwdir $pw files/${pa//\//%}; fv=$REPLY; }
+    # A stop far down the same file is pushed to like one in another: the
+    # scroll lays out every line between first, and 1,500 of them held j a
+    # third of a second before anything moved.
+    [[ $pa == $pb && -e $pdir/files/${pa//\//%} ]] && (( la - lb < 300 && lb - la < 300 )) && { wrapped $pdir $pwdir $pw files/${pa//\//%}; fv=$REPLY; }
   fi
   xgo $np "$fv" $la $lb $2
 }

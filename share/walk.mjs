@@ -1415,7 +1415,10 @@ function tourPrep(r, w, out = r.dir) {
     said.forEach((g, i) => {
       const f = g.from || g.fns[0], o = owner(ds, f.path, f.line, "head");
       saidPaths.push(f.path);
-      const x = { path: f.path, focus: f.line, start: o ? o.r[0] : f.line, end: o ? o.r[1] : f.line, test: [...g.untouched, ...g.tests][0] };
+      // The lines around it, as a stop of the tour has: the definition
+      // holding it can be a whole service (an Effect.Service class is its
+      // file), and a pane of 1,900 lines made each j wait a third of a second.
+      const x = { path: f.path, focus: f.line, start: Math.max(o ? o.r[0] : 1, f.line - 20), end: Math.min(o ? o.r[1] : f.line, f.line + 20), test: [...g.untouched, ...g.tests][0] };
       rows.push(row(`${C.faint}${String(i + 1).padStart(2)}${C.r}  ${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}`, f.path, f.line, `tour:d${i + 1}`));
       const { ti, k, body, at } = stopOf(x, w, AROUND);
       const head = [C.faint + `behavior ${i + 1} of ${said.length}  ·  ${f.path.split("/").pop()}:${f.line}` + (g.from ? `  ·  where it is passed in` : "") + C.r, ""];
