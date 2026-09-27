@@ -212,7 +212,10 @@ const cut = (s, n) => ([...s].length > n ? [...s].slice(0, Math.max(0, n - 1)).j
 function wrap(t, w, lead = "") {
   const out = [];
   let line = "";
-  for (const word of t.split(/\s+/)) {
+  // A word wider than the line (a URL, an id) in pieces that fit, not off the edge.
+  const room = Math.max(10, w - width(lead));
+  const words = t.split(/\s+/).flatMap((x) => { const cs = [...x], ps = []; for (let i = 0; i < cs.length; i += room) ps.push(cs.slice(i, i + room).join("")); return ps.length ? ps : [x]; });
+  for (const word of words) {
     if (line && width(lead + line + " " + word) > w) { out.push(lead + line); line = word; } else line = line ? line + " " + word : word;
   }
   if (line) out.push(lead + line);
@@ -571,8 +574,18 @@ function delta(x, y, path, out) {
   }
   const X = new Map(x.p), Y = new Map(y.p);
   // A field past what the tracer kept is not gone.
-  for (const [k, v] of Y) if (!X.has(k) && !x.m) out.push({ kind: "added", path: path + "." + k, y: full(v) });
-  for (const [k, v] of X) if (!Y.has(k) && !y.m) out.push({ kind: "removed", path: path + "." + k, x: full(v) });
+  const gone = x.m || y.m ? [] : [...X.keys()].filter((k) => !Y.has(k)), come = x.m || y.m ? [] : [...Y.keys()].filter((k) => !X.has(k));
+  // Wrapped: the fields that went are all inside one that came, the same
+  // values ({ status, … } now { _tag, result: { status, … } }), or the other
+  // way round. One change, not the fields gone: a refactor's tagged result
+  // read as a compliance flag dropped.
+  const inside = (o, keys, from) => isObj(o) && !o.a && keys.every((k) => { const e = o.p.find(([n]) => n === k); return e && full(e[1]) === full(from.get(k)); });
+  const into = gone.length ? come.find((a) => inside(Y.get(a), gone, X)) : null;
+  const outof = !into && come.length ? gone.find((a) => inside(X.get(a), come, Y)) : null;
+  if (into) out.push({ kind: "wrapped", path: path + "." + into, y: gone.join(", ") });
+  if (outof) out.push({ kind: "unwrapped", path: path + "." + outof, y: come.join(", ") });
+  for (const [k, v] of Y) if (!X.has(k) && k !== into && !(outof && come.includes(k)) && !x.m) out.push({ kind: "added", path: path + "." + k, y: full(v) });
+  for (const [k, v] of X) if (!Y.has(k) && k !== outof && !(into && gone.includes(k)) && !y.m) out.push({ kind: "removed", path: path + "." + k, x: full(v) });
   for (const [k, v] of X) if (Y.has(k)) delta(v, Y.get(k), path + "." + k, out);
 }
 function changes(A, B) {
@@ -621,8 +634,9 @@ function diff(r) {
     const g = groups.get(k);
     // A field's values, or how they changed: undefined → true going in and
     // false → true once stored are one change.
-    const v = c.kind === "added" ? c.y : c.kind === "removed" ? c.x : c.kind === "changed" ? `${cut(c.x, 60)} → ${cut(c.y, 60)}` : null;
-    if (v !== null && !g.values.includes(v)) g.values.push(v);
+    const v = c.kind === "added" || c.kind === "wrapped" || c.kind === "unwrapped" ? c.y : c.kind === "removed" ? c.x : c.kind === "changed" ? `${cut(c.x, 60)} → ${cut(c.y, 60)}` : null;
+    // A wrap's fields one at a time, so each is listed once.
+    for (const x of v === null ? [] : c.kind === "wrapped" || c.kind === "unwrapped" ? v.split(", ") : [v]) if (!g.values.includes(x)) g.values.push(x);
     if (c.kind === "count" && !g.counts.some((x) => x.field === field(c.path))) g.counts.push({ field: field(c.path), x: c.x, y: c.y });
     if (!g.fns.some((f) => f.name === c.fn && f.path === c.file)) g.fns.push({ name: c.fn, path: c.file, line: c.line });
     // Where a changed value was handed in: the first call site seen passing
@@ -720,6 +734,8 @@ function says(g) {
   const vals = g.values.slice(0, 3).map((x) => v(x)).join(", ") + (g.values.length > 3 ? ", …" : "");
   if (g.kind === "added") return `A field \`${g.field}\` is there after the change and not before (${vals}), in ${where}, in ${tests}.`;
   if (g.kind === "removed") return `The field \`${g.field}\` (${vals}) is gone after the change, in ${where}, in ${tests}.`;
+  if (g.kind === "wrapped") return `What ${where} works with is wrapped after the change: its fields (${vals}) are the same, now inside \`${g.field}\`, in ${tests}.`;
+  if (g.kind === "unwrapped") return `What ${where} works with is unwrapped after the change: the fields that were inside \`${g.field}\` (${vals}) are the same, now at the top, in ${tests}.`;
   if (g.kind === "shape") return `What ${where} works with changed shape after the change: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(", ")}, in ${tests}.`;
   if (g.kind === "count") return `In the test "${g.tests[0]}", ${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} distinct values go through ${where} after the change: ${g.counts.map((c) => `${c.field} ${c.x} → ${c.y}`).join(", ")}.`;
   return `\`${g.field}\` in ${where} changed: ${g.values.slice(0, 3).join(", ")}${g.values.length > 3 ? ", …" : ""} (before → after), in ${tests}.`;
@@ -804,6 +820,8 @@ const verdictMark = (g) => !g.verdict ? C.faint + "·" + C.r : g.verdict.surpris
 function diffLabel(g) {
   if (g.kind === "added") return `+ ${g.field}`;
   if (g.kind === "removed") return `− ${g.field}`;
+  if (g.kind === "wrapped") return `wrapped into ${g.field}`;
+  if (g.kind === "unwrapped") return `unwrapped from ${g.field}`;
   if (g.kind === "shape") return `reshaped: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(" ")}`;
   if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} values: ${g.counts.map((c) => `${c.field} ${c.x}→${c.y}`).join(", ")}`;
   return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
@@ -812,17 +830,19 @@ function diffLabel(g) {
 function pinned(r, g, w) {
   const i = readJson(join(r.dir, "diff.json"), { groups: [] }).groups.findIndex((x) => x.says === g.says);
   const p = readJson(join(r.dir, `pin.${i}.json`), null);
-  if (!p) return [C.faint + "t writes a test that passes before the change and fails with it" + C.r];
-  if (!p.ok) return [C.at + `✗ "${cut(p.name, w - 20)}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}` + C.r, C.faint + "t tries again" + C.r];
-  return [C.good + `✓ "${cut(p.name, w - 6)}"` + C.r, C.good + "  passes before the change, fails with it" + C.r,
-    ...p.fails.split("\n").filter(Boolean).slice(0, 4).map((l) => "  " + C.ctx + cut(l, w - 4) + C.r), C.faint + "c posts it to the MR" + C.r];
+  if (!p) return wrap("t writes a test that passes before the change and fails with it", w).map((l) => C.faint + l + C.r);
+  if (!p.ok) return [...wrap(`✗ "${p.name}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}`, w).map((l) => C.at + l + C.r), C.faint + "t tries again" + C.r];
+  return [...wrap(`✓ "${p.name}"`, w).map((l) => C.good + l + C.r), C.good + "  passes before the change, fails with it" + C.r,
+    ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts it to the MR" + C.r];
 }
 function diffPreview(r, g, w) {
-  const out = [C.text + "\x1b[1m" + cut(diffLabel(g), w) + C.r, ""];
-  const line = (k, v, c = C.text) => out.push(`${C.faint}${k.padEnd(11)}${C.r}${c}${cut(v, w - 11)}${C.r}`);
+  const out = [...wrap(diffLabel(g), w).map((l) => C.text + "\x1b[1m" + l + C.r), ""];
+  // Whole, wrapped under its own column: nothing here is cut short.
+  const line = (k, v, c = C.text) => wrap(String(v), w - 11).forEach((l, i) => out.push(`${C.faint}${(i ? "" : k).padEnd(11)}${C.r}${c}${l}${C.r}`));
   if (g.kind === "added") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "new, as", v));
   else if (g.kind === "removed") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "gone, was", v));
   else if (g.kind === "shape") { line("added", g.added.join(", ")); line("removed", g.removed.join(", ")); }
+  else if (g.kind === "wrapped" || g.kind === "unwrapped") { line(g.kind === "wrapped" ? "now inside" : "was inside", g.field); g.values.slice(0, 3).forEach((v, i) => line(i ? "" : "the same", v)); }
   else if (g.kind === "count") g.counts.slice(0, 6).forEach((c, i) => line(i ? "" : "values", `${c.field}  ${c.x} before, ${c.y} after`));
   else g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "was → is", v));
   if (g.from) line("passed by", `${g.from.fn} at ${g.from.path.split("/").pop()}:${g.from.line}`, C.at);
@@ -833,11 +853,11 @@ function diffPreview(r, g, w) {
   for (const t of [...g.untouched, ...g.tests.filter((t) => !g.untouched.includes(t))].slice(0, 3)) line("", (g.untouched.includes(t) ? "◦ " : "• ") + t, C.faint);
   out.push("");
   const v = g.verdict;
-  if (!v) out.push(C.faint + "not judged: Claude reads each change against what the change says it does, when an agent is here" + C.r);
+  if (!v) out.push(...wrap("not judged: Claude reads each change against what the change says it does, when an agent is here", w).map((l) => C.faint + l + C.r));
   else {
     out.push(v.surprise === 2 ? C.bad + "! a reviewer should look" + C.r : v.surprise === 1 ? C.at + "? a plausible side effect" + C.r : C.good + "✓ what the change says it does" + C.r);
-    if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).slice(0, 2).map((l) => "  " + C.ctx + l + C.r));
-    if (v.why) { const ws = wrap(v.why, w - 2); out.push(...ws.slice(0, 3).map((l, j) => "  " + C.text + l + (j === 2 && ws.length > 3 ? "…" : "") + C.r)); }
+    if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).map((l) => "  " + C.ctx + l + C.r));
+    if (v.why) out.push(...wrap(v.why, w - 2).map((l) => "  " + C.text + l + C.r));
   }
   out.push("", ...pinned(r, g, w), "", C.faint + "enter opens where it happens" + C.r);
   return out;
@@ -1399,7 +1419,7 @@ function tourPrep(r, w, out = r.dir) {
       const { ti, k, body, at } = stopOf(x, w, AROUND);
       const head = [C.faint + `behavior ${i + 1} of ${said.length}  ·  ${f.path.split("/").pop()}:${f.line}` + (g.from ? `  ·  where it is passed in` : "") + C.r, ""];
       head.push(...diffPreview(r, g, w).slice(0, -2));
-      head.push(k >= 0 ? C.faint + `values from the test "${cover.tests[ti].name}"; s steps through it, b there shows it before the change` + C.r : C.faint + "no test stops on this line, so no values" + C.r);
+      head.push(...wrap(k >= 0 ? `values from the test "${cover.tests[ti].name}"; s steps through it, b there shows it before the change` : "no test stops on this line, so no values", w).map((l) => C.faint + l + C.r));
       head.push(C.faint + "─".repeat(w) + C.r);
       writeFileSync(join(dir, `d${i + 1}`), `\x1epin ${head.length} at ${at}\n` + head.join("\n") + "\n" + solid(body, w));
       writeFileSync(join(dir, `d${i + 1}.at`), `${f.path} ${f.line} ${k >= 0 ? ti : -1} ${k}\n`);
