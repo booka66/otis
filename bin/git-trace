@@ -604,11 +604,14 @@ judge() {
   [ "$n" -gt 0 ] && [ "$(git config --get otis.walkModel)" != off ] && otis-agent-run --ready >/dev/null 2>&1 || return 0
   about > "$d/about"
   say "Claude is reading $n change$( [ "$n" = 1 ] || echo s) in behavior against what the change says it does"
+  # Four at a time: all at once (21 on one change) ran into the rate limit,
+  # and held up whatever else was asking Claude, a test being pinned.
   i=0
   while [ "$i" -lt "$n" ]; do
     { $walk diff-prompt "$d" "$i" > "$d/diff.$i.prompt"
       ask "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" "$verdict" "$d/diff.$i.prompt" "judging change $((i + 1))" > "$d/diff.$i.json"; } &
     i=$((i + 1))
+    [ $((i % 4)) = 0 ] && wait
   done
   wait
   $walk diff-verdicts "$d" 2>>"$d/log"
@@ -672,7 +675,7 @@ if [ "$1" = --phase ]; then
       # nothing), then its spec run untraced at the base and at the head, and
       # given back once with what went wrong when it does not do both.
       g=$4 p=$d/pin.$4
-      gj=$(jq -c --argjson g "$g" '.groups[$g]' "$d/diff.json")
+      gj=$(jq -c --arg g "$g" 'first(.groups[] | select(.id == $g))' "$d/diff.json")
       tname=$(printf '%s' "$gj" | jq -r '(.untouched + .tests)[0]')
       spec=$(jq -r --arg t "$tname" 'first(.tests[] | select(.name == $t) | .spec)' "$d/cover.json")
       spec=$(sed -n "$((spec + 1))p" "$d/specs")
@@ -896,7 +899,7 @@ EOF
   --base) d=$2; phase "$d" base; exit 0 ;;
   --pin-key)
     # t and c on a change in behavior, from a's list (d:<i>) or the tour's
-    # stop (tour:d<n>, the nth of those the tour shows): the change's index.
+    # stop (tour:d<n>, the nth of those the tour shows): the change's id.
     d=$2 key=$3 row=$4
     case $row in
       d:*) g=${row#d:} ;;
@@ -904,6 +907,7 @@ EOF
       *) note "$key is for a change in behavior: the list's first rows, or the tour's first stops"; exit 0 ;;
     esac
     [ -n "$g" ] || exit 0
+    g=$(jq -r --argjson g "$g" '.groups[$g].id' "$d/diff.json")
     if [ "$key" = t ]; then echo "execute(git-trace --pin '$d' $g)"
     elif [ "$(jq .ok "$d/pin.$g.json" 2>/dev/null)" = true ]; then echo "execute(git-trace --pin-post '$d' $g)"
     else note "no test pins it yet: t writes one"; fi
@@ -921,7 +925,7 @@ EOF
     esac
     git-confirm "Comment on !$iid with the test that passes before this change and fails with it?" || exit 0
     jq -n --arg spec "$(jq -r .spec "$p.json")" --arg code "$(grep '^+' "$p.patch" | grep -v '^+++' | sed 's/^+//')" --arg fails "$(jq -r .fails "$p.json")" \
-      --arg says "$(jq -r --argjson g "$3" '.groups[$g].says' "$d/diff.json")" \
+      --arg says "$(jq -r --arg g "$3" 'first(.groups[] | select(.id == $g)) | .says' "$d/diff.json")" \
       '{body: "Running this change'"'"'s tests before and after it: \($says)\n\nThis test, added to `\($spec)`, passes on the target branch and fails on this one:\n\n```ts\n\($code)\n```\n" + (if $fails != "" then "\nOn this branch:\n\n```\n\($fails)\n```\n" else "" end)}' > "$p.post"
     glab api -X POST "projects/:fullpath/merge_requests/$iid/notes" -H 'Content-Type: application/json' --input "$p.post" >/dev/null 2>"$p.err" ||
       { note "the comment was not posted: $(head -c 200 "$p.err")"; exit 0; }

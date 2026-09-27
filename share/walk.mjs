@@ -32,6 +32,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { gzipSync } from "node:zlib";
+import { createHash } from "node:crypto";
 
 const [cmd, ...args] = process.argv.slice(2);
 
@@ -699,7 +700,10 @@ function diff(r) {
   // stored once is now stored twice), what a function returns last.
   for (const g of merged) if (g.counts.length) g.counts.sort((a, b) => (a.field === "returns") - (b.field === "returns") || a.x - b.x || Math.abs(b.y - b.x) - Math.abs(a.y - a.x));
   for (const g of merged) g.testsChanged = !g.untouched.length && g.tests.every((t) => testEdited(t, r.specs[specOf.get(t)]));
-  const out = { raw: all.length + masked, masked, changed, unmasked: changed.length > 0 && !again, groups: merged.map((g) => ({ ...g, says: says(g) })) };
+  // id: the change's own, for what is kept about it (the test t writes for
+  // it): its place on the list moves whenever the list is worked out again.
+  const idOf = (g) => createHash("sha1").update([g.kind, g.field, g.tests[0], g.fns[0].name].join("|")).digest("hex").slice(0, 10);
+  const out = { raw: all.length + masked, masked, changed, unmasked: changed.length > 0 && !again, groups: merged.map((g) => ({ ...g, id: idOf(g), says: says(g) })) };
   out.groups.sort((a, b) => b.untouched.length - a.untouched.length || b.tests.length - a.tests.length);
   writeFileSync(join(r.dir, "diff.json"), JSON.stringify(out));
 }
@@ -840,8 +844,7 @@ function diffLabel(g) {
 }
 // pinned: the test Claude wrote for change i (git-trace's pin), and how it ran.
 function pinned(r, g, w) {
-  const i = readJson(join(r.dir, "diff.json"), { groups: [] }).groups.findIndex((x) => x.says === g.says);
-  const p = readJson(join(r.dir, `pin.${i}.json`), null);
+  const p = readJson(join(r.dir, `pin.${g.id}.json`), null);
   if (!p) return wrap("t writes a test that passes before the change and fails with it", w).map((l) => C.faint + l + C.r);
   if (!p.ok) return [...wrap(`✗ "${p.name}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}`, w).map((l) => C.at + l + C.r), C.faint + "t tries again" + C.r];
   return [...wrap(`✓ "${p.name}"`, w).map((l) => C.good + l + C.r), C.good + "  passes before the change, fails with it" + C.r,

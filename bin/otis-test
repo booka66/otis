@@ -845,9 +845,11 @@ EOF
   expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "behavior that changed · 1 · 1 to look at|! returns 0 → 1 1 test, 1 untouched|"
   expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-commit-open $head 'lib.ts' 3)"
   # t on a change writes a test that pins it; c posts one that did.
-  expect trace/pin-key "$(git-trace --pin-key "$bd" t d:0)|$(GIT_FZF_STATE=$tmp/tst git-trace --pin-key "$bd" c d:0; cat "$tmp/tst/note")" "execute(git-trace --pin '$bd' 0)|no test pins it yet: t writes one"
-  printf '%s' '{"name":"keeps run returning 0","spec":"lib.spec.ts","base":0,"head":1,"ok":true,"fails":"Expected: 0\nReceived: 1"}' > "$bd/pin.0.json"
-  expect trace/pin-shown "$(FZF_PREVIEW_COLUMNS=80 node "$share/walk.mjs" preview "$bd" d:0 | strip | grep -c 'keeps run returning 0\|passes before the change, fails with it\|Received: 1')|$(git-trace --pin-key "$bd" c d:0)" "3|execute(git-trace --pin-post '$bd' 0)"
+  # A pinned test is kept by the change's id, not its place on the list.
+  pid=$(jq -r '.groups[0].id' "$bd/diff.json")
+  expect trace/pin-key "$(git-trace --pin-key "$bd" t d:0)|$(GIT_FZF_STATE=$tmp/tst git-trace --pin-key "$bd" c d:0; cat "$tmp/tst/note")" "execute(git-trace --pin '$bd' $pid)|no test pins it yet: t writes one"
+  printf '%s' '{"name":"keeps run returning 0","spec":"lib.spec.ts","base":0,"head":1,"ok":true,"fails":"Expected: 0\nReceived: 1"}' > "$bd/pin.$pid.json"
+  expect trace/pin-shown "$(FZF_PREVIEW_COLUMNS=80 node "$share/walk.mjs" preview "$bd" d:0 | strip | grep -c 'keeps run returning 0\|passes before the change, fails with it\|Received: 1')|$(git-trace --pin-key "$bd" c d:0)" "3|execute(git-trace --pin-post '$bd' $pid)"
   # The tour: what it sets out to do, then a stop a row, each with the values
   # of the test it names, and s from it to that test's step. One chapter is
   # stops alone; more are headed each by its title, and a chapter still being
