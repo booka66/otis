@@ -307,6 +307,9 @@ slot_ready() {
 }
 # take_slots <want>: up to want free slots, their paths in $slots; waits for
 # one unless ahead of a review, which gives up (and says so by returning 1).
+# Ahead of a review, or with OTIS_WALK_BACKGROUND set (a script walking many
+# changes), it leaves a slot free for what you start yourself: a batch that
+# took both held a t waiting ten minutes. The background one waits for two.
 take_slots() {
   slots_dir
   while :; do
@@ -315,7 +318,7 @@ take_slots() {
       { [ ! -e "$sd/walk-$i.lock" ] || ! kill -0 "$(cat "$sd/walk-$i.lock/pid" 2>/dev/null)" 2>/dev/null; } && free=$((free + 1))
       i=$((i + 1))
     done
-    can=$free; [ -e "$d/ahead" ] && can=$((free - 1))
+    can=$free; { [ -e "$d/ahead" ] || [ -n "${OTIS_WALK_BACKGROUND:-}" ]; } && can=$((free - 1))
     [ "$can" -gt "$1" ] && can=$1
     if [ "$can" -ge 1 ]; then
       slots= i=1 got=0
