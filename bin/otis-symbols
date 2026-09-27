@@ -109,7 +109,11 @@ at_quit() { (( $#outq )) && print -rl -- $outq; }
 # the list's width, lh its height; the pane at column px, row py, pw wide
 # and ph high, its first two rows where the row is (phd).
 integer lw lh px py pw ph side phd=2
-typeset -a PH
+typeset -a PH HB
+# The pinned head whole (HB) when it is taller than its share of the pane
+# (hroom rows), and how far it is scrolled (hoff): J and K, or the wheel
+# over it, scroll it; the code under it keeps the rest of the pane.
+integer hoff=0 hroom=0
 layout() {
   if (( W >= 120 )); then
     side=1; (( lw = W * 42 / 100, lw < 48 ? (lw = 48) : 0 ))
@@ -867,7 +871,7 @@ xframe() {
     P+=("$REPLY")
   done
   if [[ $xmode == code ]]; then xcodeat; xframe_code; else xframe_anchor; fi
-  PH=() phd=2 poff=0 pfile=
+  PH=() HB=() hoff=0 phd=2 poff=0 pfile=
 }
 # xframe_anchor: the code under the head around the anchor row, which goes
 # from xa0 to xa1 and from row xy0 to xy1 of the code.
@@ -902,6 +906,35 @@ xstop() {
 # taller head is its own height: padding every head to the tallest left a
 # short one a gap of a dozen rows where code could be.
 integer hfix=0
+# headroom: the rows a pinned head may take: two fifths of the pane, so the
+# code under it always has the rest to itself (a head that took all but six
+# rows left three lines of code, and cut its own end off).
+headroom() { REPLY=$(( (ph - 2) * 2 / 5 )); (( REPLY < 6 )) && REPLY=6; }
+# headview <room> <rows...>: the rows the pane shows of a head: all of them
+# (padded, headpad) when they fit, else a window of them from hoff and a
+# last row that says how much more there is and how to see it.
+headview() {
+  integer room=$1; shift
+  if (( $# <= room )); then headpad "$@"; return; fi
+  (( hoff > $# - room + 1 )) && hoff=$(( $# - room + 1 ))
+  (( hoff < 0 )) && hoff=0
+  local -a v=("${(@)argv[hoff+1,hoff+room-1]}")
+  integer below=$(( $# - hoff - room + 1 ))
+  # A rule across the pane, the note set in it: where this part ends and
+  # the code begins.
+  local note
+  if (( below > 0 )); then note=" ↓ $below more line$( (( below == 1 )) || print s) · J scrolls this part, K back "
+  else note=" end of this part · K back to its top "; fi
+  v+=("${F}──${note}${(l:pw - 4 - ${(m)#note}::─:)}$R")
+  reply=("${(@)v}")
+}
+# headscroll <rows>: J and K on a head taller than its room.
+headscroll() {
+  (( $#HB > hroom )) || return 1
+  (( hoff += $1 ))
+  headview $hroom "${(@)HB}"; PH=("${(@)reply}")
+  return 0
+}
 headpad() {
   reply=("$@")
   integer want=$hfix room=$(( ph - 2 - 6 )) i
@@ -933,12 +966,13 @@ integer NK=0 NL=0
 xsplit() {
   xfile $1
   local -a all=("${(@)reply}")
-  integer np=$xfh room=$(( ph - 2 - 6 ))
-  (( np > room )) && np=room
-  headpad "${(@)all[1,np]}"; NH=("${(@)reply}")
+  integer np=$xfh room
+  headroom; room=$REPLY
+  # As the pane will show it once landed (headview, from its top).
+  hoff=0; headview $room "${(@)all[1,np]}"; NH=("${(@)reply}")
   NB=("${(@)all[np+1,-1]}")
   xkeys "${(@)NB}"; NBK=("${(@)reply}")
-  (( NK = xfk ? xfk + xfh - np : 0 ))
+  (( NK = xfk ? xfk : 0 ))
   xlanding $#NH
   NL=$REPLY
 }
@@ -1374,7 +1408,8 @@ helplines() {
   for (( n = 1; n <= $#hk; n++ )); do P+=("  ${A}${(r:9:: :)hk[n]}$R ${C}$hv[n]$R"); done
   P+=("")
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
-    ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
+    ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
+    "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
@@ -1429,7 +1464,7 @@ draw() {
   (( lo > 0 && hi <= lrows )) && top=0
   # The pane: the preview, or ? its keys.
   local head=
-  if (( help )); then helplines; pfile=; PH=() phd=2; head="  ${B}${T}keys, and what the glyphs say$R"
+  if (( help )); then helplines; pfile=; PH=() HB=() phd=2; head="  ${B}${T}keys, and what the glyphs say$R"
   elif (( cur )) && [[ -n $preview$stepscmd$panescmd ]] && (( xon )); then
     # A transition's frame (xframe), under the row's own head line, which
     # crossfades from the old one.
@@ -1450,14 +1485,15 @@ draw() {
       # the pane's head that much taller. All but six rows of the pane at
       # most, so there is always some code to scroll; what does not fit
       # scrolls.
-      PH=() phd=2
+      PH=() HB=() hoff=0 phd=2
       integer pover=0
       integer pat=0
       if [[ $P[1] == (#b)$'\036'pin\ (<->)(\ at\ (<->))# ]]; then
-        integer np=$match[1] room=$(( ph - 2 - 6 ))
+        integer np=$match[1]
         pat=${match[3]:-0}
-        (( np > room )) && { pover=$(( np - room )); np=room; }
-        headpad "${(@)P[2,np+1]}"
+        headroom; hroom=$REPLY
+        HB=("${(@)P[2,np+1]}")
+        headview $hroom "${(@)HB}"
         PH=("${(@)reply}") P=("${(@)P[np+2,-1]}") phd=$(( 2 + $#reply ))
         # A preview that says which row of its code is its line opens with
         # that line a third of the way down, the code around it in sight.
@@ -1477,7 +1513,7 @@ draw() {
     (( pwant >= 0 )) && [[ -n $pfile && -z $sbase$pdir ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
     if [[ $rid[cur] != $crumbfor ]]; then crumb; crumbline=$REPLY crumbfor=$rid[cur]; fi
     head=$crumbline
-  else P=() pfile= PH=() phd=2
+  else P=() pfile= PH=() HB=() phd=2
   fi
   plen=$#P
   local -a fr pr
@@ -1743,7 +1779,9 @@ mouse() {
     return
   fi
   if (( b == 64 || b == 65 )); then
-    if inpane || (( ! side && y >= py )); then scroll $(( b == 64 ? -3 : 3 ))
+    # Over a pinned head taller than its room: that head.
+    if (( y > py && y < py + phd && (side ? x >= px : 1) )) && headscroll $(( b == 64 ? -3 : 3 )); then :
+    elif inpane || (( ! side && y >= py )); then scroll $(( b == 64 ? -3 : 3 ))
     else step $(( b == 64 ? -1 : 1 )); fi
     return
   fi
@@ -2080,6 +2118,8 @@ handle() {
     esc) if [[ -n $query ]]; then query= dirty=1; else quit 130; fi ;;
     /) searching=1 dirty=1 ;;
     '?') help=$(( !help )) poff=0 ;;
+    J) headscroll 3 ;;
+    K) headscroll -3 ;;
     ctrl-d) scroll $(( (ph - phd) / 2 )) ;;
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
     ctrl-e) scroll 1 ;;
