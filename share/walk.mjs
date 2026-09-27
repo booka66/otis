@@ -597,7 +597,12 @@ function changes(A, B) {
     const xs = [...a.values.values()], ys = [...b.values.values()], found = [];
     // Different counts are the change; pairing the values up by the order
     // they came in would then pair unrelated ones.
-    if (xs.length !== ys.length) found.push({ kind: "count", path: name, x: xs.length, y: ys.length });
+    // Which values are new after the change and which are gone: stored 1 → 2
+    // is only a question until the second stored value is there to read.
+    if (xs.length !== ys.length) {
+      const fx = xs.map(full), fy = ys.map(full);
+      found.push({ kind: "count", path: name, x: xs.length, y: ys.length, fresh: fy.filter((v) => !fx.includes(v)), gone: fx.filter((v) => !fy.includes(v)) });
+    }
     else for (let i = 0; i < xs.length; i++) delta(xs[i], ys[i], name, found);
     for (const c of found) out.push({ ...c, key: k, test, file: path, fn: b.fn, line: b.line, spec: b.spec, from: b.from });
   }
@@ -637,7 +642,9 @@ function diff(r) {
     const v = c.kind === "added" || c.kind === "wrapped" || c.kind === "unwrapped" ? c.y : c.kind === "removed" ? c.x : c.kind === "changed" ? `${cut(c.x, 60)} → ${cut(c.y, 60)}` : null;
     // A wrap's fields one at a time, so each is listed once.
     for (const x of v === null ? [] : c.kind === "wrapped" || c.kind === "unwrapped" ? v.split(", ") : [v]) if (!g.values.includes(x)) g.values.push(x);
-    if (c.kind === "count" && !g.counts.some((x) => x.field === field(c.path))) g.counts.push({ field: field(c.path), x: c.x, y: c.y });
+    // A count a function and a name: several functions' returns are not one.
+    if (c.kind === "count" && !g.counts.some((x) => x.field === field(c.path) && x.fn === c.fn))
+      g.counts.push({ fn: c.fn, field: field(c.path), x: c.x, y: c.y, fresh: (c.fresh || []).slice(0, 3), gone: (c.gone || []).slice(0, 3), nf: (c.fresh || []).length, ng: (c.gone || []).length });
     if (!g.fns.some((f) => f.name === c.fn && f.path === c.file)) g.fns.push({ name: c.fn, path: c.file, line: c.line });
     // Where a changed value was handed in: the first call site seen passing
     // one, which is the line to read, not the function it arrived in; on the
@@ -688,6 +695,9 @@ function diff(r) {
     }
     return edited.get(k);
   };
+  // What always had one value and now has more first (the clearest: a draft
+  // stored once is now stored twice), what a function returns last.
+  for (const g of merged) if (g.counts.length) g.counts.sort((a, b) => (a.field === "returns") - (b.field === "returns") || a.x - b.x || Math.abs(b.y - b.x) - Math.abs(a.y - a.x));
   for (const g of merged) g.testsChanged = !g.untouched.length && g.tests.every((t) => testEdited(t, r.specs[specOf.get(t)]));
   const out = { raw: all.length + masked, masked, changed, unmasked: changed.length > 0 && !again, groups: merged.map((g) => ({ ...g, says: says(g) })) };
   out.groups.sort((a, b) => b.untouched.length - a.untouched.length || b.tests.length - a.tests.length);
@@ -737,7 +747,7 @@ function says(g) {
   if (g.kind === "wrapped") return `What ${where} works with is wrapped after the change: its fields (${vals}) are the same, now inside \`${g.field}\`, in ${tests}.`;
   if (g.kind === "unwrapped") return `What ${where} works with is unwrapped after the change: the fields that were inside \`${g.field}\` (${vals}) are the same, now at the top, in ${tests}.`;
   if (g.kind === "shape") return `What ${where} works with changed shape after the change: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(", ")}, in ${tests}.`;
-  if (g.kind === "count") return `In the test "${g.tests[0]}", ${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} distinct values go through ${where} after the change: ${g.counts.map((c) => `${c.field} ${c.x} → ${c.y}`).join(", ")}.`;
+  if (g.kind === "count") return `In the test "${g.tests[0]}", ${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} different values go through ${where} after the change: ${g.counts.map((c) => `${counted(c)} ${c.x} → ${c.y}` + (c.fresh && c.fresh.length ? ` (new: ${c.fresh.map((v) => cut(v, 120)).join("; ")})` : "")).join(", ")}.`;
   return `\`${g.field}\` in ${where} changed: ${g.values.slice(0, 3).join(", ")}${g.values.length > 3 ? ", …" : ""} (before → after), in ${tests}.`;
 }
 // diffPrompt: one change put to a model against the change's own words
@@ -814,6 +824,8 @@ function testRows(r) {
   return out;
 }
 
+// counted: whose values a count is: upsertDraftCore returns, DraftService's stored.
+const counted = (c) => !c.fn ? c.field : c.field === "returns" ? `${c.fn} returns` : `${c.fn}'s ${c.field}`;
 // A change in behavior on a row: its glyph for Claude's verdict (! look, ?
 // maybe, ✓ what the change says, · not judged), and what changed, short.
 const verdictMark = (g) => !g.verdict ? C.faint + "·" + C.r : g.verdict.surprise === 2 ? C.bad + "!" + C.r : g.verdict.surprise === 1 ? C.at + "?" + C.r : C.good + "✓" + C.r;
@@ -823,7 +835,7 @@ function diffLabel(g) {
   if (g.kind === "wrapped") return `wrapped into ${g.field}`;
   if (g.kind === "unwrapped") return `unwrapped from ${g.field}`;
   if (g.kind === "shape") return `reshaped: ${[...g.added.map((f) => "+" + f), ...g.removed.map((f) => "−" + f)].join(" ")}`;
-  if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} values: ${g.counts.map((c) => `${c.field} ${c.x}→${c.y}`).join(", ")}`;
+  if (g.kind === "count") return `${g.counts[0].y < g.counts[0].x ? "fewer" : "more"} different values: ${g.counts.map((c) => `${counted(c)} ${c.x}→${c.y}`).join(", ")}`;
   return `${g.field}  ${g.values[0]}${g.values.length > 1 ? `, +${g.values.length - 1}` : ""}`;
 }
 // pinned: the test Claude wrote for change i (git-trace's pin), and how it ran.
@@ -843,7 +855,18 @@ function diffPreview(r, g, w) {
   else if (g.kind === "removed") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "gone, was", v));
   else if (g.kind === "shape") { line("added", g.added.join(", ")); line("removed", g.removed.join(", ")); }
   else if (g.kind === "wrapped" || g.kind === "unwrapped") { line(g.kind === "wrapped" ? "now inside" : "was inside", g.field); g.values.slice(0, 3).forEach((v, i) => line(i ? "" : "the same", v)); }
-  else if (g.kind === "count") g.counts.slice(0, 6).forEach((c, i) => line(i ? "" : "values", `${c.field}  ${c.x} before, ${c.y} after`));
+  else if (g.kind === "count") {
+    // Each: whose, how many different values before and after, then the
+    // ones that are new and the ones that are gone, whole.
+    out.push(...wrap("How many different values each took in this test, before the change and after (the same value twice counts once):", w).map((l) => C.faint + l + C.r), "");
+    for (const c of g.counts.slice(0, 6)) {
+      line("", `${counted(c)}: ${c.x} before, ${c.y} after`);
+      for (const v of c.fresh || []) line("  new", v, C.good);
+      if (c.nf > (c.fresh || []).length) line("", `and ${c.nf - c.fresh.length} more new`, C.faint);
+      for (const v of c.gone || []) line("  gone", v, C.bad);
+      if (c.ng > (c.gone || []).length) line("", `and ${c.ng - c.gone.length} more gone`, C.faint);
+    }
+  }
   else g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "was → is", v));
   if (g.from) line("passed by", `${g.from.fn} at ${g.from.path.split("/").pop()}:${g.from.line}`, C.at);
   line("where", g.fns.map((f) => f.name).join(", "), C.ctx);
