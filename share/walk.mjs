@@ -770,7 +770,7 @@ ${about || "(no description)"}
 Its tests were run before and after the change under a tracer, and this is what they did differently:
 ${g.says}
 
-${g.testsChanged ? "Every test that saw this was itself written or edited by this change, so part of the difference may come from the tests' new setup (a mock or fixture that now has the new shape) rather than from the code.\n\n" : ""}First quote, word for word, the sentence of the description that bears most on this. Then say whether that sentence promises it, forbids it, or says nothing about it. surprise is 0 when it is what the description says, 1 for a plausible side effect of it, 2 when a reviewer should look. why is one short sentence a reviewer reads.
+${g.testsChanged ? "Every test that saw this was itself written or edited by this change, so part of the difference may come from the tests' new setup (a mock or fixture that now has the new shape) rather than from the code.\n\n" : ""}First quote, word for word, the sentence of the description that bears most on this. Then say whether that sentence promises it, forbids it, or says nothing about it. surprise is 0 when it is what the description says, 1 for a plausible side effect of it, 2 when a reviewer should look. why is one short sentence a reviewer reads. plain is one or two short sentences in everyday words saying what this test now does differently, concretely, from the values above: what now happens more, less or otherwise, e.g. "The test now sends each draft through DraftService twice, once to start it and once to resume it; before, once." No words like "distinct values", "fields" or "shape".
 `;
 }
 // diffVerdicts: each change's verdict (<dir>/diff.<i>.json) onto it, those
@@ -778,7 +778,14 @@ ${g.testsChanged ? "Every test that saw this was itself written or edited by thi
 function diffVerdicts(r) {
   const f = join(r.dir, "diff.json"), d = JSON.parse(readFileSync(f, "utf8"));
   d.groups.forEach((g, i) => { g.verdict = readJson(join(r.dir, `diff.${i}.json`), null); });
-  d.groups.sort((a, b) => (b.verdict ? b.verdict.surprise : 1) - (a.verdict ? a.verdict.surprise : 1) || b.untouched.length - a.untouched.length);
+  // More or fewer values going through a function is what a refactor does:
+  // not ! unless a test the change left alone saw it, or the description
+  // rules it out ("sends once" and it now sends twice is a count too).
+  for (const g of d.groups) if (g.verdict && g.kind === "count" && !g.untouched.length && g.verdict.relation !== "forbids" && g.verdict.surprise > 1) g.verdict.surprise = 1;
+  // Those whose every test the change rewrote last (likely the refactor),
+  // counts after the rest, then by verdict, then what old tests saw.
+  const s = (g) => (g.verdict ? g.verdict.surprise : 1);
+  d.groups.sort((a, b) => a.testsChanged - b.testsChanged || (a.kind === "count") - (b.kind === "count") || s(b) - s(a) || b.untouched.length - a.untouched.length);
   d.judged = true;
   writeFileSync(f, JSON.stringify(d));
 }
@@ -799,10 +806,18 @@ function testRows(r) {
   if (bd && bd.groups.length) {
     const look = bd.groups.filter((g) => g.verdict && g.verdict.surprise === 2).length;
     out.push(`${look ? C.bad : C.at}behavior that changed · ${bd.groups.length}${look ? ` · ${look} to look at` : ""}${C.r}${bd.unmasked ? `${C.faint} · not checked for noise${C.r}` : ""}` + "\t".repeat(11) + "gk-diff");
-    bd.groups.forEach((g, i) => {
-      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}${g.testsChanged ? `${C.faint} · tests changed too${C.r}` : ""}`;
-      out.push(row(`${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}  ${n}`, g.fns[0].path, g.fns[0].line, "d:" + i));
-    });
+    // What changed first; how many values went through what, the usual
+    // side effect of a refactor, under a heading of its own after.
+    const drow = (g, i) => {
+      const n = `${C.ctx}${g.tests.length} test${g.tests.length === 1 ? "" : "s"}${g.untouched.length ? `, ${g.untouched.length} untouched` : ""}${C.r}${g.testsChanged ? `${C.faint} · likely the refactor${C.r}` : ""}`;
+      out.push(row(`${verdictMark(g)} ${C.text}${g.verdict && g.verdict.plain ? cut(g.verdict.plain, 90) : diffLabel(g)}${C.r}  ${n}`, g.fns[0].path, g.fns[0].line, "d:" + i));
+    };
+    bd.groups.forEach((g, i) => g.kind !== "count" && drow(g, i));
+    const nc = bd.groups.filter((g) => g.kind === "count").length;
+    if (nc) {
+      out.push(`${C.faint}call patterns · ${nc}: more or fewer values through a function in a test${C.r}` + "\t".repeat(11) + "gk-counts");
+      bd.groups.forEach((g, i) => g.kind === "count" && drow(g, i));
+    }
   }
   if (c.gaps.length) {
     out.push(`${C.at}changed code no test runs · ${c.gaps.length}${C.r}` + "\t".repeat(11) + "gk-gaps");
@@ -851,7 +866,22 @@ function pinned(r, g, w) {
     ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts it to the MR" + C.r];
 }
 function diffPreview(r, g, w) {
-  const out = [...wrap(diffLabel(g), w).map((l) => C.text + "\x1b[1m" + l + C.r), ""];
+  const out = [], v = g.verdict;
+  const para = (t, c) => wrap(t, w).map((l) => c + l + C.r);
+  // First what the test now does differently, in a sentence (Claude's, from
+  // the values); then whether the change says so; the values themselves
+  // last, under a rule: read when the sentence needs proving. Data first
+  // was a wall to untangle before knowing whether it mattered.
+  out.push(...para(v && v.plain ? v.plain : diffLabel(g), C.text + "\x1b[1m"), "");
+  if (!v) out.push(...para("not judged: Claude reads each change against what the change says it does, when an agent is here", C.faint));
+  else {
+    out.push((v.surprise === 2 ? C.bad + "! a reviewer should look" : v.surprise === 1 ? C.at + "? a plausible side effect" : C.good + "✓ what the change says it does") + C.r +
+      (g.testsChanged ? C.faint + "  ·  likely the refactor: its tests were rewritten too" + C.r : ""));
+    if (v.why) out.push(...wrap(v.why, w - 2).map((l) => "  " + C.text + l + C.r));
+    if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).map((l) => "  " + C.ctx + l + C.r));
+  }
+  out.push("", ...pinned(r, g, w), "", C.faint + "── the values " + "─".repeat(Math.max(0, w - 14)) + C.r, "");
+  out.push(...para(diffLabel(g), C.text), "");
   // Whole, wrapped under its own column: nothing here is cut short.
   const line = (k, v, c = C.text) => wrap(String(v), w - 11).forEach((l, i) => out.push(`${C.faint}${(i ? "" : k).padEnd(11)}${C.r}${c}${l}${C.r}`));
   if (g.kind === "added") g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "new, as", v));
@@ -861,7 +891,7 @@ function diffPreview(r, g, w) {
   else if (g.kind === "count") {
     // Each: whose, how many different values before and after, then the
     // ones that are new and the ones that are gone, whole.
-    out.push(...wrap("How many different values each took in this test, before the change and after (the same value twice counts once):", w).map((l) => C.faint + l + C.r), "");
+    out.push(...para("How many different values each took in this test, before the change and after (the same value twice counts once):", C.faint), "");
     for (const c of g.counts.slice(0, 6)) {
       line("", `${counted(c)}: ${c.x} before, ${c.y} after`);
       for (const v of c.fresh || []) line("  new", v, C.good);
@@ -871,21 +901,14 @@ function diffPreview(r, g, w) {
     }
   }
   else g.values.slice(0, 4).forEach((v, i) => line(i ? "" : "was → is", v));
+  out.push("");
   if (g.from) line("passed by", `${g.from.fn} at ${g.from.path.split("/").pop()}:${g.from.line}`, C.at);
   line("where", g.fns.map((f) => f.name).join(", "), C.ctx);
   line("in", `${g.tests.length} test${g.tests.length === 1 ? "" : "s"}` + (g.untouched.length ? `, ${g.untouched.length} in spec files the change leaves alone` : ""), C.ctx);
   if (g.testsChanged) line("", "the tests changed too: each was written or edited here, so their new setup may be part of it", C.at);
   // The tests the change leaves alone first, marked ◦: behavior an old test sees differently.
   for (const t of [...g.untouched, ...g.tests.filter((t) => !g.untouched.includes(t))].slice(0, 3)) line("", (g.untouched.includes(t) ? "◦ " : "• ") + t, C.faint);
-  out.push("");
-  const v = g.verdict;
-  if (!v) out.push(...wrap("not judged: Claude reads each change against what the change says it does, when an agent is here", w).map((l) => C.faint + l + C.r));
-  else {
-    out.push(v.surprise === 2 ? C.bad + "! a reviewer should look" + C.r : v.surprise === 1 ? C.at + "? a plausible side effect" + C.r : C.good + "✓ what the change says it does" + C.r);
-    if (v.quote) out.push(...wrap(`${v.relation}: “${v.quote}”`, w - 2).map((l) => "  " + C.ctx + l + C.r));
-    if (v.why) out.push(...wrap(v.why, w - 2).map((l) => "  " + C.text + l + C.r));
-  }
-  out.push("", ...pinned(r, g, w), "", C.faint + "enter opens where it happens" + C.r);
+  out.push("", C.faint + "enter opens where it happens" + C.r);
   return out;
 }
 
@@ -1430,7 +1453,8 @@ function tourPrep(r, w, out = r.dir) {
   // leaves alone first), the value before and after, and the sentence of the
   // description it was held against; s steps through that test, and b in the
   // step there shows the same test before the change.
-  const said = bd ? bd.groups.filter((g) => !g.verdict || g.verdict.surprise > 0) : [], saidPaths = [];
+  // Stops for what changed; call patterns (counts) stay on a's list.
+  const said = bd ? bd.groups.filter((g) => (!g.verdict || g.verdict.surprise > 0) && g.kind !== "count") : [], saidPaths = [];
   if (said.length) {
     rows.push(row(`${said.some((g) => g.verdict && g.verdict.surprise === 2) ? C.bad : C.at}\x1b[1mwhat the tests do differently${C.r}`, "", "", "tour:d"));
     const page = [C.at + "\x1b[1m" + "What the tests do differently" + C.r, "", ...para(`The tests were run before the change and after it, and what went into and came out of the changed functions compared. ${said.length === bd.groups.length ? "These" : `These ${said.length} of the ${bd.groups.length}`} are not what the change says it does:`, C.text), ""];

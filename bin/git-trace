@@ -597,7 +597,7 @@ about() {
     *) glab api "projects/:fullpath/merge_requests/${d##*/}" 2>/dev/null | jq -r '"# \(.title)\n\n\(.description // "")"' ;;
   esac
 }
-verdict='{"type":"object","additionalProperties":false,"required":["quote","relation","surprise","why"],"properties":{"quote":{"type":"string"},"relation":{"type":"string","enum":["promises","forbids","silent"]},"surprise":{"type":"integer","enum":[0,1,2]},"why":{"type":"string"}}}'
+verdict='{"type":"object","additionalProperties":false,"required":["quote","relation","surprise","why","plain"],"properties":{"quote":{"type":"string"},"relation":{"type":"string","enum":["promises","forbids","silent"]},"surprise":{"type":"integer","enum":[0,1,2]},"why":{"type":"string"},"plain":{"type":"string"}}}'
 # judge: the diff, and each change judged side by side (walk.mjs diff-prompt
 # has why it quotes first). Without an agent the changes stand unjudged.
 judge() {
@@ -908,7 +908,7 @@ EOF
     d=$2 key=$3 row=$4
     case $row in
       d:*) g=${row#d:} ;;
-      tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select(.value.verdict == null or .value.verdict.surprise > 0) | .key][$n - 1] // empty' "$d/diff.json") ;;
+      tour:d[0-9]*) g=$(jq -r --argjson n "${row#tour:d}" '[.groups | to_entries[] | select((.value.verdict == null or .value.verdict.surprise > 0) and .value.kind != "count") | .key][$n - 1] // empty' "$d/diff.json") ;;
       *) note "$key is for a change in behavior: the list's first rows, or the tour's first stops"; exit 0 ;;
     esac
     [ -n "$g" ] || exit 0
