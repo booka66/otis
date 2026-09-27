@@ -1404,7 +1404,7 @@ function tourPrep(r, w, out = r.dir) {
   // leaves alone first), the value before and after, and the sentence of the
   // description it was held against; s steps through that test, and b in the
   // step there shows the same test before the change.
-  const said = bd ? bd.groups.filter((g) => !g.verdict || g.verdict.surprise > 0) : [];
+  const said = bd ? bd.groups.filter((g) => !g.verdict || g.verdict.surprise > 0) : [], saidPaths = [];
   if (said.length) {
     rows.push(row(`${said.some((g) => g.verdict && g.verdict.surprise === 2) ? C.bad : C.at}\x1b[1mwhat the tests do differently${C.r}`, "", "", "tour:d"));
     const page = [C.at + "\x1b[1m" + "What the tests do differently" + C.r, "", ...para(`The tests were run before the change and after it, and what went into and came out of the changed functions compared. ${said.length === bd.groups.length ? "These" : `These ${said.length} of the ${bd.groups.length}`} are not what the change says it does:`, C.text), ""];
@@ -1414,6 +1414,7 @@ function tourPrep(r, w, out = r.dir) {
     const ds = defs(r.rows);
     said.forEach((g, i) => {
       const f = g.from || g.fns[0], o = owner(ds, f.path, f.line, "head");
+      saidPaths.push(f.path);
       const x = { path: f.path, focus: f.line, start: o ? o.r[0] : f.line, end: o ? o.r[1] : f.line, test: [...g.untouched, ...g.tests][0] };
       rows.push(row(`${C.faint}${String(i + 1).padStart(2)}${C.r}  ${verdictMark(g)} ${C.text}${diffLabel(g)}${C.r}`, f.path, f.line, `tour:d${i + 1}`));
       const { ti, k, body, at } = stopOf(x, w, AROUND);
@@ -1457,7 +1458,9 @@ function tourPrep(r, w, out = r.dir) {
   // Each stop's file whole (files/<path, / as %>), which the screen scrolls
   // through from one stop to the next in the same file.
   mkdirSync(join(dir, "files"), { recursive: true });
-  for (const p of new Set(tour.chapters.flatMap((c) => c.stops.map((x) => x.path))))
+  // The behavior stops' files too: without them j and k between those
+  // stops redrew the pane from nothing each time instead of gliding.
+  for (const p of new Set([...saidPaths, ...tour.chapters.flatMap((c) => c.stops.map((x) => x.path))]))
     writeFileSync(join(dir, "files", p.replace(/\//g, "%")), fileView(r, "head", p, w));
   writeFileSync(join(out, "tour.rows"), rows.join("\n") + "\n");
 }
