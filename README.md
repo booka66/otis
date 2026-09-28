@@ -24,6 +24,8 @@ You need zsh installed, though your own shell can be zsh, bash or fish. You also
 
 The symbol view reads a change with seam by default. `git config --global otis.engine dagger` (or `otis config`) has [dagger](https://github.com/joshmoody24/dagger) read it instead, through language servers (TypeScript 7's `tsc --lsp` for TypeScript: `npm install -g typescript`), and `G` opens dagger's page. seam still scores, splits and glosses what dagger reads, so keep both installed.
 
+A changed function that broke before says so over its diff: the fixes to its lines in the last 18 months, each under the change it fixed when git blame lays it there (a fix within 60 days of the lines it took out), found from git history alone in the background (`git-symbols-past`, `share/past.mjs`). A change here broke this code before, and this one can break it the same way.
+
 ## Getting started
 
 Run `otis-tour`. It's a menu of short guided tours, most of them hands-on with a made-up repo: reviewing by symbol, the review loop in `gmr`, Claude's reviews and fixes, verifying a change, shipping to production, committing, branches and worktrees, settings, and a cheat sheet.

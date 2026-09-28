@@ -1,0 +1,58 @@
+#!/bin/sh
+# git-symbols-past <rev> <table>          the cache file once read; else "running", having started
+#                                         the reading in the background unless it already runs
+# git-symbols-past --file <rev> <table>   the cache file for this change, if it has been read
+# git-symbols-past --run <rev> <table>    the reading itself
+#
+# Where the code a change touches broke before: for each definition it
+# changes that was there already, the fixes of the last 18 months to its
+# lines and the change each fixed, from git history alone (share/past.mjs
+# says how). The symbol's preview says it over the diff: a change here broke
+# this code before, soon after it landed, and this one can break it the same
+# way. Lazy as the gloss is (git-symbols-gloss): the picker never waits for
+# it, and a commit, a branch or an MR is read once, kept by its shas.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+mode=
+case $1 in --file|--run) mode=$1; shift ;; esac
+rev=$1 table=$2
+[ -n "$rev" ] && [ -s "$table" ] || exit 0
+
+dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/symbols-past"
+if [ -n "$OTIS_SYMBOLS_KEY" ]; then key=$OTIS_SYMBOLS_KEY; else
+  case $rev in
+    worktree) key=$(cut -f1-13 "$table" | git hash-object --stdin) ;;
+    *...*) key=$(git merge-base "${rev%%...*}" "${rev##*...}")-$(git rev-parse "${rev##*...}") ;;
+    *..*)  key=$(git rev-parse "${rev%%..*}")-$(git rev-parse "${rev##*..}") ;;
+    *)     key=$(git rev-parse "$rev") ;;
+  esac
+fi
+file=$dir/$key.tsv
+running=$dir/$key.running
+
+alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
+
+case $mode in
+  --file) [ -e "$file" ] && printf '%s\n' "$file"; exit 0 ;;
+  '')
+    [ -e "$file" ] && { printf '%s\n' "$file"; exit 0; }
+    alive && { echo running; exit 0; }
+    mkdir -p "$dir" || exit 0
+    cp "$table" "$dir/$key.table"
+    otis-detach git-symbols-past --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
+    echo $! > "$running"
+    echo running
+    exit 0 ;;
+esac
+
+# --run. The base the table's old lines are numbered at.
+case $rev in
+  worktree) base=HEAD ;;
+  *...*) base=$(git merge-base "${rev%%...*}" "${rev##*...}") ;;
+  *..*) base=${rev%%..*} ;;
+  *) base=$rev^ ;;
+esac
+echo $$ > "$running"
+trap 'rm -f "$running" "$file.new" "$dir/$key.table"' EXIT
+node "$share/past.mjs" "$(git rev-parse "$base")" "$table" > "$file.new" 2>>"$dir/$key.err" && mv "$file.new" "$file"
+[ -e "$file" ] && rm -f "$dir/$key.err"
+exit 0

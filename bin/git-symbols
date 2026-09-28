@@ -543,7 +543,7 @@ if [ "$mode" = --preview ]; then
   }
   pv=
   if [ -n "$head" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$key" ] && [ -n "$croot" ]; then
-    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" \
+    ages=$(mtimes "$croot/symbols-gloss/$key.json" "$croot/symbols-gloss/$key.running" "$croot/symbols-past/$key.tsv" "$croot/callers/${ckey:-$key}.tsv" "$croot/callers-fix" "$st/fixed" \
       ${mr:+"$croot/mr-$mr-threads.json" "$croot/mr-$mr-drafts.json" "${croot%/*}/gmr-claude/$mr.drafts" "${croot%/*}/gmr-claude/$mr.why.jsonl"})
     # cksum says the sum and then the size; the sum alone names the file.
     pv=$(printf '%s' "$rev|$path|$side|$s|$e|$rid|$ages|$up|$peeks|$usesview|$mr|$FZF_PREVIEW_COLUMNS" | cksum)
@@ -645,6 +645,43 @@ EOF
     [ -z "$does" ] && [ "$side" != file ] && gloss_coming && printf "${GK_FAINT}Claude is glossing this ...${GK_R}\n\n"
     [ -n "$why" ] && printf "${GK_CONTEXT}%s${GK_R}\n\n" "$why"
     [ -n "$pid" ] && [ -n "$eg" ] && printf "${GK_CONTEXT}%s: %s${GK_R}\n\n" "$what" "$eg"
+  fi
+  # Where this code broke before (git-symbols-past): the changes to it that
+  # were fixed soon after, each the change and then its fix, wrapped to the
+  # pane, never cut.
+  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ "$side" != file ] && [ -n "$key" ] && [ -s "$croot/symbols-past/$key.tsv" ]; then
+    LC_ALL=C awk -F'\t' -v id="$sid" -v w="${FZF_PREVIEW_COLUMNS:-100}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+      function dw(s) { gsub(/\033\[[0-9;]*m/, "", s); gsub(/[\200-\277]/, "", s); return length(s) }
+      # t in color c, wrapped to the pane, the first line after lead and the
+      # rest under ind spaces.
+      function say(lead, ind, c, t,   nw, wd, x, ln, first, pl) {
+        nw = split(t, wd, " "); ln = ""; first = 1
+        pl = lead; gsub(/\033\[[0-9;]*m/, "", pl)
+        for (x = 1; x <= nw; x++) {
+          if (ln != "" && dw(ln " " wd[x]) > w - (first ? dw(pl) : ind) - 1) { print (first ? lead : gk_rep(" ", ind)) c ln GK_R; first = 0; ln = "" }
+          ln = (ln == "" ? "" : ln " ") wd[x]
+        }
+        if (ln != "") print (first ? lead : gk_rep(" ", ind)) c ln GK_R
+      }
+      function day(d,   m) { split("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec", m, " "); return m[substr(d, 6, 2) + 0] " " gk_padl(substr(d, 9, 2) + 0, 2) }
+      function later(n) { return n == 0 ? "the same day" : n == 1 ? "a day later" : n " days later" }
+      $1 == id {
+        say(GK_ATTENTION "\342\232\240 " GK_R, 2, GK_ATTENTION, "broke before: " $3 " of its " $2 " changes in 18 months were fixes")
+        print ""
+        n = split($4, b, "\036")
+        for (i = 1; i <= n; i++) {
+          split(b[i], f, "\037")
+          if (i > 1) print ""
+          # A fix laid at the change that broke it: the change, then the fix
+          # under it; else the fix alone.
+          if (f[4] != "") {
+            say("  " GK_FAINT day(f[5]) GK_R "  ", 10, GK_TEXT, f[6] " " GK_FAINT substr(f[4], 1, 7))
+            say(gk_rep(" ", 10) GK_CONTEXT "\342\206\263 fixed " later(f[7]) ": " GK_R, 12, GK_CONTEXT, f[3] " " GK_FAINT substr(f[1], 1, 7))
+          } else say("  " GK_FAINT day(f[2]) GK_R "  ", 10, GK_CONTEXT, f[3] " " GK_FAINT substr(f[1], 1, 7))
+        }
+        if ($3 > n) { print ""; print "  " GK_FAINT "and " ($3 - n) " more" GK_R }
+        exit
+      }' "$croot/symbols-past/$key.tsv"
   fi
   if [ "$side" = file ]; then
     # A caller elsewhere: its lines as git-callers read the file, which is
@@ -1194,6 +1231,18 @@ if [ "$mode" = --rows ]; then
   else
     glossed=$(git-symbols-gloss "$rev" "$table")
     case $glossed in running) glossing=1 ;; /*) gf=$glossed ;; esac
+  fi
+  # Where the changed code broke before (git-symbols-past), for the
+  # previews: started here, and once it lands the preview you are on is
+  # drawn again with it.
+  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ ! -e "$OTIS_CACHE_ROOT/symbols-past/$OTIS_SYMBOLS_KEY.tsv" ] &&
+    [ "$(git-symbols-past "$rev" "$table")" = running ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$FZF_PORT" ] && mkdir "$st/past-wait.$OTIS_SYMBOLS_KEY" 2>/dev/null; then
+    (
+      read -r ppid_ 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-past/$OTIS_SYMBOLS_KEY.running"
+      while [ -n "$ppid_" ] && kill -0 "$ppid_" 2>/dev/null; do sleep 1; done
+      rmdir "$st/past-wait.$OTIS_SYMBOLS_KEY"
+      curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d refresh-preview
+    ) </dev/null >/dev/null 2>&1 &
   fi
   # In a review (git-mr-files), the open threads and drafts on each symbol'"'"'s
   # lines, as its file row shows them: OTIS_SYMBOL_MARKS is path, side,
