@@ -1233,17 +1233,9 @@ if [ "$mode" = --rows ]; then
     case $glossed in running) glossing=1 ;; /*) gf=$glossed ;; esac
   fi
   # Where the changed code broke before (git-symbols-past), for the
-  # previews: started here, and once it lands the preview you are on is
-  # drawn again with it.
-  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ ! -e "$OTIS_CACHE_ROOT/symbols-past/$OTIS_SYMBOLS_KEY.tsv" ] &&
-    [ "$(git-symbols-past "$rev" "$table")" = running ] && [ -n "$GIT_FZF_STATE" ] && [ -n "$FZF_PORT" ] && mkdir "$st/past-wait.$OTIS_SYMBOLS_KEY" 2>/dev/null; then
-    (
-      read -r ppid_ 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-past/$OTIS_SYMBOLS_KEY.running"
-      while [ -n "$ppid_" ] && kill -0 "$ppid_" 2>/dev/null; do sleep 1; done
-      rmdir "$st/past-wait.$OTIS_SYMBOLS_KEY"
-      curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d refresh-preview
-    ) </dev/null >/dev/null 2>&1 &
-  fi
+  # previews: started here; the screen draws it when it lands (otis-symbols
+  # watches its cache).
+  [ -z "$GIT_SYMBOLS_PLAIN" ] && [ ! -e "$OTIS_CACHE_ROOT/symbols-past/$OTIS_SYMBOLS_KEY.tsv" ] && git-symbols-past "$rev" "$table" >/dev/null
   # In a review (git-mr-files), the open threads and drafts on each symbol'"'"'s
   # lines, as its file row shows them: OTIS_SYMBOL_MARKS is path, side,
   # line, open or draft.

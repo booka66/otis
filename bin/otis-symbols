@@ -2133,8 +2133,8 @@ handle() {
 }
 
 # --- landings --------------------------------------------------------------------
-# What background work leaves in the cache: Claude's gloss and walk, tsgo's callers,
-# Claude's fixes for them, the checkout's rechecked callers, and a review's
+# What background work leaves in the cache: Claude's gloss and walk, where the
+# changed code broke before, tsgo's callers, Claude's fixes for them, the checkout's rechecked callers, and a review's
 # threads. A change in any reloads the rows, and the previews with them.
 wsig=
 watched() {
@@ -2143,7 +2143,7 @@ watched() {
   local -a watch=($watchfiles)
   if [[ -s $st/cache-root ]]; then
     croot=$(<$st/cache-root)
-    watch+=($croot/{symbols-gloss,symbols-walk,callers,callers-fix}(N/) $st/fixed(N))
+    watch+=($croot/{symbols-gloss,symbols-walk,symbols-past,callers,callers-fix}(N/) $st/fixed(N))
   fi
   (( $#watch )) || return 1
   [[ -n $GMR_IID ]] && watch+=($croot/mr-$GMR_IID-{threads,drafts}.json(N))
