@@ -95,6 +95,7 @@ typeset -a KEYS=(
   'g b'    else   ''       'branches'
   'g c'    else   ''       'otis settings'
   'g s'    else   ''       'Slack'
+  F        else   files    'find a file in your editor'
 )
 # KL: a key's whole words, by the key. The log is told every key the screen
 # offers as it opens, less the ones that only move.
@@ -1277,6 +1278,8 @@ handle() {
     u) keys_used u "$KL[u]"
        (( stale_login )) && { bykey="log in to $forge"; run_tty "git-forge login" sh; bykey=; }
        refresh --refresh; relist --refresh; flash="refreshing from $forge…" at0=$EPOCHREALTIME ;;
+    # Your editor's own fuzzy finder, on the checkout you are in (otis-find).
+    F) keys_used F "$KL[F]"; bykey=$KL[F]; run_tty "otis-find" sh; bykey=; refresh ;;
     '?') keys_used '?' "${KL[?]}"; help=$(( !help )) poff=0 ;;
     $'\x04') scroll $(( ph / 2 )) ;;
     $'\x15') scroll $(( - ph / 2 )) ;;

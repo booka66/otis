@@ -1,0 +1,22 @@
+#!/bin/sh
+# otis-find: find a file in the checkout you are in with your editor's own
+# fuzzy finder, and open it there: F on the board. nvim opens straight into
+# the finder (share/find.lua): snacks.nvim's smart picker, else Telescope's
+# or fzf-lua's, or what git config otis.finder names: the keys of a mapping
+# of your own ('<leader><leader>'), or an Ex command. Choose a file and you are editing it; quitting nvim
+# is back on the board. Close the finder with nothing chosen and nvim goes
+# with it.
+#
+# It is nvim's finder, so it needs nvim to be your editor (otis-config
+# editor); with another, it says so rather than open one you do not use.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+ed=$(otis-config editor)
+name=${ed%% *}
+name=${name##*/}
+case $name in
+  nvim) ;;
+  *) otis-popup say "F finds a file with nvim's own fuzzy finder, and your editor is ${name:-not set} (otis-config editor)"; exit 0 ;;
+esac
+# The editor as written may carry arguments of its own.
+set -f
+OTIS_FINDER=$(git config --get otis.finder) exec $ed -c "luafile $share/find.lua"

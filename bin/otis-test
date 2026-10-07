@@ -1467,7 +1467,7 @@ expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or 
 # Nothing uncommitted and nothing past the base: enter has nothing to do on
 # the row it opens on, so the footer has no enter, only the keys it shows on
 # every row and the one that lists the rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  P walk  c commits  w web  y link  ? all')" "0:1"
+expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  P walk  c commits  w web  y link  F files  ? all')" "0:1"
 # ? is every key there is, from the one table, on one screen in two
 # columns, and the footer says how to leave it.
 expect otis/help "$(printf '%s\n' "$dash" | grep -c 'MOVING *ON A CHANGE'):$(printf '%s\n' "$dash" | grep -c 'down and up *V *verify it in Cursor Cloud'):$(printf '%s\n' "$dash" | grep -c 'ON A MERGE REQUEST'):$(printf '%s\n' "$dash" | grep -c '? or q back to the board')" "1:1:1:1"
@@ -1635,6 +1635,9 @@ expect edit/zed "$(OTIS_EDITOR=$tmp/eds/zed otis-edit +7 -- -odd.ts)" "./-odd.ts
 git config otis.editor "$tmp/eds/hx"
 expect edit/git-config "$(otis-edit +2 -- b.ts)" "b.ts:2"
 git config --unset otis.editor
+# F on the board (otis-find): nvim opened straight into your own fuzzy finder
+# (share/find.lua), which reads what git config otis.finder names.
+expect find/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-find)" "-c luafile $root/share/find.lua"
 
 # --- themes: each one whole, loading one clears another, and the terminal's
 # own colors wherever no theme is loaded

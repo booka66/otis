@@ -36,7 +36,7 @@ otis keeps a log of the keys you press and the commands you run, in `~/.cache/ot
 
 ## Settings
 
-Run `otis-config` to see every setting, where its value comes from, and what it does, and to change it. On the board, `gc` opens it. Settings live in git config under `otis.*`, so a setting can apply to one repo or to all of them.
+Run `otis-config` to see every setting, where its value comes from, and what it does, and to change it. On the board, `gc` opens it. `F` on the board finds a file with nvim's own fuzzy finder (snacks.nvim's smart picker, else Telescope's or fzf-lua's) and opens it; `git config otis.finder '<leader><leader>'` makes it a mapping of your own instead, or name an Ex command. Settings live in git config under `otis.*`, so a setting can apply to one repo or to all of them.
 
 A team can commit a `.otis` file at the top of its repo, in git config format, with shared settings like its CI's deploy job or its approval gate jobs. Your own git config always wins. A `.otis` can't set anything that runs commands or picks paths on your machine (what Claude may run, lint commands, your editor, worktree location), so cloning a repo can't choose those for you.
 
