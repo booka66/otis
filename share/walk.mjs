@@ -20,17 +20,18 @@
 //
 // <dir> is the run's (git-trace): table (git-symbols --table), shas (base and
 // head), specs (a path a line), trace/<i>.jsonl the head's hits for spec i,
-// base/<i>.jsonl the base's and again/<i>.jsonl the head's once more, ran/<i>
-// and base/<i>.status how each ran, about what the change says it does,
+// before/<i>.jsonl the base's and again/<i>.jsonl the head's once more, ran/<i>
+// and before/<i>.status how each ran, about what the change says it does,
 // inputs.json the inputs Claude wrote (w). <test> is its index in cover.json,
 // <side> head or base.
 //
 // A hit is a pause before its line runs, so what changed since the last hit
 // in the same call was set by that one's line, and is shown there.
 import { execFileSync, execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 
@@ -101,11 +102,13 @@ function run(dir) {
   const specs = existsSync(join(dir, "specs")) ? readFileSync(join(dir, "specs"), "utf8").split("\n").filter(Boolean) : [];
   return { dir, rev: { base, head }, specs, rows: table(join(dir, "table")) };
 }
-// A side's traces: the head's in trace/, the base's in base/, and the head's
-// run again (for the behavior diff's noise) in again/.
-const subOf = (side) => side === "base" || side === "again" ? side : "trace";
+// A side's traces: the head's in trace/, the base's in before/ (base/ in a
+// walk from before that, which took the name of git-walk's base sha), and
+// the head's run again (for the behavior diff's noise) in again/.
+const baseSub = (dir) => !existsSync(join(dir, "before")) && statSync(join(dir, "base"), { throwIfNoEntry: false })?.isDirectory() ? "base" : "before";
+const subOf = (dir, side) => side === "base" ? baseSub(dir) : side === "again" ? side : "trace";
 function hits(dir, side, i) {
-  const f = join(dir, subOf(side), i + ".jsonl");
+  const f = join(dir, subOf(dir, side), i + ".jsonl");
   if (!existsSync(f)) return [];
   // What an async function returned comes after its pause, once it settled
   // (retOf names the pause): it is put on the pause.
@@ -123,7 +126,7 @@ function lines(f) {
 function breakable(r, side, path) {
   const s = new Set();
   let any = false;
-  const sub = side === "base" ? "base" : "trace";
+  const sub = subOf(r.dir, side === "base" ? "base" : "head");
   for (const f of [join(r.dir, sub, "breakable.jsonl"), ...r.specs.map((spec, i) => join(r.dir, sub, i + ".jsonl"))]) {
     if (!existsSync(f)) continue;
     for (const b of lines(f)) if (b.breakable === path) { any = true; for (const n of b.lines) s.add(n); }
@@ -137,7 +140,7 @@ function breakable(r, side, path) {
 // for src/, .js for .ts), so it is matched by its name, then by the most
 // directories in common.
 function split(r, side) {
-  const sub = join(r.dir, subOf(side));
+  const sub = join(r.dir, subOf(r.dir, side));
   const stem = (p) => p.split("/").pop().replace(/\.[cm]?[jt]sx?$/, "");
   const of = new Map();
   const spec = (file) => {
@@ -183,7 +186,7 @@ function split(r, side) {
   }
 }
 function status(dir, side, i) {
-  const f = side === "head" ? join(dir, "ran", String(i)) : join(dir, subOf(side), i + ".status");
+  const f = side === "head" ? join(dir, "ran", String(i)) : join(dir, subOf(dir, side), i + ".status");
   return existsSync(f) ? readFileSync(f, "utf8").trim() : "";
 }
 // mocks: the modules a spec replaces with jest.mock, as paths without extensions.
@@ -233,6 +236,30 @@ function cutA(s, n) {
   }
   return out;
 }
+// wrapA: s in pieces of at most n columns, as the screens' wrap breaks a line
+// (share/pane-wrap.awk): at its last space that fits, each piece after the
+// first under the line's own indent, the colors in force carried into it.
+function wrapA(s, n) {
+  if (width(s) <= n) return [s];
+  let lw = /^ */.exec(s.replace(/\x1b\[[0-9;]*m/g, ""))[0].length;
+  if (lw > n / 2) lw = 0;
+  const lead = " ".repeat(lw), out = [];
+  let cur = "", cw = 0, sgr = "", sp = 0, spw = 0, spsgr = "";
+  for (const [u] of s.matchAll(/\x1b\[[0-9;]*m|[^\x1b]/gu)) {
+    if (u.startsWith("\x1b")) { cur += u; sgr = u === "\x1b[0m" || u === "\x1b[m" ? "" : sgr + u; continue; }
+    if (cw >= n) {
+      if (sp > 0 && spw > lw) { out.push(cur.slice(0, sp) + "\x1b[0m"); cur = lead + spsgr + cur.slice(sp); cw = lw + cw - spw; }
+      else { out.push(cur + "\x1b[0m"); cur = lead + sgr; cw = lw; }
+      sp = 0;
+    }
+    cur += u; cw++;
+    if (u === " " && cw > lw) { sp = cur.length; spw = cw; spsgr = sgr; }
+  }
+  out.push(cur);
+  return out;
+}
+// BLANK: the gutter of a piece a line of code wrapped into.
+const BLANK = " ".repeat(8);
 // under: s with pre put back after every reset in it, as a ground or a dim.
 const under = (s, pre) => pre + s.replace(/\x1b\[0m/g, "\x1b[0m" + pre);
 // The theme's grounds for added and removed lines, as git-delta's.
@@ -377,7 +404,8 @@ function walk(r, ti, side) {
   const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
   const t = cover.tests[ti];
   const cache = join(r.dir, "walks", `${ti}-${side}.json`);
-  if (existsSync(cache)) return { t, ...JSON.parse(readFileSync(cache, "utf8")) };
+  // v: what a step keeps; one kept before it kept as much is walked again.
+  if (existsSync(cache)) { const c = JSON.parse(readFileSync(cache, "utf8")); if (c.v === 2) return { t, ...c }; }
   const ds = defs(r.rows);
   const steps = [], last = new Map(), at = new Map(), raw = new Map();
   for (const h of hits(r.dir, side, t.spec)) {
@@ -404,6 +432,8 @@ function walk(r, ti, side) {
     const fn = cont ? steps[at.get(key)].fn : cb ? cb.name : o.d.name;
     const start = cont ? steps[at.get(key)].start : cb ? cb.start : o.r[0];
     steps.push({ id: o.d.id, fn, start, path: o.d.path, line: h.at.line, depth, rawDepth: depth, def: o.r, values: [], args: [] });
+    // At a return, what it returns (an async function's once it settled).
+    if (h.ret !== undefined) steps[steps.length - 1].ret = h.ret;
     // What a call starts with is what it was called with (its parameters, not
     // the names it closes over); what changes after was set by the line before.
     if (cont) steps[at.get(key)].values.push(...set);
@@ -419,7 +449,7 @@ function walk(r, ti, side) {
   const m = Math.min(...steps.map((s) => s.depth));
   for (const s of steps) s.depth -= m;
   mkdirSync(join(r.dir, "walks"), { recursive: true });
-  writeFileSync(cache, JSON.stringify({ steps }));
+  writeFileSync(cache, JSON.stringify({ v: 2, steps }));
   return { t, steps };
 }
 // inner: the function a hit is in when it is not the definition itself, a
@@ -481,6 +511,9 @@ function cover(r) {
       (written(h.test) ? ranWritten : ran).add(o.d.id);
     }
   });
+  // Spec files whose run never started (2): what they would have reached is
+  // not known, so nothing is "untested" for want of them.
+  const unran = r.specs.filter((s, i) => status(r.dir, "head", i) === "2").map((s) => s.split("/").pop());
   // Before: whether a test ran at the base, and how much of the change's old code.
   const before = new Map();
   let based = false;
@@ -507,12 +540,18 @@ function cover(r) {
       const t = text(r.rev.head, live.path);
       for (let n = live.start; n <= live.end; n++) if (new RegExp("\\b" + d.name + "\\s*[(<]").test(t[n - 1] || "")) { call = { id: live.id, path: live.path, line: n }; break; }
       why = call ? `its call in ${live.name} (line ${call.line}) never runs` : `${live.name} runs, but never calls it`;
-    } else if (callers.length) why = `its caller ${callers[0].name} never runs either`;
+    } else if (unran.length) why = `not known: ${unran.length === 1 ? unran[0] : unran.length + " spec files"} never ran`;
+    else if (callers.length) why = `its caller ${callers[0].name} never runs either`;
     else why = "nothing traced reaches it";
     const sig = d.change === "signature" ? "signature changed · " : d.change === "added" ? "" : "";
     const input = inputs.find((x) => x.gap === d.id);
-    return { id: d.id, name: d.name, path: d.path, start: d.start, end: d.end, change: d.change, why: sig + why, mocked: !!by, call,
-      callers: callers.map((c) => c.id), input: input ? { ...input, reached: ranWritten.has(d.id) } : null };
+    // Where it is: the line with its name, not the doc comment over it, which
+    // seam counts as the definition's start.
+    const src = text(r.rev.head, d.path);
+    let at = d.start;
+    for (let n = d.start; n <= d.end; n++) if (!/^\s*(\/\/|\/\*|\*)/.test(src[n - 1] || "") && new RegExp("\\b" + d.name.replace(/\$/g, "\\$") + "\\b").test(src[n - 1] || "")) { at = n; break; }
+    return { id: d.id, name: d.name, path: d.path, start: at, end: d.end, change: d.change, why: sig + why, mocked: !!by, call,
+      unknown: !by && !live && unran.length > 0, callers: callers.map((c) => c.id), input: input ? { ...input, reached: ranWritten.has(d.id) } : null };
   });
   // Mocked last: nothing an input could do about those.
   gaps.sort((a, b) => a.mocked - b.mocked || (b.change === "signature") - (a.change === "signature"));
@@ -792,7 +831,7 @@ function legend() {
     `  The line with ${C.at}▶${C.r} is where the changed value is passed in; the box under it is that value whole, from the test named above the code.`,
     `  If that line plainly does what the description says, a ? is usually the tests, not the code.`,
     `  s steps through the test line by line; b there shows the same test before the change, to see where they part.`,
-    `  t writes a test that passes before the change and fails with it (a few minutes); c posts it to the MR.`,
+    `  t writes a test that passes before the change and fails with it (a few minutes); C posts it to the MR.`,
     "",
     b("worth a look first"),
     `  a default that flipped, a field gone or now null, a value going somewhere new; anything a ◦ test saw.`,
@@ -887,7 +926,8 @@ function testRows(r) {
   }
   if (c.gaps.length) {
     out.push("");
-    head(`${C.at}\x1b[1mcode no test runs · ${c.gaps.length}${C.r}`, "gk-gaps");
+    const unknown = c.gaps.filter((g) => g.unknown).length;
+    head(`${C.at}\x1b[1mcode no test runs · ${c.gaps.length}${C.r}${unknown ? `${C.faint} · ${unknown} not known: spec files never ran${C.r}` : ""}`, "gk-gaps");
     c.gaps.forEach((g, i) => {
       const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
       const mark = wt ? (wt.ok ? `${C.good}✓ ` : `${C.bad}✗ `) : `${C.at}⚠ `;
@@ -913,7 +953,8 @@ function testRows(r) {
   // Folded like the rest: a list of them ran off the edge.
   const failed = c.specs.filter((s) => s.status && s.status !== "0");
   if (failed.length) {
-    fold(`${failed.length} spec file${failed.length === 1 ? "" : "s"} had a failing run`, "failed");
+    const never = failed.filter((s) => s.status === "2").length;
+    fold(`${failed.length} spec file${failed.length === 1 ? "" : "s"} ${never === failed.length ? "never ran" : never ? `had a failing run (${never} never ran)` : "had a failing run"}`, "failed");
     if (open.has("failed")) for (const s of failed) out.push(row(`  ${C.bad}✗${C.r} ${C.text}${s.path}${C.r}`, s.path, 1, "f:" + s.path));
   }
   return out;
@@ -960,7 +1001,7 @@ function pinned(r, g, w) {
   if (!p) return wrap("t writes a test that passes before the change and fails with it", w).map((l) => C.faint + l + C.r);
   if (!p.ok) return [...wrap(`✗ "${p.name}" did not pin it: ${p.base !== 0 ? "it failed before the change" : p.head === 0 ? "it passed with the change" : "it did not run"}`, w).map((l) => C.at + l + C.r), C.faint + "t tries again" + C.r];
   return [...wrap(`✓ "${p.name}"`, w).map((l) => C.good + l + C.r), C.good + "  passes before the change, fails with it" + C.r,
-    ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts it to the MR · the test itself is at the end of this part" + C.r];
+    ...p.fails.split("\n").filter(Boolean).slice(0, 6).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "C posts it to the MR · the test itself is at the end of this part" + C.r];
 }
 function diffPreview(r, g, w) {
   const out = [], v = g.verdict;
@@ -1036,7 +1077,7 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     if (done && done.ok) {
       out.push(C.good + `✓ ${done.names.length} ${done.kind ? done.kind + " " : ""}tests, passing, in ${done.spec.split("/").pop()}` + C.r);
       if (done.why) out.push(...wrap(done.why, w).map((l) => C.ctx + l + C.r));
-      out.push("", ...done.names.flatMap((n) => wrap("• " + n, w)).map((l) => C.text + l + C.r), "", C.faint + "c posts them to the MR · t writes them again" + C.r);
+      out.push("", ...done.names.flatMap((n) => wrap("• " + n, w)).map((l) => C.text + l + C.r), "", C.faint + "C posts them to the MR · t writes them again" + C.r);
       out.push(...written(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.patch`), w));
       return out.join("\n") + "\n";
     }
@@ -1044,7 +1085,7 @@ function preview(r, id, c = JSON.parse(readFileSync(join(r.dir, "cover.json"), "
     // The tests t wrote for it (git-trace's cover), and how they ran.
     const wt = readJson(join(r.dir, `cover.${createHash("sha1").update(g.id + "\n").digest("hex").slice(0, 10)}.json`), null);
     if (!wt) out.push(...wrap("t writes tests for it, set up like tests of the same kind of code in the repository, and runs them", w).map((l) => C.faint + l + C.r), "");
-    if (wt && wt.ok) out.push(C.good + `✓ ${wt.names.length} ${wt.kind ? wt.kind + " " : ""}test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...(wt.why ? wrap(wt.why, w - 2).map((l) => "  " + C.text + l + C.r) : []), ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "c posts them to the MR · the tests themselves are at the end of this preview" + C.r, "");
+    if (wt && wt.ok) out.push(C.good + `✓ ${wt.names.length} ${wt.kind ? wt.kind + " " : ""}test${wt.names.length === 1 ? "" : "s"} written, passing, in ${wt.spec.split("/").pop()}` + C.r, ...(wt.why ? wrap(wt.why, w - 2).map((l) => "  " + C.text + l + C.r) : []), ...wt.names.flatMap((n) => wrap("• " + n, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "C posts them to the MR · the tests themselves are at the end of this preview" + C.r, "");
     else if (wt) out.push(C.at + `✗ not all pass: ${wt.failing.join(", ") || "they did not run"}` + C.r, ...wt.fails.split("\n").filter(Boolean).slice(0, 8).flatMap((l) => wrap(l, w - 2)).map((l) => "  " + C.ctx + l + C.r), C.faint + "t tries again" + C.r, "");
     // The call no test makes, else the function itself: each line as the
     // traces saw it, ● run by some test.
@@ -1208,6 +1249,9 @@ function render(ctx, k, w, win, around = 0) {
   // A plain value beside the line, whole; an object named there (↓) and
   // opened, whole, under it.
   const says = [...reads.map(([a, b]) => a + " = " + (isObj(b) ? "↓" : full(b))), ...made.map(([a, b], i) => (i ? "" : "⇒ ") + a + " = " + (isObj(b) ? "↓" : full(b)))];
+  // What it returns, at its return; not a function's undefined for falling off its end.
+  const ret = s.ret !== undefined && !(s.ret === "undefined" && !/\breturn\b/.test(line0)) ? [["returns", s.ret]] : [];
+  for (const [a, b] of ret) says.push(a + " " + (isObj(b) ? "↓" : full(b)));
   if (says.length) vals.set(at, says.join("  ·  "));
   // Called with: its parameters, plain values whole; objects opened under the
   // call's first line.
@@ -1221,7 +1265,7 @@ function render(ctx, k, w, win, around = 0) {
     head.push(...lines.map((l, i) => C.faint + (i ? "             " : "called with  ") + C.r + C.else + l + C.r));
   }
   const open = [];
-  for (const [a, b] of [...(first ? args : []), ...reads, ...made]) if (isObj(b) && b.p.length && !open.some((l) => l.startsWith(C.ctx + a + C.r))) tree(a, b, "", w - 12, open, 60);
+  for (const [a, b] of [...(first ? args : []), ...reads, ...made, ...ret]) if (isObj(b) && b.p.length && !open.some((l) => l.startsWith(C.ctx + a + C.r))) tree(a, b, "", w - 12, open, 60);
   const does = side === "head" ? gloss.get(s.id) : "";
   if (does) head.push(C.yours + "✦ " + C.r + C.ctx + cut(does, w - 3) + C.r);
   head.push(C.faint + "─".repeat(w) + C.r);
@@ -1240,13 +1284,12 @@ function render(ctx, k, w, win, around = 0) {
   for (let n = lo; n <= hi; n++) {
     // What the change removed here, where the head has it no more.
     if (side === "head") for (const [on, ot] of hk.before.get(n) || []) {
-      const code = cutA(oldPaint[on - 1] ?? ot, w - 9);
-      body.push(gut(C.bad + String(on).padStart(5) + C.r, C.bad + "-") + under(code, MINUS) + "\x1b[0K" + C.r);
+      wrapA(oldPaint[on - 1] ?? ot, w - 9).forEach((p, i) => body.push((i ? BLANK : gut(C.bad + String(on).padStart(5) + C.r, C.bad + "-")) + under(p, MINUS) + "\x1b[0K" + C.r));
     }
     const tx = src[n - 1] ?? "", cur = n === at, did = ranHere.has(n);
     const goes = !cur && nx && nx.id === s.id && nx.depth === s.depth && n === nx.line;
     const add = side === "head" ? hk.added.has(n) : hk.removed.has(n);
-    const skipped = !did && n > (s.start ?? s.def[0] - 1) && (can ? can.has(n) : add && !/^\s*(\/\/|\*|\/\*|[}\])]+[;,)]*\s*$|$)/.test(tx));
+    const skipped = ctx.calls.has(s.id) && !did && n > (s.start ?? s.def[0] - 1) && (can ? can.has(n) : add && !/^\s*(\/\/|\*|\/\*|[}\])]+[;,)]*\s*$|$)/.test(tx));
     const mark = cur ? C.at + "\x1b[1m▶" : goes ? C.at + "→" : did ? C.good + "●" : skipped ? C.faint + "○" : " ";
     const num = (add ? (side === "base" ? C.bad : C.good) : C.faint) + String(n).padStart(5) + C.r;
     const mockCall = [...tx.matchAll(/\b(\w+)\s*\(/g)].map((m) => m[1]).find((x) => mockedNames.has(x));
@@ -1257,19 +1300,22 @@ function render(ctx, k, w, win, around = 0) {
       tail = C.else + "\x1b[3m" + here.get(n).map(([a, b]) => a + " = " + (a.length + 3 + full(b).length <= room ? full(b) : shape(b))).join("   ") + C.r;
     }
     if (mockCall) tail = C.at + "\x1b[3m← mocked by this test" + C.r;
-    // The code as bat colors it, cut to leave the value room, then on the
-    // change's ground, dim where this call skipped it, bold where it is.
-    let code = cutA(paint[n - 1] ?? tx, w - 9);
-    if (skipped) code = under(code, "\x1b[2m");
-    if (cur) code = under(code, "\x1b[1m");
+    // The code as bat colors it, whole, wrapped where it is wider than the
+    // pane, then on the change's ground, dim where this call skipped it,
+    // bold where it is.
+    const pieces = wrapA(paint[n - 1] ?? tx, w - 9).map((p) => cur ? under(p, "\x1b[1m") : skipped ? under(p, "\x1b[2m") : p);
+    const code = pieces[0];
     // The value beside the code when both fit, else on a line of its own under it.
-    const beside = tail && width(code) + width(tail) + 2 <= w - 9;
-    const line = beside ? code + "  " + tail : code;
-    if (cur) { body.push(under(gut(num, mark) + line, HERE) + "\x1b[0K" + C.r); atRow = body.length; }
-    // What the change added on its ground, always: the same as the code
-    // around the window (codeRows), so a function it wrote reads as one.
-    else if (add) body.push(gut(num, mark) + under(line, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r);
-    else body.push(gut(num, mark) + line + C.r);
+    const beside = tail && pieces.length === 1 && width(code) + width(tail) + 2 <= w - 9;
+    pieces[0] = beside ? code + "  " + tail : code;
+    pieces.forEach((line, i) => {
+      const g = i ? BLANK : gut(num, mark);
+      if (cur) { body.push(under(g + line, HERE) + "\x1b[0K" + C.r); if (!i) atRow = body.length; }
+      // What the change added on its ground, always: the same as the code
+      // around the window (codeRows), so a function it wrote reads as one.
+      else if (add) body.push(g + under(line, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r);
+      else body.push(g + line + C.r);
+    });
     if (tail && !beside) {
       const lead = (tx.match(/^\s*/) || [""])[0].length;
       const pad = " ".repeat(9 + Math.min(lead, 24));
@@ -1311,7 +1357,8 @@ function walkPrep(r, ti, side, w) {
   paths.forEach((p, i) => writeFileSync(`${base}-${w}/file-${i}`, fileView(r, side, p, w)));
 }
 // codeRows: lines from..to of a file as the pane draws code no step is on
-// (the gutter, the change's ground, what it removed), the same bytes
+// (the gutter, the change's ground, what it removed, a line wider than the
+// pane wrapped under a blank gutter), the same bytes
 // wherever they are drawn: the file whole, and the code around a step's own
 // lines, so the screen can scroll from one into the other without a row
 // changing under it.
@@ -1324,12 +1371,14 @@ function codeRows(r, side, path, w, from, to) {
   const body = [];
   for (let n = Math.max(1, from); n <= Math.min(src.length, to); n++) {
     if (side === "head") for (const [on, ot] of hk.before.get(n) || []) {
-      body.push(gut(C.bad + String(on).padStart(5) + C.r, C.bad + "-") + under(cutA(oldPaint[on - 1] ?? ot, w - 9), MINUS) + "\x1b[0K" + C.r);
+      wrapA(oldPaint[on - 1] ?? ot, w - 9).forEach((p, i) => body.push((i ? BLANK : gut(C.bad + String(on).padStart(5) + C.r, C.bad + "-")) + under(p, MINUS) + "\x1b[0K" + C.r));
     }
     const add = side === "head" ? hk.added.has(n) : hk.removed.has(n);
     const num = (add ? (side === "base" ? C.bad : C.good) : C.faint) + String(n).padStart(5) + C.r;
-    const code = cutA(paint[n - 1] ?? src[n - 1] ?? "", w - 9);
-    body.push(add ? gut(num, " ") + under(code, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r : gut(num, " ") + code + C.r);
+    wrapA(paint[n - 1] ?? src[n - 1] ?? "", w - 9).forEach((code, i) => {
+      const g = i ? BLANK : gut(num, " ");
+      body.push(add ? g + under(code, side === "base" ? MINUS : PLUS) + "\x1b[0K" + C.r : g + code + C.r);
+    });
   }
   return body;
 }
@@ -1342,6 +1391,10 @@ function context(r, t, steps, vs, side) {
   const mockedMods = new Set(mocks(r.specs[t.spec], r.rev.head));
   return { r, t, steps, vs, side, gloss: side === "head" ? glossOf(r) : new Map(),
     mockedNames: new Set(defs(r.rows).filter((d) => mockedMods.has(stem(d.path))).map((d) => d.name)),
+    // The definitions a call runs: a line of one of these a call did not
+    // pause on is a branch it skipped. A class body or a constant is
+    // evaluated once, as its module loads, so none of its lines is skipped.
+    calls: new Set(defs(r.rows).filter(callable).map((d) => d.id)),
     can: (p) => { if (!cans.has(p)) cans.set(p, breakable(r, side, p)); return cans.get(p); } };
 }
 
@@ -1360,6 +1413,9 @@ function context(r, t, steps, vs, side) {
 const LOCK = /(^|\/)(yarn\.lock|package-lock\.json|pnpm-lock\.yaml|Cargo\.lock|go\.sum)$/;
 const codeFiles = (r) => git("diff", "--name-only", "--no-renames", r.rev.base, r.rev.head).split("\n").filter((f) => f && !TEST.test(f) && !LOCK.test(f));
 const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return d; } };
+// cover.json, or, while the tests still run (the tour is written from the
+// diff meanwhile), none of it yet: pending.
+const readCover = (r) => readJson(join(r.dir, "cover.json"), null) || { specs: [], based: false, callable: 0, tests: [], gaps: [], pending: true };
 function tourSize(r) {
   return git("diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", r.rev.base, r.rev.head, "--", ...codeFiles(r)).length;
 }
@@ -1378,8 +1434,19 @@ function tourPlanDefault(r) {
 }
 // What the plan is given: the commits, each file of code with the symbols it
 // changed, and each test with the files it reaches.
+// PLAIN: how every word of the tour the reader sees is written. Tours that
+// read like the code (its names unexplained, its jargon) had to be read
+// twice; tours that renamed things ("robot" for agent, "row" for touchpoint)
+// left the reader unable to find them in the code.
+const PLAIN = `How to write every word the reader sees: so plainly that a five-year-old could follow it, in the code's own words.
+- Short sentences, one idea each.
+- Call each thing by the name the code gives it, in backticks: a function, type, field, flag, table, or a word the code uses for an idea (\`agent\`, \`touchpoint\`, \`owner\`). Never make up your own word for it ("robot" for \`agent\`, "row" for \`touchpoint\`): the reader has to find it in the code.
+- Explain each name the first time it appears, in words a five-year-old knows: "an \`agent\` (a bot that writes to shoppers for the store)". Explain it again only where a reader might start (each chapter stands alone). After that, just use the name.
+- Every other word is an everyday word. No jargon ("idempotent", "upsert", "coalesce", "fan out", "window") and no acronyms the code does not use: say what happens instead.
+- A change is "Before, ... Now, ...". A tiny example helps ("a shopper texts twice, then the agent answers: that counts").
+- Someone who has never seen this code or this company must follow every sentence.`;
 function tourPlanPrompt(r) {
-  const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
+  const cover = readCover(r);
   const log = git("log", "--reverse", "--format=%s%n%b", `${r.rev.base}..${r.rev.head}`).slice(0, 6000);
   const stat = git("diff", "--numstat", "--no-renames", r.rev.base, r.rev.head, "--", ...codeFiles(r)).trim();
   const syms = new Map();
@@ -1388,11 +1455,13 @@ function tourPlanPrompt(r) {
   const tests = cover.tests.map((t, i) => `"${t.name}"  reaches ${[...new Set(walk(r, i, "head").steps.map((s) => s.path))].join(", ") || "nothing changed"}`).join("\n").slice(0, 40000);
   return `A code reviewer is about to be walked through a merge request too big for one short tour. Split it into chapters, each one behavior the change adds or changes that a reviewer can understand on its own: 2 to 6 of them, in the order they are best read.
 
+${PLAIN}
+
 Say first what the whole change sets out to do: two or three plain sentences.
 For each chapter:
-- title: a few words naming the behavior ("queued sends run as a child workflow").
+- title: a few plain words naming the behavior ("messages wait in line and go out one by one").
 - files: the files of code it covers, exactly as listed below. Every file below goes in exactly one chapter. Plumbing (build files, manifests, exports, config) can be its own last chapter, titled so.
-- tests: the exact names of the tests below that exercise it.
+- tests: the exact names of the tests below that exercise it${cover.pending ? " (none yet: the tests are still running, so it is [])" : ""}.
 
 The commits:
 ${log}
@@ -1400,14 +1469,14 @@ ${log}
 The files of code, with lines added and removed and the symbols changed:
 ${files}
 
-The tests, and the files each reaches:
+${cover.pending ? "" : `The tests, and the files each reaches:
 ${tests}
-`;
+`}`;
 }
 // What a chapter's tour is written from: its files' diff and what its tests
 // ran of them, and where it sits among the others.
 function tourPrompt(r, ci) {
-  const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
+  const cover = readCover(r);
   const p = plan(r), ch = p.chapters[ci], many = p.chapters.length > 1;
   const files = new Set(ch.files);
   const log = git("log", "--reverse", "--format=%s%n%b", `${r.rev.base}..${r.rev.head}`).slice(0, 4000);
@@ -1417,7 +1486,8 @@ function tourPrompt(r, ci) {
   // most of its lines first: each branch has its test (the timeout, the
   // error, the skip). Each as the calls it made into the chapter's files and
   // the values each line set.
-  const named = (t) => !many || (ch.tests || []).some((n) => t.name === n || t.name.endsWith(n));
+  // A plan written before the tests ran names none: its files decide.
+  const named = (t) => !many || !(ch.tests || []).length || ch.tests.some((n) => t.name === n || t.name.endsWith(n));
   const tests = cover.tests.map((t, i) => ({ t, i })).filter((x) => named(x.t))
     .map((x) => ({ ...x, steps: walk(r, x.i, "head").steps.filter((s) => files.has(s.path)) })).filter((x) => x.steps.length)
     .map((x) => ({ ...x, lines: new Set(x.steps.map((s) => s.path + ":" + s.line)) }));
@@ -1452,14 +1522,16 @@ Write only this chapter, from its files. It must stand alone: a reader may read 
 ` : "";
   return `You are walking a code reviewer through ${many ? "part of " : ""}a merge request so they understand what it sets out to do and how its code does it, as fast as possible and with as little thinking about navigation as possible. They will read your stops one after another, pressing a key for the next.
 
+${PLAIN}
+
 ${where}First say what ${many ? "this part of the change" : "the change"} sets out to do: two or three plain sentences, the behavior it adds or changes, not a list of files.
 
 Then pick the stops: ${many ? "3 to 10" : "5 to 15"}, in the order that tells the story best (usually the order the code runs in, entry point first). Each stop is one place in the changed code (not tests) and answers one question. For each:
-- title: a few words, what happens there ("finds the resolver for the token").
+- title: a few plain words, what happens there ("finds who should answer").
 - says: one to three plain sentences on what this code does and why it matters to the change. No restating the code token by token.
 - path, start, end: the lines to show, at the head, at most 30 lines; focus: the line the stop is about, within them, marked for the reader: for a function, type or constant, the line with its name on it (export const awaitWithin = ..., not the line with its return type or its opening brace); for a decision inside one, the statement that makes it.
-- test: the exact name of a test below that runs the focus line, when one does; its values are shown at the stop as proof. Else "".
-- proves: when there is a test, one sentence on what that test shows about this code's behavior, with the real values ("with no resolver registered it logs and returns: resolver = undefined"). Else "".
+- test: the exact name of a test below that runs the focus line, when one does; its values are shown at the stop as proof. When several do, the one whose values there best show what the code works with: a real record with its fields filled, not null, undefined or empty, unless the empty case is what the stop is about. Else "".
+- proves: when there is a test, one plain sentence on what that test shows the code does, with the real values in backticks ("when nobody is set up to answer, it writes a note and gives up: \`resolver = undefined\`"). Else "".
 
 The tour has to stand alone. The reader sees only it: your summary, then each stop's title, says, the lines you pick and the test values under them, one after another. They will not open a file, search, or run anything. When they finish the last stop they must understand what ${many ? "this part of the change" : "the change"} does and how, well enough to explain it. So:
 - Explain a name before you lean on it. A type, helper, table, flag or constant the reader has not met yet is explained where it first appears, or gets a stop of its own first; order the stops so no stop uses a name a later stop introduces. Show a data shape (a type, a schema) at the stop where it first matters. A name from outside the change (an import) gets a phrase saying what it is.
@@ -1475,11 +1547,11 @@ ${log}
 The diff of ${many ? "this chapter's" : "the"} code (tests left out):
 ${diff}
 
-What the tests ran of it, test by test (a line a pause: the function, its file and line, what it was called with, what the line set; deeper is called from above):
-${ran.join("\n\n") || "no test reaches it"}
+${r.specs.length && cover.pending ? "Its tests are still running, so there are no values yet: every stop's test and proves are \"\". Tell the story from the diff and the code; each stop's values are put under it once the tests have run it." : r.specs.length ? `What the tests ran of it, test by test (a line a pause: the function, its file and line, what it was called with, what the line set; deeper is called from above):
+${ran.join("\n\n") || "no test reaches it"}` : "No test runs this change (it has no spec file to run: SQL, config, or code with no tests), so there are no values: every stop's test and proves are \"\". Tell the story from the diff and the code."}
 ${others ? "\nOther tests that reach it, left out for room:\n" + others + "\n" : ""}
-Changed functions here no test runs:
-${gaps || "none"}
+${r.specs.length && !cover.pending ? `Changed functions here no test runs:
+${gaps || "none"}` : ""}
 `;
 }
 // tourAssemble: the plan and each chapter, as far as they have come, as one.
@@ -1499,7 +1571,28 @@ function tourAssemble(r) {
   const tmp = f(`tour.json.${process.pid}`);
   writeFileSync(tmp, JSON.stringify(t) + "\n");
   renameSync(tmp, f("tour.json"));
-  for (const x of readdirSync(r.dir)) if (/^tour-\d+(\.\w+)?$/.test(x)) rmSync(join(r.dir, x), { recursive: true, force: true });
+  // Each width's drawing stale, not gone: the pane shows it until it is drawn again (git-trace's toured).
+  for (const x of readdirSync(r.dir)) { const m = /^(tour-\d+)\.(\w+)$/.exec(x); if (m && m[2] !== "lock" && m[2] !== "stale") try { renameSync(join(r.dir, x), join(r.dir, m[1] + ".stale")); } catch { /* two chapters landing at once: the other marked it */ } }
+}
+// A chapter written before its tests ran (git-trace's values): once they
+// have, each stop shows the test that has the most to show at its line, and
+// Claude says, for each, what that test proves there. The stops stay as
+// written: the reader is on them.
+function tourValuesPrompt(r, ci) {
+  return `A chapter of a tour of a merge request was written from its diff before its tests ran. They have now, and under each stop that a test ran are the values it had there. For each stop, in order, write proves: one plain sentence on what those values show the code does, with the real values in backticks ("when nobody is set up to answer, it writes a note and gives up: \`resolver = undefined\`"). A stop with no values ("no test stops here") gets "". Do not invent values: use only the ones shown.
+
+${PLAIN}
+
+${tourText(r, ci)}`;
+}
+function tourValuesApply(r, ci, file) {
+  const f = join(r.dir, `tour.c${ci}.json`), t = JSON.parse(readFileSync(f, "utf8"));
+  const said = readJson(file, { proves: [] }).proves || [], cover = readCover(r), stopOf = stops(r, cover);
+  t.stops = t.stops.map((x, i) => {
+    const { ti, k } = stopOf(x, 100);
+    return k < 0 ? x : { ...x, test: cover.tests[ti].name, proves: said[i] || "" };
+  });
+  writeFileSync(f, JSON.stringify(t) + "\n");
 }
 // readTour: tour.json, a tour from before chapters (its stops at the top)
 // read as one chapter of them.
@@ -1537,14 +1630,14 @@ function prose(t, w, base, names) {
 // out (the run's directory, else the page's own: tour-html).
 function tourPrep(r, w, out = r.dir) {
   const tour = readTour(r);
-  const cover = JSON.parse(readFileSync(join(r.dir, "cover.json"), "utf8"));
+  const cover = readCover(r);
   const dir = join(out, `tour-${w}`);
   mkdirSync(dir, { recursive: true });
   const many = tour.chapters.length > 1, rows = [];
   const names = new Set(defs(r.rows).map((d) => d.name).filter(Boolean));
   const para = (t, c = C.text, ww = w - 2) => prose(t, ww, c, names);
   const one = (t, c) => para(t, c, 10000)[0] || "";
-  const state = (c) => c.state === "writing" ? "Claude is writing it; it lands here by itself." : c.state === "checking" ? "A reader is checking it; what it cannot answer lands here as open questions." : "";
+  const state = (c) => c.state === "writing" ? "Claude is writing it; it lands here by itself." : c.state === "tests" ? "Its tests are still running; what they had at each stop lands under it by itself." : c.state === "checking" ? "A reader is checking it; what it cannot answer lands here as open questions." : "";
   // The reader's questions: {stop, says}, or a string from before they
   // had a stop; each is listed on the chapter and again at its stop.
   const ask = (q) => typeof q === "string" ? { stop: 0, says: q } : q;
@@ -1562,6 +1655,7 @@ function tourPrep(r, w, out = r.dir) {
     else c.stops.forEach((x, si) => intro.push(C.faint + (many ? "   " : "") + String(si + 1).padStart(3) + "  " + C.r + one(x.title, C.text)));
     if (!many) { if (c.stops.length && state(c)) intro.push("", C.faint + state(c) + C.r); intro.push(...questions(c)); }
   });
+  if (cover.pending && r.specs.length) intro.push("", C.faint + "The tests are still running (a shows them); their values land under each stop by themselves." + C.r);
   if (cover.gaps.length) intro.push("", ...para(`${cover.gaps.length} changed function${cover.gaps.length === 1 ? "" : "s"} no test runs: ` + cover.gaps.map((g) => "`" + g.name + "`").join(", "), C.at));
   const bd = readJson(join(r.dir, "diff.json"), null);
   if (bd && bd.groups.length) {
@@ -1643,9 +1737,29 @@ function tourPrep(r, w, out = r.dir) {
     writeFileSync(join(dir, "files", p.replace(/\//g, "%")), fileView(r, "head", p, w));
   writeFileSync(join(out, "tour.rows"), rows.join("\n") + "\n");
 }
+// hollow: a value that shows nothing of what the code works with.
+const hollow = (v) => isObj(v) ? !v.p.length : /^(undefined|null|""|\{\}|\[\])$/.test(String(v));
+// telling: how much step k shows on line: the values its call holds there
+// (what it was called with, closes over, and set on the lines before, as
+// render has them) that the line names, a hollow one counting against it.
+function telling(r, steps, k, line) {
+  const s = steps[k], known = new Map();
+  let lo = k;
+  while (lo > 0 && steps[lo - 1].depth >= s.depth) lo--;
+  for (let j = lo; j <= k; j++) {
+    const x = steps[j];
+    if (x.id !== s.id || x.depth !== s.depth) continue;
+    for (const [a, b] of [...(x.outer || []), ...x.args, ...(j < k ? x.values : [])]) known.set(a, b);
+  }
+  const src = text(r.rev.head, s.path)[line - 1] || "";
+  let n = 0;
+  for (const [a, b] of known) if (new RegExp("(^|[^\\w$.])" + a.replace(/\$/g, "\\$") + "\\b").test(src)) n += hollow(b) ? -1 : 1;
+  return n;
+}
 // stops: a stop's lines as the walk draws them, with the values of the test
-// it names (else the first that stops on its line): {ti, k, body}, k -1 and
-// the bare lines when no test stops there.
+// it names (else, of the tests that stop on its line, the one with the most
+// to show there: a real record, not the test that passes null): {ti, k,
+// body}, k -1 and the bare lines when no test stops there.
 function stops(r, cover) {
   const walks = new Map();
   const walkOf = (ti) => { if (!walks.has(ti)) { const { t, steps } = walk(r, ti, "head"); const vs = visits(steps); walks.set(ti, { steps, ctx: context(r, t, steps, vs, "head") }); } return walks.get(ti); };
@@ -1660,7 +1774,15 @@ function stops(r, cover) {
   return (x, w, around = 0) => {
     let ti = cover.tests.findIndex((t) => t.name === x.test || (x.test && t.name.endsWith(x.test)));
     let k = ti >= 0 ? stepAt(ti, x) : -1;
-    if (k < 0) for (ti = 0; ti < cover.tests.length && (k = stepAt(ti, x)) < 0; ti++);
+    if (k < 0) {
+      let best = -Infinity;
+      cover.tests.forEach((t, i) => {
+        const j = stepAt(i, x);
+        if (j < 0) return;
+        const n = telling(r, walkOf(i).steps, j, x.focus);
+        if (n > best) { best = n; ti = i; k = j; }
+      });
+    }
     if (k < 0) return { ti: -1, k: -1, ...plain(r, x, w, around) };
     const out = render(walkOf(ti).ctx, k, w, [x.start, x.end, x.focus], around).split("\n");
     const m = /^\x1epin (\d+) at (\d+)/.exec(out[0]) || [0, 0, 0];
@@ -1679,27 +1801,33 @@ function stops(r, cover) {
 // address names the screen and the row or step, so a link opens on it. One
 // file, nothing loaded from elsewhere. The theme's colors are marker codes
 // here (git-trace sets them: OTIS_T_* as 38;5;201 and on) that become the
-// page's classes, light or dark as the reader's system is.
+// page's classes, light or dark as the reader's system is; or, given
+// page-css's rules, the theme's own, the code in bat's colors for it.
 const esc = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const MARK = { 201: "at", 202: "good", 203: "bad", 204: "yours", 205: "text", 206: "ctx", 207: "faint", 208: "else" };
 // ansiRow: one drawn line as HTML spans.
 function ansiRow(line) {
   let out = "", open = false;
-  const st = { fg: "", bg: "", b: false, dim: false, it: false };
-  const span = () => { if (open) out += "</span>"; const cls = [st.fg, st.bg, st.b && "b", st.dim && "dim", st.it && "it"].filter(Boolean); open = cls.length > 0; if (open) out += `<span class="${cls.join(" ")}">`; };
+  const st = { fg: "", rgb: "", bg: "", b: false, dim: false, it: false, u: false };
+  const span = () => {
+    if (open) out += "</span>";
+    const cls = [st.fg, st.bg, st.b && "b", st.dim && "dim", st.it && "it", st.u && "u"].filter(Boolean);
+    open = cls.length > 0 || !!st.rgb;
+    if (open) out += "<span" + (cls.length ? ` class="${cls.join(" ")}"` : "") + (st.rgb ? ` style="color:${st.rgb}"` : "") + ">";
+  };
   for (const m of line.matchAll(/\x1b\[([0-9;]*)([mK])|([^\x1b]+)/g)) {
     if (m[3]) { out += esc(m[3]); continue; }
     if (m[2] === "K") continue;
     const c = (m[1] || "0").split(";").map(Number);
     for (let i = 0; i < c.length; i++) {
       const n = c[i];
-      if (n === 0) Object.assign(st, { fg: "", bg: "", b: false, dim: false, it: false });
-      else if (n === 1) st.b = true; else if (n === 2) st.dim = true; else if (n === 3) st.it = true;
-      else if (n === 22) { st.b = false; st.dim = false; } else if (n === 23) st.it = false; else if (n === 39) st.fg = ""; else if (n === 49) st.bg = "";
-      else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) st.fg = "c" + n;
-      else if (n === 38 && c[i + 1] === 5) { st.fg = MARK[c[i + 2]] ? "m-" + MARK[c[i + 2]] : ""; i += 2; }
-      else if (n === 38 && c[i + 1] === 2) { st.fg = ""; i += 4; }
-      else if (n === 48 && c[i + 1] === 2) { st.bg = c[i + 2] === 1 ? "bg-add" : c[i + 2] === 4 ? "bg-del" : ""; i += 4; }
+      if (n === 0) Object.assign(st, { fg: "", rgb: "", bg: "", b: false, dim: false, it: false, u: false });
+      else if (n === 1) st.b = true; else if (n === 2) st.dim = true; else if (n === 3) st.it = true; else if (n === 4) st.u = true;
+      else if (n === 22) { st.b = false; st.dim = false; } else if (n === 23) st.it = false; else if (n === 24) st.u = false; else if (n === 39) st.fg = st.rgb = ""; else if (n === 49) st.bg = "";
+      else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) { st.fg = "c" + n; st.rgb = ""; }
+      else if (n === 38 && c[i + 1] === 5) { st.fg = MARK[c[i + 2]] ? "m-" + MARK[c[i + 2]] : ""; st.rgb = ""; i += 2; }
+      else if (n === 38 && c[i + 1] === 2) { st.fg = ""; st.rgb = "#" + c.slice(i + 2, i + 5).map((x) => x.toString(16).padStart(2, "0")).join(""); i += 4; }
+      else if (n === 48 && c[i + 1] === 2) { st.bg = { 1: "bg-add", 4: "bg-del", 7: "bg-add emph", 10: "bg-del emph" }[c[i + 2]] || ""; i += 4; }
       else if (n === 48 && c[i + 1] === 5) { st.bg = c[i + 2] === 58 ? "bg-here" : ""; i += 2; }
     }
     span();
@@ -1710,7 +1838,148 @@ function ansiRow(line) {
 // of code, R<n> a line the change removed.
 const GUTTER = /^(?:\x1b\[[0-9;]*m)*( *)(\d+)\x1b\[0m(?:\x1b\[[0-9;]*m)* (.*)$/;
 const PAGE_W = 110;
-function tourHtml(r, title, url) {
+// page-css: the theme loaded now (OTIS_T_*, its ground from otis-theme) as
+// rules over the page's own colors, after them so they hold in light and
+// dark alike, and font the terminal's face ahead of the page's, its files
+// (fc-list finds them) in the page so a reader without it sees it too;
+// nothing for a theme without a ground (terminal's: its colors are the
+// terminal's to say).
+const FONT_FORMAT = { otf: "opentype", ttf: "truetype", woff: "woff", woff2: "woff2" };
+function fontFaces(font) {
+  let list = "";
+  try { list = execFileSync("fc-list", ["-f", "%{file}\t%{family}\t%{weight}\t%{slant}\n", ":"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return ""; }
+  const files = list.split("\n").map((l) => l.split("\t")).map(([f, fam, w, sl]) => ({ f, fam, w, sl, ext: (f || "").split(".").pop().toLowerCase() }))
+    .filter((x) => x.fam && FONT_FORMAT[x.ext] && x.fam.split(",").includes(font));
+  // A face as big as a Nerd Font's (megabytes a style) would make the page
+  // too big to post: the reader's own monospace then.
+  if (files.reduce((n, x) => n + statSync(x.f).size, 0) > 2 << 20) return "";
+  return files.map((x) => `@font-face { font-family: ${JSON.stringify(font)}; font-weight: ${+x.w >= 180 ? 700 : 400}; font-style: ${+x.sl > 0 ? "italic" : "normal"}; src: url(data:font/${x.ext};base64,${readFileSync(x.f).toString("base64")}) format("${FONT_FORMAT[x.ext]}"); }`).join("\n");
+}
+function pageCss(font) {
+  const e = (k) => process.env["OTIS_T_" + k] || "";
+  if (!/^#[0-9a-f]{6}$/i.test(e("GROUND"))) return "";
+  const rgb = (v) => { const m = /^[34]8;2;(\d+);(\d+);(\d+)$/.exec(v); return m ? `rgb(${m[1]} ${m[2]} ${m[3]})` : v; };
+  const at = rgb(e("ATTENTION")), good = rgb(e("GOOD")), bad = rgb(e("BAD")), yours = rgb(e("YOURS")), els = rgb(e("ELSEWHERE")), file = e("FILE"), ctx = rgb(e("CONTEXT"));
+  const v = { ground: e("GROUND"), ink: rgb(e("TEXT")), soft: ctx, faint: rgb(e("FAINT")), rule: e("RULE"), sel: rgb(e("CODEBG")),
+    pass: good, fail: bad, open: at, link: file, else: els, yours, add: e("PLUS"), del: e("MINUS"),
+    here: "color-mix(in srgb, var(--open) 28%, var(--ground))", k1: bad, k2: good, k3: at, k4: file, k5: yours, k6: els, k7: ctx };
+  if (font) v.mono = `${JSON.stringify(font)}, "SF Mono", ui-monospace, Menlo, monospace`;
+  return (font ? fontFaces(font) + "\n" : "") + `:root { color-scheme: ${e("LIGHT") ? "light" : "dark"}; ${Object.entries(v).map(([k, x]) => `--${k}: ${x};`).join(" ")} }`;
+}
+// --- the change by symbol, for the page ----------------------------------------------
+// symbols: the change as git-symbols reads it and otis-symbols draws it
+// (--draw), for the page's other screen: every row the tree opens to, each
+// drawn open and closed, and each one's preview, wrapped as the pane wraps
+// it. A row's closed line is the first of these runs to show it closed:
+// nothing open (the screen as it opens), L's (a symbol open above stays
+// closed, dim), then the tree a level deeper each run until all of it is
+// open. None of your v marks or a review's threads: the page is the
+// change's, not your reading of it. Null when git-symbols reads nothing.
+// up: the tree turned over, sinks first (b's, $st/up).
+const SYM_ROWS = 1500;
+const drawnPreviews = new Map();
+const SHARE = dirname(fileURLToPath(import.meta.url));
+async function symbols(r, lw, title, up) {
+  const st = mkdtempSync(join(tmpdir(), "otis-symbols-"));
+  if (up) writeFileSync(join(st, "up"), "");
+  const rev = existsSync(join(r.dir, "rev")) ? readFileSync(join(r.dir, "rev"), "utf8").trim() : `${r.rev.base}..${r.rev.head}`;
+  const env = { ...process.env, GIT_FZF_STATE: st, OTIS_SYMBOLS_WIDTH: String(lw), FZF_COLUMNS: String(lw + 6 + PAGE_W), FZF_LINES: "50",
+    FZF_PREVIEW_COLUMNS: String(PAGE_W), FZF_PREVIEW_LINES: "48", OTIS_VIEWED_STORE: "/dev/null",
+    // Every preview is drawn here: none draws the row after it ahead.
+    GIT_SYMBOLS_AHEAD: "1" };
+  delete env.GMR_IID; delete env.FZF_PORT; delete env.FZF_API_KEY;
+  try {
+    const rows = (open, extra = {}) => {
+      writeFileSync(join(st, "open"), [...open].map((x) => x + "\n").join(""));
+      rmSync(join(st, "footer"), { force: true });
+      let out = "";
+      try { out = execFileSync("git-symbols", ["--rows", rev], { encoding: "utf8", env: { ...env, ...extra }, maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "ignore"] }); } catch { return []; }
+      return out.split("\n").filter(Boolean).map((line) => { const f = line.split("\t"); return { line, f, id: f[11] || f[f.length - 1] }; });
+    };
+    const shut = (x) => x.f[14] === "closed" || x.f[14] === "quiet";
+    const closed = new Map();
+    const keep = (rs) => { for (const x of rs) if (shut(x) && !closed.has(x.id)) closed.set(x.id, x.line); };
+    const first = rows(new Set());
+    if (!first.some((x) => x.f[12])) return null;
+    keep(first);
+    keep(rows(new Set(), { OPEN_ALL: "1", OTIS_SYMBOLS_FOLD: "1" }));
+    const all = readFileSync(join(st, "open"), "utf8").split("\n").filter(Boolean);
+    const open = new Set();
+    let full = first;
+    for (;;) {
+      const more = full.filter((x) => shut(x) && !open.has(x.id));
+      if (!more.length || full.length > SYM_ROWS) break;
+      for (const x of more) open.add(x.id);
+      const next = rows(open, { OTIS_SYMBOLS_FOLD: "1" });
+      if (!next.length) break;
+      full = next; keep(full);
+    }
+    // What the list says under the headline, less what is on its way in
+    // this checkout (Claude glossing, tsgo finding callers, node_modules):
+    // a page never sees it land.
+    const foot = join(st, "footer");
+    if (existsSync(foot)) {
+      const segs = readFileSync(foot, "utf8").trim().split(" · ").filter((x) => !/\b(is|are) \w+ing\b|installing|node_modules|never looked in|not type-checked/.test(x.replace(/\x1b\[[0-9;]*m/g, "")));
+      writeFileSync(foot, segs.join(" · ") + "\n");
+    }
+    // No bar of how much is viewed: nothing is, on a page.
+    rmSync(join(st, "progress"), { force: true });
+    writeFileSync(join(st, "draw.open"), full.map((x) => x.line + "\n").join(""));
+    writeFileSync(join(st, "draw.closed"), full.map((x) => (closed.get(x.id) || x.line) + "\n").join(""));
+    const drawn = execFileSync("otis-symbols", ["--draw", st, join(st, "draw.open"), join(st, "draw.closed"), String(lw), title],
+      { encoding: "utf8", env, maxBuffer: 1 << 28, stdio: ["ignore", "pipe", "ignore"] });
+    const lines = drawn.replace(/\n$/, "").split("\n").map((l) => {
+      const f = l.split("\t");
+      return f[0] === "row" ? { id: f[1], dep: +f[2], kids: f[3] === "1", o: f[4], c: f[5], crumb: f[6] || "" } : { text: f.slice(1).join("\t") };
+    });
+    // Each row's preview, twelve at a time, then all of them wrapped as the
+    // pane wraps them (otis-symbols's wrapin), in one awk, a line between
+    // each: its pinned lines apart from the rest.
+    const meta = {}, raws = {};
+    const want = full.filter((x) => x.f[12] && !x.id.startsWith("gk-"));
+    for (const x of full) if (x.id) meta[x.id] = { path: x.f[1], line: +x.f[2] || 1, side: x.f[3] };
+    // A preview is its symbol's, and says how the row above it uses it (or,
+    // turned over, is used by it): the same symbol under the same parent
+    // draws the same preview wherever it sits in either tree, so it is
+    // drawn once. A caller's says what it calls, further up its id: those
+    // are drawn each.
+    const last = (id) => id.slice(id.lastIndexOf(">") + 1);
+    const pkey = (x) => {
+      if (x.id.includes(">callers")) return (up ? "^" : "v") + x.id;
+      const pid = x.id.includes(">") ? last(x.id.slice(0, x.id.lastIndexOf(">"))) : "";
+      return [x.f[1], x.f[3], x.f[4], x.f[5], last(x.id), pid && (up ? "^" : "v") + pid].join("\t");
+    };
+    const one = async (x) => {
+      const k = pkey(x);
+      if (!drawnPreviews.has(k)) drawnPreviews.set(k, new Promise((ok) =>
+        execFile("git-symbols", ["--preview", rev, x.f[1], x.f[3], x.f[4], x.f[5], x.id], { encoding: "utf8", env, maxBuffer: 1 << 28 }, (e, out) => ok(out || ""))));
+      raws[x.id] = await drawnPreviews.get(k);
+    };
+    let next = 0;
+    const worker = async () => { while (next < want.length) await one(want[next++]); };
+    await Promise.all(Array.from({ length: 12 }, worker));
+    const SEP = "@@otis-page-preview@@", parts = [], pins = {};
+    for (const x of want) {
+      const ls = raws[x.id].replace(/\n$/, "").split("\n"), m = /^\x1epin (\d+)(.*)$/.exec(ls[0]);
+      if (m) { pins[x.id] = m[2]; parts.push(ls.slice(1, +m[1] + 1).join("\n"), ls.slice(+m[1] + 1).join("\n")); }
+      else parts.push(ls.join("\n"));
+    }
+    const out = execFileSync("awk", ["-v", `w=${PAGE_W}`, "-v", "cont=/dev/null", "-f", join(SHARE, "pane-wrap.awk")],
+      { input: parts.join(`\n${SEP}\n`) + "\n", encoding: "utf8", env: { ...process.env, LC_ALL: "C" }, maxBuffer: 1 << 30 })
+      .replace(/\n$/, "").split(`\n${SEP}\x1b[0m\n`);
+    const previews = {};
+    let k = 0;
+    for (const x of want) {
+      if (pins[x.id] === undefined) { previews[x.id] = out[k++]; continue; }
+      const pin = out[k++], rest = out[k++];
+      previews[x.id] = `\x1epin ${pin.split("\n").length}${pins[x.id]}\n${pin}\n${rest}`;
+    }
+    return { lines, all, meta, previews };
+  } finally {
+    rmSync(st, { recursive: true, force: true });
+  }
+}
+async function tourHtml(r, title, url, css) {
   const out = mkdtempSync(join(tmpdir(), "otis-tour-")), cols = process.env.FZF_PREVIEW_COLUMNS;
   process.env.FZF_PREVIEW_COLUMNS = String(PAGE_W);
   try {
@@ -1811,12 +2080,31 @@ function tourHtml(r, title, url) {
     const key = r.dir.split("/").pop();
     const what = /^\d+$/.test(key) ? "!" + key : key.replace(/^b-/, "").replace(/%/g, "/");
     const blob = url ? url.replace(/\/-\/merge_requests\/\d+.*$/, "") + "/-/blob/" + r.rev.head : "";
-    const listW = Math.min(64, Math.max(36, ...[...tour.list, ...tests.list].map((x) => [...S[x.show].replace(/<[^>]*>/g, "")].length + 4)));
-    const data = { S, SK, files, tour, tests, walks, blank: s(""), seam: s("  " + C.faint + "─".repeat(PAGE_W - 4) + C.r), W: PAGE_W, blob, what, title, url, listW };
+    // The list as wide as the tour's rows want, and never narrower than
+    // the symbols' want: the two screens share it, so the one does not
+    // jump to the other's width.
+    const listW = Math.min(64, Math.max(56, ...[...tour.list, ...tests.list].map((x) => [...S[x.show].replace(/<[^>]*>/g, "")].length + 4)));
+    // The change by symbol, the page's other screen (tab): its lines, a row
+    // each open and closed (c), and each row's preview.
+    // Top down, and turned over (b), drawn side by side: one's previews
+    // render while the other's rows are read.
+    const sname = /^!/.test(what) ? what + " by symbol" : "by symbol";
+    const [down, up] = await Promise.all([symbols(r, listW + 2, sname, false), symbols(r, listW + 2, sname, true)]);
+    const tree = (sy) => sy && {
+      // The headline's first line is blank: the page's list has its own room over it.
+      lines: sy.lines.slice(sy.lines[0] && sy.lines[0].text === "" ? 1 : 0).map((x) => x.id === undefined ? { show: s(x.text) } : { id: x.id, dep: x.dep, kids: x.kids, show: s(x.o), c: s(x.c) }),
+      all: sy.all,
+      pages: Object.fromEntries(sy.lines.filter((x) => x.id !== undefined && sy.previews[x.id] !== undefined).map((x) => {
+        const m = sy.meta[x.id] || {};
+        return [x.id, page(sy.previews[x.id], { crumb: s(x.crumb), ...(m.path && m.side !== "old" ? { open: [m.path, m.line] } : {}) })];
+      })),
+    };
+    const syms = down && { ...tree(down), up: tree(up) };
+    const data = { S, SK, files, tour, tests, walks, symbols: syms, blank: s(""), seam: s("  " + C.faint + "─".repeat(PAGE_W - 4) + C.r), W: PAGE_W, blob, what, title, url, listW };
     return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title || "Walkthrough of " + what)}</title>
-<style>${TOUR_CSS}</style></head><body>
+<style>${TOUR_CSS}${css || ""}</style></head><body>
 <div id="screen">
 <div id="list"><div class="lh"></div><div id="rows"></div></div>
 <div id="pane"><div id="crumb"></div><div id="stage"><div id="head"></div><div id="code"></div></div></div>
@@ -1834,10 +2122,16 @@ function tourHtml(r, title, url) {
 // xwhen, xmerge, xspread), done again over the same panes, with the rows
 // moving smoothly rather than a whole row at a time.
 const TOUR_JS = String.raw`
-// The data comes gzipped (it is mostly the same rows over and over).
+// The data comes gzipped (it is mostly the same rows over and over); a page
+// that makes its own (seam's browser extension) hands it over as
+// window.otisData instead, and may leave the tour out, say which screen
+// opens (start), and keep v's marks (viewed).
 (async function () {
-const bytes = Uint8Array.from(atob(document.getElementById("data").textContent), function (c) { return c.charCodeAt(0); });
-const D = JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text());
+const gunzip = async function () {
+  const bytes = Uint8Array.from(atob(document.getElementById("data").textContent), function (c) { return c.charCodeAt(0); });
+  return JSON.parse(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text());
+};
+const D = window.otisData || await gunzip();
 const S = D.S, SK = D.SK, XFW = 0.22;
 const LINE = /^[LR]\d+(#\d+)?$/;
 const $ = function (q) { return document.querySelector(q); };
@@ -1920,6 +2214,7 @@ function split(p, hfix) {
   return { p: p, head: head, body: p._rows.slice(np), keys: p._keys.slice(np), NK: NK, NL: Math.max(0, NK - 1 - F) };
 }
 function crumbOf(p) {
+  if (p.crumb !== undefined) return S[p.crumb];
   if (!p.open) return "";
   const path = p.open[0], cut = path.lastIndexOf("/");
   return '<span class="m-faint">' + esc(path.slice(0, cut + 1)) + '</span><span class="m-text">' + esc(path.slice(cut + 1)) + '</span><span class="m-faint">:' + p.open[1] + "</span>";
@@ -1938,10 +2233,18 @@ function hfixOf(pages) {
 }
 const hint = function (k, t) { return '<span class="m-at">' + k + '</span> <span class="m-faint">' + t + "</span>"; };
 const DOT = '   <span class="m-faint">·</span>   ';
+// The two ways through the change, over the list: the tour, and the change
+// by symbol as otis-symbols shows it; tab, or a click, goes to the other.
+function tabs() {
+  if (!D.symbols || !D.tour) return "";
+  const t = function (n, k) { return '<span class="tab ' + (track === k ? "m-at b" : "m-faint") + '" data-track="' + k + '">' + n + "</span>"; };
+  return t("tour", "tour") + "  " + t("by symbol", "symbols") + "   ";
+}
+const TAB = function (t) { return D.symbols && D.tour ? "  " + hint("tab", t) : ""; };
 function tourScreen(row) {
   return { kind: "tour", list: D.tour.list, row: row, poff: -1, hfix: hfixOf(D.tour.pages),
-    title: '<span class="m-text">tour ' + esc(D.what) + "</span>" + (D.title ? '  <span class="m-faint">' + esc(D.title) + "</span>" : ""),
-    keys: (D.blob ? hint("⏎", "open the line on GitLab") + DOT : "") + hint("j", "next stop") + "  " + hint("k", "back") + "  " + hint("s", "step through its test line by line") + "  " + hint("a", "every test and what none runs") + "  " + hint("y", "copy a link"),
+    title: '<span class="m-text">' + (D.symbols ? "" : "tour ") + esc(D.what) + "</span>" + (D.title ? '  <span class="m-faint">' + esc(D.title) + "</span>" : ""),
+    keys: (D.blob ? hint("⏎", "open the line on " + (D.forge || "GitLab")) + DOT : "") + hint("j", "next stop") + "  " + hint("k", "back") + "  " + hint("s", "step through its test line by line") + "  " + hint("a", "every test and what none runs") + TAB("by symbol") + "  " + hint("y", "copy a link"),
     page: function () { return D.tour.pages[this.list[this.row].id]; },
     cursor: function () { return this.row; },
     hash: function () { return this.list[this.row].id; } };
@@ -1959,19 +2262,142 @@ function walkScreen(ti, k) {
   if (!w.hfix) w.hfix = hfixOf(w.pages);
   return { kind: "walk", w: w, ti: ti, k: k, hist: [], poff: -1, hfix: w.hfix, list: w.list,
     title: '<span class="m-text b">' + esc(w.name) + "</span>",
-    keys: (D.blob ? hint("⏎", "open the line on GitLab") + DOT : "") + hint("j", "next line") + "  " + hint("l", "step into") + "  " + hint("h", "step out") + "  " + hint("k", "back") + "  " + hint("q", "back") + "  " + hint("y", "copy a link"),
+    keys: (D.blob ? hint("⏎", "open the line on " + (D.forge || "GitLab")) + DOT : "") + hint("j", "next line") + "  " + hint("l", "step into") + "  " + hint("h", "step out") + "  " + hint("k", "back") + "  " + hint("q", "back") + "  " + hint("y", "copy a link"),
     page: function () { return this.w.pages[this.k] || EMPTY; },
     cursor: function () { return this.w.nav[this.k] ? this.w.nav[this.k][0] : 0; },
     hash: function () { return "w" + this.ti + ":" + this.k; } };
 }
+// The change by symbol: otis-symbols's list, its headline over the tree,
+// each row open or closed as l and h leave it (all closed, as the screen
+// opens), a row under a closed one not in it.
+function symList(t, open) {
+  const out = [];
+  let hide = Infinity;
+  for (const x of t.lines) {
+    if (x.id === undefined) { hide = Infinity; out.push(x); continue; }
+    if (x.dep > hide) continue;
+    hide = Infinity;
+    const on = open.has(x.id);
+    out.push({ id: x.id, show: on ? x.show : x.c, x: x });
+    if (x.kids && !on) hide = x.dep;
+  }
+  return out;
+}
+function symbolsScreen() {
+  const sc = { kind: "symbols", t: D.symbols, open: new Set(), opens: new Map(), row: 0, poff: -1, hfix: hfixOf(D.symbols.pages), title: "",
+    keys: (D.blob ? hint("⏎", "open the line on " + (D.forge || "GitLab")) + DOT : "") + hint("j", "down") + "  " + hint("k", "up") + "  " + hint("l", "open it") + "  " + hint("h", "close it") + "  " + hint("L", "open all") + "  " + hint("H", "close all") + "  " + hint("] [", "next / last change") + (D.symbols.up ? "  " + hint("b", "bottom up / top down") : "") + (D.symbols.wide ? "  " + hint("t", "tests/config/generated") : "") + (D.viewed ? "  " + hint("v", "viewed") : "") + TAB("the tour") + (D.more || "") + "  " + hint("y", "copy a link"),
+    page: function () { return this.t.pages[this.list[this.row].id] || EMPTY; },
+    cursor: function () { return this.row; },
+    hash: function () { return (this.t === D.symbols || (D.symbols.wide && this.t === D.symbols.wide) ? "s:" : "b:") + this.list[this.row].id; } };
+  sc.list = symList(sc.t, sc.open);
+  sc.row = firstRow(sc.list, 0);
+  return sc;
+}
+// fold: l opens the row; h closes it, or, on a row not open, the row it is
+// under, the cursor going there; L opens what otis-symbols's L does, H
+// closes it all. A row keeps what is open under it while it is closed.
+function fold(k) {
+  const x = scr.list[scr.row], open = scr.open;
+  let at = x.id;
+  if (k === "l") { if (!x.x.kids || open.has(at)) return; open.add(at); }
+  else if (k === "h") {
+    if (!open.has(at)) {
+      let i = scr.row - 1;
+      while (i >= 0 && !(scr.list[i].x && scr.list[i].x.dep < x.x.dep)) i--;
+      if (i < 0 || !x.x.dep) return;
+      at = scr.list[i].id;
+    }
+    open.delete(at);
+  } else if (k === "L") scr.t.all.forEach(function (id) { open.add(id); });
+  else open.clear();
+  // The cursor stays on its row, else the nearest row over it still shown.
+  const nl = symList(scr.t, open), L = scr.t.lines;
+  let i = -1;
+  for (let j = L.findIndex(function (y) { return y.id === at; }); j >= 0 && i < 0; j--) {
+    const id = L[j].id;
+    if (id !== undefined) i = nl.findIndex(function (y) { return y.id === id; });
+  }
+  if (i < 0) i = firstRow(nl, 0);
+  if (nl[i].id === x.id) { scr.list = nl; scr.row = i; showList(true); cursor(); return; }
+  move(function () { scr.list = nl; scr.row = i; scr.poff = -1; showList(true); }, -1);
+}
+// flip: b, the tree turned over, sinks first, or back; each keeps what was
+// open in it. The cursor goes to the same row if the other has it shown,
+// else to the first row of the same symbol, else the top.
+// t, where the page has them apart (D.symbols.wide: the tree with the tests,
+// the config and what is generated in it, which the one that opens leaves
+// out): the other of the two, the same way up.
+function flip(kinds) {
+  const isUp = scr.t === D.symbols.up || !!(D.symbols.wide && scr.t === D.symbols.wide.up);
+  if (kinds && !D.symbols.wide) return;
+  const wide = kinds ? !scr.wide : scr.wide, base = wide ? D.symbols.wide : D.symbols;
+  const to = kinds ? (isUp && base.up) || base : isUp ? base : base.up;
+  if (!to) return;
+  scr.wide = wide;
+  const was = scr.list[scr.row].id, sym = was.split(">").pop();
+  move(function () {
+    scr.opens.set(scr.t, scr.open);
+    scr.t = to; scr.open = scr.opens.get(to) || new Set(); scr.hfix = hfixOf(to.pages);
+    scr.list = symList(to, scr.open);
+    let i = scr.list.findIndex(function (y) { return y.id === was; });
+    if (i < 0) i = scr.list.findIndex(function (y) { return y.id && y.id.split(">").pop() === sym; });
+    scr.row = i >= 0 ? i : firstRow(scr.list, 0); scr.poff = -1;
+    showList();
+  }, 1);
+}
+// v: a symbol read, and all under it, where the page keeps marks: D.viewed
+// is the name they are kept under in this browser. A mark is the symbol's,
+// so it shows wherever the symbol sits in either tree; D.sig, what each
+// symbol's change is, unmarks one that has changed since it was read.
+const markOf = function (id) { const s = id.slice(id.lastIndexOf(">") + 1); return s + "@" + ((D.sig && D.sig[s]) || ""); };
+let seen = new Set();
+try { if (D.viewed) seen = new Set(JSON.parse(localStorage.getItem(D.viewed) || "[]")); } catch (e) {}
+const isSeen = function (x) { return !!(D.viewed && x.id && selectable(x) && seen.has(markOf(x.id))); };
+function progress() {
+  if (!D.viewed || scr.kind !== "symbols") return "";
+  const all = new Set(), done = new Set();
+  scr.t.lines.forEach(function (x) { if (!selectable(x)) return; const m = markOf(x.id); all.add(m); if (seen.has(m)) done.add(m); });
+  return '<span class="' + (done.size === all.size && all.size ? "m-good" : "m-faint") + '">' + done.size + " of " + all.size + " viewed</span>";
+}
+function view() {
+  const x = scr.list[scr.row];
+  if (!D.viewed || !x.x) return;
+  const L = scr.t.lines, at = L.indexOf(x.x), on = !seen.has(markOf(x.id));
+  for (let i = at; i < L.length && (i === at || (L[i].id !== undefined && L[i].dep > x.x.dep)); i++) {
+    if (on) seen.add(markOf(L[i].id)); else seen.delete(markOf(L[i].id));
+  }
+  try { localStorage.setItem(D.viewed, JSON.stringify(Array.from(seen))); } catch (e) {}
+  lrs.forEach(function (d, i) { d.classList.toggle("seen", isSeen(scr.list[i])); });
+  $(".lh").innerHTML = tabs() + scr.title + progress();
+  // On to the next row still to read.
+  if (!on) return;
+  let i = scr.row + 1;
+  while (i < scr.list.length && (!selectable(scr.list[i]) || isSeen(scr.list[i]))) i++;
+  if (i < scr.list.length) row(1, i);
+}
+// swap: to the other way through the change, each where it was left, a
+// walk or a's list and what q goes back to included.
+let track = "tour";
+const tracks = {};
+function swap() {
+  if (!D.symbols) { flash("git-symbols read nothing of this change", true); return; }
+  if (!D.tour) { flash(D.noTour || "this page has no tour", true); return; }
+  const to = track === "tour" ? "symbols" : "tour";
+  move(function () {
+    tracks[track] = { scr: scr, stack: stack.splice(0) };
+    const t = tracks[to] || { scr: to === "tour" ? tourScreen(0) : symbolsScreen(), stack: [] };
+    scr = t.scr; Array.prototype.push.apply(stack, t.stack); track = to;
+  }, to === "symbols" ? 1 : -1);
+}
 const selectable = function (x) { return x.id && x.id.indexOf("gk-") !== 0; };
 let lrs = [];
-function showList() {
-  $(".lh").innerHTML = scr.title;
+function showList(keep) {
+  $(".lh").innerHTML = tabs() + scr.title + progress();
   $("#keys").innerHTML = scr.keys;
-  rowsEl.innerHTML = scr.list.map(function (x, i) { return '<div class="lr' + (selectable(x) ? "" : " gk") + '" data-i="' + i + '"><span class="bar">▌</span> ' + S[x.show] + "</div>"; }).join("");
+  const top = rowsEl.scrollTop;
+  rowsEl.innerHTML = scr.list.map(function (x, i) { return '<div class="lr' + (selectable(x) ? "" : " gk") + (isSeen(x) ? " seen" : "") + '" data-i="' + i + '"><span class="bar">▌</span> ' + S[x.show] + "</div>"; }).join("");
   lrs = Array.prototype.slice.call(rowsEl.children);
-  rowsEl.scrollTop = 0;
+  rowsEl.scrollTop = keep ? top : 0;
 }
 function cursor() {
   const c = scr.cursor();
@@ -2277,6 +2703,32 @@ function scroll(n) {
   const p = Math.max(0, Math.min(max, scr.poff + n));
   if (p !== scr.poff) { scr.poff = p; draw(landed()); }
 }
+// hunk: ] and [, the next or the last change in the pane, a run of rows on
+// a diff's background, put in the pane's middle (otis-symbols's hunk); the
+// rows gliding there.
+function hunk(dir) {
+  land();
+  const v = split(scr.page(), scr.hfix), H = ph - 2 - v.head.length, max = Math.max(0, v.body.length - H);
+  const runs = [];
+  let a = -1;
+  v.body.forEach(function (i, j) {
+    const on = /\bbg-(add|del)\b/.test(S[i]);
+    if (on && a < 0) a = j;
+    if (!on && a >= 0) { runs.push([a, j - 1]); a = -1; }
+  });
+  if (a >= 0) runs.push([a, v.body.length - 1]);
+  const mids = runs.map(function (r) { return Math.max(0, Math.min(max, r[1] - r[0] > H ? r[0] - 3 : Math.floor((r[0] + r[1]) / 2) - Math.floor(H / 2))); });
+  const from = scr.poff, want = dir > 0 ? mids.find(function (m) { return m > from; }) : mids.slice().reverse().find(function (m) { return m < from; });
+  if (want === undefined) { flash(runs.length ? (dir > 0 ? "that was its last change" : "that was its first change") : "nothing here changed", true); return; }
+  scr.poff = want;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) { draw(landed()); return; }
+  const base = landed(), dur = Math.min(0.45, 0.15 + Math.abs(want - from) * 0.012);
+  X = { dur: dur, t0: performance.now(), frame: function (t) {
+    const pos = from + (want - from) * ease(t / dur), top = Math.floor(pos);
+    return { crumb: base.crumb, head: base.head, hr: base.hr, code: v.body.slice(top, top + H + 2).map(function (i, j) { return { i: i, y: top + j - pos, a: 1 }; }) };
+  } };
+  raf = requestAnimationFrame(tick);
+}
 let flashT = 0;
 function flash(t, warn) {
   flashEl.textContent = "   " + t;
@@ -2292,13 +2744,22 @@ document.addEventListener("keydown", function (e) {
   if (e.metaKey || e.altKey || (e.ctrlKey && !/^[du]$/.test(e.key))) return;
   const half = Math.floor((ph - 2) / 2), k = e.key, walk = scr.kind === "walk";
   let done = true;
+  const sym = scr.kind === "symbols";
   if (e.ctrlKey) scroll(k === "d" ? half : -half);
+  else if (k === "Tab") swap();
+  else if (sym && (k === "l" || k === "ArrowRight")) fold("l");
+  else if (sym && (k === "h" || k === "ArrowLeft")) fold("h");
+  else if (sym && (k === "L" || k === "H")) fold(k);
+  else if (sym && k === "b") flip();
+  else if (sym && k === "t" && D.symbols.wide) flip(true);
+  else if (sym && k === "v" && D.viewed) view();
   else if (walk && /^[jklh]$/.test(k)) step(k);
   else if (walk && (k === "ArrowDown" || k === "ArrowUp")) step(k === "ArrowDown" ? "j" : "k");
   else if (!walk && (k === "j" || k === "ArrowDown")) row(1);
   else if (!walk && (k === "k" || k === "ArrowUp")) row(-1);
   else if (!walk && (k === "g" || k === "Home")) row(1, 0);
   else if (!walk && (k === "G" || k === "End")) row(-1, scr.list.length - 1);
+  else if (k === "]" || k === "[") hunk(k === "]" ? 1 : -1);
   else if (k === "PageDown") scroll(half);
   else if (k === "PageUp") scroll(-half);
   else if (k === "q" || k === "Escape") back();
@@ -2320,9 +2781,35 @@ rowsEl.addEventListener("click", function (e) {
   const d = e.target.closest(".lr");
   if (!d) return;
   const i = +d.dataset.i;
+  // A click on the row the cursor is on opens it, or closes it.
+  if (scr.kind === "symbols" && i === scr.row) { if (scr.list[i].x.kids) fold(scr.open.has(scr.list[i].id) ? "h" : "l"); return; }
   if (scr.kind !== "walk") { if (selectable(scr.list[i]) && i !== scr.row) row(i > scr.row ? 1 : -1, i); return; }
   const k = scr.w.nav.findIndex(function (n) { return n[0] === i; });
   if (k >= 0 && k !== scr.k) move(function () { scr.hist.push(scr.k); scr.k = k; scr.poff = -1; }, k > scr.k ? 1 : -1);
+});
+// A click on a symbol the pane names (a row of the page's own drawing marks
+// one data-sym, the end of its row's id): into it, the row under this one
+// when it is there, opened to; else the first row of that symbol anywhere.
+$("#pane").addEventListener("click", function (e) {
+  const el = e.target.closest("[data-sym]");
+  if (!el || scr.kind !== "symbols") return;
+  const sym = el.dataset.sym, x = scr.list[scr.row], L = scr.t.lines;
+  const ends = function (y) { return y.id !== undefined && y.id.slice(y.id.lastIndexOf(">") + 1) === sym; };
+  let j = x && x.id ? L.findIndex(function (y) { return y.id === x.id + ">" + sym; }) : -1;
+  if (j < 0) j = L.findIndex(ends);
+  if (j < 0) { flash("that one is not in this tree", true); return; }
+  const want = L[j].id;
+  move(function () {
+    for (let d = L[j].dep, i = j - 1; i >= 0 && d > 0; i--) if (L[i].id !== undefined && L[i].dep < d) { scr.open.add(L[i].id); d = L[i].dep; }
+    scr.list = symList(scr.t, scr.open);
+    scr.row = Math.max(0, scr.list.findIndex(function (y) { return y.id === want; }));
+    scr.poff = -1;
+    showList(true);
+  }, 1);
+});
+$(".lh").addEventListener("click", function (e) {
+  const t = e.target.closest(".tab");
+  if (t && t.dataset.track !== track) swap();
 });
 let wheel = 0;
 $("#pane").addEventListener("wheel", function (e) {
@@ -2334,9 +2821,24 @@ $("#pane").addEventListener("wheel", function (e) {
 addEventListener("resize", function () { land(); measure(); scr.poff = -1; draw(landed()); });
 function firstRow(list, i) { while (i < list.length && !selectable(list[i])) i++; return i < list.length ? i : 0; }
 // Where the address says: a tour row (its id), a's row (a:<id>), a step of
-// a test's walk (w<test>:<step>), each with what q goes back to under it.
+// a test's walk (w<test>:<step>), each with what q goes back to under it,
+// or a row by symbol (s:<id>), open down to it.
 function open0() {
   const h = decodeURIComponent(location.hash.slice(1));
+  const sm = /^([sb]):(.*)$/.exec(h);
+  if (sm && D.symbols && (sm[1] === "s" || D.symbols.up)) {
+    scr = symbolsScreen(); track = "symbols";
+    if (sm[1] === "b") { scr.opens.set(scr.t, scr.open); scr.t = D.symbols.up; scr.open = new Set(); scr.hfix = hfixOf(scr.t.pages); scr.list = symList(scr.t, scr.open); scr.row = firstRow(scr.list, 0); }
+    sm[1] = sm[2];
+    const L = scr.t.lines;
+    let j = L.findIndex(function (y) { return y.id === sm[1]; });
+    if (j < 0) return;
+    for (let d = L[j].dep, i = j - 1; i >= 0 && d > 0; i--) if (L[i].id !== undefined && L[i].dep < d) { scr.open.add(L[i].id); d = L[i].dep; }
+    scr.list = symList(scr.t, scr.open);
+    scr.row = Math.max(0, scr.list.findIndex(function (y) { return y.id === sm[1]; }));
+    return;
+  }
+  if (D.symbols && (!D.tour || (D.start === "symbols" && !h))) { scr = symbolsScreen(); track = "symbols"; return; }
   const tr = D.tour.list.findIndex(function (x) { return x.id === h; });
   scr = tourScreen(tr >= 0 ? tr : 0);
   let m = /^a:(.*)$/.exec(h);
@@ -2353,6 +2855,9 @@ open0();
 showList();
 cursor();
 draw(landed());
+// A page that changes its own data (a comment posted, in seam's extension)
+// asks for what shows to be drawn again, where it is.
+window.otisRedraw = function () { land(); if (scr.kind === "symbols") scr.list = symList(scr.t, scr.open); showList(true); cursor(); draw(landed()); };
 })();
 `;
 const TOUR_CSS = `
@@ -2375,9 +2880,13 @@ body { font: var(--font, 13px)/var(--row, 20px) var(--mono); font-variant-ligatu
 #rows { flex: 1; min-height: 0; overflow: hidden; padding-top: var(--row); }
 .lr { height: var(--row); white-space: pre; overflow: hidden; cursor: pointer; padding-right: 1ch; }
 .lr .bar { visibility: hidden; color: var(--open); }
+.lr { transition: opacity 0.2s; }
+.lr.seen { opacity: 0.45; }
+.lr.seen .bar { visibility: visible; color: var(--pass); }
 .lr.on { background: var(--sel); }
 .lr.on .bar { visibility: visible; }
 .lr.gk { cursor: default; }
+.tab { cursor: pointer; } .tab.m-faint:hover { color: var(--ink); }
 .lr:hover:not(.on):not(.gk) { background: color-mix(in srgb, var(--sel) 45%, transparent); }
 #pane { position: relative; min-width: 0; overflow: hidden; padding-left: 2ch; }
 #crumb { position: relative; height: var(--row); }
@@ -2390,8 +2899,9 @@ body { font: var(--font, 13px)/var(--row, 20px) var(--mono); font-variant-ligatu
 .r > span { display: inline-block; height: 100%; vertical-align: top; }
 #foot { grid-column: 1 / -1; border-top: 1px solid var(--rule); padding: calc(var(--row) * 0.25) 2ch 0; white-space: pre; overflow: hidden; }
 #foot a { text-decoration: none; } #foot a:hover { text-decoration: underline; }
-.b { font-weight: 700; } .dim { opacity: 0.55; } .it { font-style: italic; }
+.b { font-weight: 700; } .dim { opacity: 0.55; } .it { font-style: italic; } .u { text-decoration: underline; text-underline-offset: 0.2em; }
 .bg-add { background: var(--add); } .bg-del { background: var(--del); } .bg-here { background: var(--here); }
+.bg-add.emph { background: color-mix(in srgb, var(--pass) 28%, var(--add)); } .bg-del.emph { background: color-mix(in srgb, var(--fail) 28%, var(--del)); }
 .m-at { color: var(--open); } .m-good { color: var(--pass); } .m-bad { color: var(--fail); } .m-yours { color: var(--yours); }
 .m-text { color: var(--ink); } .m-ctx { color: var(--soft); } .m-faint { color: var(--faint); } .m-else { color: var(--else); }
 .c31, .c91 { color: var(--k1); } .c32, .c92 { color: var(--k2); } .c33, .c93 { color: var(--k3); } .c34, .c94 { color: var(--k4); }
@@ -2431,11 +2941,13 @@ function tourMissing(r, ci) {
 // plain: a stop's lines with no test at them: the code, the change's lines marked.
 function plain(r, x, w, around = 0) {
   const paint = painted(r.rev.head, x.path), hk = hunks(r.rev, x.path);
-  // The code as the file draws it, the stop's line marked: {body, at}.
+  // The code as the file draws it, the stop's line (every piece it wraps
+  // into) marked: {body, at}, at the row of its first piece.
   const rows = codeRows(r, "head", x.path, w, Math.min(x.start, x.focus) - around, x.focus);
   const num = (hk.added.has(x.focus) ? C.good : C.faint) + String(x.focus).padStart(5) + C.r;
-  rows[rows.length - 1] = under(`${num} ${C.at}\x1b[1m▶${C.r} ` + cutA(paint[x.focus - 1] ?? "", w - 9), HERE) + "\x1b[0K" + C.r;
-  const at = rows.length;
+  const ps = wrapA(paint[x.focus - 1] ?? text(r.rev.head, x.path)[x.focus - 1] ?? "", w - 9);
+  const at = rows.length - ps.length + 1;
+  rows.splice(at - 1, ps.length, ...ps.map((p, i) => under((i ? BLANK : `${num} ${C.at}\x1b[1m▶${C.r} `) + p, HERE) + "\x1b[0K" + C.r));
   rows.push(...codeRows(r, "head", x.path, w, x.focus + 1, Math.max(x.end, x.focus) + around));
   return { body: rows.join("\n") + "\n", at };
 }
@@ -2472,8 +2984,14 @@ switch (cmd) {
   case "tour-plan-default": process.stdout.write(tourPlanDefault(run(args[0]))); break;
   case "tour-prompt": process.stdout.write(tourPrompt(run(args[0]), +args[1] || 0)); break;
   case "tour-assemble": tourAssemble(run(args[0])); break;
+  case "tour-values-prompt": process.stdout.write(tourValuesPrompt(run(args[0]), +args[1] || 0)); break;
+  case "tour-values-apply": tourValuesApply(run(args[0]), +args[1] || 0, args[2]); break;
   case "tour-prep": { const r = run(args[0]); await warm(r); tourPrep(r, +args[1] || 100); break; }
-  case "tour-html": process.stdout.write(tourHtml(run(args[0]), args[1] || "", args[2] || "")); break;
+  case "tour-html": process.stdout.write(await tourHtml(run(args[0]), args[1] || "", args[2] || "", args[3] || "")); break;
+  case "page-css": process.stdout.write(pageCss(args[0] || "")); break;
+  // The page's own script and styles, for a page built somewhere else.
+  case "tour-js": process.stdout.write(TOUR_JS); break;
+  case "tour-css": process.stdout.write(TOUR_CSS); break;
   case "tour-text": process.stdout.write(tourText(run(args[0]), +args[1] || 0)); break;
   case "tour-missing": process.stdout.write(tourMissing(run(args[0]), +args[1] || 0)); break;
   default: process.stderr.write("walk.mjs: targets, cover, rows, preview, walk-rows, walk-prep or a tour-* command\n"); process.exit(2);

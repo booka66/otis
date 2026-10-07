@@ -33,7 +33,8 @@ pane_color() {
 }
 
 # PANE_AWK: ulen(s), the columns plain text takes, and ufit(s, w), it cut to
-# w columns with an ellipsis, a character at a time: an awk that counts
+# w columns with an ellipsis (for a column of a table, never for a sentence:
+# see kept), a character at a time: an awk that counts
 # bytes (macOS's, or any under LC_ALL=C) split a character in two and cut
 # the line short. For an awk run LC_ALL=C, so every awk counts the same.
 PANE_AWK='
@@ -43,60 +44,71 @@ function ufit(s, w,   i, n, L) {
   L = length(s); n = 0
   for (i = 1; i <= L; i++) if (substr(s, i, 1) !~ /[\200-\277]/ && ++n > w - 1) break
   return substr(s, 1, i - 1) "\342\200\246"
+}
+# lines_of(s, w): how many lines of w columns the text wraps to. kept(s, w,
+# most): the text as a preview may say it in about that many lines, and
+# never cut: of one that takes more, the sentences from its start that fit,
+# whole; the first whole whatever it takes, since a sentence that stops
+# halfway says nothing.
+function lines_of(s, w,   n, ws, i, line, k) {
+  n = split(s, ws, " "); line = ""; k = 0
+  for (i = 1; i <= n; i++) {
+    if (line != "" && ulen(line " " ws[i]) > w) { k++; line = ws[i] }
+    else line = line (line == "" ? "" : " ") ws[i] }
+  return k + (line != "")
+}
+function kept(s, w, most,   n, ws, i, acc, best) {
+  if (lines_of(s, w) <= most) return s
+  n = split(s, ws, " "); acc = ""; best = ""
+  for (i = 1; i <= n; i++) {
+    acc = acc (acc == "" ? "" : " ") ws[i]
+    if (ws[i] ~ /[.?!]["\047)\]]*$/ || i == n) {
+      if (best == "" || lines_of(acc, w) <= most) best = acc; else break
+    }
+  }
+  return best
 }'
 
-# pane_fit <text> [width]: plain text cut to the width with an ellipsis.
-pane_fit() {
-  # No process for what fits already, nearly every line: its length in
-  # bytes is at least its length in characters.
-  if [ "${#1}" -le "${2:-$PANE_W}" ]; then printf '%s\n' "$1"; return; fi
-  printf '%s' "$1" | LC_ALL=C awk -v w="${2:-$PANE_W}" "$PANE_AWK"'{ print ufit($0, w) }'
-}
+# pane_fit <text> [width]: the text, whole. It once cut what was too long
+# for a line with an ellipsis; nothing a preview says is cut now, and the
+# pane wraps a line that runs past its edge.
+pane_fit() { printf '%s\n' "$1"; }
 
 # pane_callout <color> <head> [<line>...]: what wants you. A line may hold
-# colors already (printf %b); a line "keys:⏎ open it · r resolve" is keys,
-# each first word lit.
+# colors already (printf %b). It names no keys: those are the footer's to
+# say, for the row and the screen a preview is shown under.
 pane_callout() {
   pane_color "$1"; _pn_c=$PANE_C; shift
   printf "${_pn_c}▌ \033[1m%s${GK_R}\n" "$(pane_fit "$1" $((PANE_W - 2)))"; shift
   for _pn_l in "$@"; do
-    case $_pn_l in
-      # The keys are the footer's to say, for the row and the screen it is
-      # on: a preview is shown under more than one, so it names none.
-      keys:*) ;;
-      *)
-        _pn_p=$(printf '%b' "$_pn_l" | sed 's/\[[0-9;:]*m//g')
-        if [ "${#_pn_p}" -le $((PANE_W - 2)) ]; then printf "${_pn_c}▌ ${GK_R}%b\n" "$_pn_l"
-        else
-          # Too long for a line: wrapped, to three at most, in its own color.
-          case $_pn_l in "\033["*m*) _pn_k=${_pn_l%%m*}m ;; *) _pn_k=$GK_TEXT ;; esac
-          printf '%s' "$_pn_p" | tr '\n' ' ' | LC_ALL=C awk -v w=$((PANE_W - 2)) -v most=3 -v b="$(printf "${_pn_c}▌ ${GK_R}${_pn_k}")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
-            { n = split($0, ws, " "); line = ""; k = 0
-              for (i = 1; i <= n; i++) {
-                if (line != "" && ulen(line " " ws[i]) > w) {
-                  if (++k == most) { print b ufit(line " …", w) r; exit }
-                  print b line r; line = ws[i]
-                } else line = line (line == "" ? "" : " ") ws[i] }
-              if (line != "") print b ufit(line, w) r }'
-        fi ;;
-    esac
+    _pn_p=$(printf '%b' "$_pn_l" | sed "s/$(printf '\033')\[[0-9;:]*m//g")
+    if [ "${#_pn_p}" -le $((PANE_W - 2)) ]; then printf "${_pn_c}▌ ${GK_R}%b\n" "$_pn_l"
+    else
+      # Too long for a line: wrapped in its own color, in three lines if
+      # whole sentences of it fit in three.
+      case $_pn_l in "\033["*m*) _pn_k=${_pn_l%%m*}m ;; *) _pn_k=$GK_TEXT ;; esac
+      printf '%s' "$_pn_p" | tr '\n' ' ' | LC_ALL=C awk -v w=$((PANE_W - 2)) -v most=3 -v b="$(printf "${_pn_c}▌ ${GK_R}${_pn_k}")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
+        { n = split(kept($0, w, most), ws, " "); line = ""
+          for (i = 1; i <= n; i++) {
+            if (line != "" && ulen(line " " ws[i]) > w) { print b line r; line = ws[i] }
+            else line = line (line == "" ? "" : " ") ws[i] }
+          if (line != "") print b line r }'
+    fi
   done
   echo
 }
 
 # pane_wrap <text> [color] [lines]: a sentence that matters, indented two,
-# broken between words over at most that many lines (2), the last cut
-# with … when there is more: never one line cut at the pane's edge.
+# broken between words, in about that many lines (2): whole sentences of it
+# that fit (kept), never one cut short.
 pane_wrap() {
   pane_color "${2:-text}"
   printf '%s' "$1" | tr '\n' ' ' | LC_ALL=C awk -v w=$((PANE_W - 2)) -v most="${3:-2}" -v t="$(printf "$PANE_C")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
-    { n = split($0, ws, " "); line = ""; k = 0
+    { n = split(kept($0, w, most), ws, " "); line = ""
       for (i = 1; i <= n; i++) {
-        if (line != "" && ulen(line " " ws[i]) > w) {
-          if (++k == most) { for (j = i; j <= n; j++) line = line " " ws[j]; print "  " t ufit(line, w) r; exit }
-          print "  " t line r; line = ws[i]
-        } else line = line (line == "" ? "" : " ") ws[i] }
-      if (line != "") print "  " t ufit(line, w) r }'
+        if (line != "" && ulen(line " " ws[i]) > w) { print "  " t line r; line = ws[i] }
+        else line = line (line == "" ? "" : " ") ws[i] }
+      if (line != "") print "  " t line r }'
 }
 
 pane_title() { printf "${GK_TEXT}\033[1m%s${GK_R}\n" "$(pane_fit "$1")"; }
@@ -140,8 +152,9 @@ pane_bar() {
 }
 
 # pane_hang <lead> <lead's columns> <color> <lines> <text> [tail]: the text
-# after a lead (a glyph and an id, colors and all), wrapped under itself to
-# at most that many lines, the tail (a state, colored) after the first.
+# after a lead (a glyph and an id, colors and all), wrapped under itself in
+# about that many lines (whole sentences of it: kept), the tail (a state,
+# colored) after the first.
 pane_hang() {
   pane_color "$3"
   printf '%s' "$5" | tr '\n\t' '  ' | LC_ALL=C awk -v w=$((PANE_W - $2 - ${#6} - 1)) -v most="$4" -v ind="$2" \
@@ -149,11 +162,9 @@ pane_hang() {
     function emit(s) { if (k == 0) printf "%s%s%s%s", lead, t, s, r; else printf "%" ind "s%s%s%s", "", t, s, r
       if (k == 0 && tail != "") printf "%" (w - ulen(s) + 1) "s%s%s", "", tail, r
       printf "\n"; k++ }
-    { n = split($0, ws, " "); line = ""; k = 0
+    { n = split(kept($0, w, most), ws, " "); line = ""; k = 0
       for (i = 1; i <= n; i++) {
-        if (line != "" && ulen(line " " ws[i]) > w) {
-          if (k + 1 == most) { emit(ufit(line " …", w)); exit }
-          emit(line); line = ws[i]
-        } else line = line (line == "" ? "" : " ") ws[i] }
-      if (line != "") emit(ufit(line, w)) }'
+        if (line != "" && ulen(line " " ws[i]) > w) { emit(line); line = ws[i] }
+        else line = line (line == "" ? "" : " ") ws[i] }
+      if (line != "") emit(line) }'
 }

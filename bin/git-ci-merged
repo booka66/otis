@@ -35,7 +35,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 
 repo=$(otis-config project)
 since=$(jq -rn --argjson days "$days" 'now - $days * 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")')
-mrs=$(glab api graphql -f repo="$repo" -f query='query($repo: String!) { currentUser {
+mrs=$(git-forge api graphql -f repo="$repo" -f query='query($repo: String!) { currentUser {
   authoredMergeRequests(state: merged, first: 20, projectPath: $repo, sort: MERGED_AT_DESC) { nodes {
     iid title sourceBranch targetBranch mergedAt mergeCommitSha webUrl } } } }' |
   jq -e --arg since "$since" '[.data.currentUser.authoredMergeRequests.nodes[] | select(.mergedAt >= $since)]') || exit 1
@@ -44,7 +44,7 @@ mrs=$(glab api graphql -f repo="$repo" -f query='query($repo: String!) { current
 # (migrations share the environment, hence 20), and the deploy job of recent
 # main pipelines, which says which deploys are running or waiting on the lock.
 # Deploys come out as {sha, at, pipeline, url, status}.
-prod=$(glab api graphql -f repo="$repo" -f env="$env" -f job="$job" -f main="$main" -f query='query($repo: ID!, $env: String!, $job: String!, $main: String!) { project(fullPath: $repo) {
+prod=$(git-forge api graphql -f repo="$repo" -f env="$env" -f job="$job" -f main="$main" -f query='query($repo: ID!, $env: String!, $job: String!, $main: String!) { project(fullPath: $repo) {
   environment(name: $env) { deployments(statuses: [SUCCESS], orderBy: {finishedAt: DESC}, first: 20) { nodes {
     sha finishedAt job { id name webPath pipeline { id } } } } }
   pipelines(ref: $main, source: "push", first: 20) { nodes { id sha job(name: $job) { status createdAt queuedAt startedAt webPath } } } } }' |
@@ -61,10 +61,10 @@ latest=$(printf '%s' "$prod" | jq '.latest')
 # A rollback's build: its version input, then that pipeline's commit.
 rollback=null
 if [ "$(printf '%s' "$latest" | jq -r .job)" = "$rollback_job" ]; then
-  version=$(glab api graphql -f repo="$repo" -f id="$(printf '%s' "$latest" | jq -r .id)" -f query='query($repo: ID!, $id: JobID!) {
+  version=$(git-forge api graphql -f repo="$repo" -f id="$(printf '%s' "$latest" | jq -r .id)" -f query='query($repo: ID!, $id: JobID!) {
     project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' |
     jq -er '.data.project.job.inputs[] | select(.name == "version") | .value | tostring') || exit 1
-  restored=$(glab api graphql -f repo="$repo" -f iid="$version" -f query='query($repo: ID!, $iid: ID!) {
+  restored=$(git-forge api graphql -f repo="$repo" -f iid="$version" -f query='query($repo: ID!, $iid: ID!) {
     project(fullPath: $repo) { pipeline(iid: $iid) { sha } } }' | jq -er '.data.project.pipeline.sha') || exit 1
   rollback=$(printf '%s' "$latest" | jq --arg version "$version" --arg restored "$restored" '. + {on: .sha, sha: $restored, version: $version}')
   latest=$rollback
@@ -80,7 +80,7 @@ targets=$(printf '%s' "$mrs" | jq -r '.[] | [.iid, .targetBranch, .mergedAt, .so
   while IFS="$(printf '\t')" read -r iid target merged source sha; do
     via=
     while [ "$target" != "$main" ]; do
-      base=$(glab api graphql -f repo="$repo" -f branch="$target" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $after: Time!) {
+      base=$(git-forge api graphql -f repo="$repo" -f branch="$target" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $after: Time!) {
         project(fullPath: $repo) { mergeRequests(state: merged, sourceBranches: [$branch], mergedAfter: $after, sort: MERGED_AT_ASC, first: 1) {
           nodes { iid targetBranch mergeCommitSha mergedAt } } } }') || exit 1
       next=$(printf '%s' "$base" | jq -r '.data.project.mergeRequests.nodes[0] // empty | [.iid, .targetBranch, .mergedAt, .mergeCommitSha] | @tsv')
@@ -93,7 +93,7 @@ EOF
     # so it reads as merged to main with a merge commit main never gets. When
     # its branch went to main again in a later MR, that MR brings it.
     if [ -n "$sha" ] && ! git merge-base --is-ancestor "$sha" "refs/remotes/origin/$main" 2>/dev/null; then
-      next=$(glab api graphql -f repo="$repo" -f branch="$source" -f main="$main" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $main: String!, $after: Time!) {
+      next=$(git-forge api graphql -f repo="$repo" -f branch="$source" -f main="$main" -f after="$merged" -f query='query($repo: ID!, $branch: String!, $main: String!, $after: Time!) {
         project(fullPath: $repo) { mergeRequests(state: merged, sourceBranches: [$branch], targetBranches: [$main], mergedAfter: $after, sort: MERGED_AT_ASC, first: 2) {
           nodes { iid mergedAt mergeCommitSha } } } }' |
         jq -r --arg iid "$iid" '[.data.project.mergeRequests.nodes[] | select(.iid != $iid)][0] // empty | [.iid, .mergedAt, .mergeCommitSha] | @tsv') || exit 1
@@ -142,7 +142,7 @@ states=$(printf '%s\n' "$targets" | grep . |
       # after the rollback that undid it) that has it.
       if [ "$(jq --arg iid "$iid" '.[$iid].sha != null' "$shipped")" = false ]; then
         from=$(jq -r --arg iid "$iid" '.[$iid].after // empty' "$shipped")
-        after=$(glab api "projects/:fullpath/deployments?environment=$env&status=success&order_by=finished_at&sort=asc&per_page=50&finished_after=${from:-$merged}" |
+        after=$(git-forge api "projects/:fullpath/deployments?environment=$env&status=success&order_by=finished_at&sort=asc&per_page=50&finished_after=${from:-$merged}" |
           jq -e --arg job "$job" '[.[] | select(.deployable.name == $job)
             | {sha, at: .deployable.finished_at, pipeline: (.deployable.pipeline.id | tostring), url: .deployable.web_url, status: .deployable.status}]') &&
           for d in $(printf '%s' "$after" | jq -r '.[].sha'); do
@@ -181,7 +181,7 @@ fields=$(printf '%s\n' "$states" | awk -F'\t' '$2 == "waiting" { print $1 }' | w
 done)
 pipes='{}'
 if [ -n "$fields" ]; then
-  pipes=$(glab api graphql -f repo="$repo" -f query="query(\$repo: ID!) { project(fullPath: \$repo) { $fields } }" |
+  pipes=$(git-forge api graphql -f repo="$repo" -f query="query(\$repo: ID!) { project(fullPath: \$repo) { $fields } }" |
     jq -e '.data.project') || exit 1
 fi
 

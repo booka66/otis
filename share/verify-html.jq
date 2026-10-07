@@ -1,6 +1,7 @@
 # A verification's report as one HTML page (bin/git-verify-html says what it
 # is for, and passes $plan, $files, $title, $what, $mr, $when, $fix and
 # $attempt). Input: verdict.json.
+include "otis";
 
 # The judge's prose is loose markdown: paragraphs, "- " lists, `code` and
 # **bold**. Escaped first, so nothing in it is ever markup.
@@ -15,7 +16,7 @@ def size: if . == 0 then "empty" elif . >= 1048576 then "\(. / 1048576 * 10 | fl
 
 def state: {verified: "pass", failed: "fail"}[.] // "open";
 def mark: {verified: "✓", failed: "✗"}[.] // "?";
-def said: {verified: "Verified", failed: "Failed"}[.] // "Not verified";
+def said: {verified: "Verified", failed: "Failed", changed: "Changed, and not in the description"}[.] // "Not verified";
 
 def css: "
 :root {
@@ -132,7 +133,7 @@ def claim($plan_by; $file):
 <div class=\"cid\">\($c.id | @html)\(if $plan_by[$c.id].kind == "attack" then " · what it might break" else "" end) · <b>\($c.result | said)</b></div>
 <div class=\"claim-text\">\(if $plain != "" then $plain | md else $plan_by[$c.id].claim | md end)</div></div></div>
 <div class=\"claim-body\">
-<div class=\"finding\">\(if $saw != "" then $saw | md else $c.evidence | md end)</div>
+<div class=\"finding\">\(if $saw != "" then $saw | md else $c.evidence | md end)\(if $c.result == "changed" and ($c.was // "") != "" then "<p>Before: \($c.was | @html)</p>" else "" end)</div>
 \(if ($shots | length) > 0 then "<div class=\"shots\">" + ($shots | map("<button type=\"button\" title=\"\(.name | @html)\"><img loading=\"lazy\" src=\"\(.src)\" alt=\"\(.name | @html)\"></button>") | join("")) + "</div>" else "" end)
 \($ev | map(select(.kind == "video")) | if length > 0 then "<div class=\"clips\">" + (map("<video controls preload=\"metadata\" src=\"\(.src)\" title=\"\(.name | @html)\"></video>") | join("")) + "</div>" else "" end)
 \(if ($out | length) > 0 or $plain != "" or $saw != "" then "<details><summary>Details\(if ($out | length) > 0 then " · \($out | length) file\(if ($out | length) == 1 then "" else "s" end)" else "" end)</summary>"
@@ -176,9 +177,7 @@ def page:
   . as $v
   | ($plan[0].criteria | map({(.id): .}) | add // {}) as $plan_by
   | ($files | map({(.name): .}) | add // {}) as $file
-  | ($v.criteria | length) as $all
-  | ([$v.criteria[] | select(.result == "verified")] | length) as $ok
-  | ([$v.criteria[] | select(.result == "failed") | .id] | join(", ")) as $failed
+  | ($v | tally($plan[0])) as $t
   | "<!doctype html>
 <html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
 <title>\($title | @html)</title>
@@ -187,7 +186,7 @@ def page:
 <p class=\"meta\">Verification of \(if $mr != "" then "<a href=\"\($mr | @html)\">\($what | @html)</a>" else "<code>\($what | @html)</code>" end)\(if $when != "" then " · " + $when else "" end)</p>
 <h1>\($title | @html)</h1>
 <div class=\"verdict\"><span class=\"badge \({pass: "pass", fail: "fail"}[$v.verdict] // "open")\">\({pass: "Passed", fail: "Failed"}[$v.verdict] // "Inconclusive")</span>
-<span class=\"tally\">\(if $ok == $all then "All \($all) claims verified" else "\($ok) of \($all) claims verified" + (if $failed != "" then " · \($failed) failed" else "" end) end)</span></div>
+<span class=\"tally\">Does what it says: \($t.ok) of \($t.own)\(if ($t.broke | length) > 0 then " · broke \($t.broke | length)" else "" end)\(if ($t.changed | length) > 0 then " · also changed \($t.changed | length), not in the description" else "" end)</span></div>
 <div class=\"lede\">\($v.summary | md)</div>
 </header>
 \(if ($v.concerns | length) > 0 then "<h2>Concerns</h2><ul class=\"concerns\">" + ($v.concerns | map("<li>" + (md | sub("^<p>"; "") | sub("</p>$"; "")) + "</li>") | join("")) + "</ul>" else "" end)

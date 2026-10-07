@@ -32,6 +32,26 @@ def when: (epoch | localtime | strftime("%a %H:%M")) + " (" + ago + " ago)";
 def padr($n): tostring | . as $s | $s + (if ($s | length) < $n then "          "[0:$n - ($s | length)] else "" end);
 def padl($n): tostring | . as $s | (if ($s | length) < $n then "          "[0:$n - ($s | length)] else "" end) + $s;
 def plural($n; $one; $many): if $n == 1 then $one else $many end;
+# tally($plan): a verification's verdict as its two answers, for every screen
+# that says one. Does the change do what it says: of the plan's own criteria
+# (own), how many held (ok) and the ones that did not (unmet). And what it did
+# around that, from the breaker's checks (the plan's criteria of kind attack):
+# the ones it broke, the ones where it only does more than its description
+# says (changed), and how many could not be checked (open).
+def tally($plan):
+  [$plan.criteria[]? | select(.kind == "attack") | .id] as $b
+  | [.criteria[]? | select(.id | IN($b[]) | not)] as $own
+  | [.criteria[]? | select(.id | IN($b[]))] as $around
+  | {own: ($own | length), ok: ([$own[] | select(.result == "verified")] | length),
+     unmet: [$own[] | select(.result != "verified")],
+     broke: [$around[] | select(.result == "failed")],
+     changed: [$around[] | select(.result == "changed")],
+     open: ([$around[] | select(.result == "unverified")] | length)};
+# Cut to $n columns, the last an ellipsis when there was more.
+def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+# Seconds as how long that is, in the fewest characters: "45s", "3m", "2h", "5d".
+def span: if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m"
+  elif . < 86400 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor)d" end;
 
 # A pipeline's status as it matters: one failing only on approval gates
 # (otis-config gateJobs) is waiting, not broken, and reads as APPROVAL.
@@ -62,17 +82,26 @@ def deploy_glyph:
   elif .status == "running" then attention + "◐" elif .status == "canceled" then context + "⊘"
   else attention + "○" end;
 
-# wrapl($w; $n): the text word-wrapped to lines at most $w wide, at most $n
-# of them, the last ending in … when there was more: a sentence that matters
-# reads whole, or nearly, rather than cut off after its first few words.
+# wrapl($w; $n): the text word-wrapped to lines at most $w wide, and never
+# cut: nothing a preview says ends in an ellipsis. $n is how many lines it
+# would like to take. Of a text that takes more, the sentences from its
+# start that fit in $n are kept, whole; and the first is kept whole whatever
+# it takes, since a sentence that stops halfway says nothing. A word wider
+# than a line is broken across lines.
 def wrapl($w; $n):
-  (tostring | gsub("[\\s]+"; " ") | ltrimstr(" ") | rtrimstr(" ") | split(" ")) as $words |
-  (reduce $words[] as $x ({lines: [], cur: ""};
-     if .cur == "" then .cur = $x
-     elif ((.cur | length) + 1 + ($x | length)) <= $w then .cur += " " + $x
-     else .lines += [.cur] | .cur = $x end)
-   | .lines + (if .cur != "" then [.cur] else [] end)) as $all |
-  ($all | map(if length > $w then .[0:$w - 1] + "…" else . end)) as $all |
-  if ($all | length) > $n then
-    $all[0:$n] | .[-1] |= ((if length > $w - 2 then .[0:$w - 2] | sub(" [^ ]*$"; "") else . end) + " …")
-  else $all end;
+  def wrap:
+    (split(" ") | map(select(. != "") | if length > $w then . as $x | [range(0; length; $w) | $x[.:. + $w]] else [.] end) | add // []) as $words |
+    reduce $words[] as $x ({lines: [], cur: ""};
+      if .cur == "" then .cur = $x
+      elif ((.cur | length) + 1 + ($x | length)) <= $w then .cur += " " + $x
+      else .lines += [.cur] | .cur = $x end)
+    | .lines + (if .cur != "" then [.cur] else [] end);
+  (tostring | gsub("[\\s]+"; " ") | ltrimstr(" ") | rtrimstr(" ")) as $t |
+  ($t | wrap) as $all |
+  if ($all | length) <= $n then $all else
+    ($t | split(" ")) as $ws |
+    # How many words in, each sentence ends: at a word that closes one.
+    ([range(0; $ws | length) | select($ws[.] | test("[.?!][\"\u0027)\\]]*$")) | . + 1] + [$ws | length] | unique) as $ends |
+    (last($ends[] | select(($ws[0:.] | join(" ") | wrap | length) <= $n)) // $ends[0]) as $k |
+    $ws[0:$k] | join(" ") | wrap
+  end;

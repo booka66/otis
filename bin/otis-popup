@@ -4,14 +4,17 @@
 #                                       your own, printed (git-confirm --note)
 # otis-popup text <prompt> [<default>]  a line typed, printed; esc exits 130
 # otis-popup say <message>              shown until a key
+# otis-popup busy <message> <log>       shown while a command goes on, with
+#                                       the last line it wrote to <log>
 #
 # A question asked in a box over the screen whose key started it, so answering
 # never drops you to the terminal under otis. A screen keeps its frame up for
 # what its execute runs and names a file it drew it into (OTIS_FRAME,
 # share/screen.zsh's run_tty); the box goes over that, and the frame is drawn
 # again without it once it is answered. Yes leaves "…" in the box while the
-# command goes on. With no screen under it, text and say ask on the terminal's
-# line as ever; git-confirm, which sends its questions here, asks there itself.
+# command goes on; one that can take minutes puts busy's box up for that. With
+# no screen under it, text and say ask on the terminal's line as ever;
+# git-confirm, which sends its questions here, asks there itself.
 setopt extendedglob no_nomatch
 mode=$1 msg=$2 text=$3
 
@@ -29,22 +32,26 @@ mkdir -m 700 $st || exit 1
 . ${0:A:h:h}/share/screen.zsh
 exec {tty}<>/dev/tty
 saved=$(stty -g <&$tty)
-at_leave() { stty $saved <&$tty; }
-stty -icanon -echo -isig min 1 time 0 <&$tty
+# busy reads no key: the terminal stays the command's, and ctrl-c with it.
+if [[ $mode != busy ]]; then
+  at_leave() { stty $saved <&$tty; }
+  stty -icanon -echo -isig min 1 time 0 <&$tty
+fi
+loader_stop
 size
 
 # --- the box ------------------------------------------------------------------
 # The message wrapped to the box, line by line, its colors dropped and each
-# line's indent kept on what wraps from it; a word too long for it cut.
+# line's indent kept on what wraps from it; a word too long for a line goes
+# on under it (whole).
 integer bw iw at=$#text
 (( bw = W - 4 < 64 ? W - 4 : 64, iw = bw - 4 ))
 typeset -a body
 for l in "${(@f)msg}"; do
   plain "$l"; l=$REPLY
   local ind=${(M)l##[[:space:]]#}
-  wrap "$l" $(( iw - $#ind ))
-  (( $#reply )) || reply=("")
-  for s in "${reply[@]}"; do fit "$ind$s" $iw; body+=("$REPLY"); done
+  whole "$l" $(( iw - $#ind ))
+  for s in "${reply[@]}"; do body+=("$ind$s"); done
 done
 (( $#body > H - 8 )) && body=("${(@)body[1,H-9]}" "…")
 
@@ -56,17 +63,30 @@ box() {
   typeset -a lines
   for l in "${body[@]}"; do lines+=("$T$l$R"); done
   if [[ -n $input ]]; then
-    # The text in a window the cursor stays in, … marking what is out of
-    # sight either side, as otis-ask's.
-    local shown room=$(( iw - 2 ))
-    integer from=1
-    while (( ${(m)#${text[from,at]}} > room - 1 )); do (( from++ )); done
-    shown=${text[from,-1]}
-    (( from > 1 )) && shown="…"${shown:1}
-    while (( ${(m)#shown} > room )); do shown=${shown[1,-2]}; done
-    (( from + $#shown - 1 < $#text )) && shown=${shown[1,-2]}"…"
-    lines+=("" "$A›$R $T$shown$R")
-    (( cy = $#lines, cx = 3 + ${(m)#${text[from,at]}} ))
+    # The text wrapped at its spaces, every character of it on some row so
+    # the cursor has a place; a word too long for a row broken. As many rows
+    # as the screen has room for, those with the cursor, … in the margin of
+    # the first when some above are out of sight.
+    integer room=$(( iw - 2 )) s=1 k p r cr=1 max=$(( H - 9 - $#body ))
+    typeset -a starts=(1)
+    while (( ${(m)#${text[s,-1]}} > room )); do
+      for (( k = 1; ${(m)#${text[s,s+k]}} <= room; k++ )); do :; done
+      p=$(( s + k - 1 ))
+      while (( p > s )) && [[ $text[p] != ' ' ]]; do (( p-- )); done
+      (( s = p > s ? p + 1 : s + k ))
+      starts+=($s)
+    done
+    for (( r = 1; r <= $#starts; r++ )); do (( at + 1 >= starts[r] )) && cr=$r; done
+    (( max < 1 )) && max=1
+    integer first=$(( cr > max ? cr - max + 1 : 1 ))
+    lines+=("")
+    for (( r = first; r <= $#starts && r < first + max; r++ )); do
+      local mark="  "
+      (( r == 1 )) && mark="$A›$R "
+      (( r == first && r > 1 )) && mark="$C…$R "
+      lines+=("$mark$T${text[starts[r],(r < $#starts ? starts[r+1] - 1 : -1)]}$R")
+      (( r == cr )) && (( cy = $#lines, cx = 3 + ${(m)#${text[starts[r],at]}} ))
+    done
   fi
   lines+=("" "$hint")
   (( h = $#lines + 2, top = (H - h) / 2 + 1, left = (W - bw) / 2 + 1 ))
@@ -74,8 +94,10 @@ box() {
   # command printed over it and any box an earlier question left (its "…"),
   # in one synchronized update so the clear in it does not blink. After that
   # the frame is drawn again only where a box of another size leaves some of
-  # the last one showing.
+  # the last one showing. busy draws under a command that may ask on the
+  # terminal itself (a hook): the cursor is put back where that left it.
   out=$e'[?2026h'$e'[?25l'
+  [[ $mode == busy ]] && out=$e'7'$out
   (( btop )) || out+=$(<$OTIS_FRAME)
   (( btop && (top != btop || h != bh) )) && { unbox; out=$REPLY$out; }
   (( btop = top, bh = h ))
@@ -86,6 +108,7 @@ box() {
   done
   out+=$e"[$(( top + h - 1 ));${left}H"$F"╰"${(l:bw-2::─:)}"╯"$R
   if (( cy )); then out+=$e"[$(( top + cy ));$(( left + 1 + cx ))H"$e'[?25h'
+  elif [[ $mode == busy ]]; then out+=$e'8'
   else out+=$e"[$H;1H"; fi
   print -rnu $tty -- $out$e'[?2026l'
 }
@@ -105,6 +128,11 @@ done_() {
   quit $1
 }
 keys() { local s= k l; for k l in "$@"; do s+="$A$k$R $C$l$R   "; done; REPLY=${s%   }; }
+# tick <hint>: the box's last line alone drawn again, the cursor put back.
+tick() {
+  vw "$1"
+  print -rnu $tty -- $e'7'$e"[$(( btop + bh - 2 ));$(( (W - bw) / 2 + 1 ))H"$F"│"$R" "$1${(l:iw-REPLY:: :)}" "$F"│"$R$e'8'
+}
 
 # ask: a line typed into the box, in text; 0 for enter, 1 for esc.
 ask() {
@@ -157,5 +185,44 @@ case $mode in
   say)
     keys "any key" close; box "$REPLY"
     readkey; done_ 0 ;;
+  busy)
+    # A command that can take minutes (a push, under its hook): what it is,
+    # the last line it wrote to the log, whole, and how long it has been, so
+    # a slow one reads as slow and not as stuck. It only draws, ten times a
+    # second, and the box never shrinks: two lines are kept for what the
+    # command says, more once a line of it needs more. It goes when it is
+    # stopped (loader_stop: the next box or screen, or the command done),
+    # when what started it has gone, or when something else takes the
+    # terminal (a passphrase asked for). Stopped, it draws nothing more and
+    # leaves the terminal as it is: no trap, and nothing kept to clear up.
+    rm -rf -- $st; trap - TERM HUP EXIT; trap '' INT
+    typeset -a head=("${body[@]}") said
+    integer t0=$EPOCHSECONDS secs room=2 max=$(( H - 7 - $#body ))
+    local line last=$'\0' took hint
+    while kill -0 $PPID 2>/dev/null && [[ $(stty -g <&$tty 2>/dev/null) == $saved ]]; do
+      line=
+      for l in ${(Oa)${(f)"$(tail -c 4096 -- $text 2>/dev/null)"}}; do
+        l=${l%%$'\r'#}; plain "${l##*$'\r'}"; l=${REPLY//[[:cntrl:]]/ }
+        l=${${l##[[:space:]]#}%%[[:space:]]#}
+        [[ -n $l ]] && { line=$l; break; }
+      done
+      (( secs = EPOCHSECONDS - t0 ))
+      took=${secs}s; (( secs >= 60 )) && took="$(( secs / 60 ))m ${(l:2::0:)$(( secs % 60 ))}s"
+      spin_frame; hint=$A$REPLY$R" "$T$took$R"   "; keys ctrl-c stop; hint+=$REPLY
+      if [[ $line != $last ]]; then
+        last=$line
+        whole "${line:-nothing from it yet}" $iw; said=("${reply[@]}")
+        (( $#said > max )) && said=("${(@)said[1,max]}")
+        (( $#said > room )) && room=$#said
+        body=("${head[@]}" "")
+        for l in "${said[@]}"; do body+=("$C$l"); done
+        repeat $(( room - $#said )) body+=("")
+        box "$hint"
+      else
+        tick "$hint"
+      fi
+      zselect -t 10
+    done
+    exit 0 ;;
 esac
 done_ 2

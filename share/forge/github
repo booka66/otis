@@ -1,0 +1,455 @@
+#!/bin/sh
+# share/forge/github <git-forge args>: git-forge on GitHub. The same verbs,
+# answered from gh in GitLab's shapes (share/forge/github.jq), so a caller
+# written against GitLab reads a pull request as it reads an MR: its number
+# the iid, its review threads the discussions, its checks the pipeline.
+#
+# api takes glab api's arguments and routes on the GitLab path. A path it has
+# no GitHub equivalent for fails, saying which, rather than guessing.
+share=$(cd "$(dirname "$0")/.." && pwd)
+jqg() { jq -L "$share/forge" "$@"; }
+repo=$(otis-config project)
+host=$(otis-config host)
+[ "$host" = github.com ] || export GH_HOST="$host"
+nope() { echo "not on GitHub: $1" >&2; exit 1; }
+
+# graphql <query> [-f|-F name=value ...]: gh api graphql. A query about the
+# repository takes it as $owner and $name (graphql_repo).
+graphql() { q=$1; shift; gh api graphql -f query="$q" "$@"; }
+graphql_repo() { q=$1; shift; graphql "$q" -f owner="${repo%%/*}" -f name="${repo#*/}" "$@"; }
+
+# The merge base of each pull request here, by head sha, where both ends are
+# here: GitLab's baseSha. One that is not stays null, and the review fetches
+# it (git-mr-review) as it would a missing base.
+bases() {
+  jq -r '.. | objects | select(has("headRefOid")) | "\(.headRefOid) \(.baseRefOid)"' | sort -u |
+    while read -r h b; do
+      m=$(git merge-base "$b" "$h" 2>/dev/null) && printf '%s\t%s\n' "$h" "$m"
+    done | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}'
+}
+
+# pr <number>: the pull request, as GraphQL answers it.
+pr() {
+  graphql_repo 'query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
+    pullRequest(number: $n) { '"$(jqg -nr 'include "github"; pr_fields')"' } } }' -F n="$1"
+}
+
+# mrs <review|mine|all>: the lists, as git-forge mrs answers them on GitLab.
+# To review is what asks for your review and what you have reviewed since,
+# as GitLab's reviewRequestedMergeRequests keeps both.
+mrs() {
+  f=$(jqg -nr 'include "github"; pr_fields')
+  case $1 in
+    review)
+      out=$(graphql 'query($asked: String!, $seen: String!) { viewer { login }
+        asked: search(type: ISSUE, first: 100, query: $asked) { nodes { ... on PullRequest { '"$f"' } } }
+        seen: search(type: ISSUE, first: 100, query: $seen) { nodes { ... on PullRequest { '"$f"' } } } }' \
+        -f asked="repo:$repo is:pr is:open review-requested:@me" -f seen="repo:$repo is:pr is:open reviewed-by:@me -author:@me") || exit 1
+      printf '%s' "$out" | jqg --arg repo "$repo" --argjson bases "$(printf '%s' "$out" | bases)" 'include "github";
+        {data: {currentUser: {username: .data.viewer.login, reviewRequestedMergeRequests: {nodes:
+          ([.data.asked.nodes[], .data.seen.nodes[]] | unique_by(.number) | sort_by(.updatedAt) | reverse | map(mr($repo; $bases)))}}}}' ;;
+    mine)
+      out=$(graphql 'query($q: String!) { viewer { login }
+        search(type: ISSUE, first: 100, query: $q) { nodes { ... on PullRequest { '"$f"' } } } }' \
+        -f q="repo:$repo is:pr is:open author:@me sort:updated-desc") || exit 1
+      printf '%s' "$out" | jqg --arg repo "$repo" --argjson bases "$(printf '%s' "$out" | bases)" 'include "github";
+        {data: {currentUser: {username: .data.viewer.login, authoredMergeRequests: {nodes: [.data.search.nodes[] | mr($repo; $bases)]}}}}' ;;
+    all)
+      out=$(graphql_repo 'query($owner: String!, $name: String!) { viewer { login } repository(owner: $owner, name: $name) {
+        pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { '"$f"' } } } }') || exit 1
+      printf '%s' "$out" | jqg --arg repo "$repo" --argjson bases "$(printf '%s' "$out" | bases)" 'include "github";
+        {data: {currentUser: {username: .data.viewer.login}, project: {mergeRequests: {count: .data.repository.pullRequests.totalCount,
+          nodes: [.data.repository.pullRequests.nodes[] | mr($repo; $bases)]}}}}' ;;
+    *) echo "git-forge mrs: review, mine or all" >&2; exit 2 ;;
+  esac
+}
+
+# threads <number>: its threads, submitted and pending, with the merge base
+# its positions are placed against (bases), for discussions and drafts.
+threads() {
+  out=$(graphql_repo 'query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) {
+    pullRequest(number: $n) { '"$(jqg -nr 'include "github"; thread_fields')"' } } }' -F n="$1") || exit 1
+  printf '%s' "$out" | jq --argjson bases "$(printf '%s' "$out" | bases)" \
+    '.data.repository.pullRequest |= (.base = $bases[.headRefOid])'
+}
+
+# pending <number>: "<your pending review's node id, or nothing> <the pull
+# request's node id> <its head sha>".
+pending() {
+  graphql_repo 'query($owner: String!, $name: String!, $n: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $n) {
+    id headRefOid reviews(states: PENDING, first: 10) { nodes { id viewerDidAuthor } } } } }' -F n="$1" |
+    jq -r '.data.repository.pullRequest | "\([.reviews.nodes[] | select(.viewerDidAuthor) | .id][0] // "-") \(.id) \(.headRefOid)"'
+}
+# review <number> [sha]: your pending review's node id, begun at sha (else
+# the head) if there is none.
+review() {
+  read -r rid pid head <<END
+$(pending "$1")
+END
+  [ -n "$pid" ] || exit 1
+  [ "$rid" != - ] && { echo "$rid"; return; }
+  graphql 'mutation($pr: ID!, $sha: GitObjectID) { addPullRequestReview(input: {pullRequestId: $pr, commitOID: $sha}) { pullRequestReview { id } } }' \
+    -f pr="$pid" -f sha="${2:-$head}" | ok -r '.data.addPullRequestReview.pullRequestReview.id'
+}
+
+# The body a call sends: its --input's JSON, else its fields (-f a string,
+# -F a number or true/false where it reads as one).
+body() {
+  if [ -n "$input" ]; then
+    if [ "$input" = - ]; then cat; else cat "$input"; fi
+  else
+    printf '%s\n' "$fields" | jq -Rn '[inputs | select(length > 0) | capture("^(?<t>[fF]) (?<k>[^=]+)=(?<v>.*)$")
+      | {(.k): (if .t == "F" then (.v | tonumber? // (if . == "true" then true elif . == "false" then false else . end)) else .v end)}] | add // {}'
+  fi
+}
+# ok [jq args] <filter>: a GraphQL answer through the filter, or its errors
+# on stderr and a failure.
+ok() {
+  r=$(cat)
+  if printf '%s' "$r" | jq -e '.errors | length > 0' >/dev/null 2>&1; then
+    printf '%s' "$r" | jq -r '.errors[].message' >&2; return 1
+  fi
+  printf '%s' "$r" | jq "$@"
+}
+
+# api <glab api args>: the GitLab call, answered from GitHub.
+api() {
+  method=GET path= input= fields=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -X | --method) method=$2; shift 2 ;;
+      -f | --raw-field) fields="$fields
+f $2"; shift 2 ;;
+      -F | --field) fields="$fields
+F $2"; shift 2 ;;
+      --input) input=$2; shift 2 ;;
+      -H | --header | --form) shift 2 ;;
+      --paginate) shift ;;
+      *) path=$1; shift ;;
+    esac
+  done
+  p=${path#projects/:fullpath/}
+  q=; case $p in *\?*) q=${p#*\?}; p=${p%%\?*} ;; esac
+  arg() { printf '%s' "$q" | tr '&' '\n' | sed -n "s/^$1=//p" | head -1 | sed 's/%2F/\//g'; }
+  n=; case $p in merge_requests/*) n=${p#merge_requests/}; n=${n%%/*} ;; esac
+  case "$method $p" in
+    "GET user") gh api user | jq '{id, username: .login, name: (.name // .login)}' ;;
+    # The project, for what a new MR takes from it (otis.zsh _g_mr_create).
+    "GET projects/:fullpath") gh api "repos/$repo" | jq '{id, path_with_namespace: .full_name, default_branch,
+      remove_source_branch_after_merge: (.delete_branch_on_merge // false),
+      squash_option: (if .allow_squash_merge and (.allow_merge_commit | not) and (.allow_rebase_merge | not) then "always" else "default_off" end)}' ;;
+    "GET labels")
+      gh api --paginate "repos/$repo/labels?per_page=100" | jq -s 'add | map({name, color: ("#" + .color), description})' ;;
+    "GET members/all")
+      gh api --paginate "repos/$repo/collaborators?per_page=100" | jq -s --arg q "$(arg query)" 'add
+        | map(select(.login | ascii_downcase | contains($q | ascii_downcase)) | {id, username: .login, name: .login, state: "active"})' ;;
+    "POST merge_requests")
+      body | jq '{head: .source_branch, base: .target_branch, title, body: .description}' |
+        gh api -X POST "repos/$repo/pulls" --input - | jqg 'include "github"; rest_pull' ;;
+    "GET merge_requests")
+      s=$(arg source_branch) t=$(arg target_branch)
+      gh api "repos/$repo/pulls?state=open&per_page=100${s:+&head=${repo%%/*}:$s}${t:+&base=$t}" | jqg 'include "github"; map(rest_pull)' ;;
+    "GET merge_requests/"*/discussions) threads "$n" | jqg 'include "github"; discussions' ;;
+    "GET merge_requests/"*/draft_notes) threads "$n" | jqg 'include "github"; drafts' ;;
+
+    # A new thread: on the lines its position names, or on the pull request
+    # itself with none.
+    "POST merge_requests/"*/discussions)
+      b=$(body)
+      if [ "$(printf '%s' "$b" | jq '.position == null')" = true ]; then
+        printf '%s' "$b" | jq '{body}' | gh api -X POST "repos/$repo/issues/$n/comments" --input - >/dev/null || exit 1
+      else
+        printf '%s' "$b" | jqg 'include "github"; {body, commit_id: .position.head_sha} + (.position | github_line)' |
+          gh api -X POST "repos/$repo/pulls/$n/comments" --input - >/dev/null || exit 1
+      fi
+      echo '{}' ;;
+    # A reply: in a review thread, or, to a comment on the pull request,
+    # another comment, since those have no threads.
+    "POST merge_requests/"*/discussions/*/notes | "POST merge_requests/"*/notes)
+      b=$(body) t=${p#merge_requests/*/discussions/}; t=${t%/notes}
+      case $p in
+        */discussions/PRRT_*)
+          graphql 'mutation($t: ID!, $b: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $t, body: $b}) { comment { databaseId } } }' \
+            -f t="$t" -f b="$(printf '%s' "$b" | jq -r .body)" | ok '{id: .data.addPullRequestReviewThreadReply.comment.databaseId}' ;;
+        (*) printf '%s' "$b" | jq '{body}' | gh api -X POST "repos/$repo/issues/$n/comments" --input - | jq '{id}' ;;
+      esac ;;
+    "PUT merge_requests/"*/discussions/*/notes/* | "DELETE merge_requests/"*/discussions/*/notes/*)
+      c=${p##*/} kind=pulls; case $p in */discussions/comment-*) kind=issues ;; esac
+      if [ "$method" = PUT ]; then
+        body | jq '{body}' | gh api -X PATCH "repos/$repo/$kind/comments/$c" --input - >/dev/null || exit 1
+      else
+        gh api -X DELETE "repos/$repo/$kind/comments/$c" || exit 1
+      fi
+      echo '{}' ;;
+    "PUT merge_requests/"*/discussions/*)
+      t=${p##*/} to=$(arg resolved)
+      case $t in PRRT_*) ;; *) echo "a comment on the pull request itself cannot be resolved" >&2; exit 1 ;; esac
+      m=resolveReviewThread; [ "$to" = false ] && m=unresolveReviewThread
+      graphql "mutation(\$t: ID!) { $m(input: {threadId: \$t}) { thread { isResolved } } }" -f t="$t" |
+        ok "{resolved: .data.$m.thread.isResolved}" ;;
+
+    # Drafts are your pending review, begun by the first one.
+    "POST merge_requests/"*/draft_notes)
+      b=$(body)
+      rid=$(review "$n" "$(printf '%s' "$b" | jq -r '.position.head_sha // empty')") || exit 1
+      if [ "$(printf '%s' "$b" | jq '.in_reply_to_discussion_id != null')" = true ]; then
+        graphql 'mutation($r: ID!, $t: ID!, $b: String!) { addPullRequestReviewThreadReply(input: {pullRequestReviewId: $r, pullRequestReviewThreadId: $t, body: $b}) { comment { id } } }' \
+          -f r="$rid" -f t="$(printf '%s' "$b" | jq -r .in_reply_to_discussion_id)" -f b="$(printf '%s' "$b" | jq -r .note)" |
+          ok '{id: .data.addPullRequestReviewThreadReply.comment.id}'
+      else
+        printf '%s' "$b" | jqg --arg r "$rid" 'include "github";
+          {query: "mutation($input: AddPullRequestReviewThreadInput!) { addPullRequestReviewThread(input: $input) { thread { comments(first: 1) { nodes { id } } } } }",
+           variables: {input: ({pullRequestReviewId: $r, body: .note} + (.position | github_line |
+             {path, line, side, startLine: .start_line, startSide: .start_side} | with_entries(select(.value != null))))}}' |
+          gh api graphql --input - | ok '{id: .data.addPullRequestReviewThread.thread.comments.nodes[0].id}'
+      fi ;;
+    "POST merge_requests/"*/draft_notes/bulk_publish)
+      read -r rid _ <<END
+$(pending "$n")
+END
+      [ "$rid" != - ] || { echo '{}'; return 0; }
+      graphql 'mutation($r: ID!) { submitPullRequestReview(input: {pullRequestReviewId: $r, event: COMMENT}) { pullRequestReview { state } } }' \
+        -f r="$rid" | ok '{}' ;;
+    "PUT merge_requests/"*/draft_notes/*)
+      graphql 'mutation($c: ID!, $b: String!) { updatePullRequestReviewComment(input: {pullRequestReviewCommentId: $c, body: $b}) { pullRequestReviewComment { id } } }' \
+        -f c="${p##*/}" -f b="$(body | jq -r .note)" | ok '{id: .data.updatePullRequestReviewComment.pullRequestReviewComment.id}' ;;
+    "DELETE merge_requests/"*/draft_notes/*)
+      graphql 'mutation($c: ID!) { deletePullRequestReviewComment(input: {id: $c}) { clientMutationId } }' -f c="${p##*/}" | ok '{}' ;;
+
+    "GET merge_requests/"*)
+      case $p in merge_requests/*/*) nope "$method $path" ;; esac
+      rest "$n" ;;
+    # Merged now at the head you read, or when its checks pass (auto-merge),
+    # the way the repository merges for you.
+    "PUT merge_requests/"*/merge)
+      sha=$(arg sha)
+      read -r pid how <<END
+$(rest "$n" | jq -r '"\(.id) \(.merge_method)"')
+END
+      if [ "$(arg auto_merge)" = true ]; then
+        graphql 'mutation($pr: ID!, $how: PullRequestMergeMethod!, $sha: GitObjectID) { enablePullRequestAutoMerge(input: {pullRequestId: $pr, mergeMethod: $how, expectedHeadOid: $sha}) { pullRequest { autoMergeRequest { enabledAt } } } }' \
+          -f pr="$pid" -f how="$(printf '%s' "$how" | tr a-z A-Z)" -f sha="$sha" |
+          ok '{state: "opened", merge_when_pipeline_succeeds: (.data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest != null)}'
+      else
+        jq -n --arg sha "$sha" --arg how "$how" '{sha: $sha, merge_method: $how}' |
+          gh api -X PUT "repos/$repo/pulls/$n/merge" --input - | jq '{state: (if .merged then "merged" else "opened" end), merge_error: (if .merged then null else .message end)}'
+      fi ;;
+    # Rebased onto its target by GitHub, waited for until its head moves, so
+    # the next look sees the rebased branch.
+    "PUT merge_requests/"*/rebase)
+      read -r pid old <<END
+$(rest "$n" | jq -r '"\(.id) \(.sha)"')
+END
+      graphql 'mutation($pr: ID!, $sha: GitObjectID) { updatePullRequestBranch(input: {pullRequestId: $pr, expectedHeadOid: $sha, updateMethod: REBASE}) { pullRequest { headRefOid } } }' \
+        -f pr="$pid" -f sha="$old" | ok '{}' >/dev/null || exit 1
+      i=0
+      while [ $i -lt 30 ] && [ "$(gh api "repos/$repo/pulls/$n" --jq .head.sha)" = "$old" ]; do sleep 1; i=$((i + 1)); done
+      echo '{}' ;;
+    # Deploys are GitHub deployments to the environment, the newest first,
+    # or oldest (sort=asc); the filters those who ask use, applied here.
+    "GET deployments")
+      env=$(deploy_env "$(arg environment)") job=$(otis-config deployJob)
+      graphql_repo 'query($owner: String!, $name: String!, $env: String!) { repository(owner: $owner, name: $name) {
+        deployments(environments: [$env], first: 100, orderBy: {field: CREATED_AT, direction: DESC}) { nodes {
+          databaseId commitOid createdAt creator { login }
+          latestStatus { state createdAt logUrl environmentUrl } statuses(first: 20) { nodes { state createdAt } } } } } }' -f env="$env" |
+        ok -L "$share/forge" --arg job "$job" --arg status "$(arg status)" --arg after "$(arg finished_after)" --arg sort "$(arg sort)" \
+          --argjson n "$(arg per_page | grep . || echo 100)" 'include "github";
+          [.data.repository.deployments.nodes[] | deployment($job)
+            | select($status == "" or .status == $status)
+            | select($after == "" or ((.deployable.finished_at // "") > $after))]
+          | if $sort == "asc" then reverse else . end | .[0:$n]' ;;
+    # A pipeline is the checks on one commit, its id the newest workflow
+    # run's there (git-forge mrs); a job is a check run.
+    "GET pipelines/"*/jobs)
+      sha=$(gh api "repos/$repo/actions/runs/$(pipe_id)" --jq .head_sha) || exit 1
+      gh api --paginate "repos/$repo/commits/$sha/check-runs?per_page=100" | jq -s 'map(.check_runs) | add' | jqg 'include "github"; map(rest_job)' ;;
+    # A check that is not an Actions job has no log to fetch; its own report
+    # (title, summary, text, and where to read more) stands in for one.
+    "GET jobs/"*/trace)
+      if log=$(gh api --allow-escape-sequences "repos/$repo/actions/jobs/$(job_id)/logs" 2>/dev/null); then printf '%s\n' "$log"
+      else gh api "repos/$repo/check-runs/$(job_id)" | jq -r '"\(.name): \(.conclusion // .status)", "",
+          (.output | .title // empty, .summary // empty, .text // empty), "", "more: \(.details_url // .html_url)"'
+      fi ;;
+    "GET jobs/"*) gh api "repos/$repo/check-runs/$(job_id)" | jqg 'include "github"; rest_job' ;;
+    "POST jobs/"*/retry) gh api -X POST "repos/$repo/actions/jobs/$(job_id)/rerun" >/dev/null && echo '{}' ;;
+    # Actions cancels a run, not one job of it.
+    "POST jobs/"*/cancel)
+      run=$(gh api "repos/$repo/actions/jobs/$(job_id)" --jq .run_id) || exit 1
+      gh api -X POST "repos/$repo/actions/runs/$run/cancel" >/dev/null && echo '{}' ;;
+    "POST pipelines/"*/retry | "POST pipelines/"*/cancel)
+      sha=$(gh api "repos/$repo/actions/runs/$(pipe_id)" --jq .head_sha) || exit 1
+      case $p in */retry) what=rerun-failed-jobs pick='.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled"' ;;
+        *) what=cancel pick='.status != "completed"' ;; esac
+      gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" | jq -r ".workflow_runs[] | select($pick) | .id" |
+        while read -r run; do gh api -X POST "repos/$repo/actions/runs/$run/$what" >/dev/null || exit 1; done && echo '{}' ;;
+    # A change to the MR: its labels, its reviewers (by id, as GitLab takes
+    # them), its title or description.
+    "PUT merge_requests/"*)
+      case $p in merge_requests/*/*) nope "$method $path" ;; esac
+      b=$(body)
+      if printf '%s' "$b" | jq -e 'has("labels")' >/dev/null; then
+        printf '%s' "$b" | jq '{labels: (.labels | if type == "string" then split(",") else . end | map(select(. != "")))}' |
+          gh api -X PUT "repos/$repo/issues/$n/labels" --input - >/dev/null || exit 1
+      fi
+      if printf '%s' "$b" | jq -e 'has("reviewer_ids")' >/dev/null; then
+        now=$(gh api "repos/$repo/pulls/$n" | jq -c '[.requested_reviewers[] | {id, login}]') || exit 1
+        want=$(printf '%s' "$b" | jq -c '.reviewer_ids | if type == "string" then fromjson else . end')
+        add=$(jq -nc --argjson now "$now" --argjson want "$want" '$want - [$now[].id]' | jq -r '.[]' |
+          while read -r id; do gh api "user/$id" --jq .login; done | jq -Rsc 'split("\n") | map(select(. != ""))')
+        drop=$(jq -nc --argjson now "$now" --argjson want "$want" '[$now[] | select(.id | IN($want[]) | not) | .login]')
+        [ "$add" = '[]' ] || jq -n --argjson r "$add" '{reviewers: $r}' | gh api -X POST "repos/$repo/pulls/$n/requested_reviewers" --input - >/dev/null || exit 1
+        [ "$drop" = '[]' ] || jq -n --argjson r "$drop" '{reviewers: $r}' | gh api -X DELETE "repos/$repo/pulls/$n/requested_reviewers" --input - >/dev/null || exit 1
+      fi
+      if printf '%s' "$b" | jq -e 'has("description") or has("title")' >/dev/null; then
+        printf '%s' "$b" | jq '{title, body: .description} | with_entries(select(.value != null))' |
+          gh api -X PATCH "repos/$repo/pulls/$n" --input - >/dev/null || exit 1
+      fi
+      rest "$n" ;;
+    *) nope "$method $path" ;;
+  esac
+}
+# The pipeline's or job's id in the path.
+pipe_id() { x=${p#pipelines/}; echo "${x%%/*}"; }
+job_id() { x=${p#jobs/}; echo "${x%%/*}"; }
+
+# rest <number>: the pull request as GitLab's REST MR.
+rest() {
+  out=$(pr "$1") || exit 1
+  printf '%s' "$out" | jqg --arg repo "$repo" --argjson bases "$(printf '%s' "$out" | bases)" 'include "github";
+    .data.repository.pullRequest | rest_mr($repo; $bases)'
+}
+
+# mr_update <number> <glab mr update args>: --ready or --draft, and a
+# --label or --unlabel with it.
+mr_update() {
+  n=$1; shift
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --ready) gh pr ready "$n" -R "$repo" >/dev/null || exit 1 ;;
+      --draft) gh pr ready "$n" -R "$repo" --undo >/dev/null || exit 1 ;;
+      --label) gh pr edit "$n" -R "$repo" --add-label "$2" >/dev/null || exit 1; shift ;;
+      --unlabel) gh pr edit "$n" -R "$repo" --remove-label "$2" >/dev/null || exit 1; shift ;;
+    esac
+    shift
+  done
+}
+
+# deploy_env <name>: the GitHub environment a GitLab one's name means: that
+# name, else the one that ends in "/ <name>", as a host that deploys several
+# projects names them ("<project> / production").
+deploy_env() {
+  gh api "repos/$repo/environments" --jq '.environments[].name' |
+    awk -v e="$1" '$0 == e { exact = $0 } substr($0, length($0) - length(e) - 1) == "/ " e && !sfx { sfx = $0 }
+      END { print (exact != "" ? exact : (sfx != "" ? sfx : e)) }'
+}
+
+# main_builds: main's last 10 commits, each with its checks as a pipeline,
+# newest first: {sha, title, at, author, pipeline}.
+main_builds() {
+  graphql_repo 'query($owner: String!, $name: String!, $ref: String!) { repository(owner: $owner, name: $name) {
+    ref(qualifiedName: $ref) { target { ... on Commit { history(first: 10) { nodes {
+      oid messageHeadline committedDate author { user { login } } '"$(jqg -nr 'include "github"; rollup_fields')"' } } } } } } }' \
+    -f ref="refs/heads/$(otis-config main)" |
+    ok -L "$share/forge" --arg repo "$repo" 'include "github"; [.data.repository.ref.target.history.nodes[] |
+      {sha: .oid, title: .messageHeadline, at: .committedDate, author: (.author.user.login // ""),
+       pipeline: checks(.statusCheckRollup; "/\($repo)/commit/\(.oid)")}]'
+}
+
+# merged: your pull requests merged in the last week and whether each is
+# live, as git-ci-merged answers on GitLab. Live once a successful deploy's
+# commit has its merge commit (git ancestry, main fetched first); deploying
+# or queued when a deploy on its way has it; else waiting, with its merge
+# commit's checks as the pipeline, their state put as the deploy job's, since
+# a host that deploys main (Railway, Vercel) deploys once those pass.
+merged() {
+  main=$(otis-config main) job=$(otis-config deployJob)
+  since=$(jq -rn 'now - 7 * 86400 | strftime("%Y-%m-%d")')
+  prs=$(graphql 'query($q: String!) { search(type: ISSUE, first: 20, query: $q) { nodes { ... on PullRequest {
+    number title headRefName baseRefName mergedAt url mergeCommit { oid '"$(jqg -nr 'include "github"; rollup_fields')"' } } } } }' \
+    -f q="repo:$repo is:pr is:merged author:@me merged:>=$since sort:updated-desc" |
+    ok -L "$share/forge" --arg repo "$repo" 'include "github"; [.data.search.nodes[] | select(.mergeCommit) |
+      {iid: (.number | tostring), title, sourceBranch: .headRefName, targetBranch: .baseRefName, mergedAt,
+       mergeCommitSha: .mergeCommit.oid, webUrl: .url,
+       checks: checks(.mergeCommit.statusCheckRollup; "/\($repo)/commit/\(.mergeCommit.oid)")}]
+      | sort_by(.mergedAt) | reverse') || exit 1
+  deploys=$(api "projects/:fullpath/deployments?environment=$(otis-config deployEnv)&per_page=100" |
+    jq '[.[] | {sha, at: (.deployable.finished_at // .deployable.started_at // .created_at), pipeline: (.id | tostring),
+      url: .deployable.web_url, status}]') || exit 1
+  git fetch --quiet --no-tags origin "$main" 2>/dev/null
+  # iid, state, and the deploy that has it (the first to go live with it,
+  # oldest first, or the one on its way), one line each.
+  states=$(printf '%s' "$prs" | jq -r '.[] | [.iid, .targetBranch, .mergeCommitSha] | @tsv' |
+    while IFS="$(printf '\t')" read -r iid target sha; do
+      if [ "$target" != "$main" ]; then printf '%s\tbranch\t\n' "$iid"; continue; fi
+      found=$(printf '%s' "$deploys" | jq -r 'reverse | .[] | select(.status | IN("success", "running", "created")) | [.status, .sha] | @tsv' |
+        while IFS="$(printf '\t')" read -r st d; do
+          git merge-base --is-ancestor "$sha" "$d" 2>/dev/null && { printf '%s\t%s\n' "$st" "$d"; break; }
+        done)
+      case $found in
+        (success*) printf '%s\tlive\t%s\n' "$iid" "${found#*	}" ;;
+        (running*) printf '%s\tdeploying\t%s\n' "$iid" "${found#*	}" ;;
+        (created*) printf '%s\tqueued\t%s\n' "$iid" "${found#*	}" ;;
+        (*) printf '%s\twaiting\t\n' "$iid" ;;
+      esac
+    done)
+  jq -n --argjson prs "$prs" --argjson deploys "$deploys" --arg states "$states" '
+    ($states | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: {state: .[1], sha: .[2]}}) | from_entries) as $s |
+    ([$deploys[] | select(.status == "success")][0]) as $latest |
+    { lastDeploy: $latest, running: ([$deploys[] | select(.status == "running")][0]), rollback: null,
+      mrs: [$prs[] | $s[.iid] as $st | del(.checks) + {state: $st.state}
+        + (if $st.sha != "" then {deploy: ([$deploys[] | select(.sha == $st.sha)] | if $st.state == "live" then map(select(.status == "success")) else . end | .[0])} else {} end)
+        + (if $st.state == "waiting" and .checks then {pipeline: (.checks | {id, status, path,
+            job: {status: ({RUNNING: "CREATED", PENDING: "CREATED", CREATED: "CREATED", SUCCESS: "SUCCESS", FAILED: "SKIPPED"}[.status] // "CREATED")}})}
+           else {} end)] }'
+}
+
+# branch_mrs <names>: the pull requests of those branches, as git-forge
+# branch-mrs answers on GitLab: from the 100 most recently updated, open or
+# not, since GitHub asks by one head branch at a time.
+branch_mrs() {
+  graphql_repo 'query($owner: String!, $name: String!) { viewer { login } repository(owner: $owner, name: $name) {
+    pullRequests(first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes {
+      number state headRefName baseRefName headRefOid updatedAt author { login } } } } }' |
+    ok --argjson names "$1" '{data: {currentUser: {username: .data.viewer.login}, project: {mergeRequests: {nodes:
+      [.data.repository.pullRequests.nodes[] | select(.headRefName | IN($names[])) |
+        {iid: (.number | tostring), state: ({OPEN: "opened", MERGED: "merged", CLOSED: "closed"}[.state]),
+         sourceBranch: .headRefName, targetBranch: .baseRefName, diffHeadSha: .headRefOid, updatedAt,
+         author: {username: (.author.login // "")}}]}}}}'
+}
+
+# approve <number> <sha>: an approving review at that commit, submitting
+# your pending review's drafts with it where there are some.
+approve() {
+  read -r rid _ head <<END
+$(pending "$1")
+END
+  [ "$head" = "$2" ] || { echo "it has moved on to $(printf '%.8s' "$head") since the $(printf '%.8s' "$2") you read" >&2; exit 1; }
+  if [ "$rid" != - ]; then
+    graphql 'mutation($r: ID!) { submitPullRequestReview(input: {pullRequestReviewId: $r, event: APPROVE}) { pullRequestReview { state } } }' -f r="$rid" | ok '{}' >/dev/null
+  else
+    jq -n --arg sha "$2" '{commit_id: $sha, event: "APPROVE"}' | gh api -X POST "repos/$repo/pulls/$1/reviews" --input - >/dev/null
+  fi
+}
+
+# What GitHub has no counterpart for, whose keys are left off: glab stacks,
+# starting a pipeline by hand, glab's stage graph, and uploads attached to a
+# comment.
+github_lacks='stack run-pipeline stage-graph upload'
+
+case $1 in
+  api) shift; api "$@" ;;
+  mrs) mrs "$2" ;;
+  approve) approve "$2" "$3" ;;
+  close) gh pr close "$2" -R "$repo" >/dev/null ;;
+  branch-mrs) branch_mrs "$2" ;;
+  merged) merged ;;
+  main-builds) main_builds ;;
+  mr-update) shift; mr_update "$@" ;;
+  head-ref) printf 'refs/pull/%s/head\n' "$2" ;;
+  mr-url) [ -n "$2" ] && printf 'https://%s/%s/pull/%s\n' "$host" "$repo" "$2" ;;
+  can) case " $github_lacks " in *" $2 "*) exit 1 ;; *) exit 0 ;; esac ;;
+  lacks) echo "$github_lacks" ;;
+  login) exec gh auth login --hostname "$host" ;;
+  *) echo "usage: git-forge api|mrs|approve|close|mr-update|head-ref|mr-url|can|lacks ..." >&2; exit 2 ;;
+esac

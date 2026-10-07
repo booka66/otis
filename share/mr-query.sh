@@ -1,7 +1,8 @@
 # The GraphQL for merge requests, shared by the two lists that ask for them:
-# git-mr-list (gmr) and otis-list (the dashboard). They go through
-# git-cached-json under the same cache names, so whichever picker you open
-# first warms the other, and a field added here lands in both.
+# git-mr-list (gmr) and otis-list (the dashboard), through git-forge mrs,
+# whose GitHub side answers in the same shape (share/forge/github.jq). They go
+# through git-cached-json under the same cache names, so whichever picker you
+# open first warms the other, and a field added here lands in both.
 #
 #   mr_fields        the node body of an MR in a list you did not author
 #   mr_review_query  the MRs requesting your review

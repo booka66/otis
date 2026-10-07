@@ -18,6 +18,7 @@
 # git-symbols --viewed <rev> <toggle|add> <row id>
 #                                            v: the row and everything under it viewed, or, all of it
 #                                            viewed already, none; add: the row alone, a review's enter
+# git-symbols --viewed <rev> warm            every symbol's diff hashed ahead of v, behind the first list
 # git-symbols --page <rev> [row id]          G: seam's page for the change, in the browser, open on the row;
 #                                            dagger's, with otis.engine dagger
 # git-symbols --table <rev>                  the table's path in the cache, built first if it is not
@@ -940,8 +941,9 @@ if [ -n "$GIT_FZF_STATE" ]; then table=$GIT_FZF_STATE/symbols.tsv; else table=$(
 # does: across pushes and amends, from ga to the commit gl shows, and in any
 # change whose diff of that symbol is the same one; an edit to it clears it.
 # One store rather than one per change, since the hash is what says it is
-# the same thing to read.
-vstore=$(git rev-parse --path-format=absolute --git-common-dir)/otis-viewed
+# the same thing to read. OTIS_VIEWED_STORE stands in for it: a page of the
+# change (walk.mjs symbols) is drawn with none of your marks.
+vstore=${OTIS_VIEWED_STORE:-$(git rev-parse --path-format=absolute --git-common-dir)/otis-viewed}
 # vspec_awk: from the table, key, path, side, start and end for each key in
 # the first file. A file row is its whole diff.
 vspec_awk='
@@ -993,34 +995,52 @@ vhash() {
   (cd "$vd" && cksum *) | awk -F'\t' 'FILENAME == ARGV[1] { key[$1] = $2; next } { split($0, c, " "); print key[c[3]] "\t" c[1] "-" c[2] }' "$vd.keys" -
   rm -rf "$vp" "$vd" "$vd.keys"
 }
+# vhashes <spec>: key<TAB>hash for each of the spec's keys, in the file $vc.
+# A commit's or a range's hashes never change, so they are kept for the
+# picker's life, keyed by the change, and only a key not yet hashed is; the
+# worktree's are hashed each time, into a file to remove ($vkept empty).
+vhashes() {
+  if [ -n "$head" ] && [ -n "$OTIS_SYMBOLS_KEY" ]; then
+    vc=$st/vh.$OTIS_SYMBOLS_KEY vkept=1
+    : >> "$vc"
+    awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$vc" "$1" > "$1.miss"
+    vhash "$1.miss" >> "$vc"
+    rm -f "$1.miss"
+  else
+    vc=$st/vh.$$ vkept=
+    vhash "$1" > "$vc"
+  fi
+}
 # viewed <keys> <out>: of the keys (the first field of each line), the
-# symbols in the table whose mark still holds. A commit's or a range's
-# hashes never change, so they are kept for the picker's life, keyed by the
-# change, and only a key not yet hashed is.
+# symbols in the table whose mark still holds.
 viewed() {
   : > "$2"
   [ -s "$vstore" ] || return 0
   vs=$st/vspec.$$
   awk -F'\t' "$vspec_awk" "$1" "$table" > "$vs"
-  if [ -n "$head" ] && [ -n "$OTIS_SYMBOLS_KEY" ]; then
-    vc=$st/vh.$OTIS_SYMBOLS_KEY
-    : >> "$vc"
-    awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$vc" "$vs" > "$vs.miss"
-    vhash "$vs.miss" >> "$vc"
-    rm -f "$vs.miss"
-  else
-    vc=$st/vh.$$
-    vhash "$vs" > "$vc"
-  fi
+  vhashes "$vs"
   awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } FILENAME == ARGV[2] { m[$1] = $2; next } ($1 in want) && ($1 in m) && m[$1] == $2 { print $1 }' "$vs" "$vstore" "$vc" > "$2"
-  rm -f "$vs"; [ -z "$head" ] && rm -f "$vc"
+  rm -f "$vs"; [ -n "$vkept" ] || rm -f "$vc"
 }
 
 if [ "$mode" = --viewed ]; then
   verb=$2 rid=$3
+  [ -s "$table" ] || exit 0
+  # Under a picker a commit's or a range's hashes are the ones its lists
+  # keep (vhashes), so v reads the ones it marks rather than diff their
+  # files again, which was half of a v.
+  [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ] && read -r OTIS_SYMBOLS_KEY 2>/dev/null < "$st/key"
+  # warm: every symbol of the change hashed, for the first v on each.
+  if [ "$verb" = warm ]; then
+    [ -n "$OTIS_SYMBOLS_KEY" ] || exit 0
+    awk -F'\t' '{ print ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$table" > "$st/vall.$$"
+    awk -F'\t' "$vspec_awk" "$st/vall.$$" "$table" > "$st/vall.$$.spec"
+    vhashes "$st/vall.$$.spec"
+    rm -f "$st/vall.$$" "$st/vall.$$.spec"
+    exit 0
+  fi
   # Not a heading, the spine, or callers elsewhere, which the change did not touch.
   case $rid in ''|gk-*|*'>callers'|*'>callers>'*) exit 0 ;; esac
-  [ -s "$table" ] || exit 0
   key=${rid##*>}
   # What v takes: the row, and for toggle everything under it as the tree
   # has it open or not: a class's members and the changed symbols it uses,
@@ -1044,8 +1064,10 @@ if [ "$mode" = --viewed ]; then
       }
     }' "$table" > "$keys"
   [ -s "$keys" ] || { rm -f "$keys"; exit 0; }
-  awk -F'\t' "$vspec_awk" "$keys" "$table" | { cat > "$keys.spec"; vhash "$keys.spec"; } > "$now"
-  rm -f "$keys.spec"
+  awk -F'\t' "$vspec_awk" "$keys" "$table" > "$keys.spec"
+  vhashes "$keys.spec"
+  awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } ($1 in want) && !($1 in seen) { seen[$1] = 1; print }' "$keys.spec" "$vc" > "$now"
+  rm -f "$keys.spec"; [ -n "$vkept" ] || rm -f "$vc"
   : >> "$vstore"
   # All of it viewed already: toggle clears it. Otherwise it all takes the
   # diff as it is now.
@@ -1056,13 +1078,6 @@ if [ "$mode" = --viewed ]; then
   # A review's file marks follow: a file is viewed once every symbol in it
   # is, and its row for what no symbol claims if it has one.
   if [ -n "$GMR_IID" ] && [ -n "$head" ]; then
-    read -r OTIS_SYMBOLS_KEY < "$st/key" 2>/dev/null
-    # What v just hashed goes in the change's hashes, so viewed() below
-    # diffs only the rest of those files, not these again.
-    if [ -n "$OTIS_SYMBOLS_KEY" ]; then
-      : >> "$st/vh.$OTIS_SYMBOLS_KEY"
-      awk -F'\t' 'FILENAME == ARGV[1] { have[$1] = 1; next } !($1 in have)' "$st/vh.$OTIS_SYMBOLS_KEY" "$now" >> "$st/vh.$OTIS_SYMBOLS_KEY"
-    fi
     cut -f1 "$now" | sed 's/#.*//' | sort -u > "$keys.paths"
     awk -F'\t' 'FILENAME == ARGV[1] { want[$1] = 1; next } ($1 in want) { print ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$keys.paths" "$table" > "$keys.all"
     viewed "$keys.all" "$keys.done"
@@ -1174,8 +1189,18 @@ highlight() {
 }
 
 if [ "$mode" = --rows ]; then
+  # The footer is this run's own until it is whole, the list's line and then
+  # the note, and goes into place at once (OTIS_FOOTER, for a caller that
+  # adds to it in turn): reloads run side by side (the gloss landing, the
+  # callers landing), and each adding to the one another had half written
+  # said the same note three times.
+  # Only the filter is told it: a reload this starts in the background
+  # writes a footer of its own.
+  foot=${OTIS_FOOTER:-${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}} tfoot=
+  [ -n "$foot" ] && tfoot=$foot.$$
+  unset OTIS_FOOTER
   # The table is kept for the picker's life, but a range can name a moving
-  # ref (gci's base..HEAD): a commit made from nvim moves it, so the shas the
+  # ref (base..HEAD): a commit made from nvim moves it, so the shas the
   # table was built from are checked on every reload. The worktree always
   # rebuilds; every reload of it is an edit.
   if [ -n "$head" ]; then
@@ -1359,6 +1384,12 @@ if [ "$mode" = --rows ]; then
   # What v has marked viewed that still holds, for the rows.
   vw=$st/vw.$$
   viewed "$vstore" "$vw"
+  # The rest of the change's symbols hashed behind the first list (--viewed
+  # warm), once per picker, so v finds the one it marks hashed already.
+  if [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/vh-all.$OTIS_SYMBOLS_KEY" ]; then
+    : > "$st/vh-all.$OTIS_SYMBOLS_KEY"
+    git-symbols --viewed "$rev" warm </dev/null >/dev/null 2>&1 &
+  fi
   # In a picker the spine is its header (git-fzf --header-from-state), not
   # rows: the cursor never lands on it, and enter has nothing to open.
   header=
@@ -1665,7 +1696,7 @@ if [ "$mode" = --rows ]; then
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
           (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
-    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" | highlight | git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
+    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" | highlight | OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
   rm -f "$counts" "$order" "$vw"
   [ -n "$GIT_FZF_STATE" ] || exit 0
@@ -1707,8 +1738,9 @@ if [ "$mode" = --rows ]; then
     note=$(printf "${GK_CONTEXT}nothing here is TypeScript, so there are only files${GK_R}")
   fi
   [ -n "$held" ] || printf '%s\n' "$OTIS_CALLERS_KEY" "$fixing" "$rechecking" "$nm" > "$st/held"
-  footer=; IFS= read -r footer 2>/dev/null < "$GIT_FZF_STATE/footer"
-  printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
+  footer=; IFS= read -r footer 2>/dev/null < "$tfoot"
+  printf '%s\n' "${footer:+$footer · }$note" > "$tfoot.new" && mv -f "$tfoot.new" "$foot"
+  rm -f "$tfoot"
   exit 0
 fi
 

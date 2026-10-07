@@ -12,7 +12,8 @@
 # started again after its process died (resume, share/claude-run.sh): what is
 # verified (head, base, branch), Claude's plan and its conversation (session),
 # the breaker's checks (break.json),
-# the Cursor agent and its warm-up (run-0), and per round n its run (run-<n>), the tester's report
+# the Cursor agent and its warm-up (run-0, and warmed once that showed the VM
+# can run a command), and per round n its run (run-<n>), the tester's report
 # (context/report-<n>.md) and Claude's verdict (verdict-<n>.json), and the
 # fix's attempts the same with n as fix-<a>, and fix-proposed once it is done.
 # What earlier verifications of the same MR or branch ran into, git-verify
@@ -31,10 +32,10 @@ key=$1
 [ -n "$key" ] || exit 2
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
+. "$share/cursor.sh"
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 d=$common/otis-verify/$key
 ctx=$d/context
-api=https://api.cursor.com
 agent= run= wt=
 rounds=3
 # This machine's own additions to the repo's verify-env brief: what retros
@@ -75,41 +76,6 @@ finish() {
 }
 note_signal
 
-# cursor <method> <path> [json]: Cursor's API. The response on stdout, and
-# exit 1 with its error body there instead when it fails. The JSON content
-# type goes only with a body: a POST with neither (cancel) is refused with one.
-# A GET that failed on Cursor's side or the network's, not on the request (a
-# 4xx), is tried again for five minutes; a POST is not, since it may have
-# landed (send_run has its own).
-cursor() {
-  m=$1 p=$2 i=0
-  shift 2
-  [ $# -gt 0 ] && set -- -H 'Content-Type: application/json' --data "$1"
-  until out=$(printf 'user = "%s:"\n' "$CURSOR_API_KEY" | curl -sS --fail-with-body -K - -X "$m" "$@" "$api$p" 2>&1); do
-    case $out in *'returned error: 4'*) i=99 ;; esac
-    [ "$m" = GET ] && [ $i -lt 20 ] || { printf '%s' "$out"; return 1; }
-    sleep 15; i=$((i + 1))
-  done
-  printf '%s' "$out"
-}
-
-# send_run <text>: a new run of the tester's with this prompt, its id on
-# stdout, or Cursor's error there and exit 1. Cursor takes one run at a time,
-# and frees the agent some time after its last run ends: a run can read
-# CANCELLED or FINISHED while a new one is still refused as agent_busy, for
-# seconds after a finish and over three minutes after a cancel that caught it
-# mid-command. So that is waited out, for ten minutes at most, and so is a
-# failure on Cursor's side or the network's; any other 4xx is final.
-send_run() {
-  until=$(($(date +%s) + 600))
-  until out=$(cursor POST "/v1/agents/$agent/runs" "$(jq -n --arg t "$1" '{prompt: {text: $t}}')"); do
-    case $out in *'"agent_busy"'*) ;; *'returned error: 4'*) printf '%s' "$out"; return 1 ;; esac
-    [ "$(date +%s)" -lt "$until" ] || { printf '%s' "$out"; return 1; }
-    sleep 5
-  done
-  printf '%s' "$out" | jq -r .run.id
-}
-
 # What to verify: the MR's head, or the branch as origin has it, since that is
 # all the tester's VM can see. A run picking up keeps what it started on.
 if [ -s "$d/head" ] && [ -s "$ctx/diff.patch" ]; then
@@ -127,7 +93,7 @@ else
       printf '# %s\n\nA branch with no merge request yet.\n' "$branch" > "$ctx/change.md"
       ;;
     *)
-      mr=$(glab api "projects/:fullpath/merge_requests/$key" 2>&1) || finish failed "could not ask GitLab for !$key: $(oneline "$mr")"
+      mr=$(git-forge api "projects/:fullpath/merge_requests/$key" 2>&1) || finish failed "could not ask GitLab for !$key: $(oneline "$mr")"
       [ "$(printf '%s' "$mr" | jq -r .state)" = opened ] || finish failed "!$key is not open"
       branch=$(printf '%s' "$mr" | jq -r .source_branch)
       head=$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)
@@ -235,7 +201,10 @@ retro() {
   digest breaker > "$ctx/retro-breaker.md"
   rm -f "$ctx/verify-env.local.md"
   [ -s "$envlocal" ] && cp "$envlocal" "$ctx/verify-env.local.md"
-  { printf '# What the run itself said, in order\n\n'; jq -r 'select(.type == "otis") | .text' "$d/events.jsonl"; } > "$ctx/retro-run.md"
+  # Each line with the minutes into the run it was said at, so what a
+  # blocker cost can be read off the record rather than called unknown.
+  { printf '# What the run itself said, in order, each line after the minutes into the run it was said at\n\n'
+    jq -r --argjson s "$(cat "$d/started")" 'select(.type == "otis") | (if .at then "\((.at - $s) / 60 | floor)m  " else "" end) + .text' "$d/events.jsonl"; } > "$ctx/retro-run.md"
   rounds_done=$(cat "$d/round" 2>/dev/null || echo 1)
   infra=$(git config --get otis.infraContact) || infra=
   cat > "$ctx/retro" <<EOF
@@ -246,7 +215,7 @@ A verification of a change to this repository just finished, and you are looking
 - Everything the tester did, in order (its commands, what they returned, what it said): $ctx/retro-tester.md
 - Everything the judge did: $ctx/retro-judge.md
 - Everything the breaker did, a fresh $who that read the change for what it might break and added the b criteria (empty when it did not run): $ctx/retro-breaker.md, and what it brought back: $d/break.json
-- The run's own account, in order: $ctx/retro-run.md
+- The run's own account, in order, each line after the minutes into the run it was said at: $ctx/retro-run.md
 - The judge's looks in, one file a look: $ctx/checkin-*.json (none when it never needed to)
 - The tester's report each round: $ctx/report-*.md
 - The judge's verdict each round: $d/verdict-*.json
@@ -325,7 +294,7 @@ case $key in
   b-*) pipes="projects/:fullpath/pipelines?ref=$(printf '%s' "$branch" | sed 's|/|%2F|g')&per_page=1" ;;
   *) pipes="projects/:fullpath/merge_requests/$key/pipelines?per_page=1" ;;
 esac
-pid=$(glab api "$pipes" 2>/dev/null | jq -r '.[0].id // empty')
+pid=$(git-forge api "$pipes" 2>/dev/null | jq -r '.[0].id // empty')
 if [ -n "$pid" ] && jobs=$(git-mr-pages "projects/:fullpath/pipelines/$pid/jobs?per_page=100" 2>/dev/null | jq -r '.[].name' | sort -u) && [ -n "$jobs" ]; then
   { printf 'Pipeline %s, on this very commit:\n\n' "$pid"; printf '%s\n' "$jobs" | sed 's/^/- /'; } > "$ctx/ci-jobs.md"
   ci_line="- What CI already runs on this commit, job by job: $ctx/ci-jobs.md"
@@ -349,8 +318,8 @@ review_schema='{"type":"object","additionalProperties":false,"required":["verdic
   "fix":{"type":"string"},
   "diagnosed":{"type":"boolean"},
   "summary":{"type":"string"},
-  "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","result","saw","evidence","artifacts"],"properties":{
-    "id":{"type":"string"},"result":{"enum":["verified","failed","unverified"]},"saw":{"type":"string"},"evidence":{"type":"string"},
+  "criteria":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","result","saw","was","evidence","artifacts"],"properties":{
+    "id":{"type":"string"},"result":{"enum":["verified","failed","changed","unverified"]},"saw":{"type":"string"},"was":{"type":"string"},"evidence":{"type":"string"},
     "artifacts":{"type":"array","items":{"type":"string"}}}}},
   "concerns":{"type":"array","items":{"type":"string"}}}}'
 
@@ -398,6 +367,24 @@ EOF
 # on the new commit, and the data left alone. A change with
 # nothing to verify has booted a VM for nothing; that is rare, and the cost of
 # waiting on the boot every time is not.
+model=$(otis-config cursorModel) env=$(otis-config cursorEnv)
+models=$common/otis-verify/models
+repo="$(otis-config url)/$(otis-config project)"
+# boot_vm [what failed]: a new VM of the tester's, sent the warm-up (tester-0)
+# as its first run. Cursor refusing it fails the verification, as what failed says.
+boot_vm() {
+  # A named environment (the dashboard's, with its snapshot) and repos are one or
+  # the other in Cursor's API, so with one the tester checks the commit out itself.
+  body=$(jq -n --rawfile text "$ctx/tester-0" --arg url "$repo" --arg ref "$head" --arg name "Verify $what" --arg model "$model" --arg env "$env" '
+    {prompt: {text: $text}, name: $name, autoCreatePR: false, workOnCurrentBranch: false}
+    + if $env == "" then {repos: [{url: $url, startingRef: $ref}]} else {env: {type: "cloud", name: $env}} end
+    + if $model == "" then {} else {model: {id: $model}} end')
+  out=$(cursor POST /v1/agents "$body") || finish failed "${1:-Cursor would not start the tester}: $(oneline "$out")"
+  printf '%s' "$out" | jq -r .run.id > "$d/run-0"
+  printf '%s' "$out" | jq -r '.agent.url // empty' > "$d/agent-url"
+  printf '%s' "$out" | jq -r .agent.id > "$d/agent"
+  printf '%s\t%s\n' "$(cat "$d/agent")" "$model" >> "$models"
+}
 if [ ! -s "$d/agent" ]; then
   {
     cat <<EOF
@@ -405,7 +392,7 @@ You are the tester in a verification of a change to this repository. What to ver
 
 1. Note the commit checked out now (git rev-parse HEAD), then check the change out: git fetch origin $branch && git checkout --detach $head, and confirm git rev-parse HEAD prints $head.
 2. Start the environment's default runtime, the one the environment section below says nearly every check needs, detached, as it says to. If it is already up (this VM may have verified another commit before), leave it running, but what runs this repository's own code was built from the commit you noted: when that is not $head, restart or rebuild those services, and only those, so they run $head. Leave the data services and their data as they are.
-3. Do not wait for it to be ready, and do nothing else: no reading the change, no tests, no browser. As soon as the start command has returned, end your turn with one line saying what you started or rebuilt.
+3. Do not wait for it to be ready, and do nothing else: no reading the change, no tests, no browser. As soon as the start command has returned, end your turn with one line saying what you started or rebuilt, and under it, on a line of its own, exactly what git rev-parse 'HEAD^{tree}' prints.
 EOF
     printf '\n## This environment\n\n'
     if [ -s "$ctx/verify-env.md" ]; then
@@ -420,8 +407,6 @@ EOF
   # cursorModel names now: Cursor's API does not say an agent's model, so
   # models (id, tab, model) is what each VM was booted with, and a VM not in
   # it is one whose model is unknown and is not reused either.
-  model=$(otis-config cursorModel) env=$(otis-config cursorEnv)
-  models=$common/otis-verify/models
   reuse=
   [ -s "$d/agent-prev" ] || : > "$d/agent-prev"
   while IFS= read -r a; do
@@ -438,24 +423,59 @@ EOF
     printf '%s' "$info" | jq -r '.url // empty' > "$d/agent-url"
     printf '%s\n' "$reuse" > "$d/agent"
   else
-    repo="$(otis-config url)/$(otis-config project)"
-    # A named environment (the dashboard's, with its snapshot) and repos are one or
-    # the other in Cursor's API, so with one the tester checks the commit out itself.
-    body=$(jq -n --rawfile text "$ctx/tester-0" --arg url "$repo" --arg ref "$head" --arg name "Verify $what" --arg model "$model" --arg env "$env" '
-      {prompt: {text: $text}, name: $name, autoCreatePR: false, workOnCurrentBranch: false}
-      + if $env == "" then {repos: [{url: $url, startingRef: $ref}]} else {env: {type: "cloud", name: $env}} end
-      + if $model == "" then {} else {model: {id: $model}} end')
     say "booting the tester's VM in Cursor Cloud, in ${env:-$repo}, while the plan is made ..."
-    out=$(cursor POST /v1/agents "$body") || finish failed "Cursor would not start the tester: $(oneline "$out")"
-    printf '%s' "$out" | jq -r .run.id > "$d/run-0"
-    printf '%s' "$out" | jq -r '.agent.url // empty' > "$d/agent-url"
-    printf '%s' "$out" | jq -r .agent.id > "$d/agent"
-    printf '%s\t%s\n' "$(cat "$d/agent")" "$model" >> "$models"
+    boot_vm
   fi
   say "tester's VM: $(cat "$d/agent-url")"
 fi
 # So a stop cancels the warm-up if it is still going (finish).
 agent=$(cat "$d/agent") run=$(cat "$d/run-0" 2>/dev/null)
+
+# warm_check: why, the error when the VM cannot start a command, and nothing
+# when it can. A VM can be up and idle to Cursor and still be of no use: its
+# tools check the repository's remote before every call, and once that check
+# fails (the VM's access to the forge gone) each shell, read and write comes
+# back a spawnError without having run, a bare echo included. Nothing in the
+# VM mends that, and Cursor's API does not say it of an agent; the warm-up
+# shows it, as the first thing asked of the VM. So its run is waited out, as
+# the brief would wait for it anyway (send_run), ten minutes at most.
+#
+# The warm-up ends with the commit's tree as git printed it in the VM, which
+# is nowhere in what the tester was told: a last message with it in is a VM
+# that ran a command, in this commit, and is all the check costs. Only
+# without it is the run's stream read back, which Cursor takes about a
+# minute to hand over once a run is done: shell calls that all came back
+# spawnError are a VM that cannot run. One that ran any command (a single
+# call can fail to start in a VM that is well), or made none at all, has a
+# tester that left the line out, and is taken as fine.
+warm_check() {
+  why=
+  until=$(($(date +%s) + 600))
+  while out=$(cursor GET "/v1/agents/$agent/runs/$run") && printf '%s' "$out" | jq -e '.status | IN("CREATING", "RUNNING")' >/dev/null; do
+    [ "$(date +%s)" -lt "$until" ] || finish failed "the tester's VM was still warming up ten minutes after the plan was in; $(cat "$d/agent-url")"
+    sleep 5
+    stopping
+  done
+  tree=$(git rev-parse --verify --quiet "$head^{tree}")
+  [ -n "$tree" ] && printf '%s' "$out" | jq -r '.result // ""' 2>/dev/null | grep -qF "$tree" && return
+  out=$(printf 'user = "%s:"\n' "$CURSOR_API_KEY" | curl -sSN -m 120 -K - -H 'Accept: text/event-stream' "$api/v1/agents/$agent/runs/$run/stream" 2>> "$d/stream.err" |
+    tr -d '\r' | sed -n 's/^data: *//p' |
+    jq -R -r -s '[split("\n")[] | fromjson? | objects | select(.name == "run_terminal_cmd" and .result != null)]
+      | if length > 0 and all(.[]; .result.spawnError != null) then .[0].result.spawnError | .error? // tostring else empty end')
+  [ -z "$out" ] || why="cannot start a command: $out"
+}
+# forget_vm <agent>: a VM out of models, so no later verification is handed it.
+forget_vm() {
+  grep -v "^$1	" "$models" > "$models.new" 2>/dev/null
+  mv "$models.new" "$models"
+}
+
+if [ ! -s "$d/plan.json" ]; then
+  say "$who is working out what would prove it works ..."
+  judge "$ctx/plan" "$plan_schema" "$d/plan.json"
+  jq -r '.criteria[] | "\(.id) (\(.runtime))  \(.plain // .claim)"' "$d/plan.json" | while IFS= read -r line; do say "$line"; done
+fi
+[ "$(jq -r .verifiable "$d/plan.json")" = true ] || finish done "nothing to verify in a VM: $(jq -r .summary "$d/plan.json")"
 
 # break: the judge works out what would prove the change does what it means
 # to, and so reads it the way its author did. A fresh Claude, read-only, reads
@@ -463,8 +483,12 @@ agent=$(cat "$d/agent") run=$(cat "$d/run-0" 2>/dev/null)
 # follows what the change touches outward, to the callers it did not change,
 # the data older code wrote, the readers of what it writes, and brings back at
 # most four checks the tester can run, each tied to the code that would break
-# and what sets it off, each a claim of what should still hold. It is not in
-# anyone's way: it starts with the plan and runs while the tester works on
+# and what sets it off, each a claim of what should still hold. It reads the
+# judge's plan first, and what earlier verifications of the same change found
+# (lessons.md), which is why it starts once the plan is in: a breaker that
+# knows neither attacks what the change set out to do, repeats a criterion,
+# asks for what the environment cannot show, and finds again what the last
+# run found. It is not in anyone's way: it runs while the tester works on
 # the plan, and its checks, b1, b2, ..., go to the same warm VM as a second
 # run once the tester's first round is in (attack below), before the judge
 # rules on both. Past break_mins it is stopped and asked, in the same
@@ -525,16 +549,23 @@ if [ ! -s "$d/break.json" ] && [ ! -s "$d/run-1" ] && otis-config verifyBreak; t
   git diff --no-ext-diff --name-only "$base" "$head" > "$ctx/changed"
   { printf '# The last commits before this change to the files it touches\n\n'
     tr '\n' '\0' < "$ctx/changed" | xargs -0 git log -n 60 --format='- %h %as %s' "$base" -- 2>/dev/null; } > "$ctx/history.md"
+  break_lessons=
+  [ -s "$d/lessons.md" ] && break_lessons="
+- What earlier verifications of this same change found, newest first, each under the commit it verified: $d/lessons.md. What did not hold then, and what had changed beyond the description, is listed there. One the description now owns up to, or a commit after that one has mended (the commits are newest first), is settled: leave it out. One that still stands is worth its check again, before anything new, written as it was."
   cat > "$ctx/break" <<EOF
 You are the breaker in a verification of a change to this repository. A judge has written what would prove the change does what it sets out to, and a tester, a Cursor Cloud agent in a VM with the repo's development environment (its services and data, a desktop browser, the test suites), will check it. That covers what the author meant. You cover what they did not: assume this change broke something, somewhere its author was not looking, and find it. You never run anything; you say what the tester should try, and the tester's evidence decides.
 
 - The change's title and description: $ctx/change.md
+- Its commits, newest first: $ctx/commits.md
 - What it touches, the files biggest first, each with the line it starts at in the patch: $ctx/files.md
 - Its diff, base $base to head $head: $ctx/diff.patch
 - What the files it touches went through before it, newest first: $ctx/history.md
+- The judge's plan: the criteria the tester is already checking, and its brief to the tester, which says what this environment has and what it cannot show: $d/plan.json
 - The repository at the head is the working directory.
 $brief_line
-$ci_line
+$ci_line$break_lessons
+
+Read the plan before the code. What it and the description say the change does, the change means to do, and that is the judge's to check, not yours: a claim that the old behaviour still holds exactly where they say it changes is no attack, it fails by design. Nor is a criterion's own case yours to make again. What you bring is what neither of them mentions.
 
 Work outward from the change, not along it. Of the functions, types, schemas, columns, endpoints, events, flags and config keys it changes, pick the two or three that code the change did not touch uses most, and search for those uses and read them: the author tested the calls they had in mind, and the others are where it breaks. Not every changed name; the ones with the most readers outside the change. Read the history for fixes and reverts in these files: where they broke before is where they break again. Then go through these, each against the code you found:
 
@@ -548,10 +579,10 @@ Work outward from the change, not along it. Of the functions, types, schemas, co
 
 You have about $break_mins minutes; after that you will be asked to answer at once with what you have. Stop as soon as you have four attacks you can pin, or when more reading has stopped turning up new candidates, and answer with what you have.
 
-Write down only what you can pin to code: a line outside what the change set out to do, and an input or state that reaches it. A worry you cannot tie to a line is not an attack; leave it out. A bug the base commit has as well is not this change's; leave it out. Nothing about whether it does what it sets out to, which the judge covers, and nothing the pipeline already runs. Then write:
+Write down only what you can pin to code: a line outside what the change set out to do, and an input or state that reaches it. A worry you cannot tie to a line is not an attack; leave it out. A bug the base commit has as well is not this change's; leave it out. Nothing about whether it does what it sets out to, which the judge covers, and nothing the pipeline already runs. What the plan's brief says this environment cannot show is not worth a check that can only come back blocked: find where the same break shows here, or leave it out. Then write:
 
-- attacks: at most four, the likeliest to be real and to matter first. Each has an id (b1, b2, ...), the claim, what should still hold if the change broke nothing (so the claim is true when all is well, and a check that shows it false has found the break), why (the file and line that would break, the input or state that sets it off, and what happens then), the runtime it needs, and how the tester checks it in that VM: which app and page, which data, which command, and how to produce the state (the old row, the second delivery, the flag off) the way production would. Prefer sandbox wherever it can show the break: the tester boots one runtime for everything, and the boot is most of a round. Empty when you found nothing you can pin; that is a fine answer, better than a guess.
-- plain, for each: the claim as the report's reader first sees it, one short sentence in plain words, no field names, ids, URLs or parentheses.
+- attacks: at most four, the likeliest to be real and to matter first. Each has an id (b1, b2, ...), the claim, what should still hold if the change broke nothing (so the claim is true when all is well, and a check that shows it false has found the break), why (the file and line that would break, the input or state that sets it off, and what happens then), the runtime it needs, and how the tester checks it in that VM: which app and page, which data, which command, in the plan's own terms where it has them (its logins, its data), and how to produce the state (the old row, the second delivery, the flag off) the way production would. Prefer sandbox wherever it can show the break: the tester boots one runtime for everything, and the boot is most of a round. Empty when you found nothing you can pin; that is a fine answer, better than a guess.
+- plain, for each: the claim as the report's reader first sees it, one short sentence in plain words, no field names, ids, URLs or parentheses. What should still hold, never the break itself: "An order recorded twice counts once", not "A duplicate order is counted twice".
 - runtime: sandbox for anything its seeded data can show; store only when the check needs a real merchant, a webhook or a text; none only for a check that needs no services at all.
 - summary: one sentence, what you looked at and what you think is most likely broken, or that you found nothing to pin.
 
@@ -561,13 +592,35 @@ EOF
   brk &
   breakpid=$!
 fi
-if [ ! -s "$d/plan.json" ]; then
-  say "$who is working out what would prove it works ..."
-  judge "$ctx/plan" "$plan_schema" "$d/plan.json"
-  jq -r '.criteria[] | "\(.id) (\(.runtime))  \(.plain // .claim)"' "$d/plan.json" | while IFS= read -r line; do say "$line"; done
+# The brief goes only to a VM whose warm-up ran something (warm_check). A
+# tester briefed in one that cannot spends its rounds, the breaker and the
+# judge on saying so, and the verdict that comes of it, inconclusive, reads
+# as a finding about the change. An earlier verification's VM that cannot is
+# left for a new one, once. When the new one can, the fault was the old VM's
+# own and no later verification is handed it. When the new one cannot
+# either, or Cursor will not start one, it is not the VM's doing (the forge
+# turning Cursor away, as a rule): the verification fails there, saying what
+# the VM said, and the old VM, with all it has up, is kept for when that is
+# mended.
+if [ ! -s "$d/run-1" ] && [ ! -e "$d/warmed" ]; then
+  warm_check
+  also=
+  if [ -n "$why" ] && [ -e "$d/reused" ]; then
+    old=$agent also=" (nor could the earlier one it replaced)"
+    say "the earlier tester's VM $why; booting a new one in its place ..."
+    boot_vm "the earlier tester's VM $why, and Cursor would not start a new one"
+    rm -f "$d/reused"
+    agent=$(cat "$d/agent") run=$(cat "$d/run-0")
+    say "tester's VM: $(cat "$d/agent-url")"
+    warm_check
+    [ -n "$why" ] || forget_vm "$old"
+  fi
+  if [ -n "$why" ]; then
+    forget_vm "$agent"
+    finish failed "the tester's VM $why$also. Nothing about the change was checked; $(cat "$d/agent-url")"
+  fi
+  : > "$d/warmed"
 fi
-[ "$(jq -r .verifiable "$d/plan.json")" = true ] || finish done "nothing to verify in a VM: $(jq -r .summary "$d/plan.json")"
-
 if [ ! -s "$d/run-1" ]; then
   reuse_note=
   [ -e "$d/reused" ] && reuse_note="
@@ -705,7 +758,7 @@ EOF
 # in (check_in), and a run it interrupted is followed from its replacement.
 checkin=$(otis-config verifyCheckIn)
 wait_run() {
-  last_check=$(date +%s)
+  last_check=$(date +%s) last_fetch=$last_check
   while :; do
     sid=$d/stream-$run.id
     stream_run &
@@ -713,9 +766,21 @@ wait_run() {
     while kill -0 "$spid" 2>/dev/null; do
       sleep 5
       stopping
-      if [ "$checkin" -gt 0 ] && [ $(( $(date +%s) - last_check )) -ge $((checkin * 60)) ]; then
+      # What it has saved so far, each minute: the run's screen draws a
+      # screenshot under the step that took it while the tester is still going.
+      if [ $(( $(date +%s) - last_fetch )) -ge 60 ]; then fetch_artifacts; last_fetch=$(date +%s); fi
+      overdue=$(( $(date +%s) - last_check ))
+      if [ "$checkin" -gt 0 ] && [ "$overdue" -ge $((checkin * 60)) ]; then
         last_check=$(date +%s)
-        if check_in; then
+        # A look a whole interval late is a laptop that slept. The record is
+        # as old as the sleep and the stream has only now been picked up, so
+        # the judge would rule on what the tester was doing hours ago, and
+        # once told one that had long finished to stop, whose answer to that
+        # then stood in for its report. The wait starts over instead, and by
+        # the next look the record has caught up.
+        if [ "$overdue" -ge $((checkin * 120)) ]; then
+          say "no look in $((overdue / 60)) minutes (asleep?); the judge waits for the tester's record to catch up"
+        elif check_in; then
           pkill -P "$spid" 2>/dev/null; kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
           continue 2
         fi
@@ -852,7 +917,10 @@ while :; do
   if [ ! -s "$d/verdict-$n.json" ]; then
     attacks=
     jq -e 'any(.criteria[]; .kind == "attack")' "$d/plan.json" >/dev/null 2>&1 && attacks="
-Besides your criteria, the tester had $(jq -r '[.criteria[] | select(.kind == "attack") | .id] | join(", ")' "$d/plan.json"): checks for what the change may have broken around it, from someone who read it looking for that, each with what would break and why: $d/break.json. They are criteria like yours, each a claim of what should still hold, and you judge them by the same standard. One whose evidence shows the base commit fails the same way is not the change's doing: mark it unverified and say so in concerns, as broken before this change.
+Besides your criteria, the tester had $(jq -r '[.criteria[] | select(.kind == "attack") | .id] | join(", ")' "$d/plan.json"): checks for what the change may have broken around it, from someone who read it looking for that, each with what would break and why: $d/break.json. Each is a claim of what should still hold, and you weigh its evidence by the same standard as your own. But one whose claim the evidence shows false has one of two results, and telling them apart is what these checks are for: an author told every time that the change failed stops listening.
+- failed: the change broke it. What happens now is wrong on any reading of what the change is for: a wrong number, an error, a write lost or made twice, something shown to someone who must not see it, a flow that no longer completes, older data or older code it no longer works with.
+- changed: nothing is broken; the change does more than its description says. Behaviour that moved, widened, or now shows somewhere else as well, in a way its author may well have meant and only they can say. Then saw is what it does now, and was is what it did before, in a few words (only its own messages, say).
+When you cannot tell which, it is failed only when you can say who is harmed and how; otherwise changed. Only these checks can come out changed, never a criterion of yours. One whose evidence shows the base commit fails the same way is neither, and not the change's doing: mark it unverified and say so in concerns, as broken before this change.
 "
     cat > "$ctx/review-$n" <<EOF
 The tester's round $n is over; its run ended $status.
@@ -863,10 +931,10 @@ The tester's round $n is over; its run ended $status.
 $attacks
 Judge the evidence itself, not the report's account of it: look at the screenshots and frames, and read the output. A criterion is verified only when the evidence shows the claim true, failed when it shows it false, and unverified otherwise: blocked, skipped, or claimed without anything that shows it. Weigh how each was checked against how you said to.
 
-- criteria: each of yours, with result, saw (what the evidence shows, for the report's reader who skims: one short sentence in plain words, no file names, ids or field names; "The link redirected and its click carried the code", "No code on the click, as intended"), the evidence (the file and what it shows, in a sentence) and artifacts: the files that show it, by name as they are under $d/artifacts (a frame under $ctx/frames as frames/<name>), the recording first when there is one, then the screenshots and output that matter; empty when nothing shows it. A criterion with no artifact that shows it is unverified, whatever the report says. Verified means you checked the evidence against itself: an identifier the claim turns on (a message id, a topic id, a test name, a value on screen) appears in two of its artifacts, or in one artifact and the change's own definition of it, and the evidence names which.
+- criteria: each of yours, with result, saw (what the evidence shows, for the report's reader who skims: one short sentence in plain words, no file names, ids or field names; "The link redirected and its click carried the code", "No code on the click, as intended"), was (empty, but for a check that came out changed), the evidence (the file and what it shows, in a sentence) and artifacts: the files that show it, by name as they are under $d/artifacts (a frame under $ctx/frames as frames/<name>), the recording first when there is one, then the screenshots and output that matter; empty when nothing shows it. A criterion with no artifact that shows it is unverified, whatever the report says. Verified means you checked the evidence against itself: an identifier the claim turns on (a message id, a topic id, a test name, a value on screen) appears in two of its artifacts, or in one artifact and the change's own definition of it, and the evidence names which.
 - done: false when another round would settle something that matters: an unverified criterion the tester could check, evidence that does not show what the report says, or a case it skipped. Then followup is what the tester must do next, specifically. A criterion blocked by the environment itself (no store in the VM, Secrets not injected, a service the VM cannot reach) stays blocked in every round; never send the tester back for one of those, and when nothing else is worth a round, done is true. followup only gathers evidence about $head as it is: it never asks the tester to change, regenerate or add files. A criterion that failed because of the change is not a reason for another round; it is a fail, and what to change goes in fix. This is round $n of at most $rounds; on round $rounds, done is true.
-- verdict, once done: fail when any criterion failed, pass only when every one of yours is verified and none of the others failed (one of those the VM could not check leaves a pass a pass), inconclusive otherwise.
-- fix, only once done with a fail whose cause may lie in the change itself: what the tester should do about it. When you know the cause: the file and lines, what is wrong with them, and what to change, specifically. When you suspect the change but are not sure where or why: your best lead, what the evidence shows, where you would look first and what would tell the likely causes apart; the tester, who can run things where you cannot, finds the cause before it changes anything. Either way it makes the change in its VM and checks again, and you rule on its patch. Empty when the cause lies in the environment or the test data, when mending it needs a decision only the author can make, or when it is more than a small change; and empty in every other case.
+- verdict, once done: fail when any criterion failed, pass only when every one of yours is verified and none of the others failed (one of those that came out changed, or that the VM could not check, leaves a pass a pass), inconclusive otherwise.
+- fix, only once done with a fail whose cause may lie in the change itself: what the tester should do about it. When you know the cause: the file and lines, what is wrong with them, and what to change, specifically. When you suspect the change but are not sure where or why: your best lead, what the evidence shows, where you would look first and what would tell the likely causes apart; the tester, who can run things where you cannot, finds the cause before it changes anything. Either way it makes the change in its VM and checks again, and you rule on its patch. Empty when the cause lies in the environment or the test data, when mending it needs a decision only the author can make, or when it is more than a small change; and empty in every other case, a check that came out changed among them: what to do about that is the author's to say.
 - diagnosed: true when fix names the change to make, false when it is a lead or empty.
 - summary: for the author, who reads it first: whether the change works and the one thing worth knowing, in one or two short sentences of plain words. No ids, codes, URLs, file names or status lines; the criteria carry those. What the environment could not do belongs here only when it changes what the verdict means.
 - concerns: what the evidence shows is wrong with the change itself, beyond the criteria, that the author should act on: an error in the logs or console the change causes, something off on screen, a case it breaks. One line each. Not the environment (a service down, seed data missing, what the sandbox cannot do), not the evidence (a mislabeled file, a log overwritten), and nothing you would call unrelated, expected or not a defect: the retrospective covers how the run went. Empty is the usual answer.
@@ -1050,6 +1118,7 @@ jq -r --slurpfile plan "$d/plan.json" --arg url "$(cat "$d/agent-url")" --arg di
   | "**\(.verdict | ascii_upcase)** after \($rounds) round\(if $rounds == "1" then "" else "s" end): \(.summary)",
     "",
     (.criteria[] | "- \(if .result == "verified" then "✓" elif .result == "failed" then "✗" else "?" end) **\(.id)** \($claims[.id] // "")  \n  \(.evidence)"
+      + (if .result == "changed" then "  \n  Changed, and not in the description. Before: \(.was // "")" else "" end)
       + (if ((.artifacts // []) | length) > 0 then "  \n  " + ((.artifacts // []) | map(if startswith("frames/") then "[\(.)](file://\($frames)/\(.[7:]))" else "[\(.)](file://\($dir)/\(.))" end) | join(" · ")) else "" end)),
     (if (.concerns | length) > 0 then "", "**Concerns**", "", (.concerns[] | "- " + .) else empty end),
     "", "Evidence: `\($dir)`", "Tester: \($url)"

@@ -53,11 +53,18 @@ if [ "$1" = --list ]; then
     jq -r '.[] | select(.where.path and .where.state == "line")
       | (if .draft then "draft" elif (.resolvable and (.resolved | not)) then "open" else empty end) as $k
       | [.where.path, .where.side, .where.line, $k] | @tsv' > "$st/marks" 2>/dev/null
-  OTIS_SYMBOL_MARKS=$st/marks git-symbols --rows "$range"
-  note=$(git-mr-file-preview --note "$iid" "$range")
-  printf '%s\n' "$note" > "$st/mr-note"
-  footer=$(cat "$st/footer" 2>/dev/null)
-  [ -n "$note" ] && printf '%s\n' "${footer:+$footer · }$note" > "$st/footer"
+  # The note is worked out beside the rows, which it reads nothing of: one
+  # after the other it was a third of the list. The footer whole in a file
+  # of this run's, then into place (as git-symbols --rows does, for the
+  # reloads that run side by side).
+  git-mr-file-preview --note "$iid" "$range" > "$st/mr-note.$$" &
+  OTIS_FOOTER=$st/footer.$$ OTIS_SYMBOL_MARKS=$st/marks git-symbols --rows "$range"
+  wait
+  mv -f "$st/mr-note.$$" "$st/mr-note"
+  note=$(cat "$st/mr-note")
+  footer=$(cat "$st/footer.$$" 2>/dev/null); rm -f "$st/footer.$$"
+  [ -n "$note" ] && footer=${footer:+$footer · }$note
+  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "$st/footer"
   exit 0
 fi
 # --viewed <add|toggle> <iid> <range> <path> <row id>: enter's mark and v,
@@ -66,15 +73,21 @@ if [ "$1" = --viewed ]; then
   if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then exec git-mr-viewed "$2" "$3" "${4#*..}" "$5"; fi
   exec git-symbols --viewed "$4" "$2" "$6"
 fi
-# --light <iid> <range>: the list again after a fold key (l, h, L, H, b),
-# which changes no thread and no note: the marks and the note of the last
-# list, and the rows alone. A third of the time of --list.
+# --light <iid> <range> [note]: the list again after a fold key (l, h, L, H,
+# b), which changes no thread and no note: the marks and the note of the last
+# list, and the rows alone. A third of the time of --list. With note, v's:
+# no thread changed, but how many files are viewed is in the note, so that
+# is worked out again, beside the rows. By file there is only the one list.
 if [ "$1" = --light ]; then
   iid=$2 range=$3
-  OTIS_SYMBOL_MARKS=$st/marks OTIS_SYMBOLS_FOLD=1 git-symbols --rows "$range"
+  if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then exec git-mr-files --list "$iid" "$range"; fi
+  [ "$4" = note ] && { git-mr-file-preview --note "$iid" "$range" > "$st/mr-note.$$" & }
+  OTIS_FOOTER=$st/footer.$$ OTIS_SYMBOL_MARKS=$st/marks OTIS_SYMBOLS_FOLD=1 git-symbols --rows "$range"
+  [ "$4" = note ] && { wait; mv -f "$st/mr-note.$$" "$st/mr-note"; }
   note=$(cat "$st/mr-note" 2>/dev/null)
-  footer=$(cat "$st/footer" 2>/dev/null)
-  [ -n "$note" ] && printf '%s\n' "${footer:+$footer · }$note" > "$st/footer"
+  footer=$(cat "$st/footer.$$" 2>/dev/null); rm -f "$st/footer.$$"
+  [ -n "$note" ] && footer=${footer:+$footer · }$note
+  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "$st/footer"
   exit 0
 fi
 if [ "$1" = --preview ]; then
@@ -88,7 +101,7 @@ if [ "$1" = --preview ]; then
 fi
 # --refs <iid>: the MR's head, base, target, source and start, one line.
 refs() {
-  mr=$(glab api "projects/:fullpath/merge_requests/$1" 2>&1) || { printf '%s\n' "$mr" | head -1 >&2; return 1; }
+  mr=$(git-forge api "projects/:fullpath/merge_requests/$1" 2>&1) || { printf '%s\n' "$mr" | head -1 >&2; return 1; }
   printf '%s' "$mr" | jq -r '"\(.diff_refs.head_sha) \(.diff_refs.base_sha) \(.target_branch) \(.source_branch) \(.diff_refs.start_sha)"'
 }
 [ "$1" = --refs ] && { refs "$2"; exit; }
@@ -135,7 +148,7 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
   --bind "y:transform(git-symbols --copy {12})" \
   --bind "enter:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-commit-open $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
-  --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($list)" \
+  --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($light note)" \
   --bind "f:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
   --bind "l:execute-silent(git-symbols --open {12})+reload($light)" \
   --bind "h:transform(git-symbols --close {12} $light)" \

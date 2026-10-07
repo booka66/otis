@@ -13,8 +13,8 @@
 #                  cursor's ask mode. Edit or Write too: codex's
 #                  workspace-write sandbox, cursor's agent mode in its
 #                  sandbox. Both have a shell in their sandbox, with no
-#                  network; neither can hold one to otis-claude-gate, so Bash
-#                  is refused and a run asks for it only of claude.
+#                  network; neither can hold one to a gate, so Bash is
+#                  refused.
 #   --json-schema  codex's --output-schema; for cursor, asked for in the
 #                  prompt and read out of its last message.
 #   --session-id / --resume  the caller's id, kept against the agent's own
@@ -155,7 +155,7 @@ while [ $# -gt 0 ]; do
     --no-session-persistence) persist= ;;
     --tools)
       shift
-      case ",$1," in *,Bash,*) refuse "$name has no gated shell here; only claude runs checks through git-remote-run" ;; esac
+      case ",$1," in *,Bash,*) refuse "$name has no gated shell here" ;; esac
       case ",$1," in *,Edit,* | *,Write,*) write=1 ;; esac ;;
     --add-dir) shift; dirs="$dirs$1$nl" ;;
     --output-format) shift; fmt=$1 ;;

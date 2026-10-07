@@ -24,7 +24,7 @@
 # the rebase. A stack moves as a whole: b on any layer of a glab stack rebases
 # all of it (git-stack --update), and gup with --update-refs moves a branch
 # stack.
-mr() { glab api "projects/:fullpath/merge_requests/$iid$1"; }
+mr() { git-forge api "projects/:fullpath/merge_requests/$iid$1"; }
 pause() { otis-popup say "$1"; }
 
 if [ "$1" = --check ]; then
@@ -42,7 +42,7 @@ if [ "$1" = --check ]; then
     exec echo "execute(git-stack --update $stack)+execute-silent(git-fzf-bg git-mr-list --refresh)"
   [ "$target" = "$(otis-config main)" ] ||
     exec git-fzf-note "!$iid is stacked on $target; gup in the top branch's checkout rebases the stack"
-  above=$(glab api "projects/:fullpath/merge_requests?state=opened&target_branch=$(printf '%s' "$src" | jq -sRr @uri)" 2>/dev/null | jq -r 'map("!\(.iid)") | join(", ")')
+  above=$(git-forge api "projects/:fullpath/merge_requests?state=opened&target_branch=$(printf '%s' "$src" | jq -sRr @uri)" 2>/dev/null | jq -r 'map("!\(.iid)") | join(", ")')
   [ -z "$above" ] ||
     exec git-fzf-note "$above stack on !$iid, and would keep its old commits; gup in the top branch's checkout rebases the stack"
   behind=$(printf '%s' "$json" | jq -r '.diverged_commits_count // 0')
@@ -61,7 +61,7 @@ git-confirm "$(printf '%s' "$json" | jq -r '
   "  GitLab rewrites the branch and starts a new pipeline"')
 
 rebase it?" || exit 0
-out=$(glab api -X PUT "projects/:fullpath/merge_requests/$iid/rebase" 2>&1) ||
+out=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$iid/rebase" 2>&1) ||
   { pause "GitLab would not start the rebase
 $(printf '%s\n' "$out" | head -3)"; exit 1; }
 

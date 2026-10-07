@@ -6,7 +6,8 @@
 #
 # The footer is the one place that says what a key does, so it says it for
 # the row you are on: enter on your own MR addresses its threads, on a merged
-# one opens its deploy; A approves only what you review; w and y need an MR.
+# one opens its deploy; A approves only what you review; w needs an MR, and y
+# copies the branch name without one.
 # Only what the row and the picker's state already hold is read: this runs
 # on every move, behind the picker.
 st=$GIT_FZF_STATE
@@ -24,7 +25,7 @@ case $picker in
     case $kind in
       review)
         k enter "review it"; k A "approve it"; k C "$who reviews it"
-        none R D ;;
+        none R D X ;;
       mine)
         # One jq for both: this runs on every move.
         read -r threads draft <<EOF
@@ -34,12 +35,12 @@ EOF
         if [ "${threads:-0}" -gt 0 ] 2>/dev/null; then k enter "address its $threads $( [ "$threads" -eq 1 ] && echo thread || echo threads)"
         else k enter "read it by symbol"; fi
         if [ "$draft" = true ]; then k R "mark it ready"; else k R "mark it draft"; fi
-        k C "$who proposes fixes"
+        k C "$who proposes fixes"; k X "close it"
         none A D ;;
       merged)
         k enter "its deploy"; k D "Claude watches production"
-        none A R C V P m b r N s W l a G ;;
-      *) none enter c m b A R l a s W C D V P r N w G y p v ;;
+        none A R C V P m b r N s W l a G X ;;
+      *) none enter c m b A R l a s W C D V P r N w G y p v X ;;
     esac ;;
 
   # gb: branch, kind, worktree, MR iid, place.
@@ -54,7 +55,7 @@ EOF
       merged|merged-diff|closed|closed-diff) [ "$place" = here ] || k d "delete it: it is $kind" ;;
     esac
     if [ -n "$mr" ]; then none n; k w "open !$mr"; k y "copy !$mr's link"
-    else none w y l a; fi ;;
+    else none w l a; k y "copy the branch name"; fi ;;
 
   # gw: path, branch, kind, safe.
   worktree)

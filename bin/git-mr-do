@@ -4,6 +4,7 @@
 # git-mr-do claude <kind> <iid> <target> <url> <source> <head> <base> <pipeline id> [start]
 # git-mr-do approve <kind> <iid> <head> <base>
 # git-mr-do draft <kind> <iid>
+# git-mr-do close <kind> <iid>
 # git-mr-do page <kind> <iid> <head> <base> [start]
 # The MR keys shared by gb and gmr, as fzf actions for a transform binding.
 # A row with no MR gets a footer note instead of a dead key. [then] is an action
@@ -47,6 +48,14 @@ if [ "$1" = approve ]; then
   echo "execute(git-mr-approve $3 $4 $5)+execute-silent(git-fzf-bg git-mr-list --refresh)"
   exit 0
 fi
+# close is gmr's X, on your own open MRs only: closing someone else's is
+# theirs to do (git-mr-close).
+if [ "$1" = close ]; then
+  [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
+  [ "$2" = mine ] || exec git-fzf-note "X closes your own open MRs, and !$3 is not one"
+  echo "execute(git-mr-close $3)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  exit 0
+fi
 # page is gmr's G: seam's page for the MR in the browser, the diff the review
 # would open on (git-mr-base), from the table git-mr-prefetch keeps for it.
 if [ "$1" = page ]; then
@@ -69,7 +78,7 @@ fi
 if [ "$1" = flip ]; then
   iid=$2
   (
-    if mr=$(glab api "projects/:fullpath/merge_requests/$iid" 2>&1); then
+    if mr=$(git-forge api "projects/:fullpath/merge_requests/$iid" 2>&1); then
       # Ready takes the ready label (otis-config readyLabel), which the
       # project's CI waits for; back to draft drops it. One update does both.
       label=$(otis-config readyLabel)
@@ -78,7 +87,7 @@ if [ "$1" = flip ]; then
       else
         set -- --draft ${label:+--unlabel "$label"}; said="!$iid is a draft now${label:+, without $label}"
       fi
-      out=$(glab mr update "$iid" "$@" 2>&1) || said="could not mark !$iid ${1#--}: $(printf '%s' "$out" | tail -1)"
+      out=$(git-forge mr-update "$iid" "$@" 2>&1) || said="could not mark !$iid ${1#--}: $(printf '%s' "$out" | tail -1)"
     else
       said="could not read !$iid from GitLab: $(printf '%s' "$mr" | head -1)"
     fi

@@ -30,7 +30,7 @@ dir=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias
 state=$dir/alerts-state.json
 mkdir -p "$dir"
 
-json=$(glab api graphql -f query='query { currentUser { username
+json=$(git-forge api graphql -f query='query { currentUser { username
   todos(state: pending, action: [review_requested, unmergeable, mentioned, directly_addressed], first: 50) { nodes {
     id action targetType body author { username name bot } target { ... on MergeRequest { id iid title } ... on Issue { iid } ... on WorkItem { iid } } } }
   authoredMergeRequests(state: opened, first: 100) { nodes { id iid title
@@ -38,7 +38,7 @@ json=$(glab api graphql -f query='query { currentUser { username
     notes(last: 30) { nodes { id system body author { username name bot } } } } } } }' 2>/dev/null) || exit 1
 
 merged=null
-if [ -r "$dir/ci-repo" ] && cache=$(cd "$(cat "$dir/ci-repo")" && git-cached-json --sync ci-merged 60 -- git-ci-merged 2>/dev/null); then
+if [ -r "$dir/ci-repo" ] && cache=$(cd "$(cat "$dir/ci-repo")" && git-cached-json --sync ci-merged 60 -- git-forge merged 2>/dev/null); then
   merged=$(cat "$cache")
 fi
 

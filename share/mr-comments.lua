@@ -1,7 +1,8 @@
 -- Loaded by git-commit-open when gmr's review picker opens a file: the MR's line
 -- comments show under the lines they are on, and you can add, reply to and
--- resolve them without gitlab.nvim. Everything goes through glab api from the
--- review worktree, which is on the MR's head.
+-- resolve them without gitlab.nvim. Everything goes through git-forge api (glab
+-- api, or its GitHub equivalent) from the review worktree, which is on the
+-- MR's head.
 --
 --   <leader>mc   comment on this line, or open its thread to read and reply
 --                (picking one when several start there); in visual mode, a
@@ -49,23 +50,25 @@ local function notify(msg, level)
   vim.notify("!" .. iid .. ": " .. msg, level or vim.log.levels.INFO)
 end
 
-local glab_missing_said = false
-local function have_glab()
-  if vim.fn.executable("glab") == 1 then
+-- The CLI the repo's forge is reached through: glab, or gh on GitHub.
+local cli = vim.fn.systemlist({ "otis-config", "forge" })[1] == "github" and "gh" or "glab"
+local cli_missing_said = false
+local function have_cli()
+  if vim.fn.executable(cli) == 1 then
     return true
   end
-  if not glab_missing_said then
-    glab_missing_said = true
-    notify("comments need glab (otis-setup says how to get it)", vim.log.levels.WARN)
+  if not cli_missing_said then
+    cli_missing_said = true
+    notify("comments need " .. cli .. " (otis-setup says how to get it)", vim.log.levels.WARN)
   end
 end
 
--- glab api with an optional JSON body; on_done gets the decoded response.
-local function glab(method, path, body, on_done)
-  if not have_glab() then
+-- git-forge api with an optional JSON body; on_done gets the decoded response.
+local function forge(method, path, body, on_done)
+  if not have_cli() then
     return
   end
-  local cmd = { "glab", "api", "-X", method, path }
+  local cmd = { "git-forge", "api", "-X", method, path }
   if body then
     vim.list_extend(cmd, { "-H", "Content-Type: application/json", "--input", "-" })
   end
@@ -267,7 +270,7 @@ local function render_all()
 end
 
 local function refresh(on_done)
-  if not have_glab() then
+  if not have_cli() then
     return
   end
   vim.system({ "git-mr-threads", "--fetch", iid, range }, { cwd = root, text = true }, vim.schedule_wrap(function(res)
@@ -348,10 +351,10 @@ local function comment_refs(buf, path, side, check_head)
   if not check_head then
     return true
   end
-  if not have_glab() then
-    return nil, "comments need glab"
+  if not have_cli() then
+    return nil, "comments need " .. cli
   end
-  local res = vim.system({ "glab", "api", mr }, { cwd = root, text = true }):wait()
+  local res = vim.system({ "git-forge", "api", mr }, { cwd = root, text = true }):wait()
   if res.code ~= 0 then
     return nil, "could not ask GitLab for the MR's head: " .. vim.trim(res.stderr)
   end
@@ -478,9 +481,9 @@ end
 local function edit_note(t, n)
   local _, win = compose(n.draft and "edit draft" or "edit comment", vim.split(n.body, "\n"), nil, "saves", function(text)
     if n.draft then
-      glab("PUT", mr .. "/draft_notes/" .. n.id, { note = text }, done("draft edited"))
+      forge("PUT", mr .. "/draft_notes/" .. n.id, { note = text }, done("draft edited"))
     else
-      glab("PUT", mr .. "/discussions/" .. t.id .. "/notes/" .. n.id, { body = text }, done("edited"))
+      forge("PUT", mr .. "/discussions/" .. t.id .. "/notes/" .. n.id, { body = text }, done("edited"))
     end
   end)
   if n.why and n.why ~= "" then
@@ -494,9 +497,9 @@ local function delete_note(t, n)
     return
   end
   if n.draft then
-    glab("DELETE", mr .. "/draft_notes/" .. n.id, nil, done("draft deleted"))
+    forge("DELETE", mr .. "/draft_notes/" .. n.id, nil, done("draft deleted"))
   else
-    glab("DELETE", mr .. "/discussions/" .. t.id .. "/notes/" .. n.id, nil, done("deleted"))
+    forge("DELETE", mr .. "/discussions/" .. t.id .. "/notes/" .. n.id, nil, done("deleted"))
   end
 end
 
@@ -505,7 +508,7 @@ local function resolve(t)
     notify(t.draft and "a draft has nothing to resolve yet" or "a single comment cannot be resolved", vim.log.levels.WARN)
     return
   end
-  glab("PUT", mr .. "/discussions/" .. t.id .. "?resolved=" .. tostring(not t.resolved), nil,
+  forge("PUT", mr .. "/discussions/" .. t.id .. "?resolved=" .. tostring(not t.resolved), nil,
     done(t.resolved and "unresolved" or "resolved"))
 end
 
@@ -529,10 +532,10 @@ local function open_thread(t)
   vim.list_extend(lines, { t.resolved and "(resolved)" or "", marker, "" })
   local fbuf, fwin = compose(where_text(t), lines, marker, drafting and "saves a draft" or "sends", function(text)
     if drafting then
-      glab("POST", mr .. "/draft_notes", { note = text, in_reply_to_discussion_id = t.id },
+      forge("POST", mr .. "/draft_notes", { note = text, in_reply_to_discussion_id = t.id },
         done("draft reply saved; <leader>ms submits your drafts"))
     else
-      glab("POST", mr .. "/discussions/" .. t.id .. "/notes", { body = text }, done("replied"))
+      forge("POST", mr .. "/discussions/" .. t.id .. "/notes", { body = text }, done("replied"))
     end
   end, "<leader>me edits · <leader>md deletes" .. (t.resolvable and " · <leader>mr resolves" or ""))
   -- The comment under the cursor, or below the thread your latest one.
@@ -595,9 +598,9 @@ local function comment(first, last, new)
     end
     local pos = position(refs, path, side, first, last)
     if drafting then
-      glab("POST", mr .. "/draft_notes", { note = text, position = pos }, done("draft saved; <leader>ms submits your drafts"))
+      forge("POST", mr .. "/draft_notes", { note = text, position = pos }, done("draft saved; <leader>ms submits your drafts"))
     else
-      glab("POST", mr .. "/discussions", { body = text, position = pos }, done("commented"))
+      forge("POST", mr .. "/discussions", { body = text, position = pos }, done("commented"))
     end
   end)
 end
@@ -929,7 +932,7 @@ for _, buf in ipairs(vim.api.nvim_list_bufs()) do
   attach(buf)
 end
 
-glab("GET", "user", nil, function(u)
+forge("GET", "user", nil, function(u)
   me = u.username
 end)
 
@@ -957,7 +960,7 @@ if thread then
   return
 end
 
-glab("GET", mr, nil, function(m)
+forge("GET", mr, nil, function(m)
   local head = vim.fn.systemlist({ "git", "-C", root, "rev-parse", "HEAD" })[1]
   if m.diff_refs.head_sha ~= head then
     -- The review worktree fell behind a push, or your own branch has commits the

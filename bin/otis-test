@@ -8,6 +8,10 @@ PATH=$root/bin:$PATH
 share=$root/share
 export PATH
 unset GIT_FZF_STATE
+# Nor on the settings of the repo this was run from: a shell that otis-config
+# --env was evaluated in exports them (OTIS_C_*), and a script that trusts
+# them would look at that repo's worktrees instead of the throwaway one's.
+for v in $(env | sed -n 's/^\(OTIS_C_[A-Za-z_]*\)=.*/\1/p'); do unset "$v"; done
 # The tests check hues, so they run in one theme whatever yours is.
 export OTIS_THEME=gruvbox
 eval "$(otis-theme --env)"
@@ -88,7 +92,14 @@ export OTIS_KEY_LOG=$tmp/keys.tsv
 
 # --- otis-keys only names keys its picker declares: a key renamed in one and
 # not the other labels a key that does nothing, or leaves one unlabelled.
-declared() { sed "s/'\"'\"'//g" "$share/otis.zsh" | sed -n "s/.*git-fzf '$1 ' '\([^']*\)'.*/\1/p" | tr ',' '\n' | sed 's/=.*//' | sort -u; }
+# A picker whose keys the forge can trim (git-forge lacks) names them in
+# keys='...' just above its git-fzf '<prompt> ' "$keys".
+declared() {
+  sed "s/'\"'\"'//g" "$share/otis.zsh" | awk -v p="git-fzf '$1 '" '
+    /keys='"'"'/ { k = $0; sub(/.*keys='"'"'/, "", k); sub(/'"'"'.*/, "", k) }
+    index($0, p " '"'"'") { v = substr($0, index($0, p " '"'"'") + length(p) + 2); sub(/'"'"'.*/, "", v); print v; next }
+    index($0, p " \"$keys\"") { print k }' | tr ',' '\n' | sed 's/=.*//' | sort -u
+}
 undeclared() {
   picker=$1; shift
   declared "$picker" > "$tmp/declared"
@@ -126,9 +137,8 @@ expect config/gitlab "$(otis-config gitlab; echo $?)" "0"
 expect config/gates-default "$(otis-config gateJobs)" '[]'
 expect config/deploy-default "$(otis-config deployJob)" "deploy"
 # The repo's own .otis, under your git config, and only for what a team shares.
-printf '[otis]\n\tgateJob = shared-gate\n\tdeployJob = ship\n\tclaudeCommand = rm\n\tworktrees = /elsewhere\n' > .otis
+printf '[otis]\n\tgateJob = shared-gate\n\tdeployJob = ship\n\tworktrees = /elsewhere\n' > .otis
 expect config/repo-file "$(otis-config gateJobs deployJob | tr '\n' ' ')" '["shared-gate"] ship '
-expect config/repo-file-not-commands "$(otis-config claudeCommands)" ""
 expect config/repo-file-not-worktrees "$(otis-config worktrees)" ".claude/worktrees"
 git config otis.gateJob one; git config --add otis.gateJob two
 expect config/gates-set "$(otis-config gateJobs)" '["one","two"]'
@@ -150,11 +160,16 @@ expect config/base-fallback "$(otis-config base)" "HEAD"
 git config --unset otis.host; git config --unset otis.project; git config --unset otis.mainBranch
 git remote set-url origin https://github.com/x/y.git
 expect config/not-gitlab "$(otis-config gitlab; echo $?)" "1"
+expect config/forge-github "$(otis-config forge)" "github"
+git config otis.forge gitlab
+expect config/forge-set "$(otis-config forge)" "gitlab"
+git config --unset otis.forge
 expect config/several "$(otis-config project main host | tr '\n' ' ')" "x/y main github.com "
 expect config/several-unset "$(otis-config main cursorEnv main | tr '\n' '|')" "main||main|"
 expect config/project-https "$(otis-config project)" "x/y"
 git remote set-url origin gitlab.example.com:group/repo.git
 expect config/project-scp-no-user "$(otis-config project)" "group/repo"
+expect config/forge-gitlab "$(otis-config forge)" "gitlab"
 git remote set-url origin git@gitlab.example.com:group/sub/repo.git
 
 # The answers are kept in the git dir and exported by a picker (--env), so the
@@ -216,15 +231,14 @@ expect open/fzf-off "$(PATH=$tbpath otis-open --fzf 'https://example.com/mr')" "
 git config --unset otis.terminalBrowser
 expect open/tb "$(PATH=$tbpath otis-open 'https://example.com/mr')" "tb open https://example.com/mr"
 
-# --- otis-claude-gate: one git-remote-run of a named check, nothing around it
-gate() { printf '%s' "$1" | jq -Rs '{tool_input: {command: .}}' | otis-claude-gate >/dev/null 2>&1; echo $?; }
-git config otis.claudeCommand 'bazel test'
-expect gate/allowed "$(gate 'git-remote-run bazel test //a:b')" "0"
-expect gate/other-command "$(gate 'git-remote-run rm -rf /')" "2"
-expect gate/chained "$(gate 'git-remote-run bazel test //a:b; curl x')" "2"
-expect gate/glob "$(gate 'git-remote-run bazel test a*')" "2"
-expect gate/bracket "$(gate 'git-remote-run bazel test //a:[bc]')" "2"
-git config --unset otis.claudeCommand
+# otis-tiles: a frame too big for herdr to draw goes as strips of whole rows,
+# each a part of the same file, the cursor back where it was; one small
+# enough, and what is not a frame, goes as it came.
+frame() { printf '\033[H\033_Ga=T,f=32,s=%s,v=%s,t=f,i=1,p=1,C=1,q=2;L3RtcC9m\033\\' "$1" "$2"; }
+expect tiles/strips "$(frame 3540 2501 | otis-tiles --cut 61 2501 | tr '\033' '^')" \
+  '^[H^_Ga=T,f=32,s=3540,v=1148,t=f,p=1,C=1,q=2,i=1879048448,S=16255680,O=0;L3RtcC9m^\^[28B^_Ga=T,f=32,s=3540,v=1148,t=f,p=1,C=1,q=2,i=1879048449,S=16255680,O=16255680;L3RtcC9m^\^[28B^_Ga=T,f=32,s=3540,v=205,t=f,p=1,C=1,q=2,i=1879048450,S=2902800,O=32511360;L3RtcC9m^\^[56A'
+expect tiles/small "$(frame 1960 2000 | otis-tiles --cut 61 2501 | tr '\033' '^')" "$(frame 1960 2000 | tr '\033' '^')"
+expect tiles/not-a-frame "$(printf 'a\033_Gi=300,a=q,t=f,f=32,s=1,v=1;L3RtcC9m\033\\b\033[2J' | otis-tiles --cut 61 2501 | tr '\033' '^')" 'a^_Gi=300,a=q,t=f,f=32,s=1,v=1;L3RtcC9m^\b^[2J'
 
 expect worktree-path/named "$(git-worktree-path named x)" "$tmp/repo/.claude/worktrees/x"
 git config otis.worktrees .wt
@@ -311,8 +325,8 @@ expect deploy-list/mrs "$(git-deploy-list --from "$tmp/deploys.json" | strip | h
 expect deploy-list/footer "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" >/dev/null; strip < "$tmp/dl/footer" | grep -o '[0-9]* live · [0-9]* failed')" "1 live · 1 failed"
 
 # --- otis-list, otis-do: the dashboard's rows, and what enter does with one.
-# Origin points at GitHub for this, so nothing here asks GitLab anything.
-git remote set-url origin https://github.com/x/y.git
+# Origin is on neither GitLab nor GitHub for this, so nothing here asks either.
+git remote set-url origin https://code.example.com/x/y.git
 mkdir -p "$tmp/dash"
 common=$(git rev-parse --path-format=absolute --git-common-dir)
 rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
@@ -320,13 +334,96 @@ expect otis-list/fields "$(printf '%s\n' "$rows" | awk -F'\t' '{ print NF }' | s
 expect otis-list/here-last "$(printf '%s\n' "$rows" | tail -1 | cut -f6,11,14 | tr '\t' ' ')" "here here here"
 expect otis-list/here-always "$(printf '%s\n' "$rows" | strip | grep -c '── here ')" "1"
 expect otis-list/quiet "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "nothing waiting on you"
-expect otis-list/no-gitlab "$(strip < "$tmp/dash/footer" | sed 's/.* · //')" "origin is not on GitLab, so this is your work here alone"
+expect otis-list/no-forge "$(strip < "$tmp/dash/footer" | sed 's/.* · //')" "origin is on neither GitLab nor GitHub, so this is your work here alone"
+# The board the dashboard draws from those rows (otis-board): its counts,
+# then a row a change. With nothing but the checkout it is where you are.
+printf '%s\n' "$rows" > "$tmp/dash/rows"
+expect otis-board/quiet "$(GIT_FZF_STATE=$tmp/dash otis-board | cut -f1-4 | tr '\t' ' ' | tr '\n' '|')" "# 0 0 0|here here here |"
 # Fixes Claude left on a branch with no MR: a waiting row that needs no GitLab.
 mkdir -p "$common/gmr-fix/b-feature" && printf 'patch\n' > "$common/gmr-fix/b-feature/01.patch"
 rows=$(GIT_FZF_STATE=$tmp/dash otis-list)
 expect otis-list/waiting "$(printf '%s\n' "$rows" | strip | awk -F'\t' '$11 == "w-fix-b-feature" { print $1 }' | tr -s ' ')" " ✎1 fold in 1 fix feature"
 expect otis-list/waiting-first "$(printf '%s\n' "$rows" | strip | head -1 | cut -f1 | sed 's/ ─*$//')" "── waiting on you"
 expect otis-list/waiting-count "$(strip < "$tmp/dash/footer" | sed 's/ · .*//')" "1 thing waiting on you"
+# On the board that branch is a change that needs you: no verify light, and
+# the fix beside its review light, where the cursor lands and f opens it.
+git branch feature
+printf '%s\n' "$rows" > "$tmp/dash/rows"
+board=$(GIT_FZF_STATE=$tmp/dash otis-board | strip)
+expect otis-board/counts "$(printf '%s\n' "$board" | head -1 | tr '\t' ' ')" "# 1 0 0"
+expect otis-board/branch-fix "$(printf '%s\n' "$board" | awk -F'\t' '$2 == "c-b-feature" { print $1, $3, $4, "light " $8, "[" $28 "]", $44 $50, ($51 == "'"$common"'/gmr-fix/b-feature"), NF }')" "move change feature light 4 [] ·✎1 1 69"
+# gb's and gw's rows, where the dashboard keeps them for the board. A branch
+# never pushed has its commits beside its local light, and enter goes to it.
+# A merged branch checked out nowhere and a worktree gw calls safe fold under
+# clean up, where enter deletes (asking first); any other worktree under
+# worktrees, where enter goes there and d removes it, one with nothing
+# uncommitted told from one with work in it. The worktrees under gw's
+# dedicated heading, kept for reuse, are not listed at all.
+printf 'x\tfeature\tlocal\t\t\t\t2\t0\t\nx\told\tmerged\t\t7\t\t0\t3\t\n' > "$tmp/dash/branches.tsv"
+printf 'x\t/w/gone\told\tmerged\tsafe\t7\t0\t3\nx\t/w/keep\t\tdetached\t\t\t\t\nb  3 uncommitted  1h\t/w/busy\tfeature\tlocal\t\t\t2\t0\n── dedicated\t\t\t\t\t\t\t\nx\t/w/claude-fix\t\tdetached\t\t\t\t\n' > "$tmp/dash/worktrees.tsv"
+board=$(GIT_FZF_STATE=$tmp/dash otis-board | strip)
+expect otis-board/local "$(printf '%s\n' "$board" | awk -F'\t' '$2 == "c-b-feature" { print $20 $26, $23, $24 }')" "○↑2 goto feature"
+expect otis-board/groups "$(printf '%s\n' "$board" | awk -F'\t' '$3 == "group" && $1 != "runs" { printf "%s %s|", $1, $66 }')" "cleanup 2|places 2|"
+expect otis-board/cleanup "$(printf '%s\n' "$board" | awk -F'\t' '$65 == "cleanup" { printf "%s %s %s|", $3, $23, $24 }')" "change delbranch old|place delwt /w/gone|"
+expect otis-board/places "$(printf '%s\n' "$board" | awk -F'\t' '$65 == "places" { printf "%s %s %s %s: %s|", $4, $23, $24, $60, $61 }')" "keep cd /w/keep clean: detached|busy cd /w/busy dirty: feature  ·  3 uncommitted|"
+expect otis-board/places-say "$(printf '%s\n' "$board" | awk -F'\t' '$2 == "g-places" { print $67 }')" "1 with nothing uncommitted  ·  1 with work in it"
+rm -f "$tmp/dash/branches.tsv" "$tmp/dash/worktrees.tsv"
+git branch -D feature >/dev/null 2>&1
+# What gd listed is a group too: a deploy a row, enter its jobs and logs.
+cp "$tmp/dash/deploys.json" "$tmp/dash/deploys.was"
+printf '{"deploys": [{"id": 5, "status": "success", "kind": "deploy", "at": "2026-01-01T00:00:00Z", "pipeline": "77", "sha": "abcdef0123", "mrs": ["7"], "user": "ann", "duration": 60}]}\n' > "$tmp/dash/deploys.json"
+expect otis-board/deploys "$(GIT_FZF_STATE=$tmp/dash otis-board | strip | awk -F'\t' '$65 == "deploys" { print $20, $60, $4, $23, $15 }')" "✓ abcdef01 !7  ·  by ann deployjobs 77"
+mv "$tmp/dash/deploys.was" "$tmp/dash/deploys.json"
+# An open MR of yours, approved and green, is yours to merge though GitLab
+# has not worked out that it can (a list mostly says unchecked; merging
+# asks): a row under its title, the cursor on its ship light. A verification
+# of its branch at a commit it has moved on from is that row's verify light,
+# dim, and never a second row under the branch's name: not beside the MR,
+# and not when something is in the way and it folds under waiting.
+mkdir -p "$tmp/board"
+printf 'w\t\t\t\t\tsep\t\t\t\t\tsep-waiting\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n' > "$tmp/board/rows"
+printf 'v\t\t\t\t\trun\t\t\t\t\tw-verify-b-feat\t\t/v/b-feat\trun\t●\t\tverified: failed\tfeat\t\t\t\t\t\topen the run\t\t\n' >> "$tmp/board/rows"
+printf '{"verify": {"b-feat": {"verifying": false, "status": "done", "verdict": "fail", "head": "old"}}}\n' > "$tmp/board/marks.json"
+board_mr() { printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [{"iid": "7", "title": "Ship it", "sourceBranch": "feat", "targetBranch": "main", "webUrl": "u", "draft": false, "approved": true, "autoMergeEnabled": false, "detailedMergeStatus": "%s", "updatedAt": "2026-01-01T00:00:00Z", "diffRefs": {"headSha": "new"}, "headPipeline": {"status": "SUCCESS"}, "reviewers": {"nodes": [{"username": "ann", "mergeRequestInteraction": {"reviewState": "APPROVED"}}]}}]}}}}\n' "$1" > "$tmp/board/ci.json"; }
+board_lights() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s light %s %s%s%s%s%s %s|", $1, $2, $4, $8, $20, $28, $36, $44, $52, $55 }'; }
+board_mr UNCHECKED
+expect otis-board/merge-unchecked "$(board_lights)" "move c-7 Ship it light 5 ·✗✓✓! merge|"
+# Kept for the dashboard's own test below (otis/mr-number).
+GIT_FZF_STATE=$tmp/board otis-board > "$tmp/board7.tsv"
+board_mr DISCUSSIONS_NOT_RESOLVED
+expect otis-board/verify-of-folded "$(board_lights)" "waiting c-7 Ship it light 4 ·✗✓✓· |"
+# MRs built on one another are a stack: kept together, top first, in the
+# lane of the one that wants you most, each with its piece of the rail and
+# the lane it would be in alone. Here the bottom one is yours to merge, the
+# one on it is with a reviewer and nobody was asked about the top one: all
+# three are under your move, and count as the one that needs you. An MR
+# built on nothing stays where it was.
+stack_mr() { printf '{"iid": "%s", "title": "%s", "sourceBranch": "%s", "targetBranch": "%s", "webUrl": "u", "draft": false, "approved": %s, "autoMergeEnabled": false, "detailedMergeStatus": "UNCHECKED", "updatedAt": "2026-01-01T00:00:00Z", "diffRefs": {"headSha": "new"}, "headPipeline": {"status": "SUCCESS"}, "reviewers": {"nodes": [%s]}}' "$@"; }
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s, %s, %s]}}}}\n' \
+  "$(stack_mr 9 Top feat3 feat2 false '')" "$(stack_mr 10 Other other main false '')" \
+  "$(stack_mr 7 Bottom feat main true '{"username": "ann", "mergeRequestInteraction": {"reviewState": "APPROVED"}}')" \
+  "$(stack_mr 8 Middle feat2 feat false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" > "$tmp/board/ci.json"
+board=$(GIT_FZF_STATE=$tmp/board otis-board | strip)
+expect otis-board/stack "$(printf '%s\n' "$board" | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }')" "move c-9 ┌ unsent|move c-8 ├ waiting|move c-7 └ move|unsent c-10  unsent|"
+expect otis-board/stack-counts "$(printf '%s\n' "$board" | head -1 | tr '\t' ' ')" "# 1 0 0"
+# A stack is waiting on others only when all of it is: with one of it that
+# nobody was asked to review, it is not sent yet.
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s]}}}}\n' \
+  "$(stack_mr 8 Bottom feat2 main false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" \
+  "$(stack_mr 9 Top feat3 feat2 false '')" > "$tmp/board/ci.json"
+expect otis-board/stack-unsent "$(GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }')" "unsent c-9 ┌ unsent|unsent c-8 └ waiting|"
+# A verification kept under a branch's name outlives the branch. With no MR
+# open it is a change of its own that needs you, until the branch is
+# finished: its MR merged after the run ended, or the branch is gone from
+# here and from origin. What it said of code that shipped is not your move.
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": []}}}}\n' > "$tmp/board/ci.json"
+board_branches() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^c-b-/ { printf "%s %s|", $1, $2 }'; }
+git branch feat
+expect otis-board/branch-verdict "$(board_branches)" "move c-b-feat|"
+printf '{"mrs": [{"iid": "7", "title": "Ship it", "sourceBranch": "feat", "targetBranch": "main", "webUrl": "u", "state": "live", "mergedAt": "2026-01-02T00:00:00Z"}]}\n' > "$tmp/board/ci-merged.json"
+expect otis-board/branch-merged "$(board_branches)" ""
+rm -f "$tmp/board/ci-merged.json"; git branch -D feat >/dev/null 2>&1
+expect otis-board/branch-gone "$(board_branches)" ""
 # A verification that runs says what its tester is on and how its criteria
 # stand (git-agent-list --data), for the dashboard's row and its glyphs;
 # otis-agent draws it.
@@ -337,6 +434,13 @@ printf 'Verifying live\n' > "$common/otis-verify/b-live/title"; date +%s > "$com
 printf '%s\n' '{"type":"otis","text":"tester started: http://x"}' '{"type":"tool","name":"run_terminal_cmd","input":{"detail":"bazel test //a:b | tee artifacts/c1.txt"},"who":"tester"}' \
   '{"type":"tool","name":"run_terminal_cmd","input":{"detail":"bazel test //c:d | tee artifacts/c2.txt"},"who":"tester"}' > "$common/otis-verify/b-live/events.jsonl"
 expect agent-list/doing "$(git-agent-list --data | awk -F'\t' '$1 == "running" { print $7 "|" $8 }')" "c2 · $ bazel test //c:d | tee artifacts/c2.txt|●◌○"
+# What it cost at Cursor is its own turns in the tester's VM, not all the VM
+# has run, since a VM goes from one verification to the next: the turn run-1
+# names, and one a check-in cut short, which only its stream's file still names.
+printf 'run-11111111-1111-1111-1111-111111111111\n' > "$common/otis-verify/b-live/run-1"
+: > "$common/otis-verify/b-live/stream-run-22222222-2222-2222-2222-222222222222.id"
+printf '%s\n' '{"cost":{"rawCostCents":999,"chargedCents":0},"runs":[{"id":"run-11111111-1111-1111-1111-111111111111","cost":{"rawCostCents":150,"chargedCents":0}},{"id":"run-22222222-2222-2222-2222-222222222222","cost":{"rawCostCents":75,"chargedCents":0}},{"id":"run-33333333-3333-3333-3333-333333333333","cost":{"rawCostCents":774,"chargedCents":0}}]}' > "$common/otis-verify/b-live/usage.json"
+expect costs/own-turns "$( (. "$share/claude-run.sh"; costs "$common/otis-verify/b-live") )" " · Cursor \$2.25"
 agent=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b a "stty rows 30 cols 150; otis-agent $1"; out=
   for _ in {1..50}; do while zpty -rt a buf; do out+=$buf; done; [[ $out == *CRITERIA* ]] && break; sleep 0.1; done
   sleep 0.5; while zpty -rt a buf; do out+=$buf; done
@@ -344,7 +448,40 @@ agent=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b a "stty rows 30 
 # A frame is cursor moves, not lines: the matches are counted, not the lines.
 expect agent/criteria "$(printf '%s\n' "$agent" | grep -o '● c1 \|◌ c2 \|○ c3 ' | sort -u | wc -l | tr -d ' ')" "3"
 expect agent/now "$(printf '%s\n' "$agent" | grep -o 'bazel test //c:d' | wc -l | tr -d ' ')" "3"
+expect agent/cost "$(printf '%s\n' "$agent" | grep -q 'Cursor \$2\.25' && echo shown)" "shown"
 rm -rf "$common/otis-verify/b-live"
+# A browser step answers with content blocks, not a string: it is a step and
+# what it returned like any other, and the stream goes on after it (the
+# blocks used to end jq, and with it everything the tester did next).
+expect cursor-events/browser-step "$(printf '%s\n' \
+  '{"event":"tool_call","data":{"callId":"t1","name":"mcp","status":"running","args":{"toolName":"browser_navigate","args":{"url":"http://localhost:3000/a"}}}}' \
+  '{"event":"tool_call","data":{"callId":"t1","name":"mcp","status":"completed","args":{"toolName":"browser_navigate","args":{"url":"http://localhost:3000/a"}},"result":{"success":{"content":[{"text":{"text":"### Result\nok"}},{"image":{"data":"AAAA"}}]}}}}' \
+  '{"event":"assistant","data":{"text":"It loaded."}}' \
+  '{"event":"result","data":{}}' |
+  jq -R -n -c -f "$share/cursor-events.jq" | jq -r '[.type, (.input.detail // .text // "" | gsub("\n"; "/"))] | join("=")' | tr '\n' '|')" \
+  "tool=browser navigate http://localhost:3000/a|output=browser navigate: ### Result/ok|text=It loaded.|result=|"
+# A verdict is two answers (tally): whether the change does what it says, by
+# the plan's own criteria, and what it did around that, by the breaker's
+# checks. What it broke fails it; what it only changed beyond its description
+# is a question, with how it was before; and neither counts against what it
+# says. The screens say sentences, not ids.
+v=$common/otis-verify/b-two; mkdir -p "$v"
+printf 'done\n' > "$v/status"; printf 'Verifying two\n' > "$v/title"
+printf '%s\n' '{"criteria":[{"id":"c1","plain":"A reply shows in the thread.","claim":"x"},{"id":"b1","kind":"attack","plain":"An order counts once.","claim":"y"},{"id":"b2","kind":"attack","plain":"The drawer still shows only its own texts.","claim":"z"},{"id":"b3","kind":"attack","plain":"Old rows still load.","claim":"w"}]}' > "$v/plan.json"
+printf '%s\n' '{"verdict":"fail","summary":"s","concerns":[],"criteria":[{"id":"c1","result":"verified","saw":"It shows.","was":""},{"id":"b1","result":"failed","saw":"An order recorded twice counts twice.","was":""},{"id":"b2","result":"changed","saw":"The drawer now also shows agent texts.","was":"only its own texts"},{"id":"b3","result":"unverified","saw":"No old rows here.","was":""}]}' > "$v/verdict.json"
+expect verify/two-answers "$(FZF_PREVIEW_COLUMNS=80 git-verify --preview "" two | strip | grep . | sed 's/  *$//')" "VERIFICATION  failed  ·  does what it says, 1 of 1
+BROKE  1
+  ✗  An order recorded twice counts twice.
+ALSO CHANGED  1, not in the description
+  ?  The drawer now also shows agent texts.
+     Before: only its own texts
+  the full report · 1 check around it not run"
+expect verify/two-answers-panel "$(FZF_PREVIEW_COLUMNS=80 git-agent-preview "$v" | strip | sed -n 2p)" "▌ does what it says, 1 of 1; broke 1; also changed 1"
+# With nothing broken, a change the description does not mention leaves a pass a pass.
+jq -c '.verdict = "pass" | .criteria |= map(select(.id != "b1"))' "$v/verdict.json" > "$v/verdict.json.new" && mv "$v/verdict.json.new" "$v/verdict.json"
+expect verify/changed-passes "$(FZF_PREVIEW_COLUMNS=80 git-verify --preview "" two | strip | grep . | sed -n '1,2p')" "VERIFICATION  passed  ·  does what it says, 1 of 1
+ALSO CHANGED  1, not in the description"
+rm -rf "$v"
 # Leaving what enter opened comes back to the dashboard's own rows, not gag's.
 expect otis-do/run "$(otis-do enter run run "$common/gmr-fix/b-feature" "" "" "" "" "" "" "" "")" "execute(git-mr-fix 'b-feature' '')+execute-silent(git-fzf-bg otis-list)"
 expect agent-list/open-default "$(git-agent-list --open "$common/gmr-fix/b-feature")" "execute(git-mr-fix 'b-feature' '')+reload(git-agent-list)"
@@ -359,6 +496,12 @@ printf 'Verifying y\n' > "$common/otis-verify/b-y/title" && printf '{"verdict":"
 touch "$common/otis-verify/b-y/artifacts/a.log"
 GIT_FZF_STATE=$tmp/dash PATH=$tmp/clip:$PATH otis-do copy run run "$common/otis-verify/b-y" "" "" "" "" "" "" "" "" >/dev/null
 expect otis-do/copy-run "$(sed -n 1p "$tmp/clip/got"):$(grep -c 'verdict.json\|artifacts/ .*1 files' "$tmp/clip/got")" "An otis verification, \"Verifying y\", verdict: pass.:2"
+# y in the run's own screen copies the same.
+rm -f "$tmp/clip/got"; GIT_FZF_STATE=$tmp/dash PATH=$tmp/clip:$PATH git-claude-view --copy "$common/otis-verify/b-y" >/dev/null
+expect otis-agent/copy-run "$(sed -n 1p "$tmp/clip/got")" "An otis verification, \"Verifying y\", verdict: pass."
+# y on a branch with no MR yet has no link to copy: its name.
+rm -f "$tmp/clip/got"; GIT_FZF_STATE=$tmp/dash PATH=$tmp/clip:$PATH otis-do copy run goto a/b "" "" "" a/b "" "" "" "" >/dev/null
+expect otis-do/copy-branch "$(cat "$tmp/clip/got"):$(strip < "$tmp/dash/note")" "a/b:copied a/b"
 expect otis-do/sep "$(GIT_FZF_STATE=$tmp/dash otis-do enter sep "" "" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that row is a section heading"
 expect otis-do/mr "$(otis-do enter review mr "" 42 main u b h ba 9 st)" "execute(git-mr-review {2} {3} {4} {5} {7} {8} {12})"
 # The three ways of being done with a fix, none of which leaves it waiting:
@@ -459,7 +602,7 @@ expect otis-list/deploy-stands-down "$(GIT_FZF_STATE=$tmp/dash otis-list | awk -
 jq '.mrs |= map(if .state == "deploying" or .state == "queued" then .state = "live" else . end)' "$cache/ci-merged.json" > "$cache/m.tmp" && mv "$cache/m.tmp" "$cache/ci-merged.json"
 expect otis-list/deploy-alone "$(GIT_FZF_STATE=$tmp/dash otis-list | awk -F'\t' '$11 ~ /^g-deploy-/' | wc -l | tr -d ' ')" "1"
 rm -rf "$cache"
-git remote set-url origin https://github.com/x/y.git
+git remote set-url origin https://code.example.com/x/y.git
 rm -rf "$common/gmr-fix"
 # The trash: a worktree otis took out of the way rather than deleting, which
 # keeps what git would have dropped with it, and the row that says so.
@@ -569,6 +712,10 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/viewed-shared "$(printf '%s\n' "$rows" | awk -F'\t' '$12 == "lib.ts#fresh" { print ($1 ~ / 1\/2 /) }')" "1"
   GIT_FZF_STATE=$tmp/symst git-symbols --viewed "$base..$head" toggle 'lib.ts#run'
   expect symbols/viewed-cleared "$(wc -l < "$common/otis-viewed" | tr -d ' ')" "0"
+  # --viewed warm: every symbol's hash in the picker's own cache, where v
+  # reads the ones it marks rather than diff their files again.
+  GIT_FZF_STATE=$tmp/symst git-symbols --viewed "$base..$head" warm
+  expect symbols/viewed-warm "$(cut -f1 "$tmp/symst"/vh.* | sort -u | wc -l | tr -d ' ')" "$(awk -F'\t' '{ print ($2 == "file") ? $1 : $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$table" | sort -u | wc -l | tr -d ' ')"
   # Callers elsewhere, from tsgo: main in app.ts, r in lib.spec.ts and again
   # in lib.ts call run and the change touches none; the row under run, the
   # callers under that in place (the spec one too, not filed under tests),
@@ -751,6 +898,13 @@ EOF
   mkdir -p "$wr/7" "$wr/b-me%x"; date +%s > "$wr/7/started"; echo done > "$wr/7/status"; echo abc > "$wr/7/head"
   date +%s > "$wr/b-me%x/started"; echo failed > "$wr/b-me%x/status"; echo def > "$wr/b-me%x/head"
   expect walk/marks "$(git-walk --marks | jq -c '[."7".status, ."7".head, ."me/x".status, ."7".walking]')" '["done","abc","failed",false]'
+  # P on a walk that finished at an older push opens it unless you say to
+  # walk the new one: nothing is thrown away, nothing started.
+  mkdir -p "$wr/8" "$tmp/nobin"; echo trace > "$wr/8/engine"; echo done > "$wr/8/status"; echo "$base" > "$wr/8/head"; date +%s > "$wr/8/started"
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/nobin/git-confirm"; printf '#!/bin/sh\necho "walk $*"\n' > "$tmp/nobin/git-walk"; chmod +x "$tmp/nobin"/*
+  git config otis.walkRunner true
+  expect walk/older-push "$(PATH=$tmp/nobin:$PATH "$(command -v git-walk)" 8 "$head" "$base" "$base"):$(cat "$wr/8/head")" "walk --view 8:$base"
+  git config --unset otis.walkRunner; rm -rf "$wr/8" "$tmp/nobin"
   rm -rf "$wr"
 
   # P traced (git-trace, share/walk.mjs): a run's traces written by hand, as
@@ -777,6 +931,8 @@ EOF
   node "$share/walk.mjs" cover "$td"
   expect trace/cover-tests "$(jq -c '[.tests[] | [.name, .defs]]' "$td/cover.json")" '[["lib steps",2],["lib alone",1]]'
   expect trace/cover-gap "$(jq -r '.gaps[] | select(.name == "fresh") | .why' "$td/cover.json")" "nothing traced reaches it"
+  # Where it is: the line with its name, not the doc comment over it.
+  expect trace/cover-gap-line "$(awk -F'\t' '$1 == "lib.ts" && $3 == "fresh" { print $8 }' "$table"):$(jq -r '.gaps[] | select(.name == "fresh") | .start' "$td/cover.json")" "15:16"
   expect trace/rows-gap "$(node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 ~ /^g:/ && $1 ~ /fresh +nothing traced reaches it/' | wc -l | tr -d ' ')" "1"
   # The tests fold under a line of their own; enter on it shows them.
   expect trace/rows-folded "$(GIT_FZF_STATE=$tmp/tst node "$share/walk.mjs" rows "$td" | strip | awk -F'\t' '$12 == "t:0" || $12 == "open:tests" { print $1 }' | tr -s ' ')" "▸ 2 tests ran the change"
@@ -847,9 +1003,42 @@ EOF
   echo '{"quote":"Grow the box by two","relation":"silent","surprise":2,"why":"it grows by one"}' > "$bd/diff.0.json"
   node "$share/walk.mjs" diff-verdicts "$bd"
   expect trace/diff-judged "$(node "$share/walk.mjs" rows "$bd" | strip | awk -F'\t' '$12 ~ /^(gk-diff|d:)/ { print $1 }' | tr -s ' ' | tr '\n' '|')" "look at these · 1|! returns 0 → 1|"
-  expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-commit-open $head 'lib.ts' 3)"
-  # t on a change writes a test that pins it; c posts one that did.
-  # t on changed code no test runs writes tests for it; c posts them once they pass.
+  # A step at a return says what it returns: an async one's once it settled.
+  expect trace/walk-returns "$(GIT_FZF_STATE=$tmp/tst FZF_PREVIEW_COLUMNS=100 git-trace --walk-show "$bd" 0 v:2 | strip | grep '▶' | sed 's/ *$//' | tr -s ' ')" " 3 ▶ return o.a; o = { a: 1, id: \"ac_Hd82kQ0zPw\", code: \"FCjHaOBcrTSR4kpV\" } · returns 1"
+  expect trace/diff-open "$(git-trace --open "$bd" d:0)" "execute(git-walk --open '$bd' head 'lib.ts' 3)"
+  # c comments on the same line, as the review's c; a test's row has none.
+  expect trace/diff-comment "$(git-trace --open "$bd" d:0 comment)|$(GIT_FZF_STATE=$tmp/tst git-trace --open "$bd" t:0 comment; cat "$tmp/tst/note")" "execute(git-walk --comment '$bd' head 'lib.ts' 3)|c comments on a line: a change's, a function's no test runs, or one in a test's walk"
+  # enter in P opens as the symbol view does: in a checkout at the head it
+  # walked, else an MR's line in the review worktree, else as the commit has
+  # it; a line on the base's side, the base's. The openers stubbed, to say
+  # how they were called.
+  od=$tmp/open; mkdir -p "$od/bin" "$od/run"
+  printf '#!/bin/sh\necho "commit-open base=$NVIM_DIFF_BASE iid=$GMR_IID pwd=$(basename "$PWD") $*"\n' > "$od/bin/git-commit-open"
+  printf '#!/bin/sh\necho "mr-review $*"\n' > "$od/bin/git-mr-review"
+  chmod +x "$od/bin"/*
+  echo "$base-$head" > "$od/run/key"
+  expect walk/open-here "$(PATH=$od/bin:$PATH git-walk --open "$od/run" head lib.ts 3)" "commit-open base=$base iid= pwd=$(basename "$PWD") $base..$head lib.ts 3"
+  expect walk/open-base "$(PATH=$od/bin:$PATH git-walk --open "$od/run" old lib.ts 3)" "commit-open base= iid= pwd=$(basename "$PWD") $base lib.ts 3"
+  echo "$head-$base" > "$od/run/key"; echo 7 > "$od/run/iid"; echo "$head" > "$od/run/base"; echo s > "$od/run/start"
+  expect walk/open-review "$(PATH=$od/bin:$PATH git-walk --open "$od/run" head lib.ts 3)" "mr-review --open 7 $base $head s lib.ts 3"
+  # The review's own half: the worktree made at the MR's head, and the line
+  # opened there with the review's diff base (git-mr-base's, as its file
+  # picker has it) and comments.
+  rb=$(git-mr-base "$base" "$head" "$(git rev-parse -q --verify origin/main)")
+  expect review/open "$(rm "$od/bin/git-mr-review"; PATH=$od/bin:$PATH git-mr-review --open 7 "$head" "$base" "" lib.ts 3 | tail -1)" "commit-open base=$rb iid=7 pwd=review $rb..$head lib.ts 3"
+  expect review/open-head "$(GMR_MOVING=$(git rev-parse --git-common-dir)/gmr-review-moving git-mr-wait quiet; git -C "$(git-worktree-path named review)" rev-parse HEAD)" "$head"
+  # Once it is there (--ready, as P opened), enter only opens: nothing moved.
+  expect review/open-again "$(PATH=$od/bin:$PATH git-mr-review --open 7 "$head" "$base" "" lib.ts 3; [ -e "$(git rev-parse --git-common-dir)/gmr-review-moving" ] && echo moved)" "commit-open base=$rb iid=7 pwd=review $rb..$head lib.ts 3"
+  git worktree remove --force "$(git-worktree-path named review)"; git update-ref -d refs/mr/7
+  # c there: the review's line picker (git-mr-lines), as a review, on the
+  # line; none on the base's side, whose lines it starts at the top of.
+  printf '#!/bin/sh\necho "mr-lines base=$NVIM_DIFF_BASE iid=$GMR_IID range=$GMR_RANGE kind=$GMR_KIND $*"\n' > "$od/bin/git-mr-lines"; chmod +x "$od/bin/git-mr-lines"
+  expect walk/comment "$(PATH=$od/bin:$PATH git-walk --comment "$od/run" head lib.ts 3)|$(PATH=$od/bin:$PATH git-walk --comment "$od/run" old lib.ts 3)" "mr-lines base=$head iid=7 range=$head..$base kind=review 7 $head..$base lib.ts 3|mr-lines base=$head iid=7 range=$head..$base kind=review 7 $head..$base lib.ts"
+  rm -f "$od/run/iid"
+  expect walk/open-commit "$(PATH=$od/bin:$PATH git-walk --open "$od/run" head lib.ts 3)" "commit-open base=$head iid= pwd=$(basename "$PWD") $base lib.ts 3"
+  rm -rf "$od"
+  # t on a change writes a test that pins it; C posts one that did.
+  # t on changed code no test runs writes tests for it; C posts them once they pass.
   gi=$(jq '[.gaps[].name] | index("fresh")' "$bd/cover.json")
   expect trace/cover-key "$(git-trace --pin-key "$bd" t g:$gi)|$(GIT_FZF_STATE=$tmp/tst git-trace --pin-key "$bd" c g:$gi; cat "$tmp/tst/note")" "execute(git-trace --cover '$bd' $gi)|no tests for it yet: t writes them"
   # A pinned test is kept by the change's id, not its place on the list.
@@ -876,6 +1065,9 @@ EOF
   # sentences' symbols as code, its line marked; and each test's walk, a
   # pane a step.
   expect trace/tour-page "$(git-trace --page "$td" && sed -n 's/.*id="data">\([^<]*\)<.*/\1/p' "$td/tour.html" | base64 -d | gunzip | jq -r '. as $d | [.tour.pages["1-1"].b[] | numbers | $d.S[.]] as $r | [($r | any(test("runs it"))), ($r | any(test("reads .*m-else\">MY_FLAG"))), ($r | any(test("bg-here"))), (.walks | map(.pages | length) | join(","))] | join("|")')" 'true|true|true|3,1,1'
+  # In the theme's colors, its code in bat's, over the page's own.
+  expect trace/tour-page-theme "$(git-trace --page "$td" && grep -c -- '--ground: #282828' "$td/tour.html"; sed -n 's/.*id="data">\([^<]*\)<.*/\1/p' "$td/tour.html" | base64 -d | gunzip | jq '[.S[] | select(test("style=.color:#"))] | length > 0')" "1
+true"
   expect trace/tour-no-test "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:1-2 | strip | grep -c 'no test stops here')" "1"
   expect trace/tour-step "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-step "$td" tour:1-1)" "execute(git-trace --walk '$td' 0 2)"
   expect trace/tour-questions "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$td" tour:0 | strip | grep -c '? what does shrink do')" "1"
@@ -890,6 +1082,20 @@ EOF
   printf '%s' '{"intent":"all of it","planning":false,"chapters":[{"title":"runs","files":["lib.ts"],"intent":"runs","state":"","questions":[],"stops":[{"title":"runs it","says":"s","path":"lib.ts","start":2,"end":4,"focus":3,"test":"","proves":""}]},{"title":"pairs","files":["pair.ts"],"intent":"","state":"writing","questions":[],"stops":[]}]}' > "$td/tour.json"
   rm -rf "$td"/tour-*
   expect trace/tour-chapters "$(GIT_FZF_STATE=$tmp/tst git-trace --tour-list "$td" | strip | cut -f1,12 | tr '\t' '|' | tr -s ' ' | tr '\n' ';')" "what it sets out to do|tour:0;1 runs|tour:c1; 1 runs it|tour:1-1;2 pairs being written|tour:c2;"
+  # A stop that names no test shows the values of the test with the most to
+  # show on its line: not the first, whose o there is null.
+  hd=$tmp/hollow; cp -R "$td" "$hd"; rm -rf "$hd"/tour-* "$hd"/walks "$hd"/entry-*
+  { echo '{"test":"lib hollow","at":{"fn":"run","src":"lib.ts","line":2},"stack":[],"locals":{"o":"null","twice":"true"}}'
+    echo '{"test":"lib hollow","at":{"fn":"grow","src":"lib.ts","line":8},"stack":[{"fn":"run","src":"lib.ts","line":3}],"locals":{"size":"1"}}'
+    echo '{"test":"lib hollow","at":{"fn":"run","src":"lib.ts","line":3},"stack":[],"locals":{"o":"null","twice":"true","n":"3"}}'
+    cat "$td/trace/0.jsonl"; } > "$hd/trace/0.jsonl"
+  node "$share/walk.mjs" cover "$hd"
+  expect trace/tour-telling "$(jq -r '.tests[0].name' "$hd/cover.json")|$(GIT_FZF_STATE=$tmp/tst git-trace --tour-show "$hd" tour:1-1 | strip | grep '▶' | sed 's/ *$//' | tr -s ' ')" "lib hollow| 3 ▶ return o.a; o = { a: 1 }"
+  # A change no spec file runs is toured from the diff alone: no values, and
+  # nothing said to be untested.
+  : > "$hd/specs"; rm -rf "$hd/trace" "$hd/walks"; mkdir -p "$hd/trace"; node "$share/walk.mjs" cover "$hd"
+  expect trace/tour-untraced "$(node "$share/walk.mjs" tour-prompt "$hd" 0 | grep -c 'No test runs this change\|What the tests ran of it\|no test runs:')" "1"
+  rm -rf "$hd"
   unset FZF_PREVIEW_COLUMNS
   rm -rf "$td" "$tmp/tst"
   # Ahead of a review (git-mr-prefetch): nothing without a runner, and its lock
@@ -1115,6 +1321,17 @@ kill $nmbusy 2>/dev/null; wait $nmbusy 2>/dev/null
 git -C "$tmp/nm" config otis.install 'echo "error: no network"; exit 1'
 OTIS_CACHE_ROOT=$nmc otis-node-modules --wait "$tmp/nm"
 expect nm/failed "$(OTIS_CACHE_ROOT=$nmc otis-node-modules --state "$tmp/nm")" "failed: error: no network"
+# Two runs at once (the symbol picker's and git-callers' both start one): a
+# link the other made between this one's look and its ln is not followed into
+# the package's own directory, where it would be an untracked file. A mkdir
+# that makes the link stands in for the other run. And what a mirror linked
+# is its own record, not main's.
+OTIS_CACHE_ROOT=$nmc otis-node-modules "$tmp/nm"; nmstamp=$(cat "$tmp/nm/node_modules/.otis-workspace")
+( cd "$tmp/nm-wt" && mkdir -p pkg/three && printf '{ "name": "@scope/three" }\n' > pkg/three/package.json && git add -A && git commit -qm three )
+mkdir -p "$tmp/nmrace" && printf '#!/bin/sh\n/bin/mkdir "$@"; for a; do :; done\ncase $a in */nm-wt/node_modules/@scope) ln -s ../../pkg/three "$a/three" ;; esac\nexit 0\n' > "$tmp/nmrace/mkdir" && chmod +x "$tmp/nmrace/mkdir"
+PATH=$tmp/nmrace:$PATH OTIS_CACHE_ROOT=$nmc otis-node-modules "$tmp/nm-wt"
+expect nm/no-link-inside-package "$(ls "$tmp/nm-wt/pkg/three"):$(git -C "$tmp/nm-wt" status --porcelain)" "package.json:"
+expect nm/own-record "$([ -f "$tmp/nm-wt/node_modules/.otis-workspace" ] && [ ! -L "$tmp/nm-wt/node_modules/.otis-workspace" ] && echo own):$([ "$(cat "$tmp/nm/node_modules/.otis-workspace")" = "$nmstamp" ] && echo "main's kept")" "own:main's kept"
 git -C "$tmp/nm" worktree remove --force "$tmp/nm-wt" >/dev/null 2>&1
 
 # --- git-fzf-scroll reset forgets every position in a picker keyed by its
@@ -1215,20 +1432,91 @@ else
 fi
 
 # The dashboard (otis-dash), in a pty: origin is a path here, so it draws
-# from the checkout alone, the here section and nothing waiting; j moves
-# nothing off the one row, and gb hands gb to the otis function to run.
-dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash"; out=
+# from the checkout alone, the here row and nothing needing you, with the
+# repo's other branches folded in a group under it; gb hands gb to the otis
+# function to run, and that is all the dashboard prints, the keys' help (?)
+# having been open or not: anything else with it and otis would not know
+# what it was handed, and would just close.
+dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash > $1"; out=
   for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *"nothing to commit"* ]] && break; sleep 0.1; done
-  zpty -wn d j; sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  out+=$'"'"'\n@@j\n'"'"'; zpty -wn d j; sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  zpty -wn d "?"; sleep 0.4; zpty -wn d "?"; sleep 0.4; while zpty -rt d buf; do out+=$buf; done
   zpty -wn d g; zpty -wn d b; for _ in {1..20}; do while zpty -rt d buf; do out+=$buf; done; zpty -t d || break; sleep 0.1; done
-  zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
-expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing waiting on you')" "1"
+  zpty -d d 2>/dev/null; print -r -- $out' - "$tmp/dash.handed" | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+expect otis/quiet "$(printf '%s\n' "$dash" | grep -c 'Nothing needs you')" "1"
 expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
-# Nothing uncommitted and nothing past the base: enter has nothing to do,
-# so the footer offers only the keys that open the rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | grep -c '⏎'):$(printf '%s\n' "$dash" | grep -c ' m MRs')" "0:1"
-# The last thing it writes, after the screen is put back.
-expect otis/b-hands-over "$(printf '%s\n' "$dash" | tail -1 | grep -c 'gb$')" "1"
+# Nothing uncommitted and nothing past the base: enter has nothing to do on
+# the row it opens on, so the footer offers only the key that lists the rest.
+expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '? keys')" "0:1"
+expect otis/b-hands-over "$(cat "$tmp/dash.handed")" "gb"
+# A change with an MR has its number on its row, in a column before the
+# lights: the board made above for MR 7, handed over by stand-ins for
+# otis-list and otis-board (and one for otis-preview, which would ask a forge).
+mkdir -p "$tmp/dashstub"
+printf '#!/bin/sh\necho row\n' > "$tmp/dashstub/otis-list"
+printf '#!/bin/sh\ncat "%s"\n' "$tmp/board7.tsv" > "$tmp/dashstub/otis-board"
+printf '#!/bin/sh\n' > "$tmp/dashstub/otis-preview"
+chmod +x "$tmp/dashstub"/*
+dash=$(PATH=$tmp/dashstub:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash"; out=
+  for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *"Ship it"* ]] && break; sleep 0.1; done
+  sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  zpty -wn d q; sleep 0.3; zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+expect otis/mr-number "$(printf '%s\n' "$dash" | grep -o 'Ship it *![0-9]* ' | head -1 | tr -s ' ')" "Ship it !7 "
+# A login the forge no longer takes is said under the headline, with the key
+# that mends it: u logs in (git-forge login) and then refetches. A u pressed
+# while a refresh is on its way is not dropped: its refetch goes when that
+# one lands. And a stale mark whose error is gone (a preview's, never asked
+# for again) is taken down rather than hold the line up. otis-list's stand-in
+# marks as git-cached-json does, is slow the first time, and logs how it was
+# asked and the marks it found.
+dl=$tmp/dashlogin; mkdir -p "$dl/stubs" "$dl/cache"
+cp "$tmp/dashstub/otis-board" "$tmp/dashstub/otis-preview" "$dl/stubs/"
+printf '   ERROR  \n          \n  Oauth2: "invalid_grant" "The provided authorization grant is invalid, expired,          \n  revoked.".\n' > "$dl/cache/mrs.json.err"
+cat > "$dl/stubs/otis-list" <<EOF
+#!/bin/sh
+c=$dl/cache
+[ -e "\$c/first" ] || { : > "\$c/first"; printf '%s\n' "\$c/old.json" > "\$GIT_FZF_STATE/stale.old.json"; sleep 2; }
+if [ -s "\$c/mrs.json.err" ]; then printf '%s\n' "\$c/mrs.json" > "\$GIT_FZF_STATE/stale.mrs.json"; else rm -f "\$GIT_FZF_STATE/stale.mrs.json"; fi
+printf '%s|%s\n' "\$1" "\$(ls "\$GIT_FZF_STATE" | grep '^stale\.' | tr '\n' ' ')" >> "\$c/log"
+: > "\$GIT_FZF_STATE/footer"
+echo row
+EOF
+cat > "$dl/stubs/git-forge" <<EOF
+#!/bin/sh
+[ "\$1" = login ] && { mv "$dl/cache/mrs.json.err" "$dl/cache/logged-in"; exit 0; }
+exec "$root/bin/git-forge" "\$@"
+EOF
+chmod +x "$dl/stubs"/*
+dash=$(PATH=$dl/stubs:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 100; otis-dash"; out= c=$1
+  lines() { [[ -e $c/log ]] && REPLY=${#${(f)"$(<$c/log)"}} || REPLY=0; }
+  for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *otis* ]] && break; sleep 0.1; done
+  zpty -wn d u
+  for _ in {1..80}; do while zpty -rt d buf; do out+=$buf; done; lines; [[ $out == *"login expired"* ]] && (( REPLY >= 2 )) && break; sleep 0.1; done
+  zpty -wn d u
+  for _ in {1..80}; do while zpty -rt d buf; do out+=$buf; done; lines; [[ -e $c/logged-in ]] && (( REPLY >= 3 )) && break; sleep 0.1; done
+  sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  zpty -wn d q; sleep 0.3; zpty -d d 2>/dev/null; print -r -- $out' - "$dl/cache" | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+expect otis/login-says "$(printf '%s\n' "$dash" | grep -o 'GitLab login expired  ·  u logs in again' | head -1)" "GitLab login expired  ·  u logs in again"
+# The second time it was asked is the first u's refetch, the login still gone.
+expect otis/u-not-dropped "$(sed -n '2p' "$dl/cache/log" | grep -c -e '^--refresh|stale\.mrs\.json')" "1"
+expect otis/u-logs-in "$([ -e "$dl/cache/logged-in" ] && echo ran):$(sed -n '3p' "$dl/cache/log")" "ran:--refresh|"
+expect otis/gone-error-mark-swept "$(sed -n '1p;2p' "$dl/cache/log" | cut -d'|' -f2 | tr '\n' '/')" "stale.mrs.json stale.old.json /stale.mrs.json /"
+# What a failed call said, whole and in a line, past glab's banner and its
+# own line breaks; a login it no longer takes is exit 3, with how to log in.
+expect forge/why-login "$(git-forge why "$dl/cache/old.json.err" 2>/dev/null; printf 'rc=%s ' $?; printf '   ERROR  \n\n  Oauth2: "invalid_grant" "expired".\n' > "$dl/e"; git-forge why "$dl/e"; echo "rc=$?")" "rc=1 your GitLab login expired: glab auth login --hostname gitlab.com logs in again
+rc=3"
+expect forge/why-whole "$(printf '\n   ERROR  \n          \n  Get "https://x/api": dial tcp:            \n  no such host.          \n' > "$dl/e"; git-forge why "$dl/e"; echo "rc=$?")" 'Get "https://x/api": dial tcp: no such host.
+rc=0'
+# With no picker to reload, a cache whose last fetch failed is still fetched
+# again when asked for, so it mends by itself once what broke it is fixed;
+# one that works is left to u, as before.
+cj=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache; mkdir -p "$cj"
+printf '{"old":1}\n' > "$cj/heal.json"; printf 'boom\n' > "$cj/heal.json.err"; cp "$cj/heal.json" "$cj/calm.json"
+touch -t 202001010000 "$cj/heal.json" "$cj/heal.json.tried" "$cj/calm.json"
+( unset FZF_PORT GIT_FZF_STATE; git-cached-json heal 15 x -- sh -c 'echo "{\"new\":1}"' >/dev/null; git-cached-json calm 15 x -- sh -c 'echo "{\"new\":1}"' >/dev/null )
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -e "$cj/heal.json.err" ] || break; sleep 0.1; done
+expect cached/failed-mends-unasked "$(cat "$cj/heal.json"):$([ -e "$cj/heal.json.err" ] && echo err)" '{"new":1}:'
+expect cached/working-waits-for-u "$(cat "$cj/calm.json")" '{"old":1}'
 
 printf 'a4\n' > a.ts && printf 'new\n' > d.ts
 # ga opens by symbol (otis-symbols), in a pty: these two files have none, so
@@ -1255,7 +1543,7 @@ git checkout -q -- a.ts && rm -f d.ts
 # first push offers one; refused, in the footer, where there is one already
 expect mr-new/draft "$(zsh -fc "source '$root/share/otis.zsh'; _g_mr_draft feature && print -r -- \"\$mr_target|\$mr_title\"")" "main|Feature"
 expect mr-new/has-one "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature 12 >/dev/null; strip < "$tmp/dash/note")" "feature already has !12; w opens it"
-expect mr-new/not-gitlab "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature >/dev/null; strip < "$tmp/dash/note")" "origin is not on GitLab"
+expect mr-new/no-forge "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature >/dev/null; strip < "$tmp/dash/note")" "origin is on neither GitLab nor GitHub"
 GIT_FZF_STATE=$tmp/dash git-mr-new --ask feature </dev/null >/dev/null 2>&1
 expect mr-new/not-pushed "$(GIT_FZF_STATE=$tmp/dash git-mr-new --said >/dev/null; strip < "$tmp/dash/note")" "feature is not pushed yet; gp pushes it and offers the MR"
 
@@ -1403,6 +1691,22 @@ noted() {
 expect confirm/note "$(noted a 'check the empty state')" "0:check the empty state"
 expect confirm/note-yes "$(noted y)" "0:"
 expect confirm/note-no "$(noted n)" "1:"
+# p's push over a screen (git-branch-push, a frame under it), in a pty: while
+# the pre-push hook waits, a box says the last line it printed and the key
+# that stops it, never only "…"; a word wider than the box goes on under
+# itself, none of it cut; and the footer says it went up.
+git switch -q -c hooked main && git commit -q --allow-empty -m "Hooked"
+printf '#!/bin/sh\necho "lint: installing %s" >&2\nsleep 2\n' "$(printf 'a%.0s' $(seq 1 70))z" > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+mkdir -p "$tmp/pushed" && : > "$tmp/push.frame"
+pushbox=$(GIT_FZF_STATE=$tmp/pushed TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b p "stty rows 24 cols 80; OTIS_FRAME=$1 git-branch-push hooked"; out=
+  for _ in {1..30}; do while zpty -rt p buf; do out+=$buf; done; [[ $out == *yes* ]] && break; sleep 0.1; done
+  zpty -wn p y
+  for _ in {1..80}; do while zpty -rt p buf; do out+=$buf; done; zpty -t p || break; sleep 0.1; done
+  zpty -d p 2>/dev/null; print -r -- $out' - "$tmp/push.frame" | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+rm -f .git/hooks/pre-push
+expect push/box-says-the-hook "$(printf '%s' "${pushbox#*pushing hooked}" | grep -o 'lint: installing\|aaaaaaaaaaz\|ctrl-c\|…' | sort -u | tr '\n' ' ')" "aaaaaaaaaaz ctrl-c lint: installing "
+expect push/went-up "$(git -C "$tmp/origin" rev-parse hooked 2>&1):$(cat "$tmp/pushed/note" 2>&1)" "$(git rev-parse hooked):pushed hooked"
+git push -q origin --delete hooked 2>/dev/null; git switch -q main && git branch -qD hooked
 
 # --- git-claude-worktree, share/claude-run.sh: the pool of worktrees Claude's
 # runs take one from, and a run whose process keeps dying. A live pid is this
@@ -1691,6 +1995,168 @@ else
   expect config/choices-picker-opens "no" "yes"
 fi
 git config --unset otis.agent
+
+# --- git-ci-merge --check: m merges what can merge, sets auto-merge on what
+# only has to wait, and says why for the rest. GitLab is a stub, one MR per
+# iid.
+mkdir -p "$tmp/mgstub" "$tmp/mgstate"
+cat > "$tmp/mgstub/glab" <<'STUB'
+#!/bin/sh
+mr() { printf '{"detailed_merge_status":"%s","merge_when_pipeline_succeeds":%s,"head_pipeline":%s}\n' "$@"; }
+case $2 in
+  */1\?*) mr mergeable false '{"id":1}' ;;
+  */2\?*) mr not_approved false '{"id":1}' ;;
+  */3\?*) mr not_approved true '{"id":1}' ;;
+  */4\?*) mr ci_must_pass false '{"id":1}' ;;
+  */5\?*) mr ci_must_pass false null ;;
+  */6\?*) mr discussions_not_resolved false '{"id":1}' ;;
+  */7\?*) mr draft_status false '{"id":1}' ;;
+  */8\?*) mr conflict false '{"id":1}' ;;
+esac
+STUB
+chmod +x "$tmp/mgstub/glab"
+mcheck() { PATH=$tmp/mgstub:$PATH GIT_FZF_STATE=$tmp/mgstate git-ci-merge --check "$1"; }
+mafter='+execute-silent(git-fzf-bg git-mr-list --refresh)'
+expect ci-merge/mergeable-merges "$(mcheck 1)" "execute(git-ci-merge 1)$mafter"
+expect ci-merge/unapproved-sets-auto "$(mcheck 2)" "execute(git-ci-merge --auto 2 not_approved)$mafter"
+expect ci-merge/already-set "$(mcheck 3; cat "$tmp/mgstate/note")" "ignore
+!3 is already set to merge itself: it still needs approval"
+expect ci-merge/failed-pipeline-sets-auto "$(mcheck 4)" "execute(git-ci-merge --auto 4 ci_must_pass)$mafter"
+expect ci-merge/no-pipeline-starts-one "$(mcheck 5)" "execute(git-ci-merge --run 5)$mafter"
+expect ci-merge/threads-set-auto "$(mcheck 6)" "execute(git-ci-merge --auto 6 discussions_not_resolved)$mafter"
+expect ci-merge/draft-refused "$(mcheck 7; cat "$tmp/mgstate/note")" "ignore
+!7 can't merge yet: it is a draft; R marks it ready"
+expect ci-merge/conflict-refused "$(mcheck 8; cat "$tmp/mgstate/note")" "ignore
+!8 can't merge yet: it has conflicts; gup to rebase"
+
+# --- git-forge: GitLab's calls pass to glab untouched; on GitHub the same
+# calls are answered from gh in GitLab's shapes. gh is a stub answering from
+# fixtures, and the repo is a local one set to GitHub, so nothing is fetched.
+here=$PWD fg=$tmp/forge
+git init -q "$fg" && cd "$fg" && git config user.email t@t && git config user.name t
+printf 'a\n' > f.ts && git add f.ts && git commit -qm base && git branch -qM main && git checkout -qb feat
+printf 'b\n' > f.ts && git commit -qam change
+b=$(git rev-parse main) h=$(git rev-parse feat)
+git remote add origin "$tmp/repo"
+mkdir -p "$tmp/fgstub"
+cat > "$tmp/fgstub/glab" <<'STUB'
+#!/bin/sh
+printf '%s|' "$@"
+STUB
+chmod +x "$tmp/fgstub/glab"
+expect forge/gitlab-passes-through "$(PATH=$tmp/fgstub:$PATH git-forge api -X PUT 'projects/:fullpath/x?a=1' -f 'body=two words')" "api|-X|PUT|projects/:fullpath/x?a=1|-f|body=two words|"
+expect forge/gitlab-head-ref "$(git-forge head-ref 7)" "refs/merge-requests/7/head"
+expect forge/gitlab-can "$(git-forge can deploys; echo $?)" "0"
+expect forge/gitlab-lacks "$(git-forge lacks)" "main-builds"
+expect forge/gitlab-mr-update "$(PATH=$tmp/fgstub:$PATH git-forge mr-update 7 --ready --label x)" "mr|update|7|--ready|--label|x|"
+expect forge/gitlab-approve "$(PATH=$tmp/fgstub:$PATH git-forge approve 7 abc)" "mr|approve|7|--sha|abc|"
+git config otis.forge github; git config otis.host github.com; git config otis.project o/r
+pr='{"number":5,"title":"T","body":"d","url":"https://github.com/o/r/pull/5","isDraft":false,"createdAt":"2026-09-01T00:00:00Z",
+ "updatedAt":"2026-09-02T00:00:00Z","headRefName":"feat","baseRefName":"main","headRefOid":"'$h'","baseRefOid":"'$b'",
+ "author":{"login":"kim"},"additions":1,"deletions":1,"changedFiles":1,"mergeStateStatus":"BEHIND","reviewDecision":"CHANGES_REQUESTED",
+ "autoMergeRequest":null,"mergedBy":null,"labels":{"nodes":[{"name":"bug"}]},
+ "reviewRequests":{"nodes":[{"requestedReviewer":{"login":"sam","databaseId":2}}]},
+ "latestReviews":{"nodes":[{"author":{"login":"lee","databaseId":3},"state":"CHANGES_REQUESTED"}]},
+ "reviewThreads":{"totalCount":2,"nodes":[{"isResolved":true},{"isResolved":false}]},
+ "commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+   {"__typename":"CheckRun","databaseId":11,"name":"test","status":"COMPLETED","conclusion":"FAILURE","startedAt":"2026-09-02T00:00:00Z",
+    "completedAt":"2026-09-02T00:05:00Z","checkSuite":{"workflowRun":{"databaseId":900,"workflow":{"name":"CI"}}}},
+   {"__typename":"StatusContext","context":"deploy/preview","state":"PENDING","createdAt":"2026-09-02T00:00:00Z"}]}}}}]}}'
+cat > "$tmp/fgstub/gh" <<STUB
+#!/bin/sh
+case "\$*" in
+  "api user") echo '{"login":"sam","name":"Sam"}' ;;
+  *"reviewThreads(first: 100) { nodes { id"*) cat <<J
+{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"$h","baseRefOid":"$b","reviewThreads":{"nodes":[
+  {"id":"PRRT_1","isResolved":false,"isOutdated":false,"path":"f.ts","subjectType":"LINE","diffSide":"RIGHT","startDiffSide":null,"line":1,"startLine":null,"originalLine":1,"originalStartLine":null,
+   "comments":{"nodes":[{"id":"PRRC_21","databaseId":21,"body":"why?","createdAt":"2026-09-02T00:00:00Z","state":"SUBMITTED","author":{"login":"lee"},"originalCommit":{"oid":"$h"}},
+                        {"id":"PRRC_23","databaseId":23,"body":"my reply","createdAt":"2026-09-03T00:00:00Z","state":"PENDING","author":{"login":"sam"},"originalCommit":{"oid":"$h"}}]}},
+  {"id":"PRRT_2","isResolved":true,"isOutdated":true,"path":"f.ts","subjectType":"LINE","diffSide":"LEFT","startDiffSide":null,"line":null,"startLine":null,"originalLine":1,"originalStartLine":null,
+   "comments":{"nodes":[{"id":"PRRC_22","databaseId":22,"body":"gone","createdAt":"2026-09-02T00:00:00Z","state":"SUBMITTED","author":{"login":"sam"},"originalCommit":{"oid":"0ld"}}]}},
+  {"id":"PRRT_3","isResolved":false,"isOutdated":false,"path":"f.ts","subjectType":"LINE","diffSide":"RIGHT","startDiffSide":"RIGHT","line":1,"startLine":1,"originalLine":1,"originalStartLine":1,
+   "comments":{"nodes":[{"id":"PRRC_24","databaseId":24,"body":"my draft","createdAt":"2026-09-03T00:00:00Z","state":"PENDING","author":{"login":"sam"},"originalCommit":{"oid":"$h"}}]}}]},
+ "comments":{"nodes":[{"databaseId":31,"body":"thanks","createdAt":"2026-09-02T00:00:00Z","author":{"login":"kim"}}]}}}}}
+J
+    ;;
+  *"reviews(states: PENDING"*) echo '{"data":{"repository":{"pullRequest":{"id":"PR_1","headRefOid":"$h","reviews":{"nodes":[{"id":"PRR_9","viewerDidAuthor":true}]}}}}}' ;;
+  "api graphql --input -") { echo "\$*"; cat; echo; } >> "$tmp/gh.posted"; echo '{"data":{"addPullRequestReviewThread":{"thread":{"comments":{"nodes":[{"id":"PRRC_25"}]}}}}}' ;;
+  *"mutation"*) printf '%s\n' "\$*" >> "$tmp/gh.posted"; echo '{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}' ;;
+  "api -X POST repos/o/r/pulls/5/comments --input -"|"api -X POST repos/o/r/pulls/5/reviews --input -") { echo "\$*"; cat; echo; } >> "$tmp/gh.posted"; echo '{}' ;;
+  *"review-requested:@me"*) echo '{"data":{"viewer":{"login":"sam"},"asked":{"nodes":[$pr]},"seen":{"nodes":[$pr]}}}' ;;
+  "api repos/o/r/actions/runs/900 --jq .head_sha") echo "$h" ;;
+  "api --paginate repos/o/r/commits/$h/check-runs?per_page=100") echo '{"check_runs":[{"id":11,"name":"test","status":"completed","conclusion":"failure",
+    "started_at":"2026-09-02T00:00:00Z","completed_at":"2026-09-02T00:05:00Z","html_url":"u","app":{"name":"GitHub Actions"}},
+    {"id":12,"name":"lint","status":"in_progress","conclusion":null,"started_at":"2026-09-02T00:00:00Z","completed_at":null,"html_url":"v","app":{"name":"GitHub Actions"}}]}' ;;
+  "api -X PUT repos/o/r/"*" --input -") { echo "\$*"; cat; echo; } >> "$tmp/gh.posted"; echo '{"merged":true}' ;;
+  "pr "*) echo "\$*" >> "$tmp/gh.posted" ;;
+  *"author:@me"*) echo '{"data":{"viewer":{"login":"sam"},"search":{"nodes":[$pr]}}}' ;;
+  *"pullRequest(number"*) echo '{"data":{"repository":{"pullRequest":$pr}}}' ;;
+  *"pullRequests(states"*) echo '{"data":{"viewer":{"login":"sam"},"repository":{"pullRequests":{"totalCount":1,"nodes":[$pr]}}}}' ;;
+  *) echo "gh stub: \$*" >&2; exit 1 ;;
+esac
+STUB
+chmod +x "$tmp/fgstub/gh"
+ghp=$tmp/fgstub:$PATH
+expect forge/mine "$(PATH=$ghp git-forge mrs mine | jq -c '.data.currentUser | [.username, (.authoredMergeRequests.nodes[0] | .iid, .diffRefs.baseSha == "'$b'",
+  .headPipeline.status, .headPipeline.id, (.headPipeline.jobs.nodes | map(.status) | join(",")), .detailedMergeStatus, .approvalsLeft,
+  (.reviewers.nodes | map(.username + ":" + .mergeRequestInteraction.reviewState) | join(",")), .resolvedDiscussionsCount)]')" \
+  '["sam","5",true,"FAILED","900","FAILED,PENDING","need_rebase",1,"lee:REQUESTED_CHANGES,sam:UNREVIEWED",1]'
+expect forge/review-once "$(PATH=$ghp git-forge mrs review | jq '.data.currentUser.reviewRequestedMergeRequests.nodes | length')" "1"
+expect forge/all "$(PATH=$ghp git-forge mrs all | jq -c '.data.project.mergeRequests | [.count, .nodes[0].sourceBranch]')" '[1,"feat"]'
+expect forge/rest-mr "$(PATH=$ghp git-forge api "projects/:fullpath/merge_requests/5" | jq -c '[.iid, .source_branch, .diff_refs.base_sha == "'$b'", .labels, .reviewers[0].username]')" '[5,"feat",true,["bug"],"lee"]'
+expect forge/user "$(PATH=$ghp git-forge api user | jq -r .username)" "sam"
+# Threads as discussions, placed as GitLab's are: submitted comments only, an
+# outdated one at the commit it was made on; your pending review's the drafts.
+expect forge/discussions "$(PATH=$ghp git-mr-pages "projects/:fullpath/merge_requests/5/discussions?per_page=100" |
+  jq -c 'map([.id, .resolved, (.notes | length), .notes[0].position.new_line, .notes[0].position.old_line, .notes[0].position.head_sha == "'$h'", .resolvable])')" \
+  '[["PRRT_1",false,1,1,null,true,true],["PRRT_2",true,1,null,1,false,true],["comment-31",false,1,null,null,false,false]]'
+expect forge/drafts "$(PATH=$ghp git-mr-pages "projects/:fullpath/merge_requests/5/draft_notes?per_page=100" |
+  jq -c 'map([.id, .note, .discussion_id, .position.new_line, .position.base_sha == "'$b'"])')" \
+  '[["PRRC_23","my reply","PRRT_1",null,false],["PRRC_24","my draft",null,1,true]]'
+expect forge/placed "$(PATH=$ghp git-mr-threads --fetch 5 "$b..$h" | jq -c 'map([.id, .where.state, (.notes | map(.draft // false))])')" \
+  '[["PRRT_1","line",[false,true]],["PRRT_2","outdated",[false]],["comment-31","overview",[false]],["draft-PRRC_24","line",[true]]]'
+# A comment where git-mr-position puts it, on GitHub's line and side; a draft
+# into your pending review; a thread resolved.
+rm -f "$tmp/gh.posted"
+PATH=$ghp git-forge api -X POST "projects/:fullpath/merge_requests/5/discussions" -H 'Content-Type: application/json' --input - >/dev/null <<J
+{"body":"hm","position":$(git-mr-position "$b" "$b" "$h" f.ts new 1 1)}
+J
+expect forge/comment-posted "$(sed 1d "$tmp/gh.posted" | jq -c '[.body, .path, .line, .side, .commit_id == "'$h'", has("start_line")]')" '["hm","f.ts",1,"RIGHT",true,false]'
+rm -f "$tmp/gh.posted"
+expect forge/draft-id "$(printf '%s' '{"note":"d","position":'"$(git-mr-position "$b" "$b" "$h" f.ts old 1 1)"'}' |
+  PATH=$ghp git-forge api -X POST "projects/:fullpath/merge_requests/5/draft_notes" --input - | jq -r .id)" "PRRC_25"
+expect forge/draft-into-review "$(sed 1d "$tmp/gh.posted" | jq -c '.variables.input | [.pullRequestReviewId, .path, .line, .side]')" '["PRR_9","f.ts",1,"LEFT"]'
+rm -f "$tmp/gh.posted"
+PATH=$ghp git-forge api -X PUT "projects/:fullpath/merge_requests/5/discussions/PRRT_1?resolved=true" >/dev/null
+expect forge/resolve "$(grep -c 'resolveReviewThread.*t=PRRT_1' "$tmp/gh.posted")" "1"
+expect forge/head-ref "$(git-forge head-ref 5)" "refs/pull/5/head"
+expect forge/mr-url "$(git-mr-url 5)" "https://github.com/o/r/pull/5"
+expect forge/lacks "$(git-forge can stack; echo $?)" "1"
+expect forge/says-what-it-lacks "$(PATH=$ghp git-forge api -X POST 'projects/:fullpath/merge_requests/5/pipelines' 2>&1; echo $?)" "not on GitHub: POST projects/:fullpath/merge_requests/5/pipelines
+1"
+# CI: a pipeline is the head commit's checks, a job a check run.
+expect forge/jobs "$(PATH=$ghp git-mr-pages "projects/:fullpath/pipelines/900/jobs?per_page=100" | jq -c 'map([.id, .name, .status, .duration])')" \
+  '[[11,"test","failed",300],[12,"lint","running",null]]'
+# The REST MR says why it cannot merge in GitLab's words, and merging it sends
+# the head you read.
+expect forge/merge-status "$(PATH=$ghp git-forge api "projects/:fullpath/merge_requests/5" | jq -r .detailed_merge_status)" "need_rebase"
+rm -f "$tmp/gh.posted"
+expect forge/merge "$(PATH=$ghp git-forge api -X PUT "projects/:fullpath/merge_requests/5/merge?sha=$h" | jq -r .state)" "merged"
+expect forge/merge-sent "$(sed 1d "$tmp/gh.posted" | jq -c '[.sha == "'$h'", .merge_method]')" '[true,"merge"]'
+rm -f "$tmp/gh.posted"
+PATH=$ghp git-forge api -X PUT "projects/:fullpath/merge_requests/5" -f "labels=bug,ready" >/dev/null
+expect forge/labels "$(head -1 "$tmp/gh.posted"; sed 1d "$tmp/gh.posted" | jq -c .labels)" "api -X PUT repos/o/r/issues/5/labels --input -
+[\"bug\",\"ready\"]"
+rm -f "$tmp/gh.posted"
+PATH=$ghp git-forge mr-update 5 --ready --label ready
+expect forge/mr-update "$(cat "$tmp/gh.posted")" "pr ready 5 -R o/r
+pr edit 5 -R o/r --add-label ready"
+expect forge/lacks-all "$(git-forge lacks)" "stack run-pipeline stage-graph upload"
+# gmr lists the pull request as yours, from the same JSON. Its prefetch is
+# held off (its lock taken), so nothing is left running behind the test.
+gst=$tmp/forge-state && mkdir -p "$gst" "$(git rev-parse --git-common-dir)/gmr-prefetch.lock"
+expect forge/gmr-row "$(PATH=$ghp GIT_FZF_STATE=$gst git-mr-list | awk -F'\t' '$6 == "mine" { print $2, $5 }')" "5 feat"
+cd "$here"
 
 # --- git-symbols-past: where the changed code broke before, from git alone.
 # A change, a fix to its lines five days on (laid at it), a fix that only

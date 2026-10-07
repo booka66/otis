@@ -1,14 +1,17 @@
 #!/bin/sh
-# otis-open [--fzf] <url>: open a link. With --fzf, print the picker action
+# otis-open [--fzf] [--bare] <url>: open a link. With --fzf, print the picker action
 # instead: execute(...) when the page takes this pane (terminal-browser),
 # execute-silent(...) when it opens in the desktop browser, for the pickers'
 # w and p keys.
 #
 # otis.terminalBrowser (on by default) uses terminal-browser where it is
 # installed, so the page takes this pane and ctrl-c comes back. A directory
-# or a video or image still opens in its app.
-fzf=
+# or a video or image still opens in its app. With --bare, the page is left
+# signed in as terminal-browser has it (the dashboard's s: Slack is signed in
+# there by itself), not as Zen is.
+fzf= bare=
 [ "$1" = --fzf ] && { fzf=1; shift; }
+[ "$1" = --bare ] && { bare=1; shift; }
 [ -n "$1" ] || exit 0
 
 # The pane, not the desktop: the setting is on (the default), the command is
@@ -54,11 +57,21 @@ if in_pane "$1"; then
   case $t in
     '' | '?' | '??') ;;
     *)
-      # Signed in as Zen is, where it has cookies for the site (otis-cookies).
-      case $1 in
-        http://* | https://*) otis-cookies --tty "/dev/$t" "$1" </dev/null >/dev/null 2>&1 & ;;
-      esac
-      exec terminal-browser open "$1" <"/dev/$t" >"/dev/$t" 2>&1 ;;
+      # Under one of otis's screens the footer is spinning until this takes
+      # the terminal (run_tty's loader): stopped here, so no frame of it is
+      # written into the pictures the browser sends.
+      [ -n "$OTIS_LOADER" ] && kill "$OTIS_LOADER" 2>/dev/null
+      # herdr drops a picture as big as a wide pane and terminal-browser
+      # sends the pane as one, so there the browser runs on a terminal of its
+      # own that cuts each into strips (otis-tiles).
+      tiles=
+      [ -n "$HERDR_PANE_ID" ] && command -v python3 >/dev/null 2>&1 && tiles=otis-tiles
+      # Signed in as Zen is, where it has cookies for the site (otis-cookies),
+      # on the terminal the browser is on: under otis-tiles that is not this one.
+      exec $tiles sh -c '[ -n "$2" ] || case $1 in
+          http://* | https://*) otis-cookies --tty "$(tty)" "$1" </dev/null >/dev/null 2>&1 & ;;
+        esac
+        exec terminal-browser open "$1"' sh "$1" "$bare" <"/dev/$t" >"/dev/$t" 2>&1 ;;
   esac
   exec terminal-browser open "$1"
 fi

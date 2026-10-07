@@ -31,6 +31,7 @@
 #   git-test-files excludes       git pathspecs that leave test files out
 #
 # filter writes the picker's footer (how many it hid) into $GIT_FZF_STATE,
+# or OTIS_FOOTER for a caller that adds its own note to it,
 # which is why the pickers load their lists from inside fzf (start:reload)
 # rather than a pipe.
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -96,7 +97,10 @@ declares() {
 # the answers it has had in its state and asks git only about new paths.
 declared_generated() {
   if declares; then
-    known=${GIT_FZF_STATE:+$GIT_FZF_STATE/declared}
+    # A run left going in the background outlives the picker that started
+    # it, and its state with it: with none there, git answers every path,
+    # rather than nothing coming back (a walk found no tests at all).
+    known=; [ -d "${GIT_FZF_STATE:-}" ] && known=$GIT_FZF_STATE/declared
     [ -n "$known" ] && : >> "$known"
     awk -F'\t' -v fs="$1" '{ n = split(fs, f, ","); for (i = 1; i <= n; i++) if ($f[i] != "") print $f[i] }' "$2" | sort -u > "$2.paths"
     if [ -n "$known" ]; then
@@ -139,7 +143,7 @@ case $1 in
     fi
 
     awk -F'\t' -v field="$field" -v keepf="$keepf" -v keepv="$keepv" -v show="$show" -v section="$section" -v declared="$declared" -v state="$state" \
-        -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$classify"'
+        -v out="${OTIS_FOOTER:-${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$classify"'
       function rule(text,   s) {
         s = "\342\224\200\342\224\200 " text " "
         while (length(s) < 62) s = s "\342\224\200"

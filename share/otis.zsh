@@ -24,13 +24,6 @@ _g_cd() {
   fi
 }
 
-# Stage everything, commit it with gcm's checks, and push with gp.
-gcp() {
-  _g_repo || return 1
-  [[ -n $1 ]] || { print -u2 'usage: gcp "subject"   stage everything, commit, push'; return 2 }
-  git add -A && gcm "$*" && gp
-}
-
 # Bare gi lists the tags there are; gi <tags> fetches those rules. The list is
 # kept as it goes by, so completing a tag never has to fetch anything
 # (bin/otis-complete).
@@ -131,7 +124,7 @@ stack-push() {
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),P=walk it: its tests traced line by line or inputs Claude picks,p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),P=walk it: its tests traced line by line or inputs Claude picks,p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link (no MR: the branch name),t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
@@ -148,7 +141,7 @@ gb() {
       --bind 't:execute-silent(git-test-files toggle; git-test-files state > "$GIT_FZF_STATE/footer")+refresh-preview' \
       --bind 'n:transform(git-mr-new --check {2} {5})' \
       --bind 'w:transform(git-mr-do web {5})' \
-      --bind 'y:transform(git-mr-do copy {5})' \
+      --bind 'y:transform([ -n {5} ] && exec git-mr-do copy {5}; printf %s {2} | otis-copy; git-fzf-note copied {2})' \
       --bind 'l:transform(git-mr-do labels {5})' \
       --bind 'a:transform(git-mr-do reviewers {5})' \
       --preview 'git-branch-preview {2} {3} {6} {4} {5} {7} {8} {9}' </dev/null) || return
@@ -377,14 +370,14 @@ gst() {
 }
 
 # One panel for staging, like lazygit's files view: space toggles the row under
-# the cursor and the list redraws in place, p picks hunks of it (gah's way),
-# and c commits what is staged (gcm's way) without leaving. Unstaging everything
+# the cursor and the list redraws in place, p picks hunks of it, c commits
+# what is staged (gcm's way) without leaving, d discards a path (asking
+# first) and P parks it in a stash instead, which gst brings back. Unstaging everything
 # is U, not u: u refreshes in every other picker, and the muscle memory used to
 # land here and throw away a careful round of hunk staging with no way back. git-stage-toggle
 # and git-file-list live in bin/ because a picker's bindings run in zsh -f and
-# cannot see functions. Like gdd, gpark and gah, the panel runs from the repo root, where
-# git status's paths start, so its keys act on the right file from any
-# subdirectory.
+# cannot see functions. The panel runs from the repo root, where git status's
+# paths start, so its keys act on the right file from any subdirectory.
 ga() {
   _g_repo || return 1
   if (( $# )); then
@@ -411,7 +404,7 @@ _ga_files() {
   # back and forth would be one more q on the way out.
   local _s='execute(OTIS_UNDER=files git-symbols worktree)+reload(git-file-list)'
   [[ $OTIS_UNDER == symbols ]] && _s=abort
-  _picked=$(cd "$top" && git-fzf 'files ' 'enter=open in editor,s=by symbol,space=stage it,p=stage hunks,c=commit,d=discard it,a=stage all,U=unstage all,y=copy path,u=refresh,t=tests/config/generated,x=clear lock' --ansi \
+  _picked=$(cd "$top" && git-fzf 'files ' 'enter=open in editor,s=by symbol,space=stage it,p=stage hunks,c=commit,d=discard it,P=park it in a stash (untracked too),a=stage all,U=unstage all,y=copy path,u=refresh,t=tests/config/generated,x=clear lock' --ansi \
       --delimiter=$'\t' --with-nth=1 --track --id-nth=6 --keys-from 'otis-keys file {2} {3}' \
       --bind 'enter:execute(git-file-open {3} {2} {4})+reload(git-file-list)' \
       --bind 'start:reload(git-file-list)' \
@@ -422,6 +415,7 @@ _ga_files() {
       --bind 'c:transform:git diff --cached --quiet && git-fzf-note "nothing staged to commit" || echo "execute(git-commit-edit || { echo press enter; read -r _; })+reload(git-file-list)"' \
       --bind 'x:reload(git-clear-lock)' \
       --bind 'd:execute(git-discard-path {3} {2} {4})+reload(git-file-list -- {2} {4})' \
+      --bind 'P:execute-silent(set -- {2} {4}; [ -n "$2" ] || set -- "$1"; git stash push -q -u -m "park-$(date +%Y%m%d-%H%M%S)" -- "$@")+reload(git-file-list)+transform(git-fzf-note parked {2}: gst brings it back)' \
       --bind 'a:reload(git add -A >/dev/null; git-file-list)' \
       --bind 'U:reload(git reset -q >/dev/null; git-file-list)' \
       --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
@@ -429,104 +423,6 @@ _ga_files() {
       --preview 'git-preview-file {3} {2} {4}' </dev/null)
   git status --short
 }
-
-gu() {
-  _g_repo || return 1
-  if (( $# )); then
-    git restore --staged -- "$@" && git status --short
-  else
-    print -u2 "usage: gu <path>   unstage it (or ga, then space)"
-    return 2
-  fi
-}
-
-
-# Fold what is staged into an earlier commit of this branch. Only this branch's
-# commits are offered, and anything in the way is refused before the picker
-# opens; the rules and the fold are git-commit-fixup's, shared with gl's f.
-gfx() {
-  _g_repo || return 1
-  git-commit-fixup --check || return 1
-  local base=$(otis-config base) sha
-  sha=$(git log --oneline --color=always "$base..HEAD" |
-    git-fzf 'fixup into ' 'enter=fold the staged changes in' --ansi --no-sort \
-      --preview 'git-preview-commit {1}' | awk '{print $1}') || return
-  [[ -z $sha ]] && return
-  git-commit-fixup "$sha"
-}
-
-# Discarding unstaged work is the one git operation with no undo: those changes
-# were never objects, so no reflog holds them. Hence the explicit confirm.
-# What discarding a row means comes from its status, as in ga's d
-# (git-discard-path), not from whether git tracks the path: after git rm
-# --cached one path is both a staged deletion and an untracked file. Paths are
-# relative to the repo root, where the picker runs.
-gdd() {
-  _g_repo || return 1
-  if [[ -z $(git status --porcelain) ]]; then
-    print "nothing to discard"
-    return
-  fi
-  local sel top=$(git rev-parse --show-toplevel)
-  sel=$(cd "$top" && git-fzf 'discard ' 'space=mark,t=tests/config/generated,enter=discard marked' --multi --ansi \
-      --delimiter=$'\t' --with-nth=1 \
-      --bind 'start:reload(git-file-list)' \
-      --bind 'space:toggle' \
-      --bind 't:execute-silent(git-test-files toggle)+clear-selection+reload(git-file-list --cached)' \
-      --preview 'git-preview-file {3} {2} {4}' </dev/null) || return
-  [[ -z $sel ]] && return
-
-  local -a f revert new untracked
-  local line
-  for line in "${(@f)sel}"; do
-    f=("${(@ps:\t:)line}")
-    case $f[3] in
-      '??')  untracked+=("$f[2]") ;;
-      A?|?A) new+=("$f[2]") ;;
-      # Undoing a rename deletes the new path and brings the old one back.
-      R?)    new+=("$f[2]"); revert+=("$f[4]") ;;
-      *)     revert+=("$f[2]") ;;
-    esac
-  done
-
-  print "about to discard:"
-  (( $#revert ))    && { print "  revert to HEAD ($#revert):"; printf '    %s\n' $revert }
-  (( $#new ))       && { print "  DELETE new files, edits and all ($#new):"; printf '    %s\n' $new }
-  (( $#untracked )) && { print "  DELETE untracked ($#untracked):"; printf '    %s\n' $untracked }
-  print -n "this cannot be undone. proceed? [y/N] "
-  if ! read -q; then print; print "aborted"; return 1; fi
-  print
-
-  # Untracked first: with both rows of a git rm --cached marked, the file is
-  # deleted and then comes back from HEAD, not the other way round.
-  (( $#untracked ))      && rm -rf -- "$top/"${^untracked}
-  (( $#revert + $#new )) && git -C "$top" restore --staged --worktree -- $revert $new
-  git status --short
-}
-
-# Safer sibling: park the selection in a tagged stash instead of destroying it.
-gpark() {
-  _g_repo || return 1
-  if [[ -z $(git status --porcelain) ]]; then
-    print "nothing to park"
-    return
-  fi
-  local sel top=$(git rev-parse --show-toplevel)
-  sel=$(cd "$top" && git-fzf 'park ' 'space=mark,t=tests/config/generated,enter=stash marked' --multi --ansi \
-      --delimiter=$'\t' --with-nth=1 \
-      --bind 'start:reload(git-file-list)' \
-      --bind 'space:toggle' \
-      --bind 't:execute-silent(git-test-files toggle)+clear-selection+reload(git-file-list --cached)' \
-      --preview 'git-preview-file {3} {2} {4}' </dev/null) || return
-  [[ -z $sel ]] && return
-  local -a paths
-  paths=("${(@f)$(print -r -- "$sel" | cut -f2)}")
-  local tag="park-$(date +%Y%m%d-%H%M%S)"
-  git -C "$top" stash push -u -m "$tag" -- $paths &&
-    git stash list --format='%h %gs' | grep -F "$tag" |
-      sed 's/^/restore with: git stash apply /'
-}
-
 
 # The command list. Each picker's own keys live in its footer and its ? help,
 # which come from the same list the bindings do, so they cannot go stale here.
@@ -687,28 +583,7 @@ gunwip() {
 # and later output scrolls out of view.
 fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?1049l'; clear }
 
-# The three things lazygit still does better, as pickers.
-
-# Hunk-level staging. Pick the file, then git add -p drives the hunks
-# (git-stage-hunks, which ga's p uses too). Needed whenever one file's changes
-# belong to two different commits in a stack.
-gah() {
-  _g_repo || return 1
-  if [[ -z $(git status --porcelain) ]]; then
-    print "nothing to stage"
-    return
-  fi
-  local sel top=$(git rev-parse --show-toplevel)
-  sel=$(cd "$top" && git-fzf 'hunks in ' 't=tests/config/generated,enter=pick hunks' --ansi \
-      --delimiter=$'\t' --with-nth=1 \
-      --bind 'start:reload(git-file-list)' \
-      --bind 't:execute-silent(git-test-files toggle)+reload(git-file-list --cached)' \
-      --preview 'git-preview-file {3} {2} {4}' </dev/null) || return
-  [[ -z $sel ]] && return
-  local -a f=("${(@ps:\t:)sel}")
-  git-stage-hunks "$f[3]" "$f[2]"
-  git status --short
-}
+# The two things lazygit still does better, as pickers.
 
 # Interactive rebase starting just below the commit you pick, so that commit is
 # the first one you can reword, edit, squash or drop. --update-refs keeps the
@@ -798,6 +673,11 @@ otis() {
         gd)  gd ;;
         gw)  gw ;;
         otis-config) otis-config ;;
+        # Enter on a change's local light, or on a worktree: only a shell
+        # can go there, and it is where the dashboard was leaving you.
+        goto$'\t'*) _g_goto_branch "${out#*$'\t'}"; return ;;
+        gotow$'\t'*) _g_goto_branch "${out#*$'\t'}" worktree; return ;;
+        cd$'\t'*) _g_cd "${out#*$'\t'}"; return ;;
         *)   return 0 ;;
       esac
       [[ $PWD == $at && $(git branch --show-current 2>/dev/null) == $on ]] || return 0
@@ -831,6 +711,7 @@ gag() {
 # what enter on a merged MR in gmr does. Reloads every 30s.
 gd() {
   _g_repo || return 1
+  git-forge can deploys || { print -u2 "gd: deploys are GitLab's environments, and this repo is on GitHub"; return 1 }
   local -a at
   [[ -n $1 ]] && at=(--bind "result:transform(git-deploy-list --pos ${(q)1})+unbind(result)")
   git-fzf 'deploys ' 'enter=jobs and logs,w=open the job,p=pipeline in browser,y=copy sha,u=refresh' --ansi --no-sort \
@@ -848,7 +729,7 @@ gd() {
 
 # Every merge request in one picker (git-mr-list): MRs to review, yours with
 # their pipelines, and yours merged this week with whether each is live (f:
-# every open MR instead). gci is the same picker with yours first.
+# every open MR instead).
 #
 # enter does the obvious thing for the row: review an MR (a shared review
 # worktree moves to it, git-mr-review), address the comments on one of yours
@@ -856,7 +737,7 @@ gd() {
 # Either of the first two is a file picker over the whole diff with threads
 # inline; q in there comes back here, and q again returns you where you were.
 # c is CI jobs and logs, r retries failed jobs, m merges once GitLab says it
-# is ready, b has GitLab rebase it onto its target (git-mr-rebase), A approves, l and a manage labels and reviewers, s switches to the
+# is ready, b has GitLab rebase it onto its target (git-mr-rebase), A approves, X closes one of yours, l and a manage labels and reviewers, s switches to the
 # branch (bringing it here from a worktree), W opens it in a worktree of its own, w and y open
 # m and b are the two keys whose answer comes from GitLab, and the only two
 # that ever made you wait: they run behind the picker (git-fzf-later), which
@@ -870,8 +751,19 @@ gd() {
 # its progress while it goes, the walk once it has landed. The list reloads every 30s, keeping the cursor.
 _gmr() {
   _g_repo || return 1
-  local out
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' 'enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,b=rebase onto target,A=approve,R=draft / ready (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,r=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh' --ansi \
+  local out keys='enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,b=rebase onto target,A=approve,R=draft / ready (yours),X=close (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,r=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh'
+  # What the forge has nothing behind (git-forge lacks) is left off the keys,
+  # and the key says so rather than failing.
+  local -a off
+  local lack
+  for lack in $(git-forge lacks); do
+    case $lack in
+      run-pipeline) keys=${keys/,N=new pipeline/}; off+=(--bind 'N:transform(git-fzf-note "starting a pipeline by hand is GitLab'"'"'s; push to run the checks again")') ;;
+      stage-graph) keys=${keys/,v=stage graph/}; off+=(--bind 'v:transform(git-fzf-note "the stage graph is GitLab'"'"'s; p opens the checks")') ;;
+      deploys) keys=${keys/,D=Claude watches production (merged)/}; off+=(--bind 'D:transform(git-fzf-note "watching production follows GitLab'"'"'s deploys")') ;;
+    esac
+  done
+  out=$(GMR_FIRST=$1 git-fzf 'MRs ' "$keys" --ansi \
     --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
     --keys-from 'otis-keys mr {6} {2} {9}' \
     --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
@@ -887,6 +779,7 @@ _gmr() {
     --bind 'b:transform(git-fzf-later "asking GitLab what !{2} would rebase onto" git-mr-rebase --check {6} {2})' \
     --bind 'A:transform(git-mr-do approve {6} {2} {7} {8})' \
     --bind 'R:transform(git-mr-do draft {6} {2})' \
+    --bind 'X:transform(git-mr-do close {6} {2})' \
     --bind 'l:transform[git-mr-do labels {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
     --bind 'a:transform[git-mr-do reviewers {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
     --bind 's:print(switch)+accept' \
@@ -899,6 +792,7 @@ _gmr() {
     --bind 'D:transform(git-mr-watch --check {6} {2})' \
     --bind 'V:transform(git-verify --check {6} {2})' \
     --bind 'P:transform(git-walk --check {6} {2})+execute-silent(git-fzf-bg git-mr-list --refresh)' \
+    "${off[@]}" \
     --preview 'git-mr-preview {2} {6} {11}' </dev/null)
   # s and W print "switch" or "worktree" and the MR's row; anything else leaves out empty.
   local -a lines=("${(@f)out}")
@@ -907,12 +801,12 @@ _gmr() {
   _g_goto_branch "$f[5]" ${lines[1]:#switch}
 }
 gmr() { _gmr review }
-gci() { _gmr mine }
 
 # This branch's commits as a glab stack, one branch and MR a commit, then
 # synced (git-stack). b in gmr rebases a glab stack onto origin/main.
 gstack() {
   _g_repo || return 1
+  git-forge can stack || { print -u2 "gstack: stacks are glab's, and this repo is on GitHub; a branch on a branch still stacks (gp offers each its PR)"; return 1 }
   git-stack "$@"
 }
 
@@ -1022,8 +916,8 @@ _g_mr_draft() {
 # delete-branch defaults as GitLab's form would: prints the new MR's JSON.
 _g_mr_create() {
   local project
-  project=$(glab api projects/:fullpath) || return
-  glab api -X POST projects/:fullpath/merge_requests -H 'Content-Type: application/json' --input - <<<"$(
+  project=$(git-forge api projects/:fullpath) || return
+  git-forge api -X POST projects/:fullpath/merge_requests -H 'Content-Type: application/json' --input - <<<"$(
     jq -n --arg s "$1" --arg t "$mr_target" --arg title "$mr_title" --arg d "$mr_desc" --argjson p "$project" \
       '{source_branch: $s, target_branch: $t, title: $title, description: $d,
         remove_source_branch: $p.remove_source_branch_after_merge,
@@ -1032,7 +926,7 @@ _g_mr_create() {
 
 _g_offer_mr() {
   local b=$1 out
-  otis-config gitlab || { _g_review_link "$b"; return }
+  { otis-config gitlab || [[ $(otis-config forge) == github ]] } || { _g_review_link "$b"; return }
   _g_mr_draft "$b" || { print -u2 "gp: $mr_why"; return }
   print
   git-confirm "create an MR from $b into $mr_target: \"$mr_title\"?" || { _g_review_link "$b"; return }
@@ -1053,7 +947,7 @@ _g_mr_new() {
   case $how in
     check)
       [[ -n $iid ]] && { git-fzf-note "$b already has !$iid; w opens it"; return }
-      otis-config gitlab || { git-fzf-note "origin is not on GitLab"; return }
+      { otis-config gitlab || [[ $(otis-config forge) == github ]] } || { git-fzf-note "origin is on neither GitLab nor GitHub"; return }
       local stack=$(git-stack --of "$b" 2>/dev/null)
       [[ -n $stack ]] && { git-fzf-note "$b is a layer of the stack $stack; gstack on it opens the stack's MRs"; return }
       print -r -- "execute(git-mr-new --ask ${(q)b})+transform(git-mr-new --said)+execute-silent(git-fzf-bg git-branch-list --switch --refresh)"
@@ -1071,7 +965,7 @@ _g_mr_new() {
       # one's commits as layers too; it goes into it instead, one MR), and
       # from a checkout of it, since infer reads HEAD. Without one it says
       # so and offers the one MR.
-      if (( n > 1 )) && [[ $(_g_mr_target "$b") == $(otis-config main) && -z $(git rev-list --merges "$base..$b") ]]; then
+      if (( n > 1 )) && git-forge can stack && [[ $(_g_mr_target "$b") == $(otis-config main) && -z $(git rev-list --merges "$base..$b") ]]; then
         print "$b has $n commits:"
         git log --reverse --format='  %h %s' "$base..$b"
         print
@@ -1092,7 +986,7 @@ _g_mr_new() {
       local main=$(otis-config main) x=$b t
       local -a chain=($b) made
       while t=$(_g_mr_target "$x"); [[ $t != $main ]] &&
-        [[ $(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=${t//\//%2F}" 2>/dev/null | jq length) == 0 ]]; do
+        [[ $(git-forge api "projects/:fullpath/merge_requests?state=opened&source_branch=${t//\//%2F}" 2>/dev/null | jq length) == 0 ]]; do
         chain=($t $chain) x=$t
       done
       for x in $chain; do

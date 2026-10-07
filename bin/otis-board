@@ -1,0 +1,495 @@
+#!/bin/sh
+# otis-board: the dashboard's board, from what otis-list left in the state.
+#
+# This is the one place that decides what an open merge request needs: its
+# lights, the lane it is in, the light the cursor lands on. otis-list
+# fetches, and says only what is not an open MR's own state. The board is a
+# change a row, with a light for each gate it has to get through, the same
+# five in the same order on every row:
+#
+#   local      where its branch is on this machine: here, in a worktree, a
+#              branch to switch to, or not here at all; and commits nobody
+#              else has
+#   verify     what a verification made of it (git-verify)
+#   pipeline   its head pipeline
+#   review     who has reviewed it, its unresolved threads, your review of
+#              someone else's
+#   ship       whether it can merge, or has
+#
+# and the rows in lanes by whose move it is: production unhappy about one of
+# yours, one to review, yours with a light that wants you, your drafts, what
+# is moving without you, and where you are. MRs built on one another (a
+# stack) are kept together, in the lane of the one of them that wants you
+# most (stacks, below). What otis-list says that is not a light of an open
+# change (a run that broke, a deploy, the trash) keeps its row as it was, in
+# the lane it belongs to.
+#
+# Under those, everything else there is, in groups the dashboard keeps folded
+# to a line each until you open one, so this is the one list of your work
+# (gmr's, gb's and gw's rows are all here):
+#
+#   waiting    open MRs with nothing for you to do: someone is reviewing
+#              yours, or you have reviewed theirs
+#   unsent     in nobody's hands yet: a branch with no MR, an MR nobody was
+#              asked to review
+#   shipped    yours that merged this week, and whether each is live
+#   cleanup    merged or closed and still on this machine: a branch or a
+#              worktree with nothing in it that would be lost
+#   places     the worktrees that are yours to keep or remove: not the ones
+#              gmr and the agents keep for reuse, which are never listed
+#   runs       Claude's background runs that are over, newest first (what
+#              gag listed): enter opens one, d forgets it
+#   deploys    production's last deploys, whoever's (what gd listed): enter
+#              is a deploy's jobs and logs
+#
+# The branches and worktrees are git-branch-list's and git-worktree-list's
+# rows, left in the state by the dashboard (branches.tsv, worktrees.tsv);
+# without them the lights say only what GitLab knows.
+#
+# A line a row, tab-separated: the lane (a group's name, for a row in one),
+# the row's key, its type (change, notice, here, place or group), its title,
+# who, how long ago, 1 on the branch you are on, the light the cursor starts
+# on, then gmr's fields (iid, target, url, source, head, base, pipeline, its
+# url, start sha), mine or review, 1 for a draft; then the five lights, eight
+# fields each: glyph, color, the kind, what enter does (otis-do's verb, or
+# the dashboard's own: goto, cd, delbranch, delwt), what it does it to (a
+# run's directory, a branch, a path), that in words, a mark beside the glyph
+# and the fix run a mark stands for; then, for a row kept as it was, its
+# verb, note, jobs done, what it is doing and its dots; and last the group it
+# folds under, for a group's own row how many are in it and a word on them,
+# and for an MR of a stack its piece of the rail and the lane it would be in
+# alone. The first line is the counts: #, need you, drafts, moving.
+st=$GIT_FZF_STATE
+[ -s "$st/rows" ] || exit 1
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/repo.sh" || exit 1
+url=${OTIS_C_url:-$(otis-config url 2>/dev/null)}
+for f in ci mrs marks runs ci-merged deploys; do [ -s "$st/$f.json" ] || echo null > "$st/$f.json"; done
+for f in seen.tsv branches.tsv worktrees.tsv; do [ -e "$st/$f" ] || : > "$st/$f"; done
+# A worktree on no branch keeps its commits only as long as it is there,
+# unless they are on some branch or on origin too. Whether they are is asked
+# of git once a worktree and commit (it takes a second in a big repository)
+# and kept with the repo's caches: path, commit, 1 if removing the worktree
+# would lose nothing. Only of the ones listed: those under gw's dedicated
+# heading, a row with no path, are not.
+kept=$OTIS_GITDIR/git-alias-cache/worktree-detached.tsv
+mkdir -p "${kept%/*}" 2>/dev/null; : >> "$kept"
+awk -F'\t' '$2 == "" { exit } $3 == "" { print $2 }' "$st/worktrees.tsv" | while IFS= read -r p; do
+  sha=$(git -C "$p" rev-parse HEAD 2>/dev/null) || continue
+  awk -F'\t' -v p="$p" -v s="$sha" '$1 == p && $2 == s { f = 1 } END { exit !f }' "$kept" && continue
+  if [ -n "$(git for-each-ref --count=1 --contains "$sha" refs/heads refs/remotes 2>/dev/null)" ]; then on=1; else on=0; fi
+  printf '%s\t%s\t%s\n' "$p" "$sha" "$on" >> "$kept"
+done
+# The branches there are, on this machine and on origin: a run kept under
+# the name of one that is on neither has nothing left to act on (finished).
+git for-each-ref --format='%(refname)' refs/heads refs/remotes/origin > "$st/refs" 2>/dev/null
+jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --rawfile refs "$st/refs" \
+  --rawfile branches "$st/branches.tsv" --rawfile worktrees "$st/worktrees.tsv" --rawfile detached "$kept" \
+  --slurpfile mine "$st/ci.json" --slurpfile askedf "$st/mrs.json" --slurpfile mergedf "$st/ci-merged.json" --slurpfile deploysf "$st/deploys.json" \
+  --slurpfile marksf "$st/marks.json" --slurpfile runsf "$st/runs.json" \
+  --arg common "$OTIS_GITDIR" --arg url "$url" --arg pwd "$(git rev-parse --show-toplevel 2>/dev/null)" '
+  include "otis";
+  (now | floor) as $NOW |
+  ($marksf[0] // {}) as $marks |
+  ($marks.gates // []) as $gates | ($marks.claude // {}) as $claude |
+  ($marks.fixes // {}) as $fixes | ($marks.verify // {}) as $verify |
+  ($runsf[0] // []) as $runs |
+  def clean: tostring | gsub("\t"; " ");
+  def plain: gsub("\u001b\\[[0-9;]*m"; "");
+  def at: if type == "string" then epoch else 0 end;
+  def since($t): ($NOW - $t) | span;
+  ($seen | split("\n") | map(select(. != "") | split("\t")) | map({key: .[0], value: (.[1] // "")}) | from_entries) as $dismissed |
+  def seen($kind; $key; $now): ($dismissed["\($kind)/\($key)"] // null) == $now;
+  ([$runs[] | {key: "\(.kind)/\(.dir | split("/") | last)", value: .ended}] | from_entries) as $ended |
+  def fresh_run($key): ($ended["otis-verify/\($key)"] // 0) > ($NOW - 86400);
+
+  # otis-list'"'"'s rows, each with the section it is under.
+  (reduce ($rows | split("\n")[] | select(. != "") | split("\t")) as $f ({s: "", out: []};
+     if $f[5] == "sep" then .s = ($f[10] | ltrimstr("sep-")) else .out += [{sec: .s, f: $f}] end) | .out) as $events |
+  (($events | map(select(.f[5] == "here")) | .[0].f[12]) // "") as $current |
+
+  # The branches on this machine (git-branch-list), by name: its kind (open,
+  # local, pushed, merged...), the worktree it is in, and how far past the
+  # base it is. And the worktrees (git-worktree-list); the ones after its
+  # dedicated heading are kept for reuse by gmr and the agents.
+  ([$branches | split("\n")[] | select(. != "") | split("\t") | select((.[1] // "") != "")
+     | {name: .[1], kind: .[2], wt: (.[3] // ""), iid: (.[4] // ""), place: (.[5] // ""),
+        ahead: ((.[6] // "") | tonumber? // 0)}]) as $brs |
+  ($brs | map({key: .name, value: .}) | from_entries) as $br |
+  (reduce ($worktrees | split("\n")[] | select(. != "") | split("\t")) as $f ({own: false, out: []};
+     if ($f[1] // "") == "" then .own = true
+     else .out += [{path: $f[1], branch: ($f[2] // ""), kind: ($f[3] // ""), safe: (($f[4] // "") == "safe"),
+                    iid: ($f[5] // ""), own: .own,
+                    dirty: (($f[0] | plain | [match("[0-9]+ uncommitted|rebasing|merging"; "g").string] | join(", ")))}] end)
+   | .out) as $wts |
+
+  ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
+  ($askedf[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) as $asked_all |
+  ($askedf[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me |
+  ($mine_mrs | map(.iid)) as $mine_iids |
+  ($asked_all | map(select(.iid | IN($mine_iids[]) | not))) as $asked |
+
+  # A light: its glyph and color, what enter does on it (vk, extra, does), a
+  # mark beside it with the fix run it stands for, how soon it wants you
+  # (rank, otis-list'"'"'s), and whether it does: you, moving, ok, wait or off.
+  def off: {g: "·", c: faint, vk: "", extra: "", does: "", m: "", fix: "", rank: 99, st: "off"};
+  def none: off + {g: ""};
+
+  # local: where the branch is. Enter goes to it, which the otis function
+  # does (the dashboard cannot move your shell); never pushed, its commits
+  # are beside it.
+  def local_cell($source):
+    ($br[$source] // null) as $b |
+    if $source == "" then none
+    elif $b == null then off + {vk: "goto", extra: $source, does: "fetch it and switch to it"}
+    else off + {vk: "goto", extra: $source} +
+      (if $b.place == "here" then {g: "▸", c: elsewhere, vk: "", does: ""}
+       elif $b.place == "worktree" then {g: "⌂", c: elsewhere, does: "go to its worktree"}
+       else {g: "○", c: context, does: "switch to it"} end)
+      + (if $b.kind == "local" and $b.ahead > 0 then {m: "↑\($b.ahead)"} else {} end)
+    end;
+
+  # verify: the verification of this head if there is one, by the MR or by
+  # its branch; else the last there was, dim, since the code has moved on.
+  def verify_cell($iid; $source; $head):
+    ([$iid, "b-" + ($source | gsub("/"; "%"))] | map(select(. != "" and $verify[.] != null) | {key: ., v: $verify[.]})) as $cands |
+    (($cands | map(select($head != "" and .v.head == $head)) | .[0])
+      // ($cands | map(select(.v.verifying or .v.status == "done")) | .[0])) as $pick |
+    if $pick == null then off else
+      $pick.key as $key | $pick.v as $v |
+      ($head == "" or $v.head == $head) as $fresh |
+      (seen("otis-verify"; $key; ($v.head // ""))) as $vseen |
+      # A fix its judge accepted, or its retrospective asked for, under either name.
+      ([$cands[].key | "f-" + ., "v-" + .] | map(select(($fixes[.].fixes // 0) > 0 and ($fixes[.].fixing | not))) | .[0]) as $fx |
+      {vk: "run", extra: "\($common)/otis-verify/\($key)", does: "open the run",
+       m: (if $fx then "✎\($fixes[$fx].fixes)" else "" end), fix: (if $fx then "\($common)/gmr-fix/\($fx)" else "" end)} +
+      (if $v.verifying then {g: "◎", c: attention, rank: 20, st: "moving"}
+       elif $v.status == "done" and $v.verdict == "fail" then
+         (if $fresh and ($vseen | not) then {g: "✗", c: bad, rank: 4, st: "you"} else {g: "✗", c: context, rank: 99, st: "off"} end)
+       elif $v.status == "done" and $v.verdict == "pass" then
+         (if $fresh and fresh_run($key) and ($vseen | not) then {g: "✓", c: good, rank: 10, st: "you"}
+          elif $fresh then {g: "✓", c: good, rank: 99, st: "ok"} else {g: "✓", c: context, rank: 99, st: "off"} end)
+       elif $v.status == "done" then
+         (if $fresh and fresh_run($key) and ($vseen | not) then {g: "?", c: yours, rank: 10, st: "you"} else {g: "?", c: context, rank: 99, st: "off"} end)
+       else {g: "·", c: faint, rank: 99, st: "off"} end)
+      | if $fx and .st != "you" then .st = "you" | .rank = 8 else . end
+    end;
+
+  def pipeline_cell:
+    (. | effective($gates)) as $e |
+    if . == null or $e == null then off else
+      {vk: "pipeline", extra: "", does: "see its jobs", m: "", fix: ""} +
+      (if $e == "FAILED" then {g: "✗", c: bad, rank: 5, st: "you"}
+       elif $e == "RUNNING" then {g: "◐", c: attention, rank: 20, st: "moving"}
+       elif ($e | IN("PENDING", "CREATED")) then {g: "○", c: attention, rank: 20, st: "moving"}
+       elif $e == "SUCCESS" then {g: "✓", c: good, rank: 99, st: "ok"}
+       elif $e == "APPROVAL" then {g: "⏸", c: elsewhere, rank: 99, st: "off"}
+       else {g: "·", c: context, rank: 99, st: "off"} end)
+    end;
+
+  # review, on one of yours: its threads first, since someone is waiting on
+  # them; then how the review stands. Enter opens the MR whatever it says.
+  def review_mine:
+    ((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) as $th |
+    ($fixes[.iid] // {}) as $f | (($f.fixes // 0) > 0 and ($f.fixing | not)) as $hasfix |
+    ([.reviewers.nodes[]? | .mergeRequestInteraction.reviewState // "UNREVIEWED"]) as $states |
+    {vk: "mr", extra: "", does: "open it",
+     m: (if $hasfix then "✎\($f.fixes)" elif $f.fixing then "◌" else "" end),
+     fix: (if $hasfix then "\($common)/gmr-fix/\(.iid)" else "" end)} +
+    (if $th > 0 then {g: "●\($th)", c: yours, rank: 6, st: "you"}
+     elif any($states[]; . == "REQUESTED_CHANGES") then {g: "✗", c: bad, rank: 6, st: "you"}
+     elif .approved then {g: "✓", c: good, rank: 99, st: "ok"}
+     elif ($states | length) > 0 then {g: "○", c: context, rank: 99, st: "wait"}
+     elif (.draft | not) and ((.updatedAt | at) > ($NOW - 3 * 86400)) then {g: "!", c: attention, rank: 12, st: "you"}
+     else {g: "·", c: faint, rank: 99, st: "off"} end)
+    | if $hasfix and .st != "you" then .st = "you" | .rank = 8 else . end;
+
+  # review, on one you were asked to: yours to give until you have.
+  def review_asked:
+    ($claude[.iid] // {}) as $cl |
+    ([.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED") as $s |
+    {extra: "", m: (if $cl.reviewing then "◌" else "" end), fix: ""} +
+    (if ($s | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES")) then
+       {g: (if $s == "APPROVED" then "✓" else "●" end), c: (if $s == "APPROVED" then good else context end),
+        vk: "mr", does: "open it", rank: 99, st: "ok"}
+     elif ($cl.drafts // 0) > 0 and ($cl.reviewing | not) then
+       {g: "✎\($cl.drafts)", c: yours, vk: "run", extra: "\($common)/gmr-claude/\(.iid)",
+        does: "read the review and its drafts", rank: 3.6, st: "you"}
+     else {g: "!", c: yours, vk: "mr", does: "review it", rank: 3.5, st: "you"} end);
+
+  # ship: set to merge itself, ready for you to merge, or stopped by
+  # something no other light says (a conflict). Someone else'"'"'s is theirs.
+  # GitLab works out whether one can merge only when asked, so a list mostly
+  # says unchecked: ready as far as anyone knows, and merging it asks
+  # (git-ci-merge --check).
+  def ship_cell($pipe; $yours):
+    ((.detailedMergeStatus // "") | ascii_upcase) as $ms |
+    {extra: "", m: "", fix: ""} +
+    (if .autoMergeEnabled then {g: "⏵", c: good, vk: "mr", does: "open it", rank: 99, st: "ok"}
+     elif $yours and .approved and $pipe == "SUCCESS" and ($ms | IN("MERGEABLE", "UNCHECKED", "CHECKING")) and (.draft | not) then
+       {g: "!", c: good, vk: "merge", does: "merge it", rank: 11, st: "you"}
+     elif ($ms | IN("CONFLICT", "NEED_REBASE")) then
+       (if $yours and (.draft | not) then {g: "✗", c: bad, vk: "mr", does: "open it", rank: 7, st: "you"}
+        else {g: "✗", c: context, vk: "mr", does: "open it", rank: 99, st: "off"} end)
+     else {g: "·", c: faint, vk: "", does: "", rank: 99, st: "off"} end);
+
+  # The light the cursor starts on: the one that wants you most; none does,
+  # the review, which opens the MR.
+  def defc: (map(.rank) | min) as $m | if $m >= 99 then 4 else (map(.rank) | index($m)) + 1 end;
+
+  # An open MR as a row. Its lane is whose move it is; with nothing lit it
+  # has none, and folds under waiting (in someone'"'"'s hands) or unsent.
+  def mr_row($mrkind):
+    (.diffRefs.headSha // "") as $head |
+    (.headPipeline | effective($gates)) as $pipe |
+    ([local_cell(.sourceBranch), verify_cell(.iid; .sourceBranch; $head), (.headPipeline | pipeline_cell),
+      (if $mrkind == "review" then review_asked else review_mine end), ship_cell($pipe; $mrkind == "mine")]
+      | map(. + {kind: $mrkind})) as $cells |
+    (if $mrkind == "review" then (if $cells[3].st == "you" then "review" else null end)
+     elif .draft then (if any($cells[]; .st == "you" or .st == "moving") then "draft" else null end)
+     elif any($cells[]; .st == "you") then "move"
+     elif any($cells[]; .st == "moving") then "moving"
+     else null end) as $lane |
+    {lane: $lane, key: "c-\(.iid)", type: "change",
+     fold: (if $lane != null then ""
+            elif $mrkind == "review" or ((.reviewers.nodes // []) | length) > 0 or .approved or .autoMergeEnabled then "waiting"
+            else "unsent" end),
+     title: (.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i")),
+     who: (if $mrkind == "review" then (.author.username // "") else "" end),
+     when: (if .updatedAt then since(.updatedAt | at) else "" end),
+     mark: ($current != "" and .sourceBranch == $current), defc: ($cells | defc),
+     iid: .iid, target: .targetBranch, url: .webUrl, source: .sourceBranch, head: $head,
+     base: (.diffRefs.baseSha // ""), pipeline: (.headPipeline.id | gid),
+     purl: (if .headPipeline.path then $url + .headPipeline.path else .webUrl end),
+     start: (.diffRefs.startSha // ""), mrkind: $mrkind, draft: (.draft // false),
+     cells: $cells, rank: ($cells | map(.rank) | min)};
+
+  # Stacks. An open MR that goes into the branch of another open MR is built
+  # on it, and the board keeps the two together: a stack is whole and in
+  # order, top first, the one that merges first (it goes into a branch no
+  # open MR here comes from) at the bottom, with a rail down its rows that
+  # says so: ┌ nothing is built on it, └ the bottom, ├ between. All of it is
+  # in the lane of the one in it that wants you most, sorted by that one, so
+  # an MR that is only waiting sits beside the one below it that is not; own
+  # is the lane each would be in alone, which the dashboard colors it by and
+  # the counts count it by. One nobody was asked to review wants you more
+  # than one that is with a reviewer: a stack is waiting on others only when
+  # all of it is.
+  def stacks: . as $all |
+    {review: 0, move: 1, draft: 2, moving: 3, unsent: 4, waiting: 5} as $urgent |
+    # What each is built on: the first other MR here whose branch it goes into.
+    ([range(0; length) as $i | [range(0; length) | select(. != $i and $all[.].source == $all[$i].target)][0]]) as $on |
+    def up($i; $d): (if $d < 30 then (range(0; $all | length) | select($on[.] == $i)) as $k | up($k; $d + 1) else empty end), {i: $i, d: $d};
+    ([range(0; length) | select($on[.] == null) | [up(.; 0)]]) as $rooted |
+    ($rooted | add // [] | map(.i)) as $reached |
+    # Two that go into each other have no bottom: each is a row alone.
+    ($rooted + [range(0; length) | select(IN($reached[]) | not) | [{i: ., d: 0}]]) as $units |
+    [$units | to_entries[] | .key as $useq | .value as $u |
+      ($u | map($all[.i] | .lane // .fold)) as $owns |
+      ($owns | min_by($urgent[.])) as $best |
+      ($u | map($all[.i].rank) | min) as $urank |
+      range(0; $u | length) as $p | $u[$p] as $m |
+      $all[$m.i] + {own: $owns[$p], urank: $urank, useq: $useq, upos: $p,
+                    rail: (if ($u | length) == 1 then "" elif $m.d == 0 then "└"
+                           elif any($on[]; . == $m.i) then "├" else "┌" end)}
+      | if ($best | IN("waiting", "unsent")) then .lane = null | .fold = $best else .lane = $best | .fold = "" end];
+
+  ([($asked[] | mr_row("review")), ($mine_mrs[] | mr_row("mine"))] | stacks) as $open |
+  ($open | map(select(.lane != null))) as $changes |
+  ($changes | map(.iid)) as $on_iids | ($changes | map(.source)) as $on_branches |
+  ($open | map(.source)) as $open_branches |
+
+  # What a row of otis-list'"'"'s is about: an MR, or a run kept under an MR'"'"'s
+  # number or a branch'"'"'s name (b-, with v- or f- before it for a fix a
+  # verification asked for or made).
+  def about: .f[10] as $id |
+    (if ($id | startswith("w-verify-")) then {t: "verify", key: $id[9:]}
+     elif ($id | startswith("g-otis-verify-")) then {t: "verify", key: $id[14:]}
+     elif ($id | startswith("w-fix-")) then {t: "fix", key: $id[6:]}
+     elif ($id | startswith("g-gmr-claude-")) then {t: "mr", key: $id[13:]}
+     elif ($id | startswith("g-gmr-fix-")) then {t: "fix", key: $id[10:]}
+     else {t: "other", key: ""} end) as $a |
+    ($a.key | sub("^[vf]-"; "")) as $base |
+    $a + {base: $base, vfix: ($a.key | test("^[vf]-")),
+          branch: (if ($base | startswith("b-")) then $base[2:] | gsub("%"; "/") else "" end)};
+  # Said by a light of a change on the board already. A branch'"'"'s
+  # verification is the verify light of its open MR wherever that MR is,
+  # folded too: never a change of its own beside it.
+  def lit: about as $a | $a.t != "other" and
+    (if $a.branch == "" then ($a.base | IN($on_iids[]))
+     elif $a.t == "verify" then ($a.branch | IN($open_branches[]))
+     else ($a.branch | IN($on_branches[])) end);
+
+  ($events | map(select((.f[5] | IN("here", "trash") | not) and (lit | not)) | . + {a: about})) as $rest |
+
+  # A run kept under a branch'"'"'s name outlives the branch, and what it said of
+  # a branch that is finished is history, not a move of yours: the branch'"'"'s
+  # MR merged after the run ended (the week'"'"'s merges, by their branch), its
+  # MR merged or closed with nothing on the branch since (the branch list'"'"'s
+  # word for one still here), or it is gone from this machine and from
+  # origin. $last is when the last of its runs ended.
+  ($refs | split("\n")) as $refnames |
+  ([($mergedf[0].mrs // [])[] | select(.sourceBranch != null and .mergedAt != null)
+     | {key: .sourceBranch, value: (.mergedAt | at)}] | from_entries) as $merged_at |
+  def finished($last): . as $b |
+    (($merged_at[$b] // 0) > $last) or (($br[$b].kind // "") | IN("merged", "closed"))
+    or (any($refnames[]; . == "refs/heads/" + $b or . == "refs/remotes/origin/" + $b) | not);
+
+  # A branch with no merge request: its verification, and a fix for it, as
+  # the lights of a change of its own, unless the branch is finished and
+  # none of its runs is still going.
+  ($rest | map(select(.a.branch != "" and (.a.t | IN("verify", "fix")))) | group_by(.a.branch) | map(
+    . as $evs | $evs[0].a.branch as $branch |
+    select(any($evs[]; .sec == "going")
+           or ($branch | finished($evs | map($ended[.f[12] | split("/") | .[-2:] | join("/")] // 0) | max) | not)) |
+    ($evs | map(select(.a.t == "verify")) | .[0]) as $v |
+    ($evs | map(select(.a.t == "fix" and .a.vfix and .f[5] == "run" and (.f[14] | startswith("✎")))) | .[0]) as $vf |
+    ($evs | map(select(.a.t == "fix" and (.a.vfix | not) and (.f[14] | startswith("✎")))) | .[0]) as $bf |
+    ($evs | map(select(.a.t == "fix" and (.f[14] | startswith("✎") | not))) | .[0]) as $fixing |
+    (if $v then
+       {vk: $v.f[13], extra: $v.f[12], does: $v.f[23]} +
+       (if $v.sec == "going" then {g: "◎", c: attention, rank: 20, st: "moving"}
+        elif ($v.f[16] | startswith("verified: failed")) then {g: "✗", c: bad, rank: 4, st: "you"}
+        elif ($v.f[16] | startswith("verified: passed")) then {g: "✓", c: good, rank: 10, st: "you"}
+        else {g: "?", c: yours, rank: 10, st: "you"} end)
+     elif $vf then {g: "·", c: faint, vk: $vf.f[13], extra: $vf.f[12], does: $vf.f[23], rank: 8, st: "you"}
+     else none end
+     | . + {m: (if $vf then $vf.f[14] else "" end), fix: (if $vf then $vf.f[12] else "" end)}) as $c1 |
+    (if $bf then {g: "·", c: faint, vk: $bf.f[13], extra: $bf.f[12], does: $bf.f[23], m: $bf.f[14], fix: $bf.f[12], rank: 8, st: "you"}
+     elif $fixing then none + {g: "◌", c: attention, vk: $fixing.f[13], extra: $fixing.f[12], does: $fixing.f[23], rank: 20, st: "moving"}
+     else none end) as $c3 |
+    ([local_cell($branch), $c1, none, $c3, none] | map(. + {kind: "run"})) as $cells |
+    {lane: (if any($cells[]; .st == "you") then "move" else "moving" end), key: "c-b-\($branch)", type: "change", fold: "",
+     title: $branch, who: "", when: ($evs | map(.f[19]) | map(select(. != "")) | .[0] // ""),
+     mark: ($branch == $current), defc: ($cells | defc),
+     iid: "", target: "", url: "", source: $branch, head: "", base: "", pipeline: "", purl: "", start: "",
+     mrkind: "run", draft: false, cells: $cells, rank: ($cells | map(.rank) | min)})) as $branches_on |
+
+  # The rest, each as otis-list had it.
+  def kept($lane): .f as $f |
+    {lane: $lane, key: $f[10], type: (if $f[5] == "here" then "here" else "notice" end), fold: "",
+     title: $f[17], who: $f[18], when: $f[19], mark: ($f[22] == "1"), defc: 1,
+     iid: $f[1], target: $f[2], url: $f[3], source: $f[4], head: $f[6], base: $f[7], pipeline: $f[8], purl: $f[9], start: $f[11],
+     mrkind: $f[5], draft: false, rank: 50,
+     cells: [off + {g: $f[14], c: $f[15], kind: $f[5], vk: $f[13], extra: $f[12], does: $f[23]}, none, none, none, none],
+     verb: $f[16], note: $f[20], prog: $f[21], sub: $f[24], dots: $f[25]};
+  ($rest | map(select((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not)
+     | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end))) as $notices |
+  ($events | map(select(.f[5] | IN("here", "trash")) | kept("here"))) as $here |
+
+  ($changes + $branches_on) as $changes |
+  ($changes | map(.source)) as $on_branches |
+  # A lane: the most urgent first, a stack where the one of it that wants
+  # you most would be, in its own order.
+  def lane($l): ($changes | map(select(.lane == $l)) | sort_by(.urank // .rank, .useq // 1e9, .upos // 0))
+    + ($notices | map(select(.lane == $l)));
+  (lane("prod") + lane("review") + lane("move")) as $need |
+  # The counts are of what each is by itself: one brought into a lane by its
+  # stack and wanting nothing is in none of them.
+  ([$need[], lane("draft")[], lane("moving")[]] | map(.own // .lane)) as $owns |
+
+  # --- the groups -----------------------------------------------------------
+  def blank: {who: "", when: "", mark: false, defc: 1, iid: "", target: "", url: "", source: "", head: "",
+              base: "", pipeline: "", purl: "", start: "", mrkind: "", draft: false, rank: 60};
+  # A branch that is on no row above, as a change with what is known of it:
+  # where it is, and what a verification of it said.
+  def branch_row($fold): . as $b |
+    ([local_cell($b.name), verify_cell(""; $b.name; ""), none, none, none] | map(. + {kind: "run"})) as $cells |
+    blank + {lane: $fold, fold: $fold, key: "c-b-\($b.name)", type: "change", title: $b.name,
+             mark: ($b.name == $current), source: $b.name, mrkind: "run", cells: $cells};
+  ($open | map(select(.lane == null))) as $quiet |
+  ($quiet | map(.source)) as $quiet_branches |
+  # waiting: in someone else'"'"'s hands. unsent: in nobody'"'"'s yet.
+  ($quiet | map(select(.fold == "waiting") | .lane = "waiting")) as $waiting |
+  (($quiet | map(select(.fold == "unsent") | .lane = "unsent"))
+   + ($brs | map(select((.kind | IN("local", "pushed", "merged-diff", "closed-diff"))
+                        and (.name | IN($on_branches[], $quiet_branches[]) | not)) | branch_row("unsent")))) as $unsent |
+  # shipped: yours that merged, newest first, and where each has got to.
+  ($notices | map(.iid)) as $noticed |
+  (($mergedf[0].mrs // []) | map(select(.iid | IN($noticed[]) | not) |
+    (if .state == "live" then {g: "✓", c: good} elif .state == "rolledback" then {g: "▼", c: bad}
+     elif .state == "deploying" then {g: "◐", c: attention} elif .state == "queued" then {g: "○", c: attention}
+     else {g: "·", c: context} end) as $g |
+    blank + {lane: "shipped", fold: "shipped", key: "s-\(.iid)", type: "notice", title: .title,
+             when: (if .mergedAt then since(.mergedAt | at) else "" end),
+             iid: .iid, target: .targetBranch, url: .webUrl, source: .sourceBranch, mrkind: "merged",
+             pipeline: ((.deploy.pipeline // "") | tostring), purl: (.deploy.url // .webUrl),
+             cells: [off + $g + {kind: "merged", vk: "mr", does: "see its deploy"}, none, none, none, none],
+             verb: (if .state == "live" then "live" elif .state == "rolledback" then "rolled back"
+                    elif .state == "deploying" then "deploying" elif .state == "queued" then "queued" else "not out yet" end)})) as $shipped |
+  # cleanup: what can go. A branch whose MR merged or closed with nothing
+  # since, not checked out anywhere; a worktree git-worktree-list calls safe.
+  (($brs | map(select((.kind | IN("merged", "closed")) and .place == "") |
+     blank + {lane: "cleanup", fold: "cleanup", key: "d-b-\(.name)", type: "change", title: .name, source: .name, iid: .iid, mrkind: "run",
+              cells: ([{g: "○", c: context, vk: "delbranch", extra: .name, does: "delete it (asks first)", m: "", fix: "", rank: 99, st: "off"},
+                       none, none, none, off + {g: (if .kind == "merged" then "✓" else "⊘" end), c: (if .kind == "merged" then good else context end)}]
+                      | map(. + {kind: "run"}))}))
+   + ($wts | map(select(.safe and (.own | not)) |
+     blank + {lane: "cleanup", fold: "cleanup", key: "d-w-\(.path)", type: "place", title: (.path | split("/") | last),
+              source: .branch, iid: .iid, mrkind: "place",
+              cells: [off + {g: "⌂", c: elsewhere, kind: "place", vk: "delwt", extra: .path, does: "remove it (asks first)"}, none, none, none, none],
+              verb: "", note: ((if .branch != "" then .branch else "detached" end) + "  ·  nothing in it would be lost")}))) as $cleanup |
+  # places: the worktrees that are staying, where you are aside. Clean, it
+  # can go whenever you like (d): its commits are on its branch, which
+  # stays; with uncommitted work, git will not remove it. On no branch, with
+  # commits that are nowhere else (stray), it is yours to judge, one at a time.
+  # (The last word on a path is the one for the commit it is at now.)
+  ([$detached | split("\n")[] | select(. != "") | split("\t")] | map({key: .[0], value: .[2]}) | from_entries
+    | to_entries | map(select(.value == "0") | .key)) as $stray |
+  ($wts | map(select((.own | not) and (.safe | not) and .path != $pwd)) | map(
+     blank + {lane: "places", fold: "places", key: "p-\(.path)", type: "place", title: (.path | split("/") | last),
+              source: .branch, iid: .iid, mrkind: "place",
+              cells: [off + {g: "⌂", c: elsewhere, kind: "place", vk: "cd", extra: .path, does: "go there"}, none, none, none, none],
+              verb: (if .dirty != "" then "dirty" elif .branch == "" and (.path | IN($stray[])) then "stray" else "clean" end),
+              note: ([(if .branch != "" then .branch else "detached" end), (if .dirty != "" then .dirty else empty end),
+                      (if .branch == "" and (.path | IN($stray[])) then "its commits are on no branch" else empty end)] | join("  ·  "))})) as $places |
+  ($places | map(select(.verb == "clean")) | length) as $canGo |
+
+  # runs: what Claude ran in the background and is over, newest first.
+  ($runs | map(select(.state != "running")) | map(. + {at: (if .ended > 0 then .ended else .started end)}) | sort_by(0 - .at) | map(
+     (.dir | split("/") | last) as $key | ($key | sub("^[vf]-"; "")) as $base |
+     blank + {lane: "runs", fold: "runs", key: "r-\(.kind)-\($key)", type: "notice", title: .last, when: since(.at),
+              iid: (if ($base | test("^[0-9]+$")) then $base else "" end),
+              note: (if ($base | startswith("b-")) then $base[2:] | gsub("%"; "/") else "" end), mrkind: "run",
+              cells: [off + {g: (if .state == "done" then "✓" elif .state == "failed" then "✗" else "·" end),
+                             c: (if .state == "failed" then bad else context end),
+                             kind: "run", vk: "run", extra: .dir, does: "open the run"}, none, none, none, none],
+              verb: ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[.kind] // "run")})) as $ran |
+  # deploys: the last to production, newest first, and what each carried.
+  (($deploysf[0].deploys // []) | map(
+     blank + {lane: "deploys", fold: "deploys", key: "y-\(.id)", type: "notice",
+              title: ((if ((.mrs // []) | length) > 0 then (.mrs | map("!" + .) | join(" ")) else "no merge requests" end)
+                      + (if .user then "  ·  by \(.user | if type == "object" then (.username // "") else . end)" else "" end)),
+              when: since(.at | at), mrkind: "deploy", pipeline: ((.pipeline // "") | tostring), purl: (.url // ""),
+              cells: [off + (if .kind == "rollback" then {g: "↺", c: bad} elif .status == "success" then {g: "✓", c: good}
+                             elif .status == "failed" then (if .duration == 0 then {g: "⊘", c: context} else {g: "✗", c: bad} end)
+                             elif .status == "running" then {g: "◐", c: attention} elif .status == "canceled" then {g: "⊘", c: context}
+                             else {g: "○", c: attention} end)
+                      + {kind: "deploy", vk: "deployjobs", extra: (.id | tostring), does: "its jobs and logs"}, none, none, none, none],
+              verb: (if .kind == "rollback" then "rollback" else (.sha // "" | .[0:8]) end)})) as $deploys |
+
+  def group($id; $name; $rows; $say):
+    if ($rows | length) == 0 then empty else
+      (blank + {lane: $id, fold: "", key: "g-\($id)", type: "group", title: $name, cells: [none, none, none, none, none],
+                count: ($rows | length), say: $say}),
+      $rows[]
+    end;
+
+  "#\t\($owns | map(select(IN("prod", "review", "move"))) | length)\t\($owns | map(select(. == "draft")) | length)\t\($owns | map(select(. == "moving")) | length)",
+  ($need[], lane("draft")[], lane("moving")[], $here[],
+   group("waiting"; "waiting on others"; $waiting; "open, and nothing for you to do"),
+   group("unsent"; "not sent yet"; $unsent; "no MR, or nobody asked to review it"),
+   group("shipped"; "shipped this week"; $shipped; ($shipped | map(.cells[0].c + .cells[0].g) | join("") + r)),
+   group("cleanup"; "clean up"; $cleanup; "merged or closed, safe to delete"),
+   group("places"; "worktrees"; $places;
+     ([(if $canGo > 0 then "\($canGo) with nothing uncommitted" else empty end),
+       (if ($places | length) > $canGo then "\(($places | length) - $canGo) with work in \(plural(($places | length) - $canGo; "it"; "them"))" else empty end)] | join("  ·  "))),
+   group("runs"; "runs"; $ran; "what Claude ran, newest first"),
+   group("deploys"; "deploys"; $deploys; ($deploys[0:24] | map(.cells[0].c + .cells[0].g) | join("") + r))
+   |
+    [.lane, .key, .type, .title, .who, .when, (if .mark then "1" else "" end), .defc,
+     .iid, .target, .url, .source, .head, .base, .pipeline, .purl, .start, .mrkind, (if .draft then "1" else "" end)]
+    + (.cells | map([.g, .c, (.kind // ""), .vk, .extra, .does, .m, .fix]) | add)
+    + [(.verb // ""), (.note // ""), (.prog // ""), (.sub // ""), (.dots // ""), (.fold // ""), (.count // ""), (.say // ""),
+       (.rail // ""), (.own // "")]
+    | map(clean) | join("\t"))'

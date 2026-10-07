@@ -5,7 +5,8 @@
 # by symbol (otis-symbols) and a run of Claude's (otis-agent). It takes what
 # git-fzf took: the keys as "key=label" pairs, fzf's --bind, --preview,
 # --multi, --delimiter, --with-nth, --id-nth, --header, --query, --search,
-# --disabled and --header-from-state, and does what the bindings say
+# --disabled, --header-from-state and its own --preview-fill, and does what
+# the bindings say
 # (execute, execute-silent, transform, reload, refresh-preview, toggle,
 # select, pos, first, last, accept, print, abort, change-header,
 # change-preview-label and the rest), with a row's fields for {n}, {+n},
@@ -62,6 +63,7 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
+integer fill=0
 preview= startacts= header= query= delim= idnth=0 keysfrom=
 integer hdr=0 searching=0 multi=0 disabled=0 lent=0
 typeset -a withnth ticks
@@ -110,6 +112,7 @@ while (( $# )); do
     --multi) multi=1; shift ;;
     --search) searching=1; shift ;;
     --disabled) disabled=1; shift ;;
+    --preview-fill) fill=1; shift ;;
     --prompt) title=${2% }; shift 2 ;;
     --prompt=*) title=${${1#--prompt=}% }; shift ;;
     *) shift ;;
@@ -178,6 +181,13 @@ layout() {
     # were cut. Rows are cut to lw - 3 = W - pw - 7 (rowlines), which
     # share/rowfmt.awk's gk_list_width matches.
     side=1; (( pw = W * 42 / 100, pw < 56 ? (pw = 56) : 0, pw > 88 ? (pw = 88) : 0 ))
+    # --preview-fill (a list of pictures): the rows take what the longest
+    # needs and the pane all the rest, when that is more.
+    if (( fill && $#PL )); then
+      integer i need=${(m)#title}
+      for (( i = 1; i <= $#PL; i++ )); do (( ${(m)#PL[i]} > need )) && need=${(m)#PL[i]}; done
+      (( W - need - 7 > pw )) && (( pw = W - need - 7 ))
+    fi
     (( px = W - pw, lw = px - 4, lh = H - 2, py = 1, ph = H - 2 ))
   else
     side=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
@@ -254,6 +264,7 @@ load() {
   integer k=1 n
   while n=${PL[(in:k:)$~pat]}; (( n <= $#PL )); do head[n]=1 HIDX+=($n); (( k++ )); done
   loaded=1 dirty=1 rlw=0
+  (( fill )) && { layout; shown_rows=(); }
 }
 
 # --- a row ---------------------------------------------------------------------
@@ -365,7 +376,7 @@ headline() {
   local stale=($st/stale.*(N))
   (( $#stale )) && HL+=("  ${X}could not refresh from GitLab: this is what it said last · ? shows why$R")
   [[ -s $foot || $#stale -gt 0 ]] && HL+=("")
-  (( loaded )) || HL+=("  ${C}loading…$R")
+  (( loaded )) || { spin_frame; HL+=("  $A$REPLY$R ${C}loading…$R"); }
   if (( loaded )) && { [[ -n $query ]] || (( searching )); }; then
     l="  "$A"/"$R" "$T$query$R
     (( searching )) && l+=$A"▏"$R
@@ -507,27 +518,13 @@ tell() {
   for i in ${(k)marked}; do (( marked[$i] )) && (( n++ )); done
   export FZF_QUERY=$query FZF_POS=$at FZF_TOTAL_COUNT=$#raw FZF_MATCH_COUNT=$#vis FZF_SELECT_COUNT=$n FZF_PROMPT="$title "
 }
-# unlisten: a child of this screen lets go of the port, or a picker opened
-# after it on the same port (otis-test's) could not bind it.
-unlisten() { (( lfd )) && ztcp -c $lfd 2>/dev/null; lfd=0; }
 render() {
   local w=$1 file=$2 i=$3 out
   subst "$preview" $i
   out=$(FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null)
   if [[ $out == *$'\e_G'* ]]; then
-    # A kitty image (kitten icat --unicode-placeholder): the image itself
-    # kept apart in .gfx, sent to the terminal when the pane shows it, and
-    # the lines it shows through as they are. icat has cut them to the pane,
-    # and the wrap would drop the image's escape and count each placeholder's
-    # marks as letters.
-    print -rn -- $out | perl -0777 -ne 'print $& while /\e_G.*?\e\\/sg' > $file.gfx
-    # icat also moves the cursor to where it would place the image on the
-    # screen (save, CUP, restore): in a pane that is somewhere else entirely,
-    # so of the rest only colors and the placeholders are kept. The image's
-    # color, which says which image a placeholder is, is set once and left to
-    # carry on; the pane draws each line on its own, so each line gets it.
-    print -r -- $out | perl -0777 -pe 's/\e_G.*?\e\\//sg; s/\eP.*?\e\\//sg; s/\e[78]//g; s/\e\[[0-9;]*[A-HJKf]//g; s/\r//g' |
-      perl -ne 'if (/(\e\[38[:;][0-9:;]*m)/) { $c = $1 } elsif ($c && /\x{F4}\x{8E}\x{BB}\x{AE}/) { $_ = $c . $_ } print' > $file.tmp
+    # A kitty image: its lines kept as they are, not wrapped (kitty_split).
+    kitty_split "$out" $file
     : > $file.cont
   else
     rm -f $file.gfx
@@ -535,6 +532,21 @@ render() {
     mv -f $file.cont.tmp $file.cont 2>/dev/null
   fi
   mv -f $file.tmp $file
+}
+# gfx_flush: the image of the preview in the pane, to the terminal, once no
+# key has come for a moment: a picture is a megabyte the terminal has to
+# take in, and one a row would hold j and k up. One it was sent a little
+# while ago it still has, and is not sent again.
+gfxdue=
+float kt=0
+typeset -a gfxsent
+gfx_flush() {
+  [[ -n $gfxdue ]] && (( EPOCHREALTIME - kt >= 0.12 )) || return
+  if (( ! ${gfxsent[(Ie)$gfxdue]} )); then
+    print -rnu $tty -- "$(<$gfxdue.gfx)"
+    gfxsent=($gfxdue ${gfxsent[1,11]})
+  fi
+  gfxdue=
 }
 # want: the row you are on, drawn if it is not kept yet. One at a time: a
 # row changed under you again and again (a key held) waits for the render
@@ -548,7 +560,7 @@ want() {
   [[ -e $f || -e $f.tmp ]] && return 1
   : > $f.tmp
   tell
-  { unlisten; render $pw $f $cur } &!
+  { unlisten; render $pw $f $cur } >/dev/null &!
   wpid=$!
 }
 # warm: the rows around the cursor, a few either side, one after another,
@@ -574,7 +586,7 @@ warm() {
       : > $f.tmp
       render $pw $f $i
     done
-  } &!
+  } >/dev/null &!
 }
 
 # --- what the keys mean on this row ----------------------------------------------------
@@ -594,7 +606,7 @@ wantkeys() {
   : > $f.tmp
   subst "$keysfrom" $cur
   tell
-  { unlisten; zsh -fc "$REPLY" > $f.tmp 2>/dev/null </dev/null; mv -f $f.tmp $f } &!
+  { unlisten; zsh -fc "$REPLY" > $f.tmp 2>/dev/null </dev/null; mv -f $f.tmp $f } >/dev/null &!
 }
 # rowkeys: the answer for this row, if there is one, in rkl (key → label).
 rowkeys() {
@@ -630,6 +642,7 @@ helplines() {
   (( multi )) && P+=("  ${A}${(r:9:: :)${:-space/tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
   [[ -s $st/legend ]] && P+=("" "${(@f)$(<$st/legend)}")
   [[ -s $st/last-error ]] && { P+=("" "  ${X}last error$R"); wrap "$(<$st/last-error)" $(( pw - 4 )); P+=("  "${^reply}); }
+  panewrap $pw
 }
 draw() {
   local t0=$EPOCHREALTIME
@@ -652,9 +665,11 @@ draw() {
     if [[ $REPLY != $pfile || -z $pfile ]]; then
       pfile=$REPLY
       if [[ -n $REPLY ]]; then P=("${(@f)$(<$REPLY)}"); else P=("${F}…$R"); fi
-      # An image in it goes to the terminal once, as it is shown; its lines
-      # are the placeholders the terminal draws it in.
-      [[ -s $pfile.gfx ]] && print -rnu $tty -- "$(<$pfile.gfx)"
+      # One kept from another width, until this width's lands: cut to the pane.
+      [[ ${pfile:t} == *.(#b)(<->).<-> && $match[1] != $pw ]] && clip $pw
+      # An image in it goes to the terminal once the cursor rests there
+      # (gfx_flush); its lines are the placeholders the terminal draws it in.
+      gfxdue=; [[ -s $pfile.gfx ]] && gfxdue=$pfile
     fi
     (( pwant >= 0 )) && [[ -n $pfile ]] && (( ${pfile##*.} >= pgen )) && { poff=$pwant; pwant=-1; }
   else P=() pfile=
@@ -693,6 +708,7 @@ draw() {
   for i in ${(k)marked}; do (( marked[$i] )) && (( nm++ )); done
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
   elif [[ -n $flash ]]; then foot+=$A$flash$R; flash=
+  elif spinning; then spin_foot
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   else
     local n k v used_=2 room
@@ -748,7 +764,7 @@ reload() {
   local cmd=$1
   (( rgen++ ))
   tell
-  { unlisten; zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } &!
+  { unlisten; zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
   rpid+=($!)
 }
 landed() {
@@ -814,17 +830,22 @@ offin() {
   offs[$rid[cur]]=$poff
 }
 # fire <event>: its binding, unless unbound.
-fire() { [[ -n $bind[$1] ]] && (( ! ${off[$1]:-0} )) && run "$bind[$1]" $cur; }
+fire() { local bykey=; [[ -n $bind[$1] ]] && (( ! ${off[$1]:-0} )) && run "$bind[$1]" $cur; }
 # The search changed: what it finds, then whoever asked to hear of it.
 requery() { qdirty=0; dirty=1; list; settle_cur; fire change; fire result; }
 # flushq: the search the keys typed so far asked for, before anything that
 # reads the rows it finds. Typing asks only for this (qdirty), so a burst of
 # keys searches once, not once a key.
 flushq() { (( qdirty )) && requery; }
-# run <actions> <row>: fzf's actions, as a binding or a transform gives them.
+# run <actions> <row> [then...]: fzf's actions, as a binding or a transform
+# gives them; then, chains of actions to run after these, on the same row.
+# A command that answers the picker (transform, execute-silent, reload-sync,
+# transform-header) runs in the background (spawn), and what comes after it
+# waits for it there, so nothing a key runs holds up the screen.
 run() {
   local s=$1 name arg i c q depth open close out
   integer row=$2
+  local -a then_=("${@[3,-1]}")
   while [[ -n $s ]]; do
     if [[ $s == (#b)([a-z-]##)([\(\[])* ]]; then
       name=$match[1] open=$match[2] s=${s#$name$open} depth=1 q=0
@@ -843,15 +864,14 @@ run() {
     subst "$arg" $row; arg=$REPLY
     case $name in
       execute)
+        # The frame stays up while the command gets going: it says so.
+        flash="${bykey:-…}${bykey:+…}"; draw
         offout; tell; run_tty "$arg"; offin; resize ;;
-      execute-silent)
-        offout; tell; zsh -fc "$arg" </dev/null >/dev/null 2>&1; offin ;;
-      transform)
-        offout; tell; out=$(zsh -fc "$arg" </dev/null 2>/dev/null); offin
-        [[ -n $out ]] && run "$out" $row ;;
+      execute-silent|transform|transform-header)
+        spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       become) offout; tell; quit_screen; exec zsh -fc "$arg" ;;
       reload) pcur=$cur; reload "$arg" ;;
-      reload-sync) pcur=$cur; tell; zsh -fc "$arg" > $st/list.sync 2>/dev/null </dev/null; take $st/list.sync; rm -f $st/list.sync ;;
+      reload-sync) pcur=$cur; spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       refresh-preview) (( gen++ )) ;;
       pos) pos $arg ;;
       first|top) (( $#vis )) && go $vis[1] ;;
@@ -870,7 +890,6 @@ run() {
       change-query) query=$arg; requery ;;
       change-prompt) title=${arg% } ;;
       change-header) header=$arg ;;
-      transform-header) tell; header=$(zsh -fc "$arg" </dev/null 2>/dev/null) ;;
       show-preview) pshow=1 ;;
       hide-preview) pshow=0 ;;
       toggle-preview) pshow=$(( ! pshow )) ;;
@@ -889,6 +908,7 @@ run() {
       # The footer, tracking, focus: this screen's own.
     esac
   done
+  (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}"
 }
 # accept: the marked rows, else the one under the cursor, handed back.
 accept() {
@@ -900,14 +920,17 @@ accept() {
   code=0; quit 0
 }
 quit_screen() { (( screen )) && screen_off; at_leave; rm -rf -- $st; }
-# act <key>: its binding, for the row under the cursor. The footer says it
-# is on it first, since some take a moment.
+sync_list() { take $1; }
+# act <key>: its binding, for the row under the cursor. While another key's
+# command is still out, it waits its turn (uq), once however often it is
+# pressed.
 integer pwant=-1 pgen=0
 typeset -A held
 act() {
   (( early )) && { pend=(act $1); flash="…"; return }
+  busy && { (( ${uq[(Ie)$1]} )) || uq+=($1); return }
   local was=$poff g=$gen
-  flash="…"; draw
+  local bykey=${${rkl[$1]:-${hv[${hk[(ie)$1]}]}}:-$1}
   run "$bind[$1]" $cur
   if (( gen != g && poff != was )); then pwant=$poff pgen=$gen poff=$was; fi
 }
@@ -1032,6 +1055,8 @@ handle() {
     # space marks, as it does on every screen that marks; tab marks and moves on.
     space) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )) ;;
     btab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step -1 ;;
+    # With ? up, q and esc close it, as its last line says, rather than the screen.
+    q|esc) (( help )) && { help=0 poff=0; return; } ;|
     q) code=130; quit 130 ;;
     esc) if [[ -n $query ]]; then query=; requery; else code=130; quit 130; fi ;;
     /) searching=1 ;;
@@ -1052,7 +1077,7 @@ port_state() {
   local out i at=$cur reading=false
   [[ -n $query ]] && at=${vis[(Ie)$cur]}
   local -a m sl
-  (( $#rpid )) && reading=true
+  (( $#rpid || $#jobs )) && reading=true
   for i in $vis; do json "$raw[i]"; m+=("{\"index\":$(( i - 1 )),\"text\":\"$REPLY\"}"); done
   for (( i = 1; i <= $#raw; i++ )); do (( ${marked[$i]:-0} )) && { json "$raw[i]"; sl+=("{\"index\":$(( i - 1 )),\"text\":\"$REPLY\"}"); }; done
   json "$query"
@@ -1073,6 +1098,7 @@ draw
 run "$startacts" 0
 for i in $ticks; do (( tnext[$i] = EPOCHREALTIME + i )); done
 integer tmo=5 stick=0
+lspun=
 while :; do
   reply=()
   zselect -t $tmo -r $tty ${winch:+-r} $winch ${${lfd:#0}:+-r} ${lfd:#0}
@@ -1086,6 +1112,7 @@ while :; do
     readkey; handle $REPLY
     while zselect -t 0 -r $tty; do readkey; handle $REPLY; (( nk++ )); done
     flushq
+    landed_jobs
     draw
   else
     float ti=$EPOCHREALTIME
@@ -1096,6 +1123,9 @@ while :; do
       [[ -z $winch ]] && resize
     fi
     landed && changed=1
+    landed_jobs && changed=1
+    spun_on && changed=1
+    (( ! loaded )) && { spin_frame; [[ $REPLY != $lspun ]] && { lspun=$REPLY; changed=1; }; }
     [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
     # This row's preview landing: one file test, not a look through pv/.
     (( cur && ! help && pshow )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }
@@ -1109,6 +1139,7 @@ while :; do
       run "$tevery[$i]" $cur; changed=1
     done
     (( changed )) && draw
+    gfx_flush
     (( ! help && ! settle )) && want
     (( EPOCHREALTIME - ti > 0.02 )) && print -r -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed" >> $trace
   fi

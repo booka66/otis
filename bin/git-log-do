@@ -3,7 +3,7 @@
 # gl's f and r, as fzf actions for a transform binding: a footer note when the
 # commit cannot take it, else the edit, then <then> (gl's reload). Either one
 # only touches this branch's own commits, past the base (otis-config base); git-commit-fixup
-# holds fixup's rules, which gfx shares. A failure waits for enter, so what went
+# holds fixup's rules. A failure waits for enter, so what went
 # wrong can be read before the picker comes back.
 action=$1 sha=$2 then=$3
 [ -n "$sha" ] || exit 0

@@ -8,12 +8,41 @@
 #
 #   git-forge api <glab api args>   a GitLab API call: glab api, or its GitHub equivalent
 #   git-forge mrs <review|mine|all> the MR lists (share/mr-query.sh): to review, yours, every open one
+#   git-forge branch-mrs <names>    the MRs of those branches (a JSON list of names), for gb and gw
+#   git-forge merged                your MRs merged this week and whether each is live (git-ci-merged)
+#   git-forge main-builds           main's last commits and their pipelines, for a forge without
+#                                   MRs to hang them on (can main-builds)
+#   git-forge approve <iid> <sha>   approve an MR at the commit you read, refused if it has moved
+#   git-forge close <iid>           close an MR without merging it
+#   git-forge mr-update <iid> <glab mr update args>   --ready or --draft, a --label or --unlabel with it
 #   git-forge head-ref <iid>        the ref an MR's head is fetched from, forks included
 #   git-forge mr-url <iid>          an MR's web link, built from the origin remote (no request)
-#   git-forge can <what>            exit 0 when the forge has it; what GitHub lacks
-#                                   (github_lacks, share/forge/github) is left off its keys
+#   git-forge can <what>            exit 0 when the forge has it: deploys, stack, run-pipeline,
+#                                   stage-graph or upload, which GitHub lacks (share/forge/github);
+#                                   main-builds, which GitLab shows through its MRs instead
+#   git-forge lacks                 all of those it lacks, space separated, for a picker to
+#                                   leave off its keys at once
+#   git-forge why <error file>      what a call that failed said (git-cached-json's <cache>.err),
+#                                   whole, in a line, exit 3 when it is your login the forge no
+#                                   longer takes: glab leads with a banner and breaks its lines
+#                                   where it likes, so a first line said ERROR and no more
+#   git-forge login                 log in to the forge again, in the terminal
 share=$(cd "$(dirname "$0")/../share" && pwd)
 forge=$(otis-config forge)
+if [ "$1" = why ]; then
+  [ -s "$2" ] || exit 1
+  name=GitLab login="glab auth login --hostname $(otis-config host 2>/dev/null || echo gitlab.com)"
+  [ "$forge" = github ] && name=GitHub login="gh auth login"
+  # A login it no longer takes: glab's token that expired and would not
+  # renew (invalid_grant), a 401, either tool saying to log in.
+  if grep -qiE 'invalid_grant|401 Unauthorized|HTTP 401|Bad credentials|token (is |was |has )?(expired|revoked)|not logged in|auth login' "$2"; then
+    printf 'your %s login expired: %s logs in again\n' "$name" "$login"
+    exit 3
+  fi
+  sed -E "s/$(printf '\033')\[[0-9;]*m//g" "$2" | tr -s ' \t\n' '   ' | sed -E 's/^ //; s/^(ERROR|Error:?|error:) //; s/ $//'
+  echo
+  exit 0
+fi
 [ "$forge" = github ] && exec "$share/forge/github" "$@"
 
 case $1 in
@@ -27,6 +56,14 @@ case $1 in
       *) echo "git-forge mrs: review, mine or all" >&2; exit 2 ;;
     esac
     exec glab api graphql -f query="$q" -f repo="$(otis-config project)" ;;
+  merged) exec git-ci-merged ;;
+  branch-mrs)
+    query='query($repo: ID!, $branches: [String!]) { currentUser { username } project(fullPath: $repo) {
+    mergeRequests(sourceBranches: $branches, first: 100) { nodes { iid state sourceBranch targetBranch diffHeadSha updatedAt author { username } } } } }'
+    exec glab api graphql -f query="$query" -f repo="$(otis-config project)" -F branches="$2" ;;
+  approve) exec glab mr approve "$2" --sha "$3" ;;
+  close) exec glab mr close "$2" ;;
+  mr-update) shift; exec glab mr update "$@" ;;
   head-ref) printf 'refs/merge-requests/%s/head\n' "$2" ;;
   mr-url)
     [ -n "$2" ] || exit 1
@@ -39,6 +76,8 @@ case $1 in
     host=${rest%%/*}; host=${host%%:*}
     repo=${rest#*/}; repo=${repo%.git}
     printf 'https://%s/%s/-/merge_requests/%s\n' "$host" "$repo" "$2" ;;
-  can) exit 0 ;;
-  *) echo "usage: git-forge api|mrs|head-ref|mr-url|can ..." >&2; exit 2 ;;
+  can) [ "$2" != main-builds ] ;;
+  lacks) echo main-builds ;;
+  login) exec glab auth login --hostname "$(otis-config host 2>/dev/null || echo gitlab.com)" ;;
+  *) echo "usage: git-forge api|mrs|approve|close|mr-update|head-ref|mr-url|can|lacks|why|login ..." >&2; exit 2 ;;
 esac

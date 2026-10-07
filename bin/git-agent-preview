@@ -83,10 +83,13 @@ case $state in
       *) pane_callout attention "$verb${title:+: $title} · $took" "${GK_TEXT}$now_doing${GK_R}" ;;
     esac ;;
   done)
-    # The one fact: how many held, and which did not.
-    held=$(jq -r '(.criteria | length) as $n | [.criteria[] | select(.result == "verified")] as $ok |
-      [.criteria[] | select(.result != "verified") | .id] as $not |
-      "\($ok | length) of \($n) verified" + (if ($not | length) > 0 then "; not " + ($not | join(", ")) else "" end)' "$d/verdict.json" 2>/dev/null)
+    # The two facts: whether it does what it says, and what it broke or only
+    # changed around that (tally, share/otis.jq); the report below says which.
+    vplan=$d/plan.json; [ -s "$vplan" ] || vplan=/dev/null
+    held=$(jq -r -L "$share" --slurpfile plan "$vplan" 'include "otis"; tally($plan[0] // {}) |
+      "does what it says, \(.ok) of \(.own)"
+      + (if (.broke | length) > 0 then "; broke \(.broke | length)" else "" end)
+      + (if (.changed | length) > 0 then "; also changed \(.changed | length)" else "" end)' "$d/verdict.json" 2>/dev/null)
     case $verdict in
       pass) pane_callout good "Verified: it passed" "${GK_TEXT}${held}${GK_R}" ;;
       fail) pane_callout bad "Verified: it failed" "${GK_TEXT}${held}${GK_R}" ;;
@@ -95,10 +98,10 @@ case $state in
         if [ "$drafts" -gt 0 ]; then
           pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}$(pane_fit "gmr's review of it shows them, where they go" $((PANE_W - 2)))${GK_R}"
         elif [ "$fixes" -gt 0 ]; then
-          pane_callout yours "$fixes $( [ "$fixes" -eq 1 ] && echo fix || echo fixes) to accept or drop" "keys:⏎ the proposals"
+          pane_callout yours "$fixes $( [ "$fixes" -eq 1 ] && echo fix || echo fixes) to accept or drop"
         fi ;;
     esac ;;
-  stopped) pane_callout context "Stopped${ended:+ at $(at "$ended" '+%a %H:%M')}" "keys:r runs it again" ;;
+  stopped) pane_callout context "Stopped${ended:+ at $(at "$ended" '+%a %H:%M')}" ;;
   *) pane_callout bad "It $( [ "$state" = died ] && echo died || echo failed)${took:+ after $took}" "${GK_TEXT}${lastword:-no word from it on why}${GK_R}" ;;
 esac
 

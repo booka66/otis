@@ -58,17 +58,17 @@ say() { printf "${GK_TEXT}%s${GK_R}" "$(pane_fit "$1" $((PANE_W - 2)))"; }
 plural() { [ "$1" -eq 1 ] && printf '%s' "$2" || printf '%s' "$3"; }
 [ -n "$claude" ] && who=$(otis-agent-run --name "$(git rev-parse --path-format=absolute --git-common-dir)/gmr-fix/b-$(printf '%s' "$b" | tr '/' '%')")
 case $claude in
-  fixing) pane_callout attention "$who is working on fixes here" "$(say "It proposes them as it goes; they wait for you to take them.")" "keys:C how far it has got" ;;
-  ?*)     pane_callout yours "$claude $(plural "$claude" fix fixes) from $who waiting" "$(say "Each is a change you accept or leave.")" "keys:C shows them · space accepts · a applies" ;;
+  fixing) pane_callout attention "$who is working on fixes here" "$(say "It proposes them as it goes; they wait for you to take them.")" ;;
+  ?*)     pane_callout yours "$claude $(plural "$claude" fix fixes) from $who waiting" "$(say "Each is a change you accept or leave.")" ;;
 esac
 case $kind in
-  merged-diff) pane_callout bad "Commits since its MR merged" "$(say "GitLab never got them: !$iid is already in.")" "keys:n opens a new MR for them" ;;
-  closed-diff) pane_callout bad "Commits GitLab never got" "$(say "!$iid closed with this branch behind it.")" "keys:n opens an MR for them" ;;
+  merged-diff) pane_callout bad "Commits since its MR merged" "$(say "GitLab never got them: !$iid is already in.")" ;;
+  closed-diff) pane_callout bad "Commits GitLab never got" "$(say "!$iid closed with this branch behind it.")" ;;
   merged|closed)
-    [ -z "$place" ] && pane_callout good "Safe to delete" "$(say "!$iid $kind, and nothing here is missing from GitLab.")" "keys:d deletes it · M marks every one like it" ;;
+    [ -z "$place" ] && pane_callout good "Safe to delete" "$(say "!$iid $kind, and nothing here is missing from GitLab.")" ;;
 esac
 [ -n "$unrelated" ] && pane_callout yours "Shares no history with $base" \
-  "$(say "Its $nc $(plural "$nc" commit commits) start from nothing: an MR would carry all of it.")" "keys:⏎ switch to it · c its commits"
+  "$(say "Its $nc $(plural "$nc" commit commits) start from nothing: an MR would carry all of it.")"
 
 # --- what it is -----------------------------------------------------------------
 case $kind in
@@ -90,16 +90,6 @@ lastago=; [ -n "$last" ] && lastago="last commit $(ago "$last") ago"
 if [ "$kind" = main ]; then pane_meta "$where" "${behind:-0} behind $base" "$lastago"
 else pane_meta "$mr" "$where" "$lastago"; fi
 
-# Its verification, only where there is one to show: git-verify keeps a run
-# under the MR's iid, or under the branch with each / as %, and finding no
-# directory there is the whole answer for nearly every branch.
-if [ -n "$iid" ]; then vd=$OTIS_GITDIR/otis-verify/$iid
-else
-  k= r=$b
-  while :; do case $r in */*) k=$k${r%%/*}%; r=${r#*/} ;; *) k=$k$r; break ;; esac; done
-  vd=$OTIS_GITDIR/otis-verify/b-$k
-fi
-[ -d "$vd" ] && git-verify --preview "$iid" "$b"
 
 # --- how it stands --------------------------------------------------------------
 # Ahead and behind as two bars on one scale, so the lopsided one shows.
@@ -125,10 +115,17 @@ printf '%s\n' "$log" | LC_ALL=C awk -F'\t' -v now="$now" -v w="$PANE_W" -v a="$(
   function ago(ts,   s) { s = now - ts
     if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
     if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }
+  # A subject is said whole: what does not fit beside the sha goes on under
+  # itself, never cut.
   NR <= 8 {
     g = ago($2); col = (g == was) ? "" : g; was = g
-    s = ufit($3, w - 18)
-    printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, s, r
+    sw = w - 9 - length($1); if (sw < 20) sw = 20
+    n = split($3, ws, " "); line = ""; k = 0
+    for (i = 1; i <= n + 1; i++) {
+      if (i <= n && (line == "" || ulen(line " " ws[i]) <= sw)) { line = line (line == "" ? "" : " ") ws[i]; continue }
+      if (k++ == 0) printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, line, r
+      else printf "%" (9 + length($1)) "s%s%s%s\n", "", t, line, r
+      line = (i <= n) ? ws[i] : "" }
     oldest = g; next }
   { oldest = ago($2) }
   END { if (total > 8) printf "        %s+ %d more, back to %s ago%s\n", f, total - 8, oldest, r }'
@@ -148,14 +145,6 @@ if [ -n "$numstat" ]; then
     # the next step of a path under a directory: a directory, or the file
     function child(p, pre,   rest) { rest = substr(p, length(pre) + 1)
       return index(rest, "/") ? pre substr(rest, 1, index(rest, "/")) : p }
-    # pfit: a path to w columns by the middle, the top and the end kept,
-    # app/…/ai/execution/; a name too long for even that, cut at its end
-    function pfit(s, w,   q, n, i, sl, out) { if (ulen(s) <= w) return s
-      sl = (s ~ /\/$/) ? "/" : ""; if (sl) s = substr(s, 1, length(s) - 1)
-      n = split(s, q, "/"); out = q[n] sl
-      if (n < 2 || ulen(q[1] "/…/" out) > w) return ufit(out, w)
-      for (i = n - 1; i > 1 && ulen(q[1] "/…/" q[i] "/" out) <= w; i--) out = q[i] "/" out
-      return q[1] "/…/" out }
     # open group k into what is under it, down past directories it is all
     # of; one whose parts are only files stays whole, a row of its own
     function open(k,   i, c, one, pre, n) { pre = G[k]
@@ -201,7 +190,11 @@ if [ -n "$numstat" ]; then
       k = w - (fc ? 34 : 22) - 10; if (k > 40) k = 40; if (k < 12) k = 12; if (nw > k) nw = k
       bw = w - nw - (fc ? 34 : 22); if (bw > 30) bw = 30; if (bw < 6) bw = 6
       for (i = 1; i <= ng && i <= 6; i++) {
-        d = ds[i]; nm = pfit(nm_[d], nw); nm = nm substr("                                        ", 1, nw - ulen(nm))
+        # Its name whole: one too long for the column has a line to itself,
+        # over its bar.
+        d = ds[i]; nm = nm_[d]
+        if (ulen(nm) > nw) { printf "  %s%s%s\n", t, nm, r; nm = "" }
+        nm = nm substr("                                        ", 1, nw - ulen(nm))
         k = int((ga[d] + gd[d]) * bw / top + 0.5); if (k < 1) k = 1
         ka = int(k * ga[d] / (ga[d] + gd[d] > 0 ? ga[d] + gd[d] : 1) + 0.5); kd = k - ka
         bar = g; for (j = 0; j < ka; j++) bar = bar "━"; bar = bar x; for (j = 0; j < kd; j++) bar = bar "━"

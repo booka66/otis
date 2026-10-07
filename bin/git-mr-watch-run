@@ -64,7 +64,7 @@ cp "$skill" "$ctx/watch-prod.md"
 # Live first. gmr's cache of your merged MRs says where this one is.
 last=
 while :; do
-  if merged=$(git-cached-json --sync ci-merged 60 -- git-ci-merged 2>/dev/null); then
+  if merged=$(git-cached-json --sync ci-merged 60 -- git-forge merged 2>/dev/null); then
     mr=$(jq -c --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$merged")
     [ -n "$mr" ] || finish failed "!$iid is not among your MRs merged this week"
     state=$(printf '%s' "$mr" | jq -r .state)
@@ -87,7 +87,7 @@ say "live since $(clock "$live"), deployed with $(printf '%.8s' "$sha")"
 # The deploy's own record: when it started, and the deploy before it, whose
 # commit bounds what else went out with this one.
 job=$(otis-config deployJob)
-deploys=$(glab api "projects/:fullpath/deployments?environment=$(otis-config deployEnv)&status=success&order_by=finished_at&sort=desc&per_page=50" 2>&1) ||
+deploys=$(git-forge api "projects/:fullpath/deployments?environment=$(otis-config deployEnv)&status=success&order_by=finished_at&sort=desc&per_page=50" 2>&1) ||
   finish failed "could not list production's deploys: $(oneline "$deploys")"
 started=$(printf '%s' "$deploys" | jq -r --arg sha "$sha" --arg job "$job" '[.[] | select(.sha == $sha and .deployable.name == $job)][0].created_at // empty')
 previous=$(printf '%s' "$deploys" | jq -r --arg sha "$sha" --arg job "$job" '

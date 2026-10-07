@@ -33,7 +33,6 @@ if [ "$kind" = sep ]; then
     def days: (now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) / 86400 | floor;
     def age: (now - (sub("\\.[0-9]+"; "") | fromdateiso8601)) as $s |
       if $s < 3600 then "\($s / 60 | floor)m" elif $s < 86400 then "\($s / 3600 | floor)h" else "\($s / 86400 | floor)d" end;
-    def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
     def rep($n): if $n > 0 then [range($n)] | map("━") | join("") else "" end;
     def spaces($n): if $n > 0 then [range($n)] | map(" ") | join("") else "" end;
     def cap: ascii_upcase;
@@ -172,7 +171,6 @@ esac
 mr='first((.data.currentUser.reviewRequestedMergeRequests, .data.project.mergeRequests) | .nodes[]? | select(.iid == $iid))'
 jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
   include "otis";
-  def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
   '"$mr"' | (.iid | length) as $il |
   attention + "\u001b[1m!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r,
   context + ("\(.author.username)  ·  \(.sourceBranch) → \(.targetBranch)" | cut($w)) + r,

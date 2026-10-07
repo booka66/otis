@@ -134,6 +134,13 @@ case $mode in
     # neither, and would otherwise never notice a thread made elsewhere.
     git-cached-json --no-wait "mr-$iid-threads" 15 "$3" -- git-mr-pages "$api/discussions?per_page=100" >/dev/null 2>&1
     git-cached-json --no-wait "mr-$iid-drafts" 15 "$3" -- git-mr-pages "$api/draft_notes?per_page=100" >/dev/null 2>&1
+    # With no picker to tell (the dashboard), git-cached-json leaves an old
+    # cache as it is, so the fetch is asked for outright and left behind: the
+    # dashboard redraws when the cache's time moves.
+    [ -n "$FZF_PORT" ] || {
+      git-cached-json --sync "mr-$iid-threads" 15 -- git-mr-pages "$api/discussions?per_page=100"
+      git-cached-json --sync "mr-$iid-drafts" 15 -- git-mr-pages "$api/draft_notes?per_page=100"
+    } >/dev/null 2>&1 &
     ;;
   --refresh)
     reload=$2
@@ -267,7 +274,7 @@ case $mode in
     id=$3 resolvable=$4 resolved=$5
     [ "$resolvable" = true ] || exec git-fzf-note "only a thread can be resolved, and this is a single comment or a draft"
     if [ "$resolved" = true ]; then to=false; else to=true; fi
-    if response=$(glab api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
+    if response=$(git-forge api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
       git-mr-threads --refresh "$iid" "reload(git-mr-threads --list $iid $range)"
     else
       git-fzf-error "resolve the thread" "$response"

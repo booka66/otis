@@ -40,10 +40,10 @@ fi
 if [ "$n" -gt 0 ]; then
   set --
   [ "$kind" = review ] && [ "$answer" = comment ] && set -- -f reviewer_state=reviewed
-  out=$(glab api -X POST "$api/draft_notes/bulk_publish" "$@" 2>&1) || fail "could not publish: $out"
+  out=$(git-forge api -X POST "$api/draft_notes/bulk_publish" "$@" 2>&1) || fail "could not publish: $out"
 fi
 if [ "$answer" = approve ]; then
-  out=$(glab mr approve "$iid" --sha "$head" 2>&1) || fail "published, but could not approve: $out"
+  out=$(git-forge approve "$iid" "$head" 2>&1) || fail "published, but could not approve: $out"
 fi
 [ "$kind" = review ] && git-mr-since record "$iid" "$head" "$base"
 exit 0

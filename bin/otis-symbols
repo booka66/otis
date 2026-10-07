@@ -56,17 +56,29 @@ wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
 # Not under a picker: a script that would post to one must not find the one
 # this was opened from.
 unset FZF_PORT FZF_API_KEY
-export GIT_FZF_STATE=${TMPDIR:-/tmp}/git-fzf.$$.$RANDOM$RANDOM
-mkdir -m 700 $GIT_FZF_STATE || exit 1
-st=$GIT_FZF_STATE
-: > $st/lock; : > $st/by-id
-mkdir $st/pv
-trace=${OTIS_SYMBOLS_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/symbols.log}
-mkdir -p ${trace:h} 2>/dev/null; : > $trace
+# otis-symbols --draw <state> <rows> <rows closed> <width> <title>: no
+# screen, the list as it would draw it, for the page (walk.mjs symbols):
+# the lines over the rows (line, its text), then a line a row (row, its id,
+# depth, 1 if it opens, its line open, its line closed, the pane's crumb for
+# it). <rows> is git-symbols --rows with every row open, <rows closed> the
+# same rows each as it is closed, both written into <state> at <width>.
+integer drawing=0
+if [[ $1 == --draw ]]; then
+  drawing=1 st=$2 dopen=$3 dclosed=$4 lw=$5 title=$6
+  set --
+else
+  export GIT_FZF_STATE=${TMPDIR:-/tmp}/git-fzf.$$.$RANDOM$RANDOM
+  mkdir -m 700 $GIT_FZF_STATE || exit 1
+  st=$GIT_FZF_STATE
+  : > $st/lock; : > $st/by-id
+  mkdir $st/pv
+  trace=${OTIS_SYMBOLS_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/symbols.log}
+  mkdir -p ${trace:h} 2>/dev/null; : > $trace
+fi
 
 # --- what it was asked to be -------------------------------------------------
 # The keys: labels for the footer and ?, those after a lone | for ? alone.
-title=${1% } spec=$2; shift 2
+(( drawing )) || { title=${1% } spec=$2; shift 2; }
 typeset -a hk hv hm
 typeset -A bind
 integer more=0
@@ -75,7 +87,7 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
-preview= startacts= hdr=0 searching=0 watchfiles=() stepscmd= panescmd=
+preview= startacts= hdr=$drawing searching=0 watchfiles=() stepscmd= panescmd=
 # --repeat j,k: keys cheap enough to act on every repeat of a key held down
 # (a debugger's step), which the rest do not (below).
 typeset -A repeat
@@ -97,8 +109,12 @@ while (( $# )); do
 done
 
 . ${0:A:h:h}/share/screen.zsh
-keys_caller; keys_open "${REPLY:-${${title//\!<-> /}%% *}}" "$spec"
-screen_start
+# The state --draw draws from is its caller's, left where it is.
+(( drawing )) && trap - EXIT HUP
+if (( ! drawing )); then
+  keys_caller; keys_open "${REPLY:-${${title//\!<-> /}%% *}}" "$spec"
+  screen_start
+fi
 # What an accept hands back, printed once the screen is given back.
 typeset -a outq
 at_quit() { (( $#outq )) && print -rl -- $outq; }
@@ -336,7 +352,7 @@ headline() {
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
   L+=("") LI+=(0)
-  if (( ! loaded )); then L+=("  ${C}reading the change…$R") LI+=(0); return; fi
+  if (( ! loaded )); then spin_frame; L+=("  $A$REPLY$R ${C}reading the change…$R") LI+=(0); return; fi
   # Claude's sentence, the list's header, wrapped to the list.
   if (( hdr )) && [[ -s $st/header ]]; then
     plain "$(<$st/header)"; words=(${=REPLY}); s=
@@ -516,7 +532,9 @@ shown() {
 # than by a script a key: the command says where walk-prep put the walk for
 # this pane's width (its nav and a preview a step, git-trace --steps-base),
 # and it runs when the screen opens, when the rows are reloaded (b, the other
-# side) and when the width settles, never on a key. j, l and h go over, into
+# side) and when the width settles, never on a key, and in the background
+# (bg_ask): walk-prep takes seconds at a width it has not laid out yet, and
+# the screen keeps drawing and taking keys meanwhile. j, l and h go over, into
 # and out, k back, each one frame: the step's preview was drawn and wrapped
 # ahead (steps_warm), so a key moves the cursor and the pane together. A
 # step to another line of the same file scrolls there through the file
@@ -525,15 +543,36 @@ typeset -a nvi nover ninto nout nfi nline shist
 typeset -A sfirst frow
 integer kcur=-1 sw=0
 sbase= sdir=
-steps_load() {
+# bg_ask <name> <command>: the command, for this pane's width, in the
+# background; bg_got <name> once its answer has landed, in REPLY. Only the
+# newest one asked counts, and only at the width it was asked for: a resize
+# meanwhile asks again once the width settles.
+typeset -A askn
+bg_ask() {
+  local n=$(( ++askn[$1] )) w=$pw
+  subst "$2" 0
+  { FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" > $st/ask.$1.$n.tmp 2>/dev/null </dev/null
+    print -r -- $w >> $st/ask.$1.$n.tmp; mv -f $st/ask.$1.$n.tmp $st/ask.$1.$n } >/dev/null &!
+}
+bg_got() {
+  local f=$st/ask.$1.${askn[$1]:-0}
+  local -a a
+  [[ -e $f ]] || return 1
+  a=("${(@f)$(<$f)}"); rm -f $st/ask.$1.<->(N)
+  (( a[-1] == pw )) || return 1
+  REPLY=${(F)a[1,-2]}
+}
+steps_load() { bg_ask steps "$stepscmd"; }
+# steps_cur: where the walk is: a tour's stop opens on its step (git-trace
+# --walk-at), and b's other side starts over.
+steps_cur() { kcur=-1; [[ -r $st/cur ]] && { read -r kcur < $st/cur; [[ $kcur == <-> ]] || kcur=-1; }; }
+# steps_take <base>: walk-prep's answer, laid out.
+steps_take() {
   local was=$sbase line
   local -a f
-  subst "$stepscmd" 0
-  sbase=$(FZF_PREVIEW_COLUMNS=$pw zsh -fc "$REPLY" 2>/dev/null </dev/null)
+  sbase=$1
   [[ -n $sbase && -s $sbase.nav ]] || { sbase=$was; return 1; }
-  # Where the walk is: a tour's stop opens on its step (git-trace --walk-at).
-  kcur=-1
-  [[ -r $st/cur ]] && { read -r kcur < $st/cur; [[ $kcur == <-> ]] || kcur=-1; }
+  steps_cur
   if [[ $sbase != $was ]] || (( pw != sw )); then
     nvi=() nover=() ninto=() nout=() nfi=() nline=() sfirst=() frow=()
     for line in ${(f)"$(<$sbase.nav)"}; do
@@ -573,7 +612,7 @@ wrapall() {
       [[ -d $d ]] || break
       [[ -e $d/$f ]] || wrapin $w $raw/$f $d/$f $d/$f.tmp.$sysparams[pid]
     done
-  } &!
+  } >/dev/null &!
 }
 steps_file() { wrapped ${sbase}-$sw $sdir $sw $1; }
 # steps_warm: the files first, which every scroll in them needs and which are
@@ -600,10 +639,10 @@ steps_warm() {
 # directory can hold each such file whole (files/<path, / as %>): j or k
 # from one to another line of the same file scrolls there (xcode).
 pdir= pwdir=
-panes_load() {
-  local d
-  subst "$panescmd" 0
-  d=$(FZF_PREVIEW_COLUMNS=$pw zsh -fc "$REPLY" 2>/dev/null </dev/null)
+panes_load() { bg_ask panes "$panescmd"; }
+# panes_take <dir>: the command's answer, wrapped.
+panes_take() {
+  local d=$1
   [[ -n $d && -d $d ]] || return 1
   # Drawn again (the rows reloaded because they changed): wrapped again.
   pdir=$d pwdir=$st/panes/$pw
@@ -1285,7 +1324,7 @@ want() {
   pvname "$rid[cur]" $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
   : > $f.tmp
-  render $pw $f $cur &!
+  render $pw $f $cur >/dev/null &!
   wpid=$!
 }
 # warm: the rows around the cursor, a few either side, one after another,
@@ -1309,7 +1348,7 @@ warm() {
       : > $f.tmp
       render $pw $f $i
     done
-  } &!
+  } >/dev/null &!
 }
 # Where the row is, over its preview: its file and line, and the rows it is
 # under, by name.
@@ -1421,27 +1460,7 @@ helplines() {
     "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
     "  ${G}●$R$C in a review, the agent's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
-  # Each line in the pane's width, not cut at its edge: broken at spaces,
-  # colors kept, what runs on under the line's own text (a key's, under its
-  # words; the rest, two in from where it starts).
-  local -a out words
-  local l cur wd
-  integer w=$(( pw - 2 )) n ind wl lead first
-  for l in "${P[@]}"; do
-    vw "$l"; (( REPLY <= w )) && { out+=("$l"); continue; }
-    plain "$l"
-    if [[ $REPLY == (#b)([[:space:]]#[^[:space:]]##[[:space:]][[:space:]]##)[^[:space:]]* ]]; then ind=${#match[1]}; else ind=$(( ${#${REPLY%%[^ ]*}} + 2 )); fi
-    lead=${#${REPLY%%[^[:space:]]*}}
-    cur=${(l:lead:: :)} n=$lead first=1 words=("${(@s: :)${l#${(l:lead:: :)}}}")
-    for wd in "${words[@]}"; do
-      vw "$wd"; wl=$REPLY
-      if (( ! first && n + 1 + wl > w )); then out+=("$cur$R"); cur=${(l:ind:: :)}$wd; n=$(( ind + wl ))
-      else (( first )) || { cur+=" "; (( n++ )); }; cur+=$wd; (( n += wl )); fi
-      first=0
-    done
-    out+=("$cur")
-  done
-  P=("${out[@]}")
+  panewrap $(( pw - 2 ))
 }
 draw() {
   local t0=$EPOCHREALTIME
@@ -1480,6 +1499,8 @@ draw() {
     if [[ $REPLY != $pfile || -z $pfile ]]; then
       pfile=$REPLY
       if [[ -n $REPLY ]]; then P=("${(@f)$(<$REPLY)}"); else P=("${F}…$R"); fi
+      # One kept from another width, until this width's lands: cut to the pane.
+      [[ ${pfile:t} == *.(#b)(<->).<-> && $match[1] != $pw ]] && clip $pw
       # A preview's first lines can be pinned (a walk's step: "\036pin N"
       # and N lines): held under where the row is while the rest scrolls,
       # the pane's head that much taller. All but six rows of the pane at
@@ -1556,6 +1577,7 @@ draw() {
   elif [[ -n $flash ]]; then
     foot+=$A$flash$R; flash=
     (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]] && foot+=$C"   ·   "$R$A"c"$R$C" comments on them"$R
+  elif spinning; then spin_foot
   elif (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]]; then
     local sd=${selr%% *} sw=${selr#* }
     if [[ $sd == *,* ]]; then sw="lines ${${sd%,*}/old/-}${${sd%,*}/new/+}${sw% *}–${${sd#*,}/old/-}${${sd#*,}/new/+}${sw#* }"
@@ -1630,7 +1652,7 @@ reload() {
   local cmd=$1
   lastlist=$cmd
   (( rgen++ ))
-  { zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } &!
+  { zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
   rpid+=($!)
 }
 landed() {
@@ -1680,10 +1702,13 @@ offin() {
   (( poff = o - 1, poff < 0 ? (poff = 0) : 0 ))
   offs[$rid[cur]]=$poff
 }
-# run <actions> <row>: fzf's actions, as a binding or a transform gives them.
+# run <actions> <row> [then...]: fzf's actions, as a binding or a transform
+# gives them, then the chains after them; a command that answers runs in the
+# background (share/screen.zsh's spawn), and what comes after it waits there.
 run() {
   local s=$1 name arg i c q depth open close out
   integer row=$2
+  local -a then_=("${@[3,-1]}")
   while [[ -n $s ]]; do
     if [[ $s == (#b)([a-z-]##)([\(\[])* ]]; then
       name=$match[1] open=$match[2] s=${s#$name$open} depth=1 q=0
@@ -1702,17 +1727,17 @@ run() {
     subst "$arg" $row; arg=$REPLY
     case $name in
       execute)
+        # The frame stays up while the command gets going: it says so.
+        flash="${bykey:-…}${bykey:+…}"; draw
         offout; run_tty "$arg"; offin; resize ;;
-      execute-silent)
-        offout; zsh -fc "$arg" </dev/null >/dev/null 2>&1; offin ;;
-      transform)
-        offout; out=$(zsh -fc "$arg" </dev/null 2>/dev/null); offin
-        [[ -n $out ]] && run "$out" $row ;;
+      execute-silent|transform)
+        spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       reload) pcur=$cur; reload "$arg" ;;
       # Landed before the next action runs, for one that moves on the rows.
-      reload-sync) pcur=$cur; lastlist=$arg; zsh -fc "$arg" > $st/list.$(( ++rgen )) 2>/dev/null </dev/null; landed ;;
+      reload-sync) pcur=$cur; lastlist=$arg; spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       refresh-preview) (( gen++ )) ;;
-      pos) (( arg > 0 && arg <= $#raw )) && go $arg ;;
+      # A walk put somewhere (git-trace --walk-at) says so in $st/cur too.
+      pos) (( arg > 0 && arg <= $#raw )) && go $arg; [[ -n $stepscmd && -n $sbase ]] && steps_cur ;;
       first|top) (( $#vis )) && go $vis[1] ;;
       last) (( $#vis )) && go $vis[-1] ;;
       abort) quit 130 ;;
@@ -1721,9 +1746,11 @@ run() {
       # The footer, the prompt, binding and unbinding: this screen's own.
     esac
   done
+  (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}"
 }
-# act <key>: its binding, for the row under the cursor. The footer says it
-# is on it first, since some (p's peeks, i) take a moment. A binding that
+sync_list() { mv -f $1 $st/list.$(( ++rgen )); landed; }
+# act <key>: its binding, for the row under the cursor, or, while another
+# key's command is out, once that lands (uq). A binding that
 # redraws the preview and moves its scroll (p keeps the line at the top
 # where it is, with notes above it now) holds the scroll it had until the
 # new preview lands, then takes both in one frame, rather than the old
@@ -1731,8 +1758,10 @@ run() {
 integer pwant=-1 pgen=0
 typeset -A held
 act() {
+  busy && { (( ${uq[(Ie)$1]} )) || uq+=($1); return }
   local was=$poff g=$gen
-  flash="…"; draw
+  symkeys
+  local bykey=${${rkl[$1]:-${hv[${hk[(ie)$1]}]}}:-$1}
   run "$bind[$1]" $cur
   if (( gen != g && poff != was )); then pwant=$poff pgen=$gen poff=$was; fi
   dirty=1
@@ -2114,6 +2143,8 @@ handle() {
     k|up) step -1 ;;
     g) (( $#vis )) && go $vis[1] ;;
     G) (( $#vis )) && go $vis[-1] ;;
+    # With ? up, q and esc close it, as its last line says, rather than the screen.
+    q|esc) (( help )) && { help=0 poff=0; return; } ;|
     q) quit 130 ;;
     esc) if [[ -n $query ]]; then query= dirty=1; else quit 130; fi ;;
     /) searching=1 dirty=1 ;;
@@ -2155,6 +2186,27 @@ watched() {
   [[ -n $was ]]
 }
 
+# --- the list for a page ------------------------------------------------------------
+# --draw: every row drawn open and closed, guides and all, as rowline has
+# them, the headline and headings as list lays them out.
+if (( drawing )); then
+  integer pw=${FZF_PREVIEW_COLUMNS:-110} k
+  typeset -a LO LIO FO
+  load $dopen; list
+  LO=("${L[@]}") LIO=("${LI[@]}") FO=("${fold[@]}")
+  typeset -a RO=("${RL[@]}")
+  load $dclosed; list
+  for (( k = 1; k <= $#LO; k++ )); do
+    if (( LIO[k] )); then
+      cur=$LIO[k]; crumb
+      print -r -- "row"$'\t'$rid[cur]$'\t'$dep[cur]$'\t'${${FO[cur]:+1}:-0}$'\t'$RO[cur]$'\t'$RL[cur]$'\t'$REPLY
+    else
+      print -r -- "line"$'\t'${LO[k]#  }
+    fi
+  done
+  exit 0
+fi
+
 # --- the loop ----------------------------------------------------------------------
 screen_on
 pbask
@@ -2169,16 +2221,18 @@ fi
 integer opened=0
 run "$startacts" 0
 opened=1
-# A walk's steps come up now, drawn, from the step the start put it on:
-# nothing lands later to draw them.
-[[ -n $stepscmd ]] && steps_load && draw
-[[ -n $panescmd ]] && panes_load && draw
+# A walk's steps and a tour's panes are asked for now, beside the rows.
+[[ -n $stepscmd ]] && steps_load
+[[ -n $panescmd ]] && panes_load
 integer tmo=5 stick=0 wtick=0 rewidth=0
+lspun=
 while :; do
   reply=()
   # A transition draws a frame every 20ms (zselect counts hundredths): at
   # 10ms a frame of the whole pane, under a multiplexer, came out in bursts.
-  zselect -t $(( xon || lon ? 2 : tmo )) -r $tty ${winch:+-r} $winch
+  # A key's command or a reload out is looked for as often: v is one after
+  # the other, and at the resting tick each sat landed for 25ms on average.
+  zselect -t $(( xon || lon || $#jobs || $#rpid ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize
@@ -2187,12 +2241,16 @@ while :; do
     kt=$EPOCHREALTIME nk=1
     readkey; handle $REPLY
     while zselect -t 0 -r $tty; do readkey; handle $REPLY; (( nk++ )); done
+    landed_jobs
     draw
   else
     float ti=$EPOCHREALTIME
     changed=0
     (( xon )) && xtick && changed=1
     (( lon )) && changed=1
+    landed_jobs && changed=1
+    spun_on && changed=1
+    (( ! loaded )) && { spin_frame; [[ $REPLY != $lspun ]] && { lspun=$REPLY; changed=1 dirty=1; }; }
     # Once a second: whatever opened this is still there (else it goes,
     # rather than read keys under a shell's prompt), and, without perl, the size.
     if (( EPOCHSECONDS != stick )); then
@@ -2208,6 +2266,8 @@ while :; do
     # The list landing is the drawn panes being there too: the screen
     # opened without them rather than wait (panes_load, before the loop).
     landed && { changed=1; [[ -n $panescmd && -z $pdir ]] && panes_load; }
+    [[ -n $stepscmd ]] && bg_got steps && steps_take "$REPLY" && changed=1
+    [[ -n $panescmd ]] && bg_got panes && panes_take "$REPLY" && changed=1
     # The row's preview landing: one test for the file this gen and width
     # draw, and none once it shows. A glob of every kept preview, twenty
     # times a second, was the loop's whole cost at rest.

@@ -1,0 +1,8 @@
+#!/bin/sh
+# git-mr-close <iid>: close an MR after a y/N. Success goes straight back to
+# the picker; only a failure waits, so its error can be read.
+iid=$1
+[ -n "$iid" ] || exit 0
+git-confirm "close !$iid without merging?" || exit 0
+out=$(git-forge close "$iid" 2>&1) && exit 0
+otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'close failed')"

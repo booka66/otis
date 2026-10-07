@@ -131,7 +131,9 @@ fi
 
 
 # The GitLab host is otis.host where set (a self-hosted GitLab), else gitlab.com.
+# Run in a repo on GitHub, origin's host is GitHub's, not a GitLab to log in to.
 host=$("$root/bin/otis-config" host 2>/dev/null || echo gitlab.com)
+[ "$("$root/bin/otis-config" forge 2>/dev/null)" = github ] && host=$(git config --global --get otis.host || echo gitlab.com)
 if have glab; then
   if glab auth status --hostname "$host" >/dev/null 2>&1; then
     pass glab "$(glab --version | head -1 | cut -d' ' -f2), logged in to $host"
@@ -237,6 +239,11 @@ else
   fi
   offer_run claude "D watches production through Claude Code and Datadog's MCP server" \
     "$claude_install, then claude to log in" "$claude_install" claude
+fi
+offer_brew gh "repos on GitHub: their pull requests in gmr and on the dashboard, as MRs are" \
+  "GitHub repos are your branches alone. $(install_hint gh 'see https://cli.github.com'), then gh auth login" gh
+if have gh && ! gh auth status >/dev/null 2>&1; then
+  note gh "installed but not logged in: gh auth login, for GitHub repos"
 fi
 offer_brew glow "MR descriptions in the picker render as markdown instead of plain text" \
   "descriptions show as plain text. $(install_hint glow 'see https://github.com/charmbracelet/glow')" glow
@@ -507,12 +514,6 @@ if [ "$file" != git.zsh ]; then
 fi
 
 printf '\nfeatures\n'
-remote=$(git config --get otis.remote 2>/dev/null)
-if [ -n "$remote" ]; then
-  pass "remote checks" "type checks and tests run on $remote (otis.remote)"
-else
-  note "remote checks" "Claude's reviews and fixes run the repo's checks only with a workspace to run them in, set per repo: git config otis.remote <ssh host> and otis.remotePath <its checkout> (a Coder workspace after coder config-ssh)"
-fi
 install=$(git config --get otis.install 2>/dev/null)
 if [ -n "$install" ]; then
   pass "node_modules" "installed again by '$install' when the lockfile moves past it (otis.install)"

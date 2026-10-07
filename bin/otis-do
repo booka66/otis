@@ -4,7 +4,7 @@
 # otis-do copy    <kind> <verb> <extra> ...the same: y. A background run's
 #                 folder, as a note Claude can start from (what the run was, its
 #                 verdict, and what each file there holds); anything else, the
-#                 MR's link
+#                 MR's link, or the branch's name when it has no MR yet
 # The dashboard's enter, as fzf actions for a transform binding: whatever the
 # row's verb says it is. The row carries the verb worked out once, in otis-list,
 # so the thing you read and the thing enter does can never disagree.
@@ -29,7 +29,10 @@ pipeline=$1 start=$2
 if [ "$what" = copy ]; then
   case $extra in
     */otis-verify/*|*/gmr-watch/*|*/gmr-fix/*|*/gmr-claude/*|*/otis-walk/*) ;;
-    *) exec git-mr-do copy "$iid" ;;
+    *) # A branch with no MR yet has no link to copy: its name.
+       [ -z "$iid" ] && [ -n "$source" ] || exec git-mr-do copy "$iid"
+       printf '%s' "$source" | otis-copy && exec git-fzf-note "copied $source"
+       exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $source" ;;
   esac
   [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
   # A walk: what it walked, each walk's point, and where the walk is.

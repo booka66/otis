@@ -32,11 +32,8 @@
 #   cursorModel  the model V's Cursor Cloud tester runs, an id from Cursor's GET /v1/models with its parameters after a colon
 #                (gpt-5.6-luna:reasoning=high): otis.cursorModel, else Cursor's default
 #   agent        the coding agent otis's review, fix and verify runs and callers' fixes use: claude (Claude Code),
-#                codex or cursor (Cursor's agent): otis.agent, else claude. Only claude runs checks through
-#                git-remote-run (claudeCommands); the others work in their own sandbox (otis-agent-run)
+#                codex or cursor (Cursor's agent): otis.agent, else claude. The others work in their own sandbox (otis-agent-run)
 #   agentModel   the model codex or cursor runs, in its own names: otis.agentModel, else the agent's default
-#   claudeCommands  the commands Claude may run through git-remote-run in a review or fix run, one a line,
-#                each a prefix ('bazel test' allows bazel test //x:y): every otis.claudeCommand; none means no shell
 #   engine       what reads a change by symbol for the symbol view: seam, or dagger (github.com/joshmoody24/dagger,
 #                over TypeScript 7's tsc --lsp or what dagger.toml names): otis.engine, else seam. seam still scores,
 #                splits, glosses and finds the callers of either one's table
@@ -72,10 +69,10 @@
 #     deployJob = deploy-production
 #
 # Your own git config wins over it. Only the settings named in shared() are
-# read from it: a repo you clone must not be able to choose the agent, the commands
-# Claude may run (claudeCommand), your editor, or where worktrees go.
-names='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommand engine sideBySide worktrees install editor terminalBrowser lessons'
-sharednames='host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak'
+# read from it: a repo you clone must not be able to choose the agent, your
+# editor, or where worktrees go.
+names='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees install editor terminalBrowser lessons'
+sharednames='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak'
 nl='
 '
 shared() {
@@ -168,7 +165,7 @@ cfg_bool() {
   esac
 }
 
-keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel claudeCommands engine sideBySide worktrees editor terminalBrowser lessons gitlab'
+keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees editor terminalBrowser lessons gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -237,7 +234,6 @@ one() {
     verifyBreak) [ "$(cfg_bool verifyBreak || echo true)" = true ] ;;
     agent) cfg agent || echo claude ;;
     agentModel) cfg agentModel ;;
-    claudeCommands) cfg_all claudeCommand | grep -v '^$' ;;
     engine) case $(cfg engine) in dagger) echo dagger ;; *) echo seam ;; esac ;;
     sideBySide) cfg sideBySide ;;
     worktrees) cfg worktrees || echo .claude/worktrees ;;
@@ -275,15 +271,13 @@ one() {
 # current. The environment's copy is held to the same file, so a setting
 # changed from the dashboard's c is what that picker's next reload reads.
 #
-# Two keys are left out of both and always looked up live. claudeCommands is
-# the one setting that says what Claude may run, and what decides that should
-# come from git config and nowhere else. editor answers with $OTIS_EDITOR
-# where there is one, and an answer that follows the environment cannot be
-# kept in a file that only watches git config. Worktrees under the checkout the
-# environment was made in share its git config and count as inside it; a .otis
-# that differs between branches checked out there is the one thing this would
-# miss. A worktree asked on its own, with no environment from above, reads its
-# own .otis into its own cache (repo_facts).
+# One key is left out of both and always looked up live. editor answers with
+# $OTIS_EDITOR where there is one, and an answer that follows the environment
+# cannot be kept in a file that only watches git config. Worktrees under the
+# checkout the environment was made in share its git config and count as
+# inside it; a .otis that differs between branches checked out there is the
+# one thing this would miss. A worktree asked on its own, with no environment
+# from above, reads its own .otis into its own cache (repo_facts).
 envkeys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons gitlab'
 boolkeys='verifyRetro verifyFix verifyBreak terminalBrowser lessons gitlab'
 cachename=otis-config-cache
@@ -346,7 +340,7 @@ build_cache() {
       *) val=$(one "$key" 2>/dev/null) || { unset_keys="$unset_keys $key"; val=; } ;;
     esac
     # A value of more than one line cannot be carried a line a key like this,
-    # so that key is left out and looked up the long way, as claudeCommands is.
+    # so that key is left out and looked up the long way.
     case $val in
       *"$nl"*) ;;
       *) printf '%s\t%s\n' "$key" "$val" ;;
@@ -421,7 +415,7 @@ answer() {
 gitname() {
   case $1 in
     url) echo host ;; main | base) echo mainBranch ;; gateJobs) echo gateJob ;;
-    claudeCommands) echo claudeCommand ;; gitlab) ;; *) echo "$1" ;;
+    gitlab) ;; *) echo "$1" ;;
   esac
 }
 
@@ -526,7 +520,7 @@ $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
   --prompt)
     scope=$2 n=$(gitname "$3")
     case $n in
-      gateJob | claudeCommand)
+      gateJob)
         f=$(mktemp) || exit 1
         { echo "# otis.$n ($scope), one a line; lines starting with # are dropped, and none at all unsets it"
           git config "--$scope" --get-all "otis.$n" 2>/dev/null; } > "$f"
@@ -566,7 +560,7 @@ esac
 # The preview is what the key does, from the list at the top of this file, and
 # every git config file that sets it. enter sets it in this repo, E for every
 # repo (--global), x puts it back to the default. A setting with several values
-# (gateJobs, claudeCommands) opens in your editor, one value a line.
+# (gateJobs) opens in your editor, one value a line.
 if [ $# -eq 0 ]; then
   exec git-fzf 'otis config ' 'enter=set in this repo,E=set for every repo,x=back to the default (unsets here and globally)' --ansi \
     --delimiter='\t' --with-nth=1 --track --id-nth=2 \

@@ -83,10 +83,14 @@ workspace() {
       [ -n "$name" ] || continue
       case $d in */node_modules/*) continue ;; esac
       [ -e "$dst/$name" ] || [ -L "$dst/$name" ] && continue
+      # -n: another run at once (the symbol picker's and git-callers' both
+      # start here) may make the link between that look and this ln, which
+      # would then follow it and leave a link inside the package's own
+      # directory, an untracked file in the checkout.
       case $name in
-        @*/*) mkdir -p "$dst/${name%%/*}" && ln -s "../../$d" "$dst/$name" && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
+        @*/*) mkdir -p "$dst/${name%%/*}" && ln -sn "../../$d" "$dst/$name" 2>/dev/null && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
         */*) ;;
-        *) ln -s "../$d" "$dst/$name" && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
+        *) ln -sn "../$d" "$dst/$name" 2>/dev/null && printf '%s\n' "$name" >> "$dst/.otis-links" ;;
       esac
     done
   printf '%s\n' "$stamp" > "$dst/.otis-workspace"
@@ -148,6 +152,9 @@ else
     for e in "$src"/* "$src"/.[!.]*; do
       [ -e "$e" ] || [ -L "$e" ] || continue
       n=${e##*/}
+      # What main linked for its own checkout is not this one's: a link to it
+      # would have every checkout redo the others' work and write over it.
+      case $n in .otis-links|.otis-workspace) continue ;; esac
       if [ -L "$e" ]; then set -- "$@" "$n"
       elif [ -d "$e" ]; then
         case $n in

@@ -78,7 +78,7 @@ case $mode in
   --edit|--delete)
     id=$1
     # The thread's latest note of yours: a draft is, and so is one by you.
-    me=$(glab api user 2>/dev/null | jq -r '.username // empty')
+    me=$(git-forge api user 2>/dev/null | jq -r '.username // empty')
     note=$(jq -c --arg id "$id" --arg me "$me" '.[] | select(.id == $id) | [.notes[] | select(.draft or .author.username == $me)] | last // empty' \
       "$GIT_FZF_STATE/threads.json" 2>/dev/null)
     [ -n "$note" ] || fail "none of the comments in that thread are yours"
@@ -91,7 +91,7 @@ case $mode in
       git-confirm "$context
 
 delete it?" || exit 0
-      out=$(glab api -X DELETE "$url" 2>&1) || fail "GitLab said no: $(printf '%s' "$out" | head -1)"
+      out=$(git-forge api -X DELETE "$url" 2>&1) || fail "GitLab said no: $(printf '%s' "$out" | head -1)"
       git-mr-threads --refresh "$iid" refresh-preview
       exit 0
     fi
@@ -130,12 +130,12 @@ fi
 printf "${GK_CONTEXT}sending ...${GK_R}\n"
 if [ "$mode" = --edit ]; then
   [ "$text" = "$was" ] && exit 0
-  out=$(jq -n --arg f "$field" --arg t "$text" '{($f): $t}' | glab api -X PUT "$url" -H "Content-Type: application/json" --input - 2>&1) ||
+  out=$(jq -n --arg f "$field" --arg t "$text" '{($f): $t}' | git-forge api -X PUT "$url" -H "Content-Type: application/json" --input - 2>&1) ||
     fail "GitLab said no: $(printf '%s' "$out" | head -1)"
   git-mr-threads --refresh "$iid" refresh-preview
   exit 0
 fi
-mr=$(glab api "$api" 2>&1) || fail "could not ask GitLab for the MR: $(printf '%s' "$mr" | head -1)"
+mr=$(git-forge api "$api" 2>&1) || fail "could not ask GitLab for the MR: $(printf '%s' "$mr" | head -1)"
 refs=$(printf '%s' "$mr" | jq -r '.diff_refs | "\(.base_sha) \(.start_sha // "") \(.head_sha)"')
 read -r base start head <<EOF
 $refs
@@ -163,7 +163,7 @@ case $mode in
     fi
     ;;
 esac
-out=$(printf '%s' "$body" | glab api -X POST "$url" -H "Content-Type: application/json" --input - 2>&1) ||
+out=$(printf '%s' "$body" | git-forge api -X POST "$url" -H "Content-Type: application/json" --input - 2>&1) ||
   fail "GitLab said no: $(printf '%s' "$out" | head -1)"
 # Fetched now, so the picker's reload after this shows it.
 git-mr-threads --refresh "$iid" refresh-preview

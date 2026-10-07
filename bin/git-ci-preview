@@ -12,7 +12,6 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
   include "otis";
   def B: "\u001b[1m";
-  def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
   def callout($c; $head; $why): $c + "▌ " + B + ($head | cut($w - 2)) + r,
     (if $why != "" then $c + "▌ " + r + text + ($why | cut($w - 2)) + r else empty end), "";
   def fact($c; $t): "  " + $c + ($t | cut($w - 2)) + r;

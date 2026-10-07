@@ -19,7 +19,7 @@ if (isMainThread) {
   // Jest and its workers, and Vitest's workers (a fork a pool slot, where the
   // tests run), alone: NODE_OPTIONS reaches every node a test starts, a
   // database its setup runs among them, whose paths can say jest too.
-  const jest = /(\/bin\/jest(\.js)?|\/jest-worker\/build\/workers\/\w+\.js)$/.test(process.argv[1] || "");
+  const jest = /(\/\.?bin\/jest(\.js)?|\/jest-worker\/build\/workers\/\w+\.js)$/.test(process.argv[1] || "");
   const vitest = /vitest[^/]*\/(files\/)?dist\/workers\/forks\.js$/.test(process.argv[1] || "") || !!process.env.VITEST_POOL_ID;
   if (process.env.OTIS_TRACE_DEBUG) try { fs.appendFileSync(process.env.OTIS_TRACE_DEBUG, `${process.pid} ${jest ? "jest" : vitest ? "vitest" : "-"} ${process.argv.slice(1, 3).join(" ")} pool=${process.env.VITEST_POOL_ID || ""}\n`); } catch {}
   if (!jest && !vitest) return;

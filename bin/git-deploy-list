@@ -37,7 +37,7 @@ if [ "$1" = --fetch ]; then
   { read -r env; read -r job; read -r rollback_job; } <<EOF
 $(otis-config deployEnv deployJob rollbackJob)
 EOF
-  all=$(glab api "projects/:fullpath/deployments?environment=$env&order_by=created_at&sort=desc&per_page=100") || exit 1
+  all=$(git-forge api "projects/:fullpath/deployments?environment=$env&order_by=created_at&sort=desc&per_page=100") || exit 1
   deploys=$(printf '%s' "$all" | jq -e --arg job "$job" --arg rb "$rollback_job" '
     [.[] | select((.deployable.name == $job and (.status | IN("blocked", "skipped") | not))
               or (.deployable.name == $rb and (.status | IN("success", "failed", "running"))))

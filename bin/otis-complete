@@ -26,7 +26,7 @@ case $cmd in
   # A range or a ref to start from.
   gl | grb | gdm | gstack) refs ;;
   # Paths, and the branch names that gb's own switch takes.
-  ga | gu | gah | gdd | gpark) echo '@files' ;;
+  ga) echo '@files' ;;
   otis-config) sed -n 's/^keys=.//p' "$(dirname "$0")/otis-config" | tr -d "'" | tr ' ' '\n' ;;
   otis-theme) otis-theme --list | cut -f1 ;;
   # The gitignore tags, from the list gi fetched last time it was asked for

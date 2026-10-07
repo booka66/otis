@@ -174,7 +174,7 @@ case $mode in
     [ -n "$id" ] || exec git-fzf-note "r resolves a thread; move onto one"
     [ "$resolvable" = true ] || exec git-fzf-note "only a thread can be resolved, and this is a single comment or a draft"
     if [ "$resolved" = true ]; then to=false; else to=true; fi
-    if response=$(glab api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
+    if response=$(git-forge api -X PUT "$api/discussions/$id?resolved=$to" 2>&1); then
       git-mr-threads --refresh "$iid" "reload($list)"
     else
       git-fzf-error "resolve the thread" "$response"

@@ -29,7 +29,8 @@
 # finished step; r, once it is over, exits 3 so the caller starts it afresh.
 # v shows or hides the detail (thinking, what tools returned), enter and l
 # open a step, or the whole progress, in less, o opens the tester in Cursor,
-# a lists what the run brought back (git-verify --artifacts), w opens a
+# a lists what the run brought back (git-verify --artifacts), y copies its
+# folder and what is in it for Claude, w opens a
 # verification's report in the browser (git-verify-html; terminal-browser
 # where otis.terminalBrowser is on), and p links it
 # from the MR's description (git-verify --attach).
@@ -205,6 +206,10 @@ case $1 in
     [ -n "$ask" ] || exec git-fzf-note "no message for infra here: the retrospective found nothing only they can change"
     printf '%s\n' "$ask" | otis-copy || exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel)"
     exec git-fzf-note "copied the message for $(git config --get otis.infraContact || echo infra)" ;;
+  # --copy <dir>: y, the run's folder and what is in it, for Claude, as the
+  # dashboard's y copies it (otis-do).
+  --copy)
+    exec otis-do copy run run "$2" "" "" "" "" "" "" "" "" ;;
   # --fix <dir>: f, the fix a failed verification's judge accepted
   # (git-verify-run's fix), in the proposals picker.
   --fix)

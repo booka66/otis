@@ -1,6 +1,7 @@
 #!/bin/sh
 # git-trace --can <base> <head>   exit 0 when P can trace the change: a runner, and a spec file among
 #                                 what it changed
+# git-trace --ci <base> <head> <dir> [title] [url]   the run and its page with nobody there: a CI job
 # git-trace --run <dir>           the run, in the background: the change's spec files, each through
 #                                 the runner with the tracer on, at its head, in a slot
 # git-trace --view <dir>          P's screen: what runs the change, and what nothing runs
@@ -54,11 +55,12 @@
 # The run's state is git-walk's (<git dir>/otis-walk/<key>), with engine
 # trace in it, so gag, the dashboard and gmr's marks read it as they read a
 # walk. Here: shas, table, specs, targets.json, trace/<i>.jsonl and ran/<i>
-# (the head's), base/ (the base's), again/ (the head's once more),
+# (the head's), before/ (the base's), again/ (the head's once more),
 # inputs.json and inputs.patch (i's), cover.json (share/walk.mjs cover),
 # about (what the change says it does) and diff.json (share/walk.mjs diff).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
+. "$share/cursor.sh"
 . "$share/palette.sh"
 walk="node $share/walk.mjs"
 note() { git-fzf-note "$1" >/dev/null; }
@@ -120,7 +122,7 @@ esac
 # lines, the files whole for the glide, lines as wide as the pane, the code
 # around a step's own, added lines always on their ground), so one
 # drawn before is drawn again rather than shown as it was.
-drawn=v5
+drawn=v9
 prepared() {
   w=${FZF_PREVIEW_COLUMNS:-100}
   b=$1/walks/$2-$3
@@ -141,13 +143,18 @@ shown() {
   awk -v vi="${1#v:}" -v k="$cur" '$2 == vi { if ($1 == k) { f = k; exit } if (first == "") first = $1 } END { print (f != "" ? f : first) }' "$b.nav"
 }
 side() { cat "$GIT_FZF_STATE/side" 2>/dev/null || echo head; }
-# toured <dir>: the tour drawn for this width (walk.mjs tour-prep).
+# toured <dir>: the tour drawn for this width (walk.mjs tour-prep). A tour
+# that changed (a chapter landed, its values came in) is drawn again over
+# the old drawing, marked stale meanwhile (restale), which the pane keeps
+# showing: cleared first, the pane went blank until the new one was drawn.
+# A drawing the tour changed under is left stale, to be drawn once more.
 toured() {
   w=${FZF_PREVIEW_COLUMNS:-100}
   [ -e "$1/tour-$w.$drawn" ] && return 0
   [ -s "$1/tour.json" ] || return 1
   if mkdir "$1/tour-$w.lock" 2>/dev/null; then
-    $walk tour-prep "$1" "$w" 2>>"$1/log" && : > "$1/tour-$w.$drawn"
+    was=$(cksum < "$1/tour.json")
+    $walk tour-prep "$1" "$w" 2>>"$1/log" && [ "$(cksum < "$1/tour.json")" = "$was" ] && : > "$1/tour-$w.$drawn" && rm -f "$1/tour-$w.stale"
     rmdir "$1/tour-$w.lock"
   else
     i=0; while [ ! -e "$1/tour-$w.$drawn" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
@@ -184,10 +191,12 @@ case $1 in
   # Where the tour's previews are drawn for this width, for its screen (otis-symbols --panes).
   # Only once drawn: drawing is the list's (--tour-list, in the background),
   # and doing it here held the screen before its loader could move.
-  --tour-panes) w=${FZF_PREVIEW_COLUMNS:-100}; [ -e "$2/tour-$w.$drawn" ] && printf '%s\n' "$2/tour-$w"; exit 0 ;;
+  --tour-panes) w=${FZF_PREVIEW_COLUMNS:-100}; { [ -e "$2/tour-$w.$drawn" ] || [ -e "$2/tour-$w.stale" ]; } && printf '%s\n' "$2/tour-$w"; exit 0 ;;
+  # --tour-open <dir> <row> [comment]: enter, or c, on a stop's line.
   --tour-open)
-    toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "enter opens a stop's line; this one is the overview"; exit 0; }
-    echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)"; exit 0 ;;
+    v=${4:-open}
+    toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "$([ "$v" = open ] && echo "enter opens" || echo "c comments on") a stop's line; this one is the overview"; exit 0; }
+    echo "execute(git-walk --$v '$2' head '$p' $l)"; exit 0 ;;
   --tour-step)
     toured "$2" && read -r p l ti k < "$2/tour-$w/${3#tour:}.at" 2>/dev/null || { note "s steps through a stop's test; this one is the overview"; exit 0; }
     [ "$ti" -ge 0 ] || { note "no test stops here, so there is nothing to step through"; exit 0; }
@@ -208,8 +217,23 @@ esac
 # the rest is done here. Their locks stay here, since this is what takes them.
 # The runner is told OTIS_WALK_SCRATCH, a directory beside the slots for what a
 # build keeps, since a workspace's home is often small. Claude's inputs (w)
-# are written in a slot here, which only needs the files.
+# are written in a slot here, which only needs the files. Before a push, a
+# checkout with under 5G free has its build caches (otis.walkRemoteCaches,
+# else ~/.cache/bazel-disk) trimmed, the least used first: a Bazel disk
+# cache grows until the disk is full, and the push there failed with it.
+# Only a cache that can lose any one file goes there, which Bazel's disk
+# cache can and its repo cache (~/.cache/bazel/_bazel_*/cache/repos) cannot.
+#
+# With git config otis.walkRemote cursor, a slot is a Cursor Cloud VM instead
+# (cursor_trace), one kept a slot and booted in otis.cursorEnv as V's tester
+# is: only the tests run there, and the rest is done here as before. Nothing
+# runs in one of those but what its agent runs, so every run is a prompt to
+# it, on otis.walkCursorModel (else otis.cursorModel): a small model does,
+# since all it is asked is to run two commands and say when they are done.
 remote=$(git config --get otis.walkRemote)
+# OTIS_WALK_HERE (git-trace --ci): no slots and no workspace. The checkout the
+# run is in is at the head already and is the one place there is to run.
+[ -n "${OTIS_WALK_HERE:-}" ] && remote=
 rpath=$(git config --get otis.remotePath)
 slots_dir() {
   repo=$(basename "$(git rev-parse --show-toplevel)")
@@ -223,22 +247,37 @@ slots_dir() {
   mkdir -p "$sd"
   sn=$(git config --get otis.walkSlotCount || echo 2)
 }
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+# kit <dir> <spec...>: what goes with a run somewhere else: the tracer, its
+# targets, the inputs Claude wrote, the runner and the spec files' names.
+kit() {
+  k=$1; shift
+  cp "$share/walk-trace.js" "$k/"; cp "$tg" "$k/targets.json"
+  [ -s "${patch:-$d/inputs.patch}" ] && cp "${patch:-$d/inputs.patch}" "$k/inputs.patch"
+  r=$(runner); f=$(eval printf '%s' "$r")
+  if [ -f "$f" ]; then cp "$f" "$k/runner"; else printf '%s "$@"\n' "$r" > "$k/runner"; fi
+  printf '%s\n' "$@" > "$k/specs"
+}
 # remote_trace <slot> <sha> <side> <out> <spec...>: a slot's spec files run on
 # otis.walkRemote, as a slot here runs them; its trace in <out>.jsonl.
 remote_trace() {
+  [ "$remote" = cursor ] && { cursor_trace "$@"; return; }
   rs=$rsd/$(basename "$1") sha=$2 rside=$3 o=$4; shift 4
   t=$(mktemp -d) || return 2
+  # A stopped workspace starts on the first ssh, which times out before its
+  # agent is up (255): again until it answers, or two minutes.
   n=0
-  until GIT_SSH_COMMAND="ssh $keep" git push -q -f "ssh://$remote$rpath" "$sha:refs/otis/walk/$(basename "$rs")" "$head:refs/otis/walk/$(basename "$rs")-head" 2>&1; do
+  while room; rc=$?; [ "$rc" -eq 255 ] && [ "$n" -lt 8 ]; do n=$((n + 1)); sleep 15; done
+  [ "$rc" -eq 0 ] || { [ "$rc" -eq 255 ] && echo "could not reach $remote (is the workspace running?)"; rm -rf "$t"; return 2; }
+  n=0
+  until out=$(GIT_SSH_COMMAND="ssh $keep" git push -q -f "ssh://$remote$rpath" "$sha:refs/otis/walk/$(basename "$rs")" "$head:refs/otis/walk/$(basename "$rs")-head" 2>&1); do
+    printf '%s\n' "$out"
+    # A full disk stays full: again only took the walk two minutes to say so.
+    case $out in *"No space left on device"*) rm -rf "$t"; return 2 ;; esac
     n=$((n + 1)); [ "$n" -ge 4 ] && { echo "could not push the change to $remote:$rpath (is the workspace running?)"; rm -rf "$t"; return 2; }
     sleep 15
   done
-  cp "$share/walk-trace.js" "$t/"; cp "$tg" "$t/targets.json"
-  [ -s "${patch:-$d/inputs.patch}" ] && cp "${patch:-$d/inputs.patch}" "$t/inputs.patch"
-  r=$(runner); f=$(eval printf '%s' "$r")
-  if [ -f "$f" ]; then cp "$f" "$t/runner"; else printf '%s "$@"\n' "$r" > "$t/runner"; fi
-  printf '%s\n' "$@" > "$t/specs"
-  q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+  kit "$t" "$@"
   {
     printf 'slot=%s repo=%s sha=%s head=%s side=%s scratch=%s\n' "$(q "$rs")" "$(q "$rpath")" "$sha" "$head" "$rside" "$(q "$(dirname "$rs")/scratch")"
     [ -n "${OTIS_TEST_NAME:-}" ] && printf 'OTIS_TEST_NAME=%s; export OTIS_TEST_NAME\n' "$(q "$OTIS_TEST_NAME")"
@@ -295,6 +334,163 @@ REMOTE
 # quiet rather than waiting on a dead connection.
 keep="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 rsh() { ssh $keep "$remote" "$@"; }
+# cursor_trace <slot> <sha> <side> <out> <spec...>: the same in the slot's
+# Cursor Cloud VM. Cursor's API runs nothing in a VM and puts no file in one:
+# code reaches it from origin alone, what happens there is what its agent
+# does, and files come back as artifacts. So the kit is a commit, its parents
+# the commits the run needs, pushed to a ref of the slot's own under
+# refs/otis/walk (no branch, so no pipeline; written over by the next run and
+# deleted after this one), and the agent is asked for two commands: one
+# fetches and unpacks it, the other (go.sh) starts the run detached and waits
+# on it four minutes a call, since an agent's shell call is not one to hold
+# for half an hour. The run is in the VM's own checkout, where the image's
+# build is warm, and its output, status and trace come back gzipped.
+# A VM that ended its turn without finishing is not asked again: the next run
+# boots another.
+cursor_trace() {
+  slot=$1 sha=$2 cside=$3 o=$4; shift 4
+  [ -n "$CURSOR_API_KEY" ] || { echo "Cursor needs CURSOR_API_KEY (Cursor dashboard, Integrations, API keys) exported in your shell"; return 2; }
+  t=$(mktemp -d) || return 2
+  kit "$t" "$@"
+  n=kit-$(basename "$slot")-$$-$(date +%s)
+  ref=refs/otis/walk/$(id -un)/$(basename "$slot")
+  {
+    printf 'sha=%s head=%s side=%s\n' "$sha" "$head" "$cside"
+    [ -n "${OTIS_TEST_NAME:-}" ] && printf 'OTIS_TEST_NAME=%s; export OTIS_TEST_NAME\n' "$(q "$OTIS_TEST_NAME")"
+    cat <<'VM'
+here=$(cd "$(dirname "$0")" && pwd)
+set --; while read -r f; do set -- "$@" "$f"; done < "$here/specs"
+cd "$(cat "$here/repo")" || exit 2
+git reset -q --hard
+git checkout -q --detach -f "$sha" || exit 2
+[ "$side" = base ] && git checkout -q "$head" -- "$@"
+[ -s "$here/inputs.patch" ] && { git apply "$here/inputs.patch" || echo "the inputs Claude wrote no longer apply; running without them"; }
+OTIS_TRACE_REQUIRE=$here/walk-trace.js OTIS_TRACE_TARGETS=$here/targets.json OTIS_TRACE_OUT=$here/out.jsonl sh "$here/runner" "$@"
+VM
+  } > "$t/run.sh"
+  cat > "$t/go.sh" <<'VM'
+k=$(cd "$(dirname "$0")" && pwd)
+if [ ! -e "$k/pid" ]; then
+  # One run a VM: one still going is a walk that was stopped on your side.
+  old=$(cat /var/tmp/otis-walk/pid 2>/dev/null); [ -n "$old" ] && kill -- "-$old" 2>/dev/null
+  for other in /var/tmp/otis-walk/kit-*; do [ "$other" = "$k" ] || rm -rf "$other"; done
+  setsid nohup sh -c "sh $k/run.sh > $k/log 2>&1; echo \$? > $k/done" < /dev/null > /dev/null 2>&1 &
+  echo $! > "$k/pid"; cp "$k/pid" /var/tmp/otis-walk/pid
+fi
+i=0; while [ ! -e "$k/done" ] && [ "$i" -lt 48 ]; do sleep 5; i=$((i + 1)); done
+[ -e "$k/done" ] || { echo "otis-walk: still running"; exit 0; }
+a=${OTIS_WALK_ARTIFACTS:-/opt/cursor/artifacts}/otis-walk n=$(basename "$k")
+rm -rf "$a"; mkdir -p "$a"
+gzip -c "$k/log" > "$a/$n.log.gz"
+[ -e "$k/out.jsonl" ] && gzip -c "$k/out.jsonl" > "$a/$n.out.jsonl.gz"
+# Last, and saying whether a trace goes with it: with this one there, all of it is.
+echo "$(cat "$k/done") $([ -e "$k/out.jsonl" ] && echo trace)" > "$a/$n.done"
+echo "otis-walk: finished"
+VM
+  tree=$(for f in "$t"/*; do printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"; done | git mktree) &&
+    kc=$(git commit-tree "$tree" -p "$sha" $([ "$head" = "$sha" ] || echo "-p $head") -m "otis walk kit") &&
+    out=$(git push -q -f --no-verify origin "$kc:$ref" 2>&1) || { echo "could not push the run's kit to origin as $ref: $(oneline "$out")"; rm -rf "$t"; return 2; }
+  rm -rf "$t"
+  cat > "$slot.prompt" <<EOF
+Run two shell commands in this repository's checkout, exactly as written, and do nothing else. They run the repository's own tests for a tool that reads the result itself, so nothing they print is yours to act on: a failing test or an error included, do not look into it, fix it, retry it or change any file.
+
+1. Once:
+
+git fetch -q origin +$ref:$ref && mkdir -p /var/tmp/otis-walk/$n && git archive $ref | tar -x -C /var/tmp/otis-walk/$n && git rev-parse --show-toplevel > /var/tmp/otis-walk/$n/repo
+
+2. Then this, and again each time it ends with "otis-walk: still running" (a call waits four minutes at most, and the tests can take half an hour):
+
+sh /var/tmp/otis-walk/$n/go.sh
+
+When it prints "otis-walk: finished", end your turn with that line and nothing more.
+EOF
+  # The slot's VM, booted on the model asked for now; one gone, or still on a
+  # run a stopped walk left it, gets that run canceled and is asked again.
+  model=$(git config --get otis.walkCursorModel || otis-config cursorModel)
+  agent= run=
+  [ "$(cut -f2 "$slot.agent" 2>/dev/null)" = "$model" ] && agent=$(cut -f1 "$slot.agent")
+  if [ -n "$agent" ]; then
+    [ -s "$slot.run" ] && cursor POST "/v1/agents/$agent/runs/$(cat "$slot.run")/cancel" >/dev/null 2>&1
+    run=$(send_run "$(cat "$slot.prompt")") || { echo "the VM this slot had is gone ($(oneline "$run")); booting another"; agent=; }
+  fi
+  if [ -z "$agent" ]; then
+    env=$(otis-config cursorEnv)
+    out=$(cursor POST /v1/agents "$(jq -n --rawfile text "$slot.prompt" --arg url "$(otis-config url)/$(otis-config project)" --arg ref "$(otis-config main)" \
+      --arg name "otis walks $(basename "$slot")" --arg model "$model" --arg env "$env" '
+      {prompt: {text: $text}, name: $name, autoCreatePR: false, workOnCurrentBranch: false}
+      + if $env == "" then {repos: [{url: $url, startingRef: $ref}]} else {env: {type: "cloud", name: $env}} end
+      + if $model == "" then {} else {model: {id: $model}} end')") ||
+      { echo "Cursor would not start a VM: $(oneline "$out")"; git push -q --no-verify origin ":$ref" 2>/dev/null; return 2; }
+    agent=$(printf '%s' "$out" | jq -r .agent.id) run=$(printf '%s' "$out" | jq -r .run.id)
+    printf '%s\t%s\n' "$agent" "$model" > "$slot.agent"
+    echo "otis: booting a VM in Cursor Cloud$( [ -n "$env" ] && echo ", in $env")"
+  fi
+  printf '%s\n' "$run" > "$slot.run"
+  # The agent's turn, an hour at most, then what it saved: Cursor lists a
+  # file some time after it is written, so the last one written is waited
+  # for, three minutes.
+  until=$(($(date +%s) + 3600)) st=
+  while out=$(cursor GET "/v1/agents/$agent/runs/$run") && printf '%s' "$out" | jq -e '.status | IN("CREATING", "RUNNING")' >/dev/null; do
+    [ "$(date +%s)" -lt "$until" ] || { cursor POST "/v1/agents/$agent/runs/$run/cancel" >/dev/null 2>&1; out='{"result": "still running after an hour, so it was canceled"}'; break; }
+    sleep 10
+  done
+  said_last=$(printf '%s' "$out" | jq -r '.result // .status // empty' 2>/dev/null)
+  rm -f "$slot.run"
+  git push -q --no-verify origin ":$ref" 2>/dev/null
+  got() {
+    link=$(cursor GET "/v1/agents/$agent/artifacts/download?path=$(printf '%s' "$1" | jq -Rr @uri)") &&
+      curl -sSfL "$(printf '%s' "$link" | jq -r .url)" 2>/dev/null
+  }
+  i=0 done_at=
+  case $said_last in *"otis-walk: finished"*)
+    while [ -z "$done_at" ] && [ "$i" -lt 18 ]; do
+      done_at=$(cursor GET "/v1/agents/$agent/artifacts" | jq -r --arg n "$n.done" '.items[]? | .path | select(endswith("/" + $n))' | head -1)
+      [ -n "$done_at" ] || { sleep 10; i=$((i + 1)); }
+    done ;;
+  esac
+  [ -n "$done_at" ] && read -r st trace <<EOF
+$(got "$done_at")
+EOF
+  if [ -z "$st" ]; then
+    echo "Cursor's VM did not finish the run: $(oneline "${said_last:-no answer}")"
+    rm -f "$slot.agent"
+    return 2
+  fi
+  got "${done_at%.done}.log.gz" | gunzip -c 2>/dev/null
+  [ -n "$trace" ] && { got "${done_at%.done}.out.jsonl.gz" | gunzip -c > "$o.jsonl" 2>/dev/null || { echo "could not bring the trace back from Cursor's VM"; return 2; }; }
+  return "$st"
+}
+# room: the workspace's checkout with 5G free, its build caches on the same
+# disk trimmed until it is: what was not read in three days, then in one,
+# then all of it. A Bazel disk cache only builds again what it loses. Its
+# repo cache is not one to name: Bazel takes a repo there as whole and only
+# looks whether its BUILD files exist, never reads them, so they went first
+# as unread, and every test after failed to load ("Every .bzl file must have
+# a corresponding package") until the cache was deleted whole.
+room() {
+  { printf 'repo=%s caches=%s\n' "$(q "$rpath")" "$(q "$(git config --get otis.walkRemoteCaches || echo '~/.cache/bazel-disk')")"
+    cat <<'REMOTE'
+need=5242880
+avail() { df -Pk "$1" | awk 'NR == 2 { print $4 }'; }
+disk() { df -Pk "$1" | awk 'NR == 2 { print $6 }'; }
+start=$(avail "$repo")
+[ "$start" -ge "$need" ] && exit 0
+for c in $caches; do
+  c=$(eval echo "$c")
+  [ -d "$c" ] && [ "$(disk "$c")" = "$(disk "$repo")" ] || continue
+  for age in +2 +0 -1; do
+    [ "$(avail "$repo")" -ge "$need" ] && break
+    if [ "$age" = -1 ]; then rm -rf "$c"/* 2>/dev/null; else find "$c" -type f -atime "$age" -delete 2>/dev/null; fi
+  done
+done
+end=$(avail "$repo")
+[ "$end" -gt "$start" ] && echo "otis: $((start / 1048576))G free on $(disk "$repo"); trimmed the build cache to $((end / 1048576))G free"
+[ "$end" -ge "$need" ] && exit 0
+echo "no room on $(disk "$repo"): $((end / 1024))M free, and no build cache there left to trim"
+exit 1
+REMOTE
+  } | rsh "sh -s"
+}
 # slot_lock <slot>: take it if it is free (or its holder died).
 slot_lock() {
   mkdir "$1.lock" 2>/dev/null || { ! kill -0 "$(cat "$1.lock/pid" 2>/dev/null)" 2>/dev/null && rm -rf "$1.lock" && mkdir "$1.lock" 2>/dev/null; } || return 1
@@ -302,6 +498,7 @@ slot_lock() {
 }
 # slot_ready <slot> <sha>: the slot at sha, Claude's inputs on it.
 slot_ready() {
+  [ -n "${OTIS_WALK_HERE:-}" ] && return 0
   if [ ! -e "$1/.git" ]; then
     say "making a slot for the walks: $1 (its first build is cold)"
     git worktree add --detach -f "$1" "$2" >/dev/null 2>>"$d/log" || return 1
@@ -319,6 +516,7 @@ slot_ready() {
 # changes), it leaves a slot free for what you start yourself: a batch that
 # took both held a t waiting ten minutes. The background one waits for two.
 take_slots() {
+  [ -n "${OTIS_WALK_HERE:-}" ] && { slots=" $(git rev-parse --show-toplevel)"; return 0; }
   slots_dir
   while :; do
     free=0 i=1
@@ -411,7 +609,7 @@ trace_specs() {
         set --; while read -r i; do set -- "$@" "$(sed -n "$((i + 1))p" "$d/specs")"; done < "$sub/w$w.specs"
         if [ -n "$remote" ]; then
           { remote_trace "$slot" "$sha" "$side" "$sub/w$w" "$@" 2>&1; echo $? > "$sub/w$w.status"; } | said "$(basename "$slot")"
-          say "  $(basename "$slot") on $remote: $# spec file$( [ $# = 1 ] || echo s) done, $(cat "$sub/w$w.jsonl" 2>/dev/null | wc -l | tr -d ' ') pauses"
+          say "  $(basename "$slot") on $remote: $# spec file$( [ $# = 1 ] || echo s) $( [ "$(cat "$sub/w$w.status")" = 2 ] && echo "never ran" || echo "done"), $(cat "$sub/w$w.jsonl" 2>/dev/null | wc -l | tr -d ' ') pauses"
           exit 0
         fi
         slot_ready "$slot" "$sha" || { echo 2 > "$sub/w$w.status"; exit 0; }
@@ -438,7 +636,7 @@ finish() {
   rm -rf "$d/.phase"
   say "$2"
   # One traced ahead of your review (git-walk --ahead) waits to be opened.
-  [ "$1" != stopped ] && [ ! -e "$d/ahead" ] && alert "Walked $(cat "$d/what")" "$2" "$1"
+  [ "$1" != stopped ] && [ ! -e "$d/ahead" ] && [ -z "${OTIS_WALK_HERE:-}" ] && alert "Walked $(cat "$d/what")" "$2" "$1"
   exit 0
 }
 
@@ -463,6 +661,12 @@ cover() {
 # the prompt. Nothing without an agent, or with
 # otis.walkModel off; the tests' walk is still there. otis.walkReaderModel is
 # the reader's model.
+#
+# A run's tour is written from the diff while its tests run (they took seven
+# minutes of a thirteen-minute walk, the tour one and a half after them): a
+# chapter written before they are done waits (state tests), and once they
+# are, values puts in what they had at each stop and only then is it read,
+# since the reader goes by the values.
 tour() {
   [ "$(git config --get otis.walkModel)" != off ] && otis-agent-run --ready >/dev/null 2>&1 || return 0
   model=$(git config --get otis.walkModel || echo claude-opus-5-5)
@@ -486,7 +690,7 @@ tour() {
 tassemble() { $walk tour-assemble "$d" 2>>"$d/log"; }
 stops='{"type":"object","additionalProperties":false,"required":["intent","stops"],"properties":{"intent":{"type":"string"},"stops":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","says","path","start","end","focus","test","proves"],"properties":{"title":{"type":"string"},"says":{"type":"string"},"path":{"type":"string"},"start":{"type":"integer"},"end":{"type":"integer"},"focus":{"type":"integer"},"test":{"type":"string"},"proves":{"type":"string"}}}}}}'
 gaps='{"type":"object","additionalProperties":false,"required":["clear","gaps"],"properties":{"clear":{"type":"boolean"},"gaps":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["kind","stop","says"],"properties":{"kind":{"type":"string","enum":["bug","untested","doc","other"]},"stop":{"type":"integer"},"says":{"type":"string"}}}}}}'
-# chapter <i>: one chapter written, then read.
+# chapter <i>: one chapter written, then read once it has its values.
 chapter() {
   i=$1 c=$d/tour.c$1
   what=$([ "$n" -gt 1 ] && echo "chapter $(($1 + 1))" || echo "the tour")
@@ -494,7 +698,38 @@ chapter() {
   say "Claude is writing $what"
   ask "$model" "$stops" "$c.prompt" "writing $what" > "$c.new"
   jq -e '.stops | length > 0' "$c.new" >/dev/null 2>&1 || { rm -f "$c.new" "$c.state"; tassemble; say "no tour came back for $what"; return; }
-  mv "$c.new" "$c.json"; echo checking > "$c.state"; tassemble
+  mv "$c.new" "$c.json"
+  if [ -s "$d/cover.json" ]; then echo checking > "$c.state"; tassemble; read_chapter "$i"
+  else echo tests > "$c.state"; tassemble; fi
+}
+# values: once the tests have run, each chapter written before they did
+# (state tests) is given what they had at its stops (walk.mjs
+# tour-values-prompt), then read.
+values() {
+  [ -s "$d/tour.plan.json" ] || return 0
+  model=$(git config --get otis.walkModel || echo claude-opus-5-5)
+  n=$(jq '.chapters | length' "$d/tour.plan.json")
+  i=0; while [ "$i" -lt "$n" ]; do
+    [ "$(cat "$d/tour.c$i.state" 2>/dev/null)" = tests ] && {
+      c=$d/tour.c$i what=$([ "$n" -gt 1 ] && echo "chapter $((i + 1))" || echo "the tour")
+      echo checking > "$c.state"; tassemble
+      if [ "$(jq '.tests | length' "$d/cover.json")" -gt 0 ]; then
+        $walk tour-values-prompt "$d" "$i" > "$c.values.prompt" 2>>"$d/log" &&
+          ask "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" "$proves" "$c.values.prompt" "putting the values in $what" > "$c.values.json"
+        $walk tour-values-apply "$d" "$i" "$c.values.json" 2>>"$d/log"
+      fi
+      read_chapter "$i"
+    } &
+    i=$((i + 1))
+  done
+  wait
+}
+proves='{"type":"object","additionalProperties":false,"required":["proves"],"properties":{"proves":{"type":"array","items":{"type":"string"}}}}'
+# read_chapter <i>: a chapter read the way you read it, and the bugs the
+# reader finds checked.
+read_chapter() {
+  i=$1 c=$d/tour.c$1
+  what=$([ "$n" -gt 1 ] && echo "chapter $(($1 + 1))" || echo "the tour")
   reader "$i" > "$c.read.prompt"
   ask "$(git config --get otis.walkReaderModel || echo claude-sonnet-5)" "$gaps" "$c.read.prompt" "reading $what" > "$c.read.json"
   jq '[.gaps[] | select(.kind == "bug") | {stop, says}]' "$c.read.json" > "$c.bugs.json" 2>/dev/null || { rm -f "$c.state"; tassemble; return; }
@@ -570,12 +805,14 @@ summary() {
 # that are not noise, and masking those would hide a real change. An ahead
 # run that finds the slots busy leaves it for the next.
 behave() {
-  rm -rf "$d/base" "$d/again" "$d/diff.json" "$d"/diff.*
+  # base/ was the base's traces once, over git-walk's base sha of that name.
+  rm -rf "$d/before" "$d/again" "$d/diff.json" "$d"/diff.*
+  [ -d "$d/base" ] && rm -rf "$d/base"
   reached=$($walk reached "$d")
   [ -n "$reached" ] || return 0
   say "running the tests at the base too, for what they do differently"
   $walk targets "$d/table" base > "$d/targets-base.json"
-  trace_specs "$base" "$d/base" "$d/targets-base.json" $reached || { say "every slot is busy: no before and after this time"; return 0; }
+  trace_specs "$base" "$d/before" "$d/targets-base.json" $reached || { say "every slot is busy: no before and after this time"; return 0; }
   stopping
   $walk diff "$d" 2>>"$d/log" || return 0
   pk=$(jq -r '.changed[]' "$d/diff.json" | while read -r i; do pkg_of "$(sed -n "$((i + 1))p" "$d/specs")"; done | sort -u)
@@ -631,8 +868,12 @@ judge() {
 # redraw: the screens drawn before the diff landed, drawn again with it; the
 # tour's screen watches tour.json.
 redraw() {
-  rm -rf "$d"/entry-* "$d"/tour-[0-9]*
+  rm -rf "$d"/entry-*; restale
   [ -e "$d/tour.json" ] && touch "$d/tour.json"
+}
+# restale: every width's tour drawing marked stale, to be drawn again (toured).
+restale() {
+  for m in "$d"/tour-[0-9]*."$drawn"; do [ -e "$m" ] && mv "$m" "${m%.$drawn}.stale"; done
 }
 
 # --- the background half --------------------------------------------------------
@@ -657,20 +898,44 @@ if [ "$1" = --phase ]; then
       specs_of "$base" "$head" > "$d/specs.new"
       [ -s "$d/inputs.json" ] && jq -r '.[].spec' "$d/inputs.json" | while read -r s; do grep -qxF "$s" "$d/specs.new" || echo "$s" >> "$d/specs.new"; done
       mv "$d/specs.new" "$d/specs"
-      [ -s "$d/specs" ] || finish failed "the change has no spec file to trace"
-      $walk targets "$d/table" > "$d/targets.json"
-      rm -rf "$d/trace" "$d/ran"; mkdir -p "$d/trace" "$d/ran"
+      rm -rf "$d/trace" "$d/ran" "$d/cover.json"; mkdir -p "$d/trace" "$d/ran"
+      # The tour from the diff while the tests run, and P on it as it lands.
+      # Not ahead of your review: one that finds the slots busy is thrown
+      # away, tour and all.
+      [ -e "$d/ahead" ] || ( tour ) &
+      # No spec file runs it (SQL, config, a package with no tests): nothing
+      # traced, and the tour is written from the diff alone, on the same screen.
+      if [ -s "$d/specs" ]; then
+        $walk targets "$d/table" > "$d/targets.json"
+        stopping
+        trace_specs "$head" "$d/trace" "$d/targets.json" $(awk '{ print NR - 1 }' "$d/specs")
+      else
+        say "no test runs this change: the tour is written from the diff alone"
+      fi
+      # A stop kills what is running then, and the tests end: looked at before
+      # anything new starts, or the tour went on writing after the stop.
       stopping
-      trace_specs "$head" "$d/trace" "$d/targets.json" $(awk '{ print NR - 1 }' "$d/specs")
       cover
-      # The tour is written while the tests run at the base: it needs no
-      # slot, and each took minutes one after the other.
-      ( tour ) &
       stopping
+      # Not one spec file ran (the push to a workspace failed: its disk full,
+      # it asleep): that is no trace, not a change no test runs, which is what
+      # a tour of it said of every function.
+      [ -s "$d/specs" ] && [ "$(jq '[.specs[] | select(.status != "2")] | length' "$d/cover.json")" = 0 ] &&
+        finish failed "the tests never ran$( [ -n "$remote" ] && echo " on $remote"): $(grep -m1 -o 'no room on .*\|No space left on device\|could not push[^(]*\|could not reach [^ ]*\|Cursor.*' "$d/log" || echo "see $d/log")"
+      # The tour's values, and its reading, while the tests run at the
+      # base: they need no slot. The tour itself is written by now: the
+      # head's run waited for it (trace_specs waits for everything this
+      # started), and when there were no tests this does.
+      wait
+      if [ -e "$d/ahead" ]; then ( tour ) &
+      else ( values ) &
+      fi
       # Nothing to compare when the head's run traced nothing (the push to a
       # workspace failed, or no test reaches the change).
-      [ "$(jq '.tests | length' "$d/cover.json")" -gt 0 ] && behave
+      # Not in place: the base's run wants a checkout of its own to put the base in.
+      [ -z "${OTIS_WALK_HERE:-}" ] && [ "$(jq '.tests | length' "$d/cover.json")" -gt 0 ] && behave
       wait
+      [ -s "$d/specs" ] || { [ -s "$d/tour.json" ] && finish done "toured $(cat "$d/what") from the diff: no test runs it" || finish failed "no test runs $(cat "$d/what"), and no tour came back"; }
       finish done "$(summary)" ;;
     tour)
       tour
@@ -760,7 +1025,7 @@ EOF
         wslot=${slots# }
       done
       rm -rf "$d"/entry-*
-      if [ "$(jq .ok "$p.json")" = true ]; then finish done "$(jq -r '"\(.names | length) \(.kind) tests"' "$p.json") for $name pass, in $(basename "$spec"): c posts them to the MR"
+      if [ "$(jq .ok "$p.json")" = true ]; then finish done "$(jq -r '"\(.names | length) \(.kind) tests"' "$p.json") for $name pass, in $(basename "$spec"): C posts them to the MR"
       else finish done "the tests for $name did not all pass: $(jq -r '.failing | join(", ")' "$p.json")"; fi ;;
     pin)
       # A change in behavior pinned by a test: one that passes before the
@@ -835,8 +1100,8 @@ EOF
         take_slots 1 || finish done "no slot free to write a test in"
         wslot=${slots# }
       done
-      rm -rf "$d"/entry-* "$d"/tour-[0-9]*; [ -e "$d/tour.json" ] && touch "$d/tour.json"
-      if [ "$(jq .ok "$p.json")" = true ]; then finish done "\"$name\" passes before the change and fails with it: c posts it to the MR"
+      redraw
+      if [ "$(jq .ok "$p.json")" = true ]; then finish done "\"$name\" passes before the change and fails with it: C posts it to the MR"
       # Not pinned is an answer, not a walk that failed: the walk's status is
       # this, and failed would keep its tour from opening.
       else finish done "\"$name\" did not pin it: $(jq -r 'if .base != 0 then "it failed before the change" elif .head == 0 then "it passed with the change" else "it did not run" end' "$p.json")"; fi ;;
@@ -931,6 +1196,30 @@ phase() {
 
 case $1 in
   --run) d=$2; exec git-trace --phase "$d" run ;;
+  --ci)
+    # A change traced and toured where nobody is watching (a CI job): its spec
+    # files run in this checkout, which is at the head, with no slot, no
+    # workspace and no alert; then the page. Not the base's run (what behaves
+    # differently), which wants a second checkout. Exits 0 with <dir>/tour.html
+    # written, 1 with <dir>/log saying why not.
+    base=$2 head=$3 d=$4
+    [ -n "$d" ] && git cat-file -e "$base^{commit}" 2>/dev/null && git cat-file -e "$head^{commit}" 2>/dev/null ||
+      { echo "git-trace --ci <base> <head> <dir> [title] [url]: both commits here, and a directory for the run" >&2; exit 2; }
+    rm -rf "$d"; mkdir -p "$d" || exit 2
+    d=$(cd "$d" && pwd)
+    echo trace > "$d/engine"
+    printf '%s\n' "${5:-$(git rev-parse --short "$head")}" > "$d/what"
+    printf '%s\n' "$head" > "$d/head"
+    printf '%s %s\n' "$base" "$head" > "$d/shas"
+    printf '%s..%s\n' "$base" "$head" > "$d/rev"
+    otis-config agent > "$d/agent-cli"
+    date +%s > "$d/started"
+    : > "$d/events.jsonl"
+    OTIS_WALK_HERE=1 git-trace --phase "$d" run >> "$d/log" 2>&1
+    jq -r 'select(.type == "otis") | .text' "$d/events.jsonl"
+    [ -s "$d/tour.json" ] || [ -s "$d/cover.json" ] || exit 1
+    OTIS_PAGE_TITLE=${5:-} OTIS_PAGE_URL=${6:-} git-trace --page "$d" || { echo "could not write the page (see $d/log)" >&2; exit 1; }
+    exit 0 ;;
   --view)
     d=$2
     # The tour first. One not there yet (a run from before tours) is started
@@ -941,16 +1230,18 @@ case $1 in
       i=0; while [ ! -s "$d/tour.json" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     fi
     [ -s "$d/tour.json" ] || exec git-trace --tests "$d"
-    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,t=a test that passes before a change in behavior and fails with it,c=post that test to the MR,a=what behaves differently and every test,w=the tour as a page in the browser,p=post the page to the MR,T=write the tour again,r=run the tests again,q=back' \
+    otis-symbols "tour $(cat "$d/what") " 'j=next stop,k=back,enter=open the line,s=step through its test line by line,t=a test that passes before a change in behavior and fails with it,c=comment on its line,C=post that test to the MR,a=what behaves differently and every test,w=the tour as a page in the browser,d=download the page to ~/Downloads,p=post the page to the MR,T=write the tour again,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --tour-list '$d')" \
       --bind "enter:transform(git-trace --tour-open '$d' {12})" \
       --bind "s:transform(git-trace --tour-step '$d' {12})" \
       --bind "a:execute(git-trace --tests '$d')" \
       --bind "t:transform(git-trace --pin-key '$d' t {12})" \
-      --bind "c:transform(git-trace --pin-key '$d' c {12})" \
+      --bind "c:transform(git-trace --tour-open '$d' {12} comment)" \
+      --bind "C:transform(git-trace --pin-key '$d' c {12})" \
       --bind "T:execute-silent(git-trace --retour '$d')" \
-      --bind "w:execute-silent(git-trace --page '$d' && otis-open '$d/tour.html')" \
+      --bind "w:execute-silent(git-trace --browse '$d')" \
+      --bind "d:execute-silent(git-trace --download '$d')" \
       --bind "p:execute(git-trace --attach '$d')" \
       --bind "r:execute(git-trace --again '$d')+reload(git-trace --tour-list '$d')" \
       --watch "$d/tour.json" --panes "git-trace --tour-panes '$d'" \
@@ -958,18 +1249,27 @@ case $1 in
     exit 0 ;;
   --tests)
     d=$2 st=${GIT_FZF_STATE:-}
-    otis-symbols "walk $(cat "$d/what") " 'enter=open it (a folded line: show or hide what is under it),t=write tests for this row,c=post them to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
+    # The tour opens while the tests still run: until they are done, a is their progress.
+    [ -s "$d/cover.json" ] || exec git-claude-view "$d"
+    otis-symbols "walk $(cat "$d/what") " 'enter=open it (a folded line: show or hide what is under it),c=comment on its line,t=write tests for this row,C=post them to the MR,i=Claude writes an input for a gap,b=run it at the base too and compare,r=run the tests again,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
       --bind "start:reload(git-trace --list '$d')" \
       --bind "enter:transform(git-trace --open '$d' {12})" \
       --bind "i:transform(git-trace --gap-key '$d' {12})" \
       --bind "t:transform(git-trace --pin-key '$d' t {12})+reload(git-trace --list '$d')" \
-      --bind "c:transform(git-trace --pin-key '$d' c {12})" \
+      --bind "c:transform(git-trace --open '$d' {12} comment)" \
+      --bind "C:transform(git-trace --pin-key '$d' c {12})" \
       --bind "b:execute(git-trace --base '$d')+reload(git-trace --list '$d')" \
       --bind "r:execute(git-trace --again '$d')+reload(git-trace --list '$d')" \
       --preview "git-trace --show '$d' {12}" </dev/null >/dev/null
     exit 0 ;;
+  # --open <dir> <row> [comment]: enter, or c, on a row of P's list.
   --open)
+    v=${4:-open}
+    case $v:$3 in
+      comment:[dg]:*) ;;
+      comment:*) note "c comments on a line: a change's, a function's no test runs, or one in a test's walk"; exit 0 ;;
+    esac
     case $3 in
       t:*) echo "execute(git-trace --walk '$2' ${3#t:})" ;;
       open:*)
@@ -980,11 +1280,11 @@ case $1 in
       d:*) f=$(jq -r --argjson g "${3#d:}" '.groups[$g] | (.from // .fns[0]) | "\(.path) \(.line)"' "$2/diff.json"); read -r p l <<EOF
 $f
 EOF
-           echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)" ;;
+           echo "execute(git-walk --$v '$2' head '$p' $l)" ;;
       g:*) f=$(jq -r --argjson g "${3#g:}" '.gaps[$g] | "\(.path) \(.start)"' "$2/cover.json"); read -r p l <<EOF
 $f
 EOF
-           echo "execute(git-commit-open $(cut -d' ' -f2 "$2/shas") '$p' $l)" ;;
+           echo "execute(git-walk --$v '$2' head '$p' $l)" ;;
     esac
     exit 0 ;;
   --gap-key)
@@ -1005,7 +1305,7 @@ EOF
     d=$2 key=$3 row=$4
     case $row in
       g:*)
-        # On changed code no test runs: t writes tests for it; c posts them.
+        # On changed code no test runs: t writes tests for it; C posts them.
         gi=${row#g:} gid=$(jq -r --argjson g "$gi" '.gaps[$g].id' "$d/cover.json" | shasum | cut -c1-10)
         if [ "$key" = t ]; then echo "execute(git-trace --cover '$d' $gi)"
         elif [ "$(jq .ok "$d/cover.$gid.json" 2>/dev/null)" = true ]; then echo "execute(git-trace --cover-post '$d' $gi)"
@@ -1060,17 +1360,39 @@ EOF
   --retour) d=$2; quiet_phase "$d" tour; exit 0 ;;
   --page)
     # The tour as one HTML page, <dir>/tour.html (walk.mjs tour-html), its MR's
-    # title and link at the top when it has one. The theme's colors become
-    # marker codes the page turns into its own.
-    d=$2 key=${2##*/} title= url=
-    case $key in
+    # title and link at the top when it has one, and the change by symbol
+    # beside it (tab), as git-symbols's screen draws it. The theme's colors become
+    # marker codes the page turns into its own, then page-css lays the
+    # theme's colors over them, its code in its bat theme, in Ghostty's font
+    # when there is one, carried in the page for readers without it. The theme is loaded afresh: a shell that loaded it
+    # before themes had a ground has none.
+    d=$2 key=${2##*/} title=${OTIS_PAGE_TITLE:-} url=${OTIS_PAGE_URL:-}
+    eval "$(otis-theme --env)"
+    font=$(ghostty +show-config 2>/dev/null | sed -n 's/^font-family = //p' | head -1)
+    css=$($walk page-css "$font") bat=$OTIS_T_BAT
+    [ -n "$title" ] || case $key in
       *[!0-9]*) title=$(printf '%s' "${key#b-}" | tr '%' '/') ;;
       *) mr=$(git-forge api "projects/:fullpath/merge_requests/$key" 2>/dev/null) && title=$(printf '%s' "$mr" | jq -r .title) url=$(printf '%s' "$mr" | jq -r .web_url) ;;
     esac
     OTIS_T_ATTENTION="38;5;201" OTIS_T_GOOD="38;5;202" OTIS_T_BAD="38;5;203" OTIS_T_YOURS="38;5;204" OTIS_T_TEXT="38;5;205" \
-      OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_BAT= \
-      $walk tour-html "$d" "$title" "$url" > "$d/tour.html.new" 2>>"$d/log" && mv "$d/tour.html.new" "$d/tour.html"
-    exit $? ;;
+      OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_PLUS_EMPH="#070809" OTIS_T_MINUS_EMPH="#0a0b0c" OTIS_T_BAT=$bat \
+      $walk tour-html "$d" "$title" "$url" "$css" > "$d/tour.html.$$" 2>>"$d/log" && mv "$d/tour.html.$$" "$d/tour.html"
+    s=$?; rm -f "$d/tour.html.$$"; exit $s ;;
+  --download|--browse)
+    # d: the page, as p would post it, in ~/Downloads; w: opened in the
+    # browser. Written in the background, since its previews by symbol take
+    # seconds on a big change (a half minute on the biggest): the screen
+    # stays yours, and an alert says when it is there.
+    d=$2 name=${2##*/} how=$1
+    name=walkthrough-$(printf '%s' "${name#b-}" | tr '%/' '--').html
+    if [ "$how" = --download ]; then note "writing ~/Downloads/${name}…"; else note "writing the page…"; fi
+    (
+      if ! git-trace --page "$d"; then note "could not write the page"; otis-notify --sound Basso "✗ The walkthrough" "could not write the page"; exit 0; fi
+      if [ "$how" = --browse ]; then otis-open "$d/tour.html"; exit 0; fi
+      cp "$d/tour.html" "$HOME/Downloads/$name" || { note "could not write ~/Downloads/$name"; exit 0; }
+      note "saved ~/Downloads/$name"; otis-notify "Saved the walkthrough" "~/Downloads/$name"
+    ) </dev/null >/dev/null 2>&1 &
+    exit 0 ;;
   --attach)
     # p: the page posted to the MR, after a confirm, as a verification's
     # report is: uploaded to the project (GitLab offers HTML as a download,
@@ -1119,11 +1441,12 @@ EOF
     # The name as a title, cut to fit: a long one ran into the preview.
     [ ${#name} -gt 56 ] && name="$(printf '%s' "$name" | cut -c1-55)…"
     # j, l, h and k step through it on the screen itself (--steps).
-    otis-symbols "$name " 'j=next line,l=step into,h=step out,k=back,b=before the change,enter=open the line,q=back' \
+    otis-symbols "$name " 'j=next line,l=step into,h=step out,k=back,b=before the change,enter=open the line,c=comment on it,q=back' \
       --ansi --delimiter='\t' --with-nth=1 --id-nth=12 --steps "git-trace --steps-base '$d' $ti" \
       --bind "start:reload${at:+-sync}(git-trace --walk-list '$d' $ti)${at:++transform(git-trace --walk-at '$d' $ti $at)}" \
       --bind "b:execute-silent(git-trace --side '$d' $ti)+reload(git-trace --walk-list '$d' $ti)+first" \
-      --bind "enter:execute(git-commit-open \$(git-trace --rev '$d') \$(git-trace --walk-line '$d' $ti {12}))" \
+      --bind "enter:execute(git-walk --open '$d' \$(git-trace --side-now) \$(git-trace --walk-line '$d' $ti {12}))" \
+      --bind "c:execute(git-walk --comment '$d' \$(git-trace --side-now) \$(git-trace --walk-line '$d' $ti {12}))" \
       </dev/null >/dev/null
     exit 0 ;;
   --steps-base)
@@ -1137,7 +1460,7 @@ EOF
     vi=$(awk -v k="$4" '$1 == k { print $2; exit }' "$b.nav")
     [ -n "$vi" ] && echo "pos($((vi + 1)))+refresh-preview"
     exit 0 ;;
-  --rev) side=$(cat "$GIT_FZF_STATE/side" 2>/dev/null); read -r b h < "$2/shas"; [ "$side" = base ] && echo "$b" || echo "$h"; exit 0 ;;
+  --side-now) side; exit 0 ;;
   --side)
     d=$2 st=$GIT_FZF_STATE
     if [ "$(cat "$st/side" 2>/dev/null)" = base ]; then echo head > "$st/side"; : > "$st/hist"; rm -f "$st/cur"

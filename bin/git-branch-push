@@ -3,18 +3,43 @@
 # from the checkout it is in, so its lease, its hook and its offer of an MR
 # are gp's own. A branch checked out nowhere has no HEAD for gp to push, so it
 # goes up by name with gp's lease (--force-if-includes reads the branch's own
-# reflog, so it holds without a checkout); n offers its MR from there. The
-# push's output is kept off the screen: the box says "…" while it runs, the
-# footer says what came of it, and a failure's last lines are shown in a box.
+# reflog, so it holds without a checkout); n offers its MR from there.
+#
+# A push runs the repository's pre-push hook, which can take minutes (a lint
+# that installs its tools first), so what it prints is never just held back.
+# Over a screen it goes to a file, and a box says the last line of it and how
+# long it has been (otis-popup busy), until the push is done or gp asks about
+# an MR; the footer then says what came of it, and a failure's last lines are
+# shown in a box. With no screen under it (gb) it goes on the terminal as it
+# comes, gp's question with it.
 b=$1
 [ -n "$b" ] || exit 0
 git-confirm "force-push $b with gp?" || exit 0
 wt=$(git-worktree-path of "$b")
-if [ -n "$wt" ]; then
-  out=$(cd "$wt" && gp 2>&1)
+log=$(mktemp)
+trap 'rm -f "$log" "$log.rc"' EXIT
+push() {
+  if [ -n "$wt" ]; then
+    cd "$wt" && gp
+  else
+    git push origin "refs/heads/$b:refs/heads/$b" --force-with-lease --force-if-includes
+  fi
+}
+if [ -n "$OTIS_FRAME" ] && [ -e "$OTIS_FRAME" ]; then
+  otis-popup busy "pushing $b" "$log" &
+  # The next box (gp's question, the failure) takes the busy one down, as it
+  # does a screen's loader.
+  OTIS_LOADER=$!
+  export OTIS_LOADER
+  (push) > "$log" 2>&1
+  ok=$?
+  kill "$OTIS_LOADER" 2>/dev/null
 else
-  out=$(git push origin "refs/heads/$b:refs/heads/$b" --force-with-lease --force-if-includes 2>&1)
-fi || { otis-popup say "$(printf '%s\n' "$out" | tail -5; printf 'push failed')"; exit 0; }
+  { (push) 2>&1; echo $? > "$log.rc"; } | tee "$log"
+  ok=$(cat "$log.rc")
+fi
+out=$(cat "$log")
+[ "$ok" = 0 ] || { otis-popup say "$(printf '%s\n' "$out" | tail -5; printf 'push failed')"; exit 0; }
 # gp's MR offer prints "!<iid> created: <url>" when it made one.
 mr=$(printf '%s\n' "$out" | sed -n "s/$(printf '\033')\[[0-9;]*m//g; /created: /p" | tail -1)
 git-fzf-note "pushed $b${mr:+; $mr}" >/dev/null

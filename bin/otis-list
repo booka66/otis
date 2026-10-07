@@ -1,31 +1,30 @@
 #!/bin/sh
 # otis-list [--refresh]
-# The dashboard's rows: one list, three sections.
+# What the dashboard is made from. It fetches what GitLab knows (your merge
+# requests with their pipelines, the ones you were asked to review, what
+# merged, the deploys) into the state, with what Claude's runs have left
+# (the marks), and prints the rows for everything that is not an open merge
+# request's own state. That is otis-board's to decide, in one place, from
+# the JSON left here: what its pipeline, its review and its verification
+# say, and so which lane it is in.
 #
-#   waiting on you  everything that wants a keypress from you, most costly
-#                   delay first. One row per merge request, never one per
-#                   fact: an MR with a failed pipeline and three threads is
-#                   the pipeline, because that is what you would do next.
-#                   The order, and why:
+#   waiting on you  what wants you and is not a light of an open MR, most
+#                   costly delay first:
 #                     1  prod: likely this      production is unhappy
 #                     2  rolled back            yours went out and came back
 #                     3  prod: possibly this
-#                     3½ review it              a colleague is blocked on you,
-#                        N drafts to submit     where the rest below block only you
-#                     4  verified: failed       the change does not work
+#                     4  verified: failed       a branch with no MR does not work
 #                     4½ verify failed          one of Claude's runs broke, until
 #                                               you have seen it (d)
-#                     5  pipeline failed        it cannot go out as it is
-#                     6  N threads to address   a reviewer is waiting on you
-#                     8  fold in N fixes        Claude has left you work
+#                     5  main build failed      a push of yours broke main
+#                     8  fold in N fixes        Claude has left you work, on a
+#                                               branch with no MR
 #                    10  verified: passed       news, not a blockage
-#                    11  merge it               finish it
-#                    12  ask for a review       start it
 #   going           what is moving without you, newest first: Claude's
-#                   background runs (git-agent-list) and your pipelines, then,
-#                   last, your merged MRs that production has not taken yet,
-#                   each with where it has got to. A deploy of its own shows only when it
-#                   is carrying none of yours, since yours say it better.
+#                   background runs (git-agent-list) and your pushes to main,
+#                   then, last, your merged MRs that production has not taken
+#                   yet, each with where it has got to. A deploy of its own
+#                   shows only when it is carrying none of yours.
 #   here            one row, always: the branch you are on, what is
 #                   uncommitted, unpushed and behind, and its MR.
 #
@@ -48,7 +47,6 @@ st=$GIT_FZF_STATE
 [ -n "$st" ] || { st=$(mktemp -d) || exit 1; trap 'rm -rf "$st"' EXIT; }
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-. "$share/mr-query.sh"
 # Claude's runs that a closed laptop killed go on from where they stopped, as
 # gmr and gb do when they draw. First, so a run that comes back is already
 # running when the scans below look.
@@ -125,27 +123,30 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 ) > "$st/here.tsv" &
 
 # One process for every setting this draw needs, rather than one each.
-{ read -r repo; read -r base; read -r url; read -r gates; } <<EOF
-$(otis-config project base url gateJobs)
+{ read -r repo; read -r base; read -r url; read -r gates; read -r main; } <<EOF
+$(otis-config project base url gateJobs main)
 EOF
 
-# What the glyphs mean, for the ? help view (otis-pick). A column is allowed
-# to be one glyph wide only because this is a keypress away.
+# What the board's lights mean, for the dashboard's ? (otis-dash). A light is
+# allowed to be one glyph wide only because this is a keypress away.
 {
-  printf "${GK_CONTEXT}columns${GK_R}\n"
-  printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
-  printf "  ${GK_YOURS}\342\234\2163${GK_R}      an agent has left you three of something: fixes to fold in, drafts to submit\n"
-  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_ATTENTION}\342\227\216${GK_R}      an agent is working \302\267 verifying in Cursor Cloud\n"
-  printf "  ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R}    verified: passed, failed, inconclusive\n"
-  printf "  ${GK_YOURS}\357\201\265${GK_R}        unresolved threads on your MR\n"
-  printf "  ${GK_BAD}\342\234\227${GK_R} ${GK_YOURS}\342\232\240${GK_R}      failed \302\267 production may be unhappy about it\n"
-  printf "  ${GK_GOOD}\342\234\223${GK_R} ${GK_ATTENTION}!${GK_R}      approved and green \302\267 nobody is reviewing it yet\n"
-  printf "  ${GK_ATTENTION}\342\227\220${GK_R} ${GK_ATTENTION}\342\227\213${GK_R}      running \302\267 queued: a pipeline of yours, or a merged MR on its way out\n"
-  printf "  ${GK_CONTEXT}\302\267${GK_R} ${GK_BAD}\342\226\274${GK_R}      merged and not out yet \302\267 production was rolled back without it\n"
-  printf "  ${GK_CONTEXT}\357\207\270${GK_R}        worktrees in the trash, waiting for you to empty it\n"
-  printf "\n${GK_CONTEXT}the list${GK_R}\n"
-  printf "  what wants you, then what is running, then where you are.\n"
-  printf "  one row a merge request: the thing you would do next about it.\n"
+  printf "  ${GK_CONTEXT}local${GK_R}      ${GK_ELSEWHERE}\342\226\270${GK_R} ${GK_ELSEWHERE}\342\214\202${GK_R} ${GK_CONTEXT}\342\227\213${GK_R}  its branch: you are on it \302\267 in a worktree \302\267 here to switch to; ${GK_ATTENTION}\342\206\2212${GK_R} never pushed\n"
+  printf "  ${GK_CONTEXT}verify${GK_R}     ${GK_GOOD}\342\234\223${GK_R} ${GK_BAD}\342\234\227${GK_R} ${GK_CONTEXT}?${GK_R}  what a verification made of this head; dim, of an older one\n"
+  printf "             ${GK_ATTENTION}\342\227\216${GK_R}      verifying now\n"
+  printf "  ${GK_CONTEXT}pipeline${GK_R}   ${GK_GOOD}\342\234\223${GK_R} ${GK_BAD}\342\234\227${GK_R} ${GK_ATTENTION}\342\227\220${GK_R} ${GK_ATTENTION}\342\227\213${GK_R}  passed, failed, running, queued; ${GK_ELSEWHERE}\342\217\270${GK_R} waiting on approval gates\n"
+  printf "  ${GK_CONTEXT}review${GK_R}     ${GK_YOURS}\342\227\2172${GK_R}     unresolved threads on yours\n"
+  printf "             ${GK_YOURS}!${GK_R} ${GK_ATTENTION}!${GK_R}    yours to give \302\267 nobody asked yet\n"
+  printf "             ${GK_CONTEXT}\342\227\213${GK_R} ${GK_GOOD}\342\234\223${GK_R}    asked, not in yet \302\267 approved\n"
+  printf "  ${GK_CONTEXT}ship${GK_R}       ${GK_GOOD}!${GK_R} ${GK_GOOD}\342\217\265${GK_R} ${GK_BAD}\342\234\227${GK_R}  ready for you to merge \302\267 merges itself when green \302\267 a conflict\n"
+  printf "  ${GK_CONTEXT}beside one${GK_R} ${GK_YOURS}\342\234\2161${GK_R} ${GK_ATTENTION}\342\227\214${GK_R}   a fix to fold in (f) \302\267 an agent working on it\n"
+  printf "  ${GK_CONTEXT}any${GK_R}        ${GK_FAINT}\302\267${GK_R}      nothing there yet\n"
+  printf "\n${GK_CONTEXT}the board${GK_R}\n"
+  printf "  a change a row, in lanes by whose move it is; ${GK_ELSEWHERE}\342\226\270${GK_R} is the branch you are on.\n"
+  printf "  ${GK_CONTEXT}\342\224\214 \342\224\234 \342\224\224${GK_R} join a stack: each MR is built on the one under it, and the bottom one merges first.\n"
+  printf "  a stack is kept whole, in the lane of the one in it that wants you most; the rest of it is dim.\n"
+  printf "  the cursor lands on the light that wants you most; enter opens it.\n"
+  printf "  under the lanes, the rest of your work in groups, a line each: enter opens one.\n"
+  printf "  ${GK_ATTENTION}d${GK_R} on a worktree, or under clean up, removes it; on the group's line, all that can go.\n"
   printf "  ${GK_ATTENTION}gm gb ga gd gw${GK_R} open the full list of any of it; ${GK_ATTENTION}q${GK_R} there comes back here.\n"
 } > "$st/legend"
 
@@ -155,12 +156,13 @@ EOF
 [ -s "$st/ci.json" ] || echo '{}' > "$st/ci.json"
 [ -s "$st/ci-merged.json" ] || echo '{"mrs": []}' > "$st/ci-merged.json"
 [ -s "$st/deploys.json" ] || echo '{"deploys": []}' > "$st/deploys.json"
+[ -s "$st/main.json" ] || echo '[]' > "$st/main.json"
 
-# fetch <cache name> <stale seconds> <saved as> <query>: the JSON into the
+# fetch <cache name> <stale seconds> <saved as> <review|mine|all>: the JSON into the
 # picker's state. A lookup that fails leaves the last one that worked, and
 # git-fzf-stale has already told the footer.
 fetch() {
-  json=$(git-cached-json $now "$1" "$2" "$reload" -- glab api graphql -f query="$4" -f repo="$repo" 2>/dev/null) &&
+  json=$(git-cached-json $now "$1" "$2" "$reload" -- git-forge mrs "$4" 2>/dev/null) &&
     cp "$json" "$st/$3"
 }
 
@@ -170,24 +172,32 @@ fetch() {
 # nothing for them to race over, and the caches are already safe to run beside
 # each other (git-cached-json).
 
-# Whether there is a GitLab to ask runs here, in the time those take.
+# Whether there is a GitLab or GitHub to ask runs here, in the time those take.
 note=
-if otis-config gitlab >/dev/null 2>&1; then
-  fetch mrs-review $age mrs.json "$mr_review_query" &
-  fetch ci-mine $age ci.json "$mr_mine_query" &
-  # Where each merged MR has got to is shown at once from the last answer
-  # while a new one is fetched, and that fetch is slow. An answer older than
-  # five minutes may say "not out yet" of an MR that went out since, so its
-  # rows wait for the new one (ci-merged.old) rather than say that.
-  { merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
-      cp "$merged" "$st/ci-merged.json" &&
-      if [ $(( $(date +%s) - $(stat -c %Y "$merged" 2>/dev/null || stat -f %m "$merged") )) -gt 300 ]; then
-        : > "$st/ci-merged.old"
-      else rm -f "$st/ci-merged.old"; fi; } &
-  { deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
-      cp "$deploys" "$st/deploys.json"; } &
+if otis-config gitlab >/dev/null 2>&1 || [ "$(otis-config forge)" = github ]; then
+  fetch mrs-review $age mrs.json review &
+  fetch ci-mine $age ci.json mine &
+  # Your pushes to main, where a forge has no MR for them (git-forge
+  # main-builds): their checks, as a pipeline of yours.
+  if git-forge can main-builds; then
+    { mb=$(git-cached-json $now main-builds $age "$reload" -- git-forge main-builds 2>/dev/null) &&
+        cp "$mb" "$st/main.json"; } &
+  fi
+  if git-forge can deploys; then
+    # Where each merged MR has got to is shown at once from the last answer
+    # while a new one is fetched, and that fetch is slow. An answer older than
+    # five minutes may say "not out yet" of an MR that went out since, so its
+    # rows wait for the new one (ci-merged.old) rather than say that.
+    { merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-forge merged 2>/dev/null) &&
+        cp "$merged" "$st/ci-merged.json" &&
+        if [ $(( $(date +%s) - $(stat -c %Y "$merged" 2>/dev/null || stat -f %m "$merged") )) -gt 300 ]; then
+          : > "$st/ci-merged.old"
+        else rm -f "$st/ci-merged.old"; fi; } &
+    { deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
+        cp "$deploys" "$st/deploys.json"; } &
+  fi
 elif git remote get-url origin >/dev/null 2>&1; then
-  note="origin is not on GitLab, so this is your work here alone"
+  note="origin is on neither GitLab nor GitHub, so this is your work here alone"
 else
   note="no origin remote, so this is your work here alone"
 fi
@@ -200,13 +210,13 @@ wait
 # marks one read the same four files this one does.
 out=$(jq -nr -L "$share" \
   --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.json" \
-  --slurpfile merged "$st/ci-merged.json" --slurpfile deployed "$st/deploys.json" \
+  --slurpfile merged "$st/ci-merged.json" --slurpfile deployed "$st/deploys.json" --slurpfile mainb "$st/main.json" \
   --slurpfile runsf "$st/runs.json" --rawfile heretsv "$st/here.tsv" \
   --argjson gates "$gates" \
   --slurpfile watch "$st/m.watch" --slurpfile claude "$st/m.claude" \
   --slurpfile fixes "$st/m.fixes" --slurpfile verify "$st/m.verify" \
   --rawfile trash "$st/trash.tsv" --rawfile seen "$st/seen.tsv" \
-  --arg common "$common" --arg base "$base" --arg url "$url" \
+  --arg common "$common" --arg base "$base" --arg url "$url" --arg main "$main" \
   --arg merged_old "$([ -e "$st/ci-merged.old" ] && echo 1)" '
   include "otis";
   (now | floor) as $NOW |
@@ -228,9 +238,7 @@ out=$(jq -nr -L "$share" \
   # A time GitLab may not have sent: a cache written before a field was asked
   # for has none, and one bad timestamp must not cost the whole list.
   def at: if type == "string" then epoch else 0 end;
-  def since($t): ($NOW - $t) as $d |
-    if $d < 60 then "\($d)s" elif $d < 3600 then "\($d / 60 | floor)m"
-    elif $d < 86400 then "\($d / 3600 | floor)h" else "\($d / 86400 | floor)d" end;
+  def since($t): ($NOW - $t) | span;
 
   # The fixed zone, which the pane never cuts: whether the row is the branch
   # you are on, the glyph, the merge request, and the verb. Everything after
@@ -266,8 +274,6 @@ out=$(jq -nr -L "$share" \
   ($review[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) as $asked_all |
   ($mine[0].data.currentUser.authoredMergeRequests.nodes // []) as $mine_mrs |
   ($review[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me |
-  ($mine_mrs | map(.iid)) as $mine_iids |
-  ($asked_all | map(select(.iid | IN($mine_iids[]) | not))) as $asked |
   ($merged[0].mrs // []) as $merged_mrs |
   ($deployed[0].deploys // []) as $deploys |
   # What you have dismissed, and what you saw when you did: a verdict that
@@ -278,49 +284,6 @@ out=$(jq -nr -L "$share" \
   # then stops taking up a row: the MR keeps showing it in gmr either way.
   ([$runs[] | {key: "\(.kind)/\(.dir | split("/") | last)", value: .ended}] | from_entries) as $ended |
   def fresh_run($kind; $key): ($ended["\($kind)/\($key)"] // 0) > ($NOW - 86400);
-
-  def my_review: [.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED";
-  def reviewed: my_review | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES");
-  def unresolved: (.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0);
-  def mr_fields($kind):
-    { kind: $kind, iid: .iid, target: .targetBranch, url: .webUrl, source: .sourceBranch,
-      head: (.diffRefs.headSha // ""), base: (.diffRefs.baseSha // ""), start: (.diffRefs.startSha // ""),
-      pipeline: (.headPipeline.id | gid),
-      purl: (if .headPipeline.path then $url + .headPipeline.path else .webUrl end),
-      id: "w-mr-\(.iid)", mark: (.sourceBranch == $current) };
-
-  # One row per MR of yours: the first of these that is true, which is the
-  # thing you would do about it next.
-  def mine_row:
-    ($fixes[.iid] // {}) as $f | ($verify[.iid] // {}) as $v |
-    (.headPipeline | effective($gates)) as $pipe |
-    ((.diffRefs.headSha // "") == ($v.head // "·")) as $fresh |
-    (unresolved) as $th |
-    (seen("otis-verify"; .iid; ($v.head // ""))) as $vseen |
-    (if $fresh and $v.status == "done" and $v.verdict == "fail" and ($vseen | not) then
-       { rank: 4, g: "●", gc: bad, verb: "verified: failed\(if $v.fixed then ", fix verified" else "" end)",
-         extra: "\($common)/otis-verify/\(.iid)", verb_key: "run" }
-     elif $pipe == "FAILED" then
-       { rank: 5, g: "✗", gc: bad, verb: "pipeline failed", verb_key: "pipeline" }
-     elif $th > 0 then
-       { rank: 6, g: "", gc: yours, verb: "\($th) \(plural($th; "thread"; "threads")) to address", verb_key: "mr" }
-     elif ($f.fixes // 0) > 0 and ($f.fixing | not) then
-       { rank: 8, g: "✎\($f.fixes)", gc: yours, verb: "fold in \($f.fixes) \(plural($f.fixes; "fix"; "fixes"))",
-         extra: "\($common)/gmr-fix/\(.iid)", verb_key: "run" }
-     elif $fresh and $v.status == "done" and ($v.verdict | IN("pass", "inconclusive"))
-          and fresh_run("otis-verify"; .iid) and ($vseen | not) then
-       { rank: 10, g: "●", gc: (if $v.verdict == "pass" then good else context end),
-         verb: "verified: \(if $v.verdict == "pass" then "passed" else "unclear" end)",
-         extra: "\($common)/otis-verify/\(.iid)", verb_key: "run" }
-     elif .approved and $pipe == "SUCCESS" and .detailedMergeStatus == "MERGEABLE"
-          and (.draft | not) and (.autoMergeEnabled | not) then
-       { rank: 11, g: "✓", gc: good, verb: "merge it", verb_key: "merge" }
-     elif (.reviewers.nodes | length) == 0 and (.draft | not)
-          and ((.updatedAt | at) > ($NOW - 3 * 86400)) then
-       { rank: 12, g: "!", gc: attention, verb: "ask for a review", verb_key: "mr" }
-     else empty end)
-    + mr_fields("mine") + { tail: (context + (.title | clean) + r), title: .title,
-        when: (if .updatedAt then since(.updatedAt | at) else "" end) };
 
   # One of yours that has merged, and has something left to say: production is
   # unhappy about it, or took it out again.
@@ -342,20 +305,6 @@ out=$(jq -nr -L "$share" \
         verb_key: (if $row.rb then "rollback" else "run" end),
         tail: (context + (.title | clean) + r), title: .title,
         when: (if .mergedAt then since(.mergedAt | at) else "" end) } | del(.rb);
-
-  # One you were asked to review, until you have reviewed it.
-  def review_row:
-    ($claude[.iid] // {}) as $cl |
-    (if reviewed then empty
-     elif ($cl.drafts // 0) > 0 and ($cl.reviewing | not) then
-       # Enter opens the review Claude ran; d there goes through the drafts.
-       { rank: 3.6, g: "✎\($cl.drafts)", gc: yours,
-         verb: "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit", verb_key: "run",
-         extra: "\($common)/gmr-claude/\(.iid)", does: "read the review and its drafts" }
-     else { rank: 3.5, g: "!", gc: yours, verb: "review it", verb_key: "mr" } end)
-    + mr_fields("review")
-    + { tail: (context + (.title | clean) + r + faint + "  " + (.author.username // "") + r),
-        title: .title, who: (.author.username // ""), when: (if .updatedAt then since(.updatedAt | at) else "" end) };
 
   # Fixes Claude proposed where there is no MR to hang them on: a branch of
   # your own (gb'"'"'s C), a verification'"'"'s retrospective, or the fix a
@@ -423,21 +372,28 @@ out=$(jq -nr -L "$share" \
         note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end),
         sub: $run.doing, dots: $run.dots };
 
-  # Your pipelines, while they run.
-  def pipe_rows:
-    $mine_mrs[] | select((.headPipeline | effective($gates)) | IN("RUNNING", "PENDING", "CREATED")) |
-    (.headPipeline.jobs.nodes // []) as $jobs |
-    ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
-    (if (.headPipeline | effective($gates)) == "RUNNING"
-     then { g: "◐", verb: "pipeline running" } else { g: "○", verb: "pipeline queued" } end)
-    + mr_fields("mine")
-    + { rank: (0 - (.headPipeline.createdAt | at)), gc: attention, verb_key: "pipeline",
-        id: "g-pipe-\(.iid)",
-        tail: (faint + since(.headPipeline.createdAt | at) + r
-              + (if ($jobs | length) > 0 then context + "  \($done) of \($jobs | length) jobs" + r else "" end)
-              + context + "  " + (.title | clean) + r),
-        title: .title, when: since(.headPipeline.createdAt | at),
+  # Your pushes to main, while their checks run: the newest few, each as a
+  # pipeline of yours with no MR (git-forge main-builds).
+  def main_fields: . as $b |
+    { kind: "main", iid: "", target: $main, url: ($url + $b.pipeline.path), source: $main,
+      head: $b.sha, base: "", start: "", pipeline: ($b.pipeline.id // ""), purl: ($url + $b.pipeline.path),
+      extra: $b.sha, verb_key: "pipeline", mark: false,
+      tail: (faint + since($b.at | at) + r + context + "  " + $b.sha[0:8] + "  " + ($b.title | clean) + r),
+      title: $b.title, when: since($b.at | at) };
+  def main_run_rows:
+    ($mainb[0] // [])[0:5][] | select(.author == $me and .pipeline != null) |
+    (.pipeline | effective($gates)) as $p | select($p | IN("RUNNING", "PENDING", "CREATED")) |
+    (.pipeline.jobs.nodes // []) as $jobs | ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
+    (if $p == "RUNNING" then { g: "◐", verb: "\($main) build running" | fit(21) } else { g: "○", verb: "\($main) build queued" | fit(21) } end)
+    + main_fields
+    + { rank: (0 - (.at | at)), gc: attention, id: "g-main-\(.sha)",
         prog: (if ($jobs | length) > 0 then "\($done)/\($jobs | length)" else "" end) };
+  # Main broken by a push of yours: its newest finished build failed.
+  def main_failed_rows:
+    ([($mainb[0] // [])[] | select(.pipeline != null) | select(.pipeline | effective($gates) | IN("SUCCESS", "FAILED", "APPROVAL"))][0] // null) as $b |
+    if $b != null and $b.author == $me and ($b.pipeline | effective($gates)) == "FAILED" then
+      $b | { rank: 5, g: "✗", gc: bad, verb: "\($main) build failed" | fit(21), id: "w-main-\(.sha)" } + main_fields
+    else empty end;
 
   # Yours that have merged and are not out yet: where each has got to on its
   # way to production. Nothing here wants you; it is the answer to whether your
@@ -497,8 +453,7 @@ out=$(jq -nr -L "$share" \
            ),
       title: ($mr.title // ""), note: ($bits | join(" · ")) };
 
-  ([ ($mine_mrs[] | mine_row), ($merged_mrs[] | merged_row), ($asked[] | review_row), loose_fix_rows,
-     branch_verify_rows, failed_rows ]
+  ([ ($merged_mrs[] | merged_row), loose_fix_rows, branch_verify_rows, failed_rows, main_failed_rows ]
     | sort_by(.rank)) as $waiting |
   # Worktrees otis moved to the trash and you have not emptied yet. Not
   # waiting on you and not going: it sits under here, with the rest of what
@@ -518,7 +473,7 @@ out=$(jq -nr -L "$share" \
 
   # Production last: runs and pipelines are still yours to watch, while a
   # deploy is the end of the line, whenever it started.
-  (([ ($runs[] | select(.state == "running") | run_row), pipe_rows ] | sort_by(.rank))
+  (([ ($runs[] | select(.state == "running") | run_row), main_run_rows ] | sort_by(.rank))
    + ([ shipping_rows, deploy_rows ] | sort_by(.rank))) as $going |
 
   ($marks | tojson),

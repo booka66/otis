@@ -123,7 +123,7 @@ apply)
           git-confirm "$(them $later) in your checkout build$([ "$(echo $later | wc -w)" -eq 1 ] && echo s) on fix $n; take $([ "$(echo $later | wc -w)" -eq 1 ] && echo it || echo them) out too?" || exit 0
           out="$n $later"
         else
-          pause "fix $n has been edited since it was applied, so it is yours now; gdd discards files"
+          pause "fix $n has been edited since it was applied, so it is yours now; d in ga's file panel discards a file"
           exit 0
         fi
       fi
@@ -382,8 +382,8 @@ fold)
   git-confirm "reply \"Fixed in <commit>.\" on $n thread$([ "$n" -eq 1 ] || echo s) and resolve $([ "$n" -eq 1 ] && echo it || echo them)?" || exit 0
   api="projects/:fullpath/merge_requests/$iid"
   printf '%s\n' "$replies" | while IFS="$(printf '\t')" read -r thread sha; do
-    glab api -X POST "$api/discussions/$thread/notes" -f body="Fixed in $sha." >/dev/null &&
-      glab api -X PUT "$api/discussions/$thread?resolved=true" >/dev/null ||
+    git-forge api -X POST "$api/discussions/$thread/notes" -f body="Fixed in $sha." >/dev/null &&
+      git-forge api -X PUT "$api/discussions/$thread?resolved=true" >/dev/null ||
       printf 'could not reply on or resolve thread %s\n' "$thread"
   done
   git-mr-threads --refresh "$iid" refresh-preview >/dev/null 2>&1

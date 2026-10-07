@@ -93,10 +93,10 @@ $out
 EOF
 
 job_trace() {
-  glab api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | joblog_clean "$dir/job-trace-$jobid.sections"
+  git-forge api "projects/:fullpath/jobs/$jobid/trace" 2>/dev/null | joblog_clean "$dir/job-trace-$jobid.sections"
 }
 rollback_inputs() {
-  glab api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
+  git-forge api graphql -f repo="$repo" -f id="gid://gitlab/Ci::Build/$jobid" -f query='query($repo: ID!, $id: JobID!) {
     project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' 2>/dev/null |
     jq -e '{version: (.data.project.job.inputs[] | select(.name == "version") | .value | tostring)}'
 }
@@ -129,7 +129,7 @@ elif [ "$status" = success ]; then
 elif [ "$status" = failed ] && [ -z "$took" ]; then
   pane_callout bad "Refused at once" "Production was already past this commit."
 elif [ "$status" = failed ]; then
-  pane_callout bad "The deploy failed after $took" "What broke and the end of its log are below." "keys:⏎ its jobs and logs · w opens the job"
+  pane_callout bad "The deploy failed after $took" "What broke and the end of its log are below."
 elif [ "$status" = running ]; then
   pane_callout attention "Deploying now${running:+ · $running}" "$(pane_fit "${yours:+In it: $yours}" $((PANE_W - 2)))"
 elif [ "$status" = canceled ]; then

@@ -4,7 +4,7 @@
 #   review   MRs requesting your review; once you have reviewed one (approved,
 #            commented as a review, or requested changes) it moves to the very
 #            bottom, out of the way, until GitLab asks you again
-#   yours    your open MRs, with their pipelines (what gci used to list)
+#   yours    your open MRs, with their pipelines 
 #   merged   yours merged in the last week, and whether each is live
 #            (git-ci-merged: merged, queued, deploying, live, rolled back),
 #            and Claude's production watch of it, if any (git-mr-watch)
@@ -14,7 +14,7 @@
 # waiting on you; a verification or trace that failed; and, at the MR's current
 # head, verified, a tour to walk (P), or clean when a review found nothing to
 # say (git-mr-claude, git-mr-fix, git-verify, git-walk).
-# gci is gmr opened with yours first ($GMR_FIRST=mine). toggle switches to
+# $GMR_FIRST=mine opens it with yours first. toggle switches to
 # every open MR in the project and back, the 100 most recently updated, since
 # a big project has thousands; --refresh (u) refetches now.
 #
@@ -41,12 +41,11 @@
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
-. "$share/mr-query.sh"
 # Claude's runs that a closed laptop killed go on from where they stopped
 # (share/claude-run.sh), in a subshell so its helpers stay out of this script.
 ( . "$share/claude-run.sh" && resume_all )
 git remote get-url origin >/dev/null 2>&1 || {
-  printf "${GK_BAD}gmr needs an origin remote on GitLab, and this repo has none${GK_R}\t\t\t\t\t\t\t\t\t\terr-origin\n"
+  printf "${GK_BAD}gmr needs an origin remote on GitLab or GitHub, and this repo has none${GK_R}\t\t\t\t\t\t\t\t\t\terr-origin\n"
   exit 0
 }
 scope=$(cat "$st/mr-scope" 2>/dev/null || echo sections)
@@ -79,39 +78,18 @@ git worktree list --porcelain | awk '
 $(otis-config project gateJobs main url)
 EOF
 
-# fetch <cache name> <stale seconds> <saved as> <query>: the JSON into the
+# fetch <cache name> <stale seconds> <saved as> <review|mine|all>: the JSON into the
 # picker's state, or an error row and a nonzero exit.
 fetch() {
-  if json=$(git-cached-json $now "$1" "$2" "$reload" -- glab api graphql -f query="$4" -f repo="$repo" 2> "$st/$1.err"); then
+  if json=$(git-cached-json $now "$1" "$2" "$reload" -- git-forge mrs "$4" 2> "$st/$1.err"); then
     cp "$json" "$st/$3"
   else
-    printf "${GK_BAD}GitLab lookup failed: %s${GK_R}\t\t\t\t\t\t\t\t\t\terr-%s\n" "$(head -1 "$st/$1.err")" "$1"
+    forge=GitLab; [ "$(otis-config forge)" = github ] && forge=GitHub
+    printf "${GK_BAD}$forge lookup failed: %s${GK_R}\t\t\t\t\t\t\t\t\t\terr-%s\n" "$(head -1 "$st/$1.err")" "$1"
     echo '{}' > "$st/$3"
     return 1
   fi
 }
-
-# What the row's glyph columns mean, for the ? help view (otis-pick). A
-# column is allowed to be one glyph wide only because this is a keypress away.
-{
-  printf "${GK_CONTEXT}columns${GK_R}\n"
-  printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
-  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R} ${GK_GOOD}\342\207\242${GK_R}    an agent is working \302\267 an agent has left something for you \302\267 an agent found nothing to comment on\n"
-  printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
-  printf "  ${GK_ATTENTION}\342\244\263${GK_R} ${GK_GOOD}\342\244\263${GK_R} ${GK_BAD}\342\244\263${GK_R}    walking inputs through it (P) \302\267 walked: P in its review shows it \302\267 the walk broke\n"
-  printf "  ${GK_ATTENTION}!1234${GK_R}    the merge request\n"
-  printf "\n${GK_CONTEXT}pipeline${GK_R}\n"
-  printf "  ${GK_GOOD}\342\234\223${GK_R} passed   ${GK_BAD}\342\234\227${GK_R} failed   ${GK_ATTENTION}\342\227\220${GK_R} running   ${GK_ATTENTION}\342\227\213${GK_R} pending\n"
-  printf "  ${GK_ELSEWHERE}\342\227\210${GK_R} failing only on approval gates, so waiting rather than broken\n"
-  printf "  ${GK_ELSEWHERE}\342\226\270${GK_R} manual   ${GK_CONTEXT}\342\212\230${GK_R} canceled   ${GK_CONTEXT}\302\267${GK_R} none\n"
-  printf "\n${GK_CONTEXT}review${GK_R}\n"
-  printf "  ${GK_GOOD}\342\234\223${GK_R} approved   ${GK_BAD}\342\234\227${GK_R} changes asked for   ${GK_CONTEXT}\302\267${GK_R} you reviewed it\n"
-  printf "  ${GK_CONTEXT}2${GK_R} approvals still needed   ${GK_ATTENTION}!${GK_R} nobody asked yet   ${GK_CONTEXT}~${GK_R} draft\n"
-  printf "  ${GK_YOURS}\357\201\265 3${GK_R} unresolved threads\n"
-  printf "\n${GK_CONTEXT}merged${GK_R}\n"
-  printf "  ${GK_GOOD}\342\226\262${GK_R} live   ${GK_ATTENTION}\342\227\220${GK_R} deploying   ${GK_ATTENTION}\342\227\213${GK_R} queued   ${GK_BAD}\342\226\274${GK_R} rolled back   ${GK_ELSEWHERE}\302\267${GK_R} not out yet\n"
-  printf "  production watch: ${GK_GOOD}\342\234\223${GK_R} not this MR   ${GK_YOURS}\342\232\240${GK_R} possibly   ${GK_BAD}\342\234\227${GK_R} likely   ${GK_CONTEXT}?${GK_R} unknown\n"
-} > "$st/legend"
 
 echo '{}' > "$st/ci.json"
 echo '{"mrs": []}' > "$st/ci-merged.json"
@@ -122,25 +100,28 @@ if [ "$scope" = sections ]; then
   # in a big project that was two round trips of an empty screen instead of one.
   # Each keeps its error row in a file of its own, so the rows still come out in
   # the order they always did rather than interleaved by whichever lands first.
-  fetch mrs-review $age mrs.json "$mr_review_query" > "$st/fetch-review.row" &
+  fetch mrs-review $age mrs.json review > "$st/fetch-review.row" &
   review_pid=$!
-  fetch ci-mine $age ci.json "$mr_mine_query" > "$st/fetch-mine.row" &
+  fetch ci-mine $age ci.json mine > "$st/fetch-mine.row" &
   mine_pid=$!
   wait "$review_pid"
   wait "$mine_pid"
   cat "$st/fetch-review.row" "$st/fetch-mine.row" 2>/dev/null
   rm -f "$st/fetch-review.row" "$st/fetch-mine.row"
-  merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-ci-merged 2>/dev/null) &&
-    cp "$merged" "$st/ci-merged.json"
-  # The deploy strip on the merged heading, from gd's cache; fetched in the
-  # background when stale, and the reload draws it. The strip is drawn from
-  # the cache this call names, so gd's own list, which would start a fetch
-  # of its own while that one runs, is never asked.
+  # Merged and deployed are GitLab's environments; GitHub has none to follow.
   strip=
-  deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
-    strip=$(git-deploy-list --from "$deploys" --strip 2>/dev/null)
+  if git-forge can deploys; then
+    merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-forge merged 2>/dev/null) &&
+      cp "$merged" "$st/ci-merged.json"
+    # The deploy strip on the merged heading, from gd's cache; fetched in the
+    # background when stale, and the reload draws it. The strip is drawn from
+    # the cache this call names, so gd's own list, which would start a fetch
+    # of its own while that one runs, is never asked.
+    deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
+      strip=$(git-deploy-list --from "$deploys" --strip 2>/dev/null)
+  fi
 else
-  fetch mrs-all $age mrs.json "$mr_all_query"
+  fetch mrs-all $age mrs.json all
   total=$(jq '.data.project.mergeRequests.count // 0' "$st/mrs.json")
   if [ "$total" -gt 100 ]; then
     printf "${GK_CONTEXT}100 of %s open MRs, most recently updated first${GK_R}\n" "$total" > "$st/footer"
@@ -173,18 +154,6 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
   def where:
     $elsewhere[.] as $w |
     if $w and . != $current then elsewhere + "in " + (if ($w | length) > 28 then $w[0:27] + "…" else $w end) + r + "  " else "" end;
-  # A pipeline whose only failures are approval gates is waiting, not broken
-  # (effective, pipe_glyph: share/otis.jq). ? in the picker lists every glyph.
-  def deploy_glyph:
-    if . == "live" then good + "▲"
-    elif . == "deploying" then attention + "◐"
-    elif . == "queued" then attention + "○"
-    elif . == "rolledback" then bad + "▼"
-    else elsewhere + "·" end;
-  # Unresolved threads, right-aligned in three columns behind their icon.
-  def threads:
-    ((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) | tostring as $n |
-    if $n == "0" then "   " else yours + "" + ($n | padl(2)) + r end;
   # One column a level, capped: a seven-deep stack was spending fourteen columns
   # saying what the order already says.
   def indent:
@@ -220,24 +189,16 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
   # Where your review of an MR stands, as GitLab keeps it per reviewer.
   def my_review: [.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED";
   def reviewed: my_review | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES");
-  def review_glyph:
-    if any(.approvedBy.nodes[]?; .username == $me) then good + "✓"
-    elif my_review == "REQUESTED_CHANGES" then bad + "✗"
-    elif my_review == "REVIEWED" then context + "·"
-    else " " end;
-  def mine_glyph:
-    if .approved then good + "✓"
-    elif .draft then context + "~"
-    elif .reviewers and (.reviewers.nodes | length) == 0 then attention + "!"
-    elif (.approvalsLeft // 0) > 0 then context + ((.approvalsLeft | tostring)[0:1])
-    else " " end;
-  # What AI is doing on it, or has left for it, in a word: one column in the
-  # fixed zone, so it is never the part that gets chopped. Work going first
-  # (what kind), then what waits on you, then what broke, then what is ready.
-  # The sentence version lives in the preview, where there is room for it.
-  def ai_word($kind):
+  # The state of a row in one word, the one that most wants you: what an agent is
+  # doing on it or has left for you, then what is broken, then what waits
+  # on someone, then what is fine. Its colour says which of those it is, and
+  # what is as it should be (live, nobody asked yet) is left quiet; the
+  # preview says the rest in sentences.
+  def word($kind):
     ($fixes[.iid] // {}) as $f | ($claude[.iid] // {}) as $cl |
-    $verify[.iid] as $v | .iid as $iid | (.sourceBranch // "") as $src | (($walk // {}) | .[$iid] // .[$src]) as $w | .diffRefs.headSha as $h |
+    $verify[.iid] as $v | .iid as $iid | (.sourceBranch // "") as $src | (($walk // {}) | .[$iid] // .[$src]) as $w |
+    (.headPipeline | effective($gates)) as $p |
+    ((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) as $open |
     def n($c; $one; $many): "\($c) " + (if $c == 1 then $one else $many end);
     if $kind == "mine" and $f.fixing then attention + "fixing"
     elif $cl.reviewing then attention + "reviewing"
@@ -245,25 +206,41 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
     elif $w.walking then attention + "tracing"
     elif $kind == "mine" and ($f.fixes // 0) > 0 then yours + n($f.fixes; "fix"; "fixes")
     elif ($cl.drafts // 0) > 0 then yours + n($cl.drafts; "note"; "notes")
-    elif $v != null and $v.status == "failed" then bad + "✗ verify"
-    elif $v != null and $v.status == "done" and $v.head == $h and $v.verdict == "fail" then bad + "✗ verify"
-    elif $w != null and $w.status == "failed" then bad + "✗ trace"
+    elif $kind == "mine" and $p == "FAILED" then bad + "failed"
+    elif $kind == "mine" and $open > 0 then yours + n($open; "thread"; "threads")
+    elif $kind == "mine" and .draft then context + "draft"
+    elif $kind == "mine" and .reviewers and (.reviewers.nodes | length) == 0 then context + "ask review"
+    elif $kind == "mine" and .autoMergeEnabled then good + "merging"
+    elif $kind == "mine" and ($p | IN("RUNNING", "PENDING", "CREATED", "WAITING_FOR_RESOURCE", "PREPARING")) then attention + "running"
+    elif $kind == "mine" and .approved then good + "approved"
+    elif $kind == "mine" and (.approvalsLeft // 0) > 0 then context + "needs \(.approvalsLeft)"
+    elif $kind == "mine" then context + "waiting"
+    elif any(.approvedBy.nodes[]?; .username == $me) then good + "approved"
+    elif my_review == "REQUESTED_CHANGES" then bad + "changes"
+    elif my_review == "REVIEWED" then context + "reviewed"
+    else attention + "review" end;
+  # What there is to read on it, in a word, when there is something: a
+  # verification of this push (V), else its tour (P). Nothing for an older
+  # push: the preview says what that one found.
+  def has:
+    $verify[.iid] as $v | .iid as $iid | (.sourceBranch // "") as $src | (($walk // {}) | .[$iid] // .[$src]) as $w | .diffRefs.headSha as $h |
+    ($claude[.iid] // {}) as $cl |
+    if $v != null and ($v.status == "failed" or ($v.status == "done" and $v.head == $h and $v.verdict == "fail")) then bad + "✗ verify"
+    elif $w != null and $w.status == "failed" then bad + "✗ tour"
     elif $v != null and $v.status == "done" and $v.head == $h and $v.verdict == "pass" then good + "verified"
-    elif $w != null and $w.status == "done" and $w.head == $h then good + "tour"
+    elif $w != null and $w.status == "done" and $w.head == $h then elsewhere + "tour"
     elif $cl.clean != null and $cl.clean == $h then good + "clean"
     else "" end;
+  # A word in its column, eleven wide.
+  def cell: . as $a | $a + r + (" " * ([11 - ($a | gsub("\u001b\\[[0-9;]*m"; "") | length), 1] | max));
+  def tag: if . == "" then "" else . + r + "  " end;
 
   def open_row($kind):
     [ (.sourceBranch | mark)
-        + (ai_word($kind) as $a | $a + r + (" " * (10 - ($a | gsub("\u001b\\[[0-9;]*m"; "") | length))))
+        + (word($kind) | cell)
         + attention + ("!\(.iid)" | padr(6)) + r + " "
-        + (.headPipeline | effective($gates) | pipe_glyph) + r + " "
-        + (if $kind == "mine" then mine_glyph else review_glyph end) + r + " "
-        + threads + " "
         + indent
-        # Set to merge when its pipeline succeeds (m in gmr): it goes out on its
-        # own, so the row says so ahead of the title, where it is never cut.
-        + (if $kind == "mine" and .autoMergeEnabled then good + "⇥ auto-merge " + r else "" end)
+        + (has | tag)
         + text + (.title | gsub("\t"; " ")) + r + "  " + (.sourceBranch | where) + base_note
         + (if $kind == "mine" and $scope != "all" then ""
            else context + (if .author.username == $me then "you" else (.author.username // "") end) + r end)
@@ -278,30 +255,24 @@ jq -nr -L "$share" --slurpfile review "$st/mrs.json" --slurpfile mine "$st/ci.js
 
   def merged_row:
     [ (.sourceBranch | mark)
-        + ($watch[.iid] as $w | if $w.watching then attention + "watching" + r + "  " else " " * 10 end)
-        + attention + ("!\(.iid)" | padr(6)) + r + " "
-        + (.state | deploy_glyph) + r + " "
+        # Watching production, else how far out it is.
         + ($watch[.iid] as $w |
-           if $w == null then " "
-           elif $w.verdict == "likely" then bad + "✗"
-           elif $w.verdict == "possible" then yours + "⚠"
-           elif $w.verdict == "unlikely" then good + "✓"
-           elif $w.verdict == "unknown" then context + "?"
-           else context + "·" end) + r + " "
+           if $w.watching then attention + "watching"
+           elif .state == "live" then context + "live"
+           elif .state == "deploying" then attention + "deploying"
+           elif .state == "queued" then attention + "queued"
+           elif .state == "rolledback" then bad + "rolled back"
+           else context + "merged" end | cell)
+        + attention + ("!\(.iid)" | padr(6)) + r + " "
         # When it went live, started deploying, was rolled back, or merged.
         + context + (((if .state == "live" then .deploy.at // .mergedAt
              elif .state == "deploying" or .state == "rolledback" then .deploy.at else .mergedAt end) | ago) | padl(3)) + r + " "
         + context + (.title | gsub("\t"; " ")) + r + "  " + (.sourceBranch | where)
-        + ($watch[.iid] as $w |
-           if $w == null then ""
-           else
-             # The glyph already carries the verdict; only a worrying one is
-             # worth spelling out twice.
-             (if $w.verdict == "likely" then bad + "  prod: likely this MR"
-              elif $w.verdict == "possible" then yours + "  prod: possibly this MR"
-              else "" end)
-             + (if $w.watching and ($w.verdict | IN("likely", "possible")) then context + " · watching" else "" end) + r
-           end),
+        # What the production watch found, spelled out only when it points here.
+        + ($watch[.iid].verdict as $v |
+           if $v == "likely" then bad + "  prod: likely this MR"
+           elif $v == "possible" then yours + "  prod: possibly this MR"
+           else "" end) + r,
       .iid, .targetBranch, .webUrl, .sourceBranch, "merged", "", "",
       (.deploy.pipeline // (.pipeline.id | gid)),
       (.deploy.url // (if .pipeline.job.webPath then $url + .pipeline.job.webPath else .webUrl end)),

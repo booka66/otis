@@ -19,7 +19,7 @@ integer since=0 first=0
 
 typeset -A opens runs uses decl label
 typeset -a names order
-local t name key rest pair k v
+local t name key rest pair k v id
 while IFS=$'\t' read -r t name key rest; do
   # What a screen offers counts from any time; what you did, from [days].
   [[ $key == :open ]] || (( t >= since )) || continue
@@ -46,13 +46,17 @@ while IFS=$'\t' read -r t name key rest; do
       # The dashboard and a run's view log the key alone: its label is the
       # one they opened with.
       [[ -n $rest ]] || rest=${label[$name$S$key]}
-      (( uses[$name$S$key$S$rest]++ )) || [[ -n ${decl[$name$S$key$S$rest]} ]] || order+=($name$S$key$S$rest) ;;
+      # A key's label can hold anything, so it is never a subscript inside
+      # (( )), which would read it as arithmetic.
+      id=$name$S$key$S$rest
+      uses[$id]=$(( ${uses[$id]:-0} + 1 ))
+      (( ${uses[$id]} > 1 )) || [[ -n ${decl[$id]} ]] || order+=($id) ;;
   esac
 done < $log
 
 (( first )) || { print "Nothing logged${1:+ in the last $1 days}."; exit 0; }
 print "${B}${T}what you use${R}${C}, since $(strftime '%a %b %-d' $first) ($(( (EPOCHSECONDS - first) / 86400 )) days)${R}"
-local n id c max never w=14
+local n c max never w=14
 for name in ${(f)"$(for n in $names; do print -r -- "${opens[$n]:-0} $n"; done | sort -rn | cut -d' ' -f2-)"}; do
   print "\n${A}${name}${R}${C}  opened ${opens[$name]:-0}×${runs[$name]:+, run ${runs[$name]}×}${R}"
   max=1 never=

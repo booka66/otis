@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-mr-reviewers <iid>                            reviewer picker for one MR (gci, gb)
+# git-mr-reviewers <iid>                            reviewer picker for one MR
 # git-mr-reviewers --list <iid> [query]             its rows
 # git-mr-reviewers --toggle <iid> <user id> <on|off>
 #
@@ -18,7 +18,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/mr-sync.sh"
 
 fetch_current() {
-  mr=$(git-cached-json "mr-$1" 15 "reload(git-mr-reviewers --list $1)" -- glab api "projects/:fullpath/merge_requests/$1" 2>/dev/null) &&
+  mr=$(git-cached-json "mr-$1" 15 "reload(git-mr-reviewers --list $1)" -- git-forge api "projects/:fullpath/merge_requests/$1" 2>/dev/null) &&
     jq '[.reviewers[] | {id, username, name}]' "$mr" > "$st/reviewers"
   [ -s "$st/reviewers" ] || echo '[]' > "$st/reviewers"
 }
@@ -36,7 +36,7 @@ case $1 in
     fi
     if [ -z "$query" ]; then
       cat "$st/reviewers"
-    elif found=$(glab api "projects/:fullpath/members/all?per_page=20&query=$(printf '%s' "$query" | jq -sRr @uri)" 2>&1); then
+    elif found=$(git-forge api "projects/:fullpath/members/all?per_page=20&query=$(printf '%s' "$query" | jq -sRr @uri)" 2>&1); then
       # Kept for tab, which adds a person by id and draws their name at once.
       printf '%s' "$found" | jq '[.[] | select(.state == "active") | {id, username, name}]' | tee "$st/found"
     else
@@ -62,14 +62,14 @@ case $1 in
     fi > "$st/reviewers.new" && mv "$st/reviewers.new" "$st/reviewers"
     failed() {
       git-fzf-error "change reviewers" "$1"
-      glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq '[.reviewers[] | {id, username, name}]' > "$st/reviewers.new" &&
+      git-forge api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq '[.reviewers[] | {id, username, name}]' > "$st/reviewers.new" &&
         mv "$st/reviewers.new" "$st/reviewers"
       mr_post "reload(git-mr-reviewers --list $iid)"
     }
     # -F parses the JSON array; -f would send "[...]" as a string, and field
     # names like reviewer_ids[] reach GitLab as a literal key it ignores.
     mr_sync "reviewers-$iid" "$(mr_gen "reviewers-$iid")" failed \
-      glab api -X PUT "projects/:fullpath/merge_requests/$iid" -F "reviewer_ids=$(jq -c 'map(.id)' "$st/reviewers")"
+      git-forge api -X PUT "projects/:fullpath/merge_requests/$iid" -F "reviewer_ids=$(jq -c 'map(.id)' "$st/reviewers")"
     ;;
   *)
     iid=$1

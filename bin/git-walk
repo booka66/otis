@@ -17,6 +17,10 @@
 #                                         (git-mr-prefetch)
 # git-walk --ahead-branches               your last branches the same (git-branch-list)
 # git-walk --ahead-since                  when ahead tracing began: only what is newer is traced
+# git-walk --open <dir> <side> <path> <line>
+#                                         enter on a line in P: opened as the symbol view opens it
+# git-walk --comment <dir> <side> <path> <line>
+#                                         c there: comment on it, as the review's c does
 #
 # The walk is git-symbols-walk's: Opus picks the inputs a change was written
 # for and ones whose behavior it changes without saying so, and follows each
@@ -40,6 +44,10 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/repo.sh" || exit 1
 top=$OTIS_GITDIR/otis-walk
 pause() { otis-popup say "$1"; exit 0; }
+# base_of <dir>: an MR walk's base sha. A walk traced before git-trace kept
+# the base's traces in before/ has them in base/ instead, over the sha: the
+# diff's base (shas) stands in, which is here, so nothing is fetched for it.
+base_of() { if [ -f "$1/base" ]; then cat "$1/base"; else cut -d' ' -f1 "$1/shas" 2>/dev/null; fi; }
 
 case $1 in
   --check)
@@ -66,6 +74,32 @@ case $1 in
     done
     printf '}\n'
     exit 0 ;;
+  --open)
+    # enter on a line in P, as the symbol view's enter: in a checkout of
+    # yours at the head it walked, where an edit is yours to commit; else,
+    # for an MR, in the review worktree, moved to it, with the review's diff
+    # base and comments (git-mr-review --open); else as the commit has it.
+    # A line on the base's side (old, or b in a test's walk) is the base's.
+    d=$2 side=$3 p=$4 l=$5
+    k=$(cat "$d/key") b=${k%-*} h=${k#*-}
+    case $side in base|old) exec git-commit-open "$b" "$p" "$l" ;; esac
+    review=$(git-worktree-path named review)
+    wt=$(git worktree list --porcelain | awk -v h="$h" -v r="$review" '/^worktree / { w = substr($0, 10) } $0 == "HEAD " h && w != r { print w; exit }')
+    [ -n "$wt" ] && { cd "$wt" && NVIM_DIFF_BASE=$b exec git-commit-open "$b..$h" "$p" "$l"; }
+    [ -s "$d/iid" ] && exec git-mr-review --open "$(cat "$d/iid")" "$h" "$(base_of "$d")" "$(cat "$d/start" 2>/dev/null)" "$p" "$l"
+    NVIM_DIFF_BASE=$b exec git-commit-open "$h" "$p" "$l" ;;
+  --comment)
+    # c on a line in P, as the review's c: the file's diff a line a row with
+    # its threads (git-mr-lines), on this line, where c starts a thread or
+    # replies, a draft until S, and enter opens the line as the review does,
+    # in its worktree when that is at the head. An MR's lines only.
+    d=$2 side=$3 p=$4 l=$5
+    [ -s "$d/iid" ] || pause "c comments on an MR, and $(cat "$d/what") has none"
+    k=$(cat "$d/key") iid=$(cat "$d/iid")
+    case $side in base|old) l= ;; esac
+    review=$(git-worktree-path named review)
+    [ "$(git -C "$review" rev-parse -q --verify HEAD 2>/dev/null)" = "${k#*-}" ] && cd "$review"
+    NVIM_DIFF_BASE=${k%-*} GMR_IID=$iid GMR_RANGE=${k%-*}..${k#*-} GMR_KIND=review exec git-mr-lines "$iid" "${k%-*}..${k#*-}" "$p" $l ;;
   --run)
     d=$top/$2
     finish() {
@@ -82,7 +116,7 @@ case $1 in
     # this ahead for the MRs you review), and its base as its review reads
     # it (git-mr-base), so the walk is keyed as the review keys the change.
     if [ -s "$d/iid" ]; then
-      iid=$(cat "$d/iid") head=$(cat "$d/head") base=$(cat "$d/base") start=$(cat "$d/start" 2>/dev/null)
+      iid=$(cat "$d/iid") head=$(cat "$d/head") base=$(base_of "$d") start=$(cat "$d/start" 2>/dev/null)
       git cat-file -e "$head^{commit}" 2>/dev/null ||
         GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin "+$(git-forge head-ref "$iid"):refs/mr/$iid" 2>>"$d/log"
       git cat-file -e "$base^{commit}" 2>/dev/null || GIT_TERMINAL_PROMPT=0 git fetch --quiet --no-tags origin 2>>"$d/log"
@@ -212,16 +246,19 @@ if [ "$1" = --list ]; then
 fi
 if [ "$1" = --view ]; then
   d=$top/$2
+  # An MR's review worktree moved to the head it walked, once, as the screen
+  # opens: enter on a line then only opens it there (--open).
+  [ -s "$d/iid" ] && git-mr-review --ready "$(cat "$d/iid")" "$(cat "$d/head")" "$(base_of "$d")" "$(cat "$d/start" 2>/dev/null)"
   [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && exec git-trace --view "$d"
-  rev=$(cat "$d/rev") k=$(cat "$d/key")
-  b=${k%-*}
-  otis-symbols "walk $(cat "$d/what") " 'enter=open the step in your editor,>=next step,<=step back,y=copy it for Claude,r=walk it again,q=back' \
+  rev=$(cat "$d/rev")
+  otis-symbols "walk $(cat "$d/what") " 'enter=open the step in your editor,c=comment on its line,>=next step,<=step back,y=copy it for Claude,r=walk it again,q=back' \
     --header-from-state --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
     --bind "start:reload(git-walk --list '$2')" \
     --bind ">:transform(git-symbols-walk --step 1)" \
     --bind "<:transform(git-symbols-walk --step -1)" \
     --bind "y:transform(git-symbols-walk --note {12})" \
-    --bind "enter:execute(NVIM_DIFF_BASE=$b git-commit-open '$rev' {2} {3})+reload(git-walk --list '$2')" \
+    --bind "enter:execute(git-walk --open '$d' {4} {2} {3})+reload(git-walk --list '$2')" \
+    --bind "c:execute(git-walk --comment '$d' {4} {2} {3})+reload(git-walk --list '$2')" \
     --bind "r:execute(git-walk --again '$2')+reload(git-walk --list '$2')" \
     --preview "git-symbols-walk --show '$rev' {12}" </dev/null >/dev/null
   exit 0
@@ -244,7 +281,8 @@ else
 fi
 d=$top/$key
 # Traced when the change's own tests can run (git-trace): nothing to pay for,
-# and no model to have. Else Claude's walk.
+# and no model to have. Else the same run with no tests in it: the tour,
+# written from the diff alone, on the same screen, which needs an agent.
 trace=
 # A walk of this very head that traced says so: nothing to ask again.
 if [ -n "$head" ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ "$(cat "$d/head" 2>/dev/null)" = "$head" ]; then trace=1
@@ -252,20 +290,19 @@ elif [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/n
 elif [ -n "$head" ]; then git-trace --can "$base" "$head" && trace=1
 else [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && trace=1; fi
 if [ -z "$trace" ]; then
-  missing=$(otis-agent-run --ready) || pause "P's walk: $missing"
-  [ "$(git config --get otis.walkModel)" != off ] || pause "otis.walkModel is off"
+  missing=$(otis-agent-run --ready) || pause "no test runs $what, so P tours it from the diff, which needs $missing"
+  [ "$(git config --get otis.walkModel)" != off ] || pause "no test runs $what, and its tour is off (otis.walkModel)"
 fi
 
 start() {
   # From gag or the dashboard, an MR's shas are the last run's.
   if [ -z "$br" ] && [ -z "$head" ]; then
-    head=$(cat "$d/head" 2>/dev/null) base=$(cat "$d/base" 2>/dev/null) start=$(cat "$d/start" 2>/dev/null)
+    head=$(cat "$d/head" 2>/dev/null) base=$(base_of "$d") start=$(cat "$d/start" 2>/dev/null)
     [ -n "$head" ] || pause "P in gmr walks $what"
   fi
-  [ -n "$asked" ] || [ -n "$trace" ] || git-confirm "Opus walks inputs through $what, the one it was written for and ones it changes without saying so (a few minutes, about one to three dollars)?" || return 1
   rm -rf "$d"
   mkdir -p "$d" || return 1
-  [ -n "$trace" ] && echo trace > "$d/engine"
+  echo trace > "$d/engine"
   printf '%s\n' "$what" > "$d/what"
   printf 'Walking %s\n' "$what" > "$d/title"
   printf '%s\n' "$head" > "$d/head"
@@ -282,11 +319,13 @@ start() {
 }
 
 # progress: the run's progress while it goes (git-claude-view: q leaves it
-# going, x stops it, r once over walks again); walked, the walk.
+# going, x stops it, r once over walks again); walked, the walk. A traced
+# run's tour is written from the diff while its tests run: the screen goes
+# to it once it lands, and the values fill in under its stops.
 progress() {
   while :; do
-    git-claude-view "$d"
-    [ $? -eq 3 ] || break
+    OTIS_AGENT_UNTIL=$d/tour.json git-claude-view "$d"
+    case $? in 4) exec git-walk --view "$key" ;; 3) ;; *) break ;; esac
     start || return 0
   done
   [ "$(cat "$d/status" 2>/dev/null)" = done ] && ! running "$d" && exec git-walk --view "$key"
@@ -297,7 +336,7 @@ progress() {
 [ -n "$again" ] && { start && progress; exit 0; }
 
 # The same head traced under its MR's key or its branch's: that run.
-if [ -n "$trace" ] && [ -n "$head" ] && [ "$(cat "$d/head" 2>/dev/null)" != "$head" ] && t=$(traced "$head"); then
+if [ -n "$head" ] && [ "$(cat "$d/head" 2>/dev/null)" != "$head" ] && t=$(traced "$head"); then
   d=$t key=${t##*/}
 fi
 if [ ! -d "$d" ]; then
@@ -305,19 +344,21 @@ if [ ! -d "$d" ]; then
 elif orphaned "$d"; then
   resume "$d"
 elif [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ -n "$head" ] && [ "$(cat "$d/head" 2>/dev/null)" != "$head" ] && ! running "$d"; then
-  # Traced at an older push: traced again, at this one.
+  # Traced at an older push. A walk that finished is yours until you say to
+  # walk the new push: a bot's push (a CI auto-fix) threw one away the moment
+  # its notification was followed. One that did not finish is walked again.
+  if [ "$(cat "$d/status" 2>/dev/null)" = done ]; then
+    pushed=$(git log -1 --format=%s "$head" 2>/dev/null)
+    git-confirm "$what has a new push since this walk${pushed:+ ($pushed)}. Walk it again? (any other key opens this walk)" || exec git-walk --view "$key"
+  fi
   start || exit 0
-elif [ "$(cat "$d/status" 2>/dev/null)" = done ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ]; then
+# Traced, or still tracing with its tour already there: the tour.
+elif [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && { [ "$(cat "$d/status" 2>/dev/null)" = done ] || { running "$d" && [ -s "$d/tour.json" ]; }; }; then
   exec git-walk --view "$key"
 elif [ "$(cat "$d/status" 2>/dev/null)" = done ]; then
-  # Walked by an older otis (git-symbols-walk's version): walked again, if
-  # you say so, else the old walk.
-  f=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-walk/$(cat "$d/key").json
-  v=$(sed -n 's/^version=//p' "$(command -v git-symbols-walk)")
-  if [ "$(jq '.version // 0' "$f" 2>/dev/null)" != "$v" ] && git-confirm "$what was walked by an older otis. Walk it again? (any other key opens the old walk)"; then
-    asked=1; start || exit 0
-  else
-    exec git-walk --view "$key"
-  fi
+  # Claude's walk, from before a change no test runs was toured: toured now,
+  # if you say so, else that walk (git-symbols-walk keeps it either way).
+  git-confirm "$what has Claude's older walk, not a tour. Tour it now? (any other key opens the old walk)" || exec git-walk --view "$key"
+  start || exit 0
 fi
 progress

@@ -224,7 +224,7 @@ budget() { awk -v n="$1" -v what="$2" 'NR <= n { print; next } END { if (NR > n)
 context() {
   about=
   if [ -n "$GMR_IID" ]; then
-    about=$(glab api "projects/:fullpath/merge_requests/$GMR_IID" 2>/dev/null | jq -r '"# !\(.iid) \(.title)\n\n\(.description // "")"' 2>/dev/null)
+    about=$(git-forge api "projects/:fullpath/merge_requests/$GMR_IID" 2>/dev/null | jq -r '"# !\(.iid) \(.title)\n\n\(.description // "")"' 2>/dev/null)
   fi
   [ -n "$about" ] || about=$(if [ -n "$head" ]; then git log --no-color --format='# %s%n%n%b' "$base..$head"; else echo "Uncommitted changes, with no words of their own."; fi)
   cat <<EOF

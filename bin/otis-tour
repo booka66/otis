@@ -86,9 +86,9 @@ tabout=(
   verify     "V finds out whether a change actually works: $who writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and $who judges the evidence, claim by claim. With what you need set up to run one."
   ship       "From an open MR to production without the browser: CI jobs and logs, merge when the pipeline passes, rebase, whether your merged MR is live yet, gd's deploys, and D, where Claude watches Datadog after your deploy and tells you whether a problem is yours."
   dashboard  "otis, where a morning starts: everything that wants you in one list, ordered by what a delay costs, one row a thing. And gag, everything $who is doing in the background."
-  commits    "ga, gcm, gam, gfx, gl, gundo and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and undo any of it."
+  commits    "ga, gcm, gam, gl, gundo and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and undo any of it."
   branches   "gb with each branch's MR and drift, worktrees for what runs beside your checkout (gw, gwn), gup, and glab stacks (gstack)."
-  settings   "What is set in your repo now, and the settings that change the most: a remote workspace for checks, what Claude may run, lint before folding fixes, the agent's lessons, your editor and theme."
+  settings   "What is set in your repo now, and the settings that change the most: lint before folding fixes and a remote workspace to run it in, the agent's lessons, your editor and theme."
   cheatsheet "Every key worth knowing, on one page."
 )
 ptitle=(
@@ -891,8 +891,7 @@ part_claude_review() {
   look 3 "Its drafts sit on their symbols in the tree, ${y}✎${r} on the row, and are marked as $who's in the preview, in nvim and in S's prompt. A comment about a caller the MR does not touch goes on the signature that breaks it, beside its callers row."
   look 4 "Under each draft, for you alone and never posted: first where its symbol sits (what happened to it, the entry point it is reached from, which callers break), then why $who wrote it, where in the tree to look, and how sure it is. Edit or delete drafts in nvim, then ${k}S${r} posts what is left, under your name."
   look 5 "It cannot publish anything: it gets read-only file tools, no MCP servers and none of your settings, and answers in JSON. otis's one write is creating drafts, and if the MR moves while $who reads, nothing is drafted."
-  look 6 "With otis.remote and otis.claudeCommand set (the settings tour), it can run the checks you named, a type check or a test, in your workspace when a comment rests on one, and says what it ran. A hook blocks any other command."
-  look 7 "Up to four run at once, each in a worktree of its own. Start one on every MR in your queue and read them as they land; the row in gmr shows each one's drafts waiting."
+  look 6 "Up to four run at once, each in a worktree of its own. Start one on every MR in your queue and read them as they land; the row in gmr shows each one's drafts waiting."
   say "${k}git config --global otis.lessons true${r} has every comment also name the principle behind it and teach it, with where to read more. Also for you alone."
   pause
 }
@@ -976,7 +975,7 @@ part_ship_merge() {
   key c "CI jobs and logs: r retries a job, P plays a manual one, X cancels, ctrl-x cancels the pipeline"
   key "r N" "retry what failed, start a new pipeline"
   key v "the pipeline's stage graph; p opens it in the browser"
-  key m "merge, or merge when the pipeline succeeds; with no pipeline yet (the next layer of a stack), starts one first"
+  key m "merge, or set it to merge itself once approved and green; with no pipeline yet (the next layer of a stack), starts one first"
   key b "have GitLab rebase it onto its target, after a confirm; on a glab stack, the whole stack"
   key R "draft or ready, on yours"
   key "A l a" "approve, labels, reviewers"
@@ -1025,11 +1024,11 @@ EOF
     perl -pi -e 's|^export function daysSince|// Whole days, rounded down.\nexport function daysSince|; s/order.total > 500/order.total >= 500/' src/fees.ts)
   say "The demo branch now has two commits, and two uncommitted edits in src/fees.ts: a comment on daysSince, which belongs in the first commit, and >= in feeWaived, which belongs in the second. Put each where it belongs:"
   look 1 "${k}ga${r}, then ${k}space${r} on feeWaived only, and ${k}q${r}. ${k}gam${r} folds what is staged into the last commit (on a stack, it restacks the branches above)."
-  look 2 "${k}ga${r} again, stage daysSince, ${k}q${r}. ${k}gfx${r} lists the branch's commits: pick \"Charge a restocking fee\". The edit goes into the commit that made daysSince, and the one above it is replayed on top."
-  look 3 "${k}gl${r} is the log: ${k}r${r} rewords a commit, ${k}f${r} folds what is staged into the one under the cursor. Try a subject like \"feat: stuff\" to meet the message rules: no type prefix, 72 characters, no em dash."
+  look 2 "${k}ga${r} again, stage daysSince, ${k}q${r}. ${k}gl${r} is the log: ${k}f${r} on \"Charge a restocking fee\" folds what is staged into it. The edit goes into the commit that made daysSince, and the one above it is replayed on top."
+  look 3 "${k}gl${r} again: ${k}r${r} rewords the commit under the cursor. Try a subject like \"feat: stuff\" to meet the message rules: no type prefix, 72 characters, no em dash."
   look 4 "${k}gundo${r} lists every state HEAD has been in. Pick one from before the folds and it is all taken back."
   look 5 "${k}gwip${r} sets everything aside as a commit, not a stash, which every worktree shares; ${k}gunwip${r} brings it back."
-  say "Also: ${k}gcm${r} commits in your editor with the diff below, ${k}gcp \"subject\"${r} stages, commits and pushes, ${k}gdd${r} discards (asks first), ${k}gpark${r} stashes a selection instead, ${k}gp${r} pushes, refusing to overwrite commits you have not seen."
+  say "Also: ${k}gcm${r} commits in your editor with the diff below, in ${k}ga${r}'s file panel (${k}f${r}) ${k}d${r} discards a file (asks first) and ${k}P${r} parks it in a stash instead, which ${k}gst${r} brings back, ${k}gp${r} pushes, refusing to overwrite commits you have not seen."
   shell
   demo_reset
 }
@@ -1081,8 +1080,7 @@ part_settings() {
     printf "    ${k}%-18s${r} %s\n" otis.$1 "$v"
     printf "    %-18s " ""; hang 23 "$2"
   }
-  setting remote "an ssh host (a Coder workspace) where heavy commands run, with otis.remotePath its checkout; git-remote-run sends your checkout there as it stands and brings back what changed"
-  setting claudeCommand "what Claude may run there, one prefix each (bazel test), targets named outright or with :all, never a glob. Without it Claude's runs have no shell at all"
+  setting remote "an ssh host (a Coder workspace) where F's lint runs instead of here, with otis.remotePath its checkout; git-remote-run sends your checkout there as it stands and brings back what changed"
   setting lintCommand "lint run before F folds $who's fixes in"
   setting lessons "true: each of $who's comments and fixes also teaches the principle behind it, for you alone"
   setting editor "what opens files from the pickers: cursor, code, zed, nvim"
@@ -1126,7 +1124,7 @@ part_cheatsheet() {
   key "F a B d" "fold in, apply uncommitted, own branch, discard"
   print
   print -r -- "  ${m}history${r}"
-  key "gam gfx" "fold staged into the last commit, into an earlier one"
+  key "gam" "fold staged into the last commit (gl's f: into an earlier one)"
   key "gundo gwip" "undo from the reflog; set work aside"
 }
 

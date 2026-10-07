@@ -3,8 +3,8 @@
 # Review an MR without touching your own worktree. One reusable worktree,
 # .claude/worktrees/review under the main checkout, is moved to the MR's head;
 # moving it only rewrites the files that differ, where a fresh worktree per MR
-# would check out the whole repo each time. The MR's commits come from GitLab's
-# refs/merge-requests/<iid>/head, which also covers forks.
+# would check out the whole repo each time. The MR's commits come from its head
+# ref (git-forge head-ref), which also covers forks.
 #
 # Fast by doing only what the picker needs before it opens. gmr passes the
 # MR's head and base as GitLab reports them, and prefetches the commits
@@ -18,11 +18,22 @@
 # opens the MR's version of each file. The worktree is always detached at the
 # MR's head: nothing of yours is ever checked out or moved.
 #
+# --ready <iid> <head> <base> <start> moves the worktree to the MR the same
+# way and no more, as P's screen opens (git-walk --view); --open <iid> <head>
+# <base> <start> <path> <line>, enter there, then only opens that line in it,
+# moving it first only when it is at another head and not on its way.
+#
 # --claude (gmr's C) has Claude review it instead (git-mr-claude), straight
 # from the list: the same commits, no worktree, since Claude takes its own.
-claude=
+claude= open= ready=
 [ "$1" = --claude ] && { claude=1; shift; }
-iid=$1 target=${2:-$(otis-config main)} url=$3 head=$5 base=$6 start=$7
+if [ "$1" = --open ]; then
+  open=1 iid=$2 head=$3 base=$4 start=$5 path=$6 line=$7 target=$(otis-config main)
+elif [ "$1" = --ready ]; then
+  ready=1 iid=$2 head=$3 base=$4 start=$5 target=$(otis-config main)
+else
+  iid=$1 target=${2:-$(otis-config main)} url=$3 head=$5 base=$6 start=$7
+fi
 [ -n "$iid" ] || exit 0
 
 pause() { otis-popup say "$1"; }
@@ -36,11 +47,23 @@ common=$(git rev-parse --git-common-dir)
 record="$common/gmr-review-branch"
 moving="$common/gmr-review-moving"
 
+# open_it: the line, in the worktree, as the file picker's enter opens it:
+# the review's diff base (what merging would change now, git-mr-base) and
+# its comments; nvim waits on a move still going (git-mr-wait).
+open_it() {
+  cd "$dir" || exit 1
+  [ -n "$start" ] || start=$(git rev-parse -q --verify "origin/$target")
+  base=$(git-mr-base "$base" "$head" "$start")
+  export NVIM_DIFF_BASE=$base GMR_IID=$iid GMR_RANGE=$base..$head GMR_KIND=review GMR_MOVING=$moving
+  exec git-commit-open "$base..$head" "$path" "$line"
+}
+[ -n "$open" ] && { [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null)" = "$head" ] || [ -s "$moving" ]; } && open_it
+
 if have "$head" && have "$base" && { [ -z "$start" ] || have "$start"; }; then
   git update-ref "$mr" "$head"
 else
   printf 'fetching !%s ...\n' "$iid"
-  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin "+refs/merge-requests/$iid/head:$mr" \
+  GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin "+$(git-forge head-ref "$iid"):$mr" \
     "+refs/heads/$target:refs/remotes/origin/$target" || { pause "fetch failed"; exit 1; }
   head=$(git rev-parse "$mr")
   base=$(git merge-base "origin/$target" "$mr") || { pause "no merge base with origin/$target"; exit 1; }
@@ -85,6 +108,8 @@ rm -f "$moving.err"
   rm -f "$record" "$moving" "$moving.err"
 ) </dev/null >/dev/null 2>&1 &
 echo $! > "$moving"
+[ -n "$ready" ] && exit 0
+[ -n "$open" ] && open_it
 
 cd "$dir" || exit 1
 # The diff shows what merging would change now, not what GitLab's merge base

@@ -86,6 +86,7 @@ dots() {
   for c in $(jq -r '.criteria[].id' "$1/plan.json" 2>/dev/null); do
     r=$(jq -r --arg c "$c" '.criteria[]? | select(.id == $c) | .result' "$1/verdict.json" 2>/dev/null)
     if [ "$r" = verified ]; then printf '●'
+    elif [ "$r" = changed ]; then printf '?'
     elif [ -n "$r" ]; then printf '✗'
     elif [ "$c" = "$now" ]; then printf '◌'
     elif ls "$1/artifacts/$c"* >/dev/null 2>&1; then printf '●'

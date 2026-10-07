@@ -124,9 +124,9 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
     return ""
   }
   # What AI is doing on it, or has left for it, in a word, as gmr says it:
-  # work going (what kind), what waits on you, what broke, what is ready.
-  # Verifications are filed under the MR when there is one; walks under the
-  # branch.
+  # work going (what kind), what waits on you, what broke, what is ready;
+  # nothing when there is none, and its width in awn. Verifications are
+  # filed under the MR when there is one; walks under the branch.
   function ai_word(b, mrid, tip, cw,   k, c, w, n) {
     k = (mrid != "") ? mrid : "b-" b; gsub(/\//, "%", k)
     if (cw == "fixing") { c = GK_ATTENTION; w = "fixing" }
@@ -137,10 +137,10 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
     else if (wstatus[b] == "failed") { c = GK_BAD; w = "\342\234\227 trace"; n = 7 }
     else if (vstatus[k] == "done" && vhead[k] == tip && vverdict[k] == "pass") { c = GK_GOOD; w = "verified" }
     else if (wstatus[b] == "done" && whead[b] == tip) { c = GK_GOOD; w = "tour" }
-    else return sprintf("%10s", "")
+    else { awn = 0; return "" }
     # The cross is three bytes and one column: its words say their width.
-    if (n == "") n = length(w)
-    return c w GK_R sprintf("%" (10 - n) "s", "")
+    awn = (n == "") ? length(w) : n
+    return c w GK_R
   }
   $1 == "MAIN"    { main = $2; next }
   $1 == "CURRENT" { current = $2; next }
@@ -157,10 +157,11 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
     else when = int(age / 2592000) "mo"
 
     # Ahead of and behind origin/main, padded by display columns rather than
-    # bytes: the arrows are three bytes each and one column each.
+    # bytes: the arrows are three bytes each and one column each. Behind by
+    # more than 99 is every old branch, and its age says so already.
     drift = ""; driftlen = 0
     if ($8 > 0) { drift = GK_ATTENTION "\342\206\221" $8 GK_R; driftlen = 1 + length($8 "") }
-    if ($9 > 0) {
+    if ($9 > 0 && $9 <= 99) {
       if (driftlen) { drift = drift " "; driftlen++ }
       drift = drift GK_CONTEXT "\342\206\223" $9 GK_R; driftlen += 1 + length($9 "")
     }
@@ -180,8 +181,12 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
     }
     name = gk_path(b, budget, GK_TEXT)
 
+    # One word: what an agent is up to on it, else where the branch stands.
     cw = claude(b, $5)
-    head = mark ai_word(b, $5, $10, cw) $4 " " iid " " drift "  "
+    aw = ai_word(b, $5, $10, cw)
+    if (aw != "") word = aw sprintf("%" (11 - awn) "s", "")
+    else word = $4 "   "
+    head = mark word iid " " drift "  "
     tail = name where "  " GK_CONTEXT when GK_R "\t" b "\t" kind "\t" wt[b] "\t" $5 "\t" place "\t" $8 "\t" $9 "\t" cw
     if (kind == "main") pinned = head tail
     else {
@@ -211,22 +216,6 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
     }
     for (i = 1; i <= n; i++) if (!stacked[i]) emit(i, 0)
   }' "$f.facts"
-
-# What the row's columns mean, for the ? help view (otis-pick), as gmr does
-# it. A column may be a glyph wide only because this is a keypress away.
-{
-  printf "${GK_CONTEXT}columns${GK_R}\n"
-  printf "  ${GK_ELSEWHERE}\342\226\266${GK_R}        the branch you are on\n"
-  printf "  ${GK_ATTENTION}\342\227\214${GK_R} ${GK_YOURS}\342\234\216${GK_R}      an agent is working \302\267 an agent has fixes waiting for you (C)\n"
-  printf "  ${GK_ATTENTION}\342\227\216${GK_R} ${GK_GOOD}\342\227\217${GK_R} ${GK_BAD}\342\227\217${GK_R} ${GK_CONTEXT}\342\227\217${GK_R} ${GK_BAD}\342\227\213${GK_R}  verifying in Cursor Cloud (V) \302\267 verified: passed, failed, inconclusive \302\267 the verification broke\n"
-  printf "  ${GK_ATTENTION}\342\244\263${GK_R} ${GK_GOOD}\342\244\263${GK_R} ${GK_BAD}\342\244\263${GK_R}    walking inputs through it (P) \302\267 walked: P in gdm shows it \302\267 the walk broke\n"
-  printf "  ${GK_ATTENTION}!1234${GK_R}    its merge request\n"
-  printf "  ${GK_ATTENTION}\342\206\2213${GK_R} ${GK_CONTEXT}\342\206\22312${GK_R}  commits it has that origin/main does not, and the other way round\n"
-  printf "\n${GK_CONTEXT}state${GK_R}\n"
-  printf "  ${GK_MAIN}main${GK_R}      ${GK_ATTENTION}open MR${GK_R}   ${GK_GOOD}merged${GK_R}   ${GK_GOOD}closed${GK_R}   ${GK_GOOD}their MR${GK_R}\n"
-  printf "  ${GK_BAD}merged+${GK_R} ${GK_BAD}closed+${GK_R}  the MR is done but the branch has moved since\n"
-  printf "  ${GK_CONTEXT}no MR${GK_R}     ${GK_CONTEXT}unpushed${GK_R}  origin has it, or it is only here\n"
-} > "$st/legend"
 
 # The test-file footer, where there is an origin: without one git-branch-facts
 # said so in the footer instead. It leads its facts with ORIGIN when there is

@@ -30,6 +30,10 @@
 # from the last fetch that worked. The cache's mtime is that time; attempts are
 # timed by $cache.tried, so a failing fetch is retried no more often than a
 # working one, and the picker reloads once when a fetch starts or stops failing.
+# With no picker to reload (the dashboard, which reads the cache again every
+# ten seconds and fetches on u), a cache whose last fetch failed is still
+# fetched again in the background: what broke it (a login that expired) once
+# mended, the failure goes by itself rather than stand until the next u.
 refresh= nowait= sync= now=
 [ "$1" = --refresh ] && { refresh=1; shift; }
 [ "$1" = --no-wait ] && { nowait=1; shift; }
@@ -86,6 +90,12 @@ run() {
     rm -f "$new.stderr"
     return 0
   fi
+  # glab takes the INT itself and exits 1 saying the command was
+  # interrupted, so sh carries on rather than run the trap: that is the
+  # picker closing too, not GitLab failing.
+  if grep -q 'command execution has been interrupted' "$new.stderr" 2>/dev/null; then
+    rm -f "$new" "$new.stderr"; exit 1
+  fi
   err=$(mktemp "$cache.err.XXXXXX")
   { jq -r '.errors[]?.message // empty' "$new" 2>/dev/null; cat "$new.stderr"; } > "$err"
   [ -s "$err" ] || printf '%s failed without saying why\n' "$1" > "$err"
@@ -93,7 +103,7 @@ run() {
   rm -f "$new" "$new.stderr"
   return 1
 }
-tell() { curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null; }
+tell() { [ -n "$FZF_PORT" ] && curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null; }
 
 # A fetch with nothing cached yet holds the picker up on an empty list, which
 # is the one place otis makes you wait with nothing on the screen. So it says
@@ -150,7 +160,7 @@ if [ -n "$now" ]; then
     rm -f "$cache.err"
   fi
   mark_stale
-  [ -s "$cache" ] || { head -1 "$cache.err" >&2; exit 1; }
+  [ -s "$cache" ] || { git-forge why "$cache.err" >&2; exit 1; }
   echo "$cache"
   exit 0
 fi
@@ -177,7 +187,7 @@ if [ ! -s "$cache" ]; then
   waiting "asking GitLab, the first time in this repo"
   if ! run "$@"; then
     waited
-    head -1 "$cache.err" >&2
+    git-forge why "$cache.err" >&2
     mark_stale
     exit 1
   fi
@@ -195,7 +205,7 @@ last=$cache
 [ "$cache.tried" -nt "$cache" ] && last=$cache.tried
 # date -r reads a file's mtime on both macOS and Linux, where stat's flags differ.
 age=$(( $(date +%s) - $(date -r "$last" +%s) ))
-[ "$age" -ge "$stale" ] && [ -n "$FZF_PORT" ] || exit 0
+[ "$age" -ge "$stale" ] && { [ -n "$FZF_PORT" ] || [ -s "$cache.err" ]; } || exit 0
 # Mark the attempt now so a burst of reloads starts one fetch, not several.
 touch "$cache.tried"
 (

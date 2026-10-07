@@ -18,7 +18,7 @@ say() { printf "${GK_TEXT}%s${GK_R}" "$(pane_fit "$1" $((PANE_W - 2)))"; }
 
 short=$wtp; case $wtp in "$HOME"/*) short="~${wtp#"$HOME"}" ;; esac
 if [ ! -d "$wtp" ]; then
-  pane_callout bad "The directory is gone" "$(say "git still keeps a record of it.")" "keys:d clears the record"
+  pane_callout bad "The directory is gone" "$(say "git still keeps a record of it.")"
   pane_title "${wtp##*/}"
   pane_meta "$short"
   exit 0
@@ -65,9 +65,9 @@ elif [ "$nd" -gt 0 ]; then
   pane_callout yours "$nd uncommitted: d won't remove it" "$(say "Commit them, or gwip there, and it can go.")"
 elif [ -z "$role" ]; then
   case $kind in
-    merged) pane_callout good "Safe to remove" "$(say "The MR merged and nothing here is uncommitted.")" "keys:d removes it, and the branch" ;;
-    closed) pane_callout good "Safe to remove" "$(say "The MR closed and nothing here is uncommitted.")" "keys:d removes it, and the branch" ;;
-    theirs) pane_callout good "Safe to remove" "$(say "Someone else's MR, and GitLab has everything here.")" "keys:d removes it, and the branch" ;;
+    merged) pane_callout good "Safe to remove" "$(say "The MR merged and nothing here is uncommitted.")" ;;
+    closed) pane_callout good "Safe to remove" "$(say "The MR closed and nothing here is uncommitted.")" ;;
+    theirs) pane_callout good "Safe to remove" "$(say "Someone else's MR, and GitLab has everything here.")" ;;
   esac
 fi
 

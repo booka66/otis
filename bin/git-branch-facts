@@ -40,11 +40,8 @@ $(otis-config base main)
 EOF
 
 refresh_cache() {
-  repo=$(otis-config project)
   names=$(git branch --format='%(refname:short)' | grep -vx "$main" | jq -R . | jq -sc .)
-  query='query($repo: ID!, $branches: [String!]) { currentUser { username } project(fullPath: $repo) {
-    mergeRequests(sourceBranches: $branches, first: 100) { nodes { iid state sourceBranch targetBranch diffHeadSha updatedAt author { username } } } } }'
-  json=$(glab api graphql -f query="$query" -f repo="$repo" -F branches="$names" 2> "$cache.err")
+  json=$(git-forge branch-mrs "$names" 2> "$cache.err")
   if [ $? -ne 0 ] || [ "$(printf '%s' "$json" | jq -r '(.errors // []) | length' 2>/dev/null)" != 0 ]; then
     printf '%s' "$json" | jq -r '.errors[]?.message // empty' 2>/dev/null >> "$cache.err"
     [ -s "$cache.err" ] || echo "the MR lookup for local branches failed without saying why" > "$cache.err"
@@ -89,6 +86,7 @@ read -r current < "$f.current" || current=
 # An origin that is not on GitLab has no MRs to look up, which is not a failure.
 gitlab=
 case $origin in *gitlab*) gitlab=1 ;; esac
+[ -z "$gitlab" ] && [ -n "$origin" ] && [ "$(otis-config forge)" = github ] && gitlab=1
 if [ -z "$origin" ]; then
   printf "${GK_CONTEXT}no origin remote, so no MR info; drift is against local main${GK_R}\n" > "$st/footer"
 elif [ -z "$gitlab" ]; then
@@ -159,8 +157,8 @@ GK_OK="$merged_ok" awk -F'\t' -v OFS='\t' -v main="$main" -v current="$current" 
     # Eight columns each, so every list that leads with one lines up: gb and
     # gw. "detached" and "missing " in git-worktree-list are the same width.
     label["main"] = GK_MAIN substr(main "        ", 1, 8) GK_R
-    label["open"] = GK_ATTENTION "open MR " GK_R; label["merged"] = GK_GOOD "merged  " GK_R; label["merged-diff"] = GK_BAD "merged+ " GK_R
-    label["closed"] = GK_GOOD "closed  " GK_R; label["closed-diff"] = GK_BAD "closed+ " GK_R; label["theirs"] = GK_GOOD "their MR" GK_R
+    label["open"] = GK_ATTENTION "open MR " GK_R; label["merged"] = GK_GOOD "merged  " GK_R; label["merged-diff"] = GK_BAD "new work" GK_R
+    label["closed"] = GK_GOOD "closed  " GK_R; label["closed-diff"] = GK_BAD "new work" GK_R; label["theirs"] = GK_GOOD "their MR" GK_R
     label["pushed"] = GK_CONTEXT "no MR   " GK_R; label["local"] = GK_CONTEXT "unpushed" GK_R
     if (origin != "") print "ORIGIN", origin
     print "MAIN", main

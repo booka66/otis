@@ -14,8 +14,24 @@
 
 def rel: if type == "string" then sub("^/workspace/"; "") else . end;
 
+# said: what a tool returned, as text. An MCP tool (the browser) answers with
+# content blocks rather than a string: their text a line each, an image left
+# out. Whatever else comes is printed as it is, so no shape can stop the
+# stream: an error here ends jq, and every event after it is lost until the
+# run's stream is picked up again.
+def said:
+  if type == "string" then .
+  elif type == "array" then map(if type == "object" and has("text") then .text | if type == "object" then .text else . end | said
+                               elif type == "object" then empty else said end) | join("\n")
+  else tostring end;
+
+# toolname: an MCP tool as words: browser_run_code_unsafe is "browser run code".
+def toolname: (.toolName // .name // "mcp") | sub("_unsafe$"; "") | gsub("_"; " ");
+
 def detail($name):
   if $name == "run_terminal_cmd" then .command
+  # An MCP call is named by the tool it reached, with what it was given.
+  elif $name == "mcp" then ([toolname] + [.args | objects | .[] | said]) | join(" ")
   elif $name == "file_search" then "\(.globPattern // "") in \(.targetDirectory // "." | rel)"
   elif $name == "grep_search" then "\(.pattern // "")\(if .path then " in \(.path | rel)" else "" end)\(if .glob then " \(.glob)" else "" end)"
   elif .path then (.path | rel) + (if .offset then " from line \(.offset)" else "" end)
@@ -33,9 +49,9 @@ def returned($name):
       elif $name == "grep_search" then
         [$s.workspaceResults[]?.content.matches[]?] as $files
         | "\([$files[].matches[]?] | length) matches in \($files | length) files: \($files | map(.file) | join(", "))"
-      else $s.content // $s.output // ($s | tostring) end
+      else $s.content // $s.output // $s end
   end
-  | .[0:600];
+  | said | .[0:600];
 
 def flush: [.buf | to_entries[] | select(.value | test("\\S")) | {type: .key, text: (.value | sub("^\\s+"; "") | sub("\\s+$"; ""))}];
 
@@ -54,15 +70,16 @@ foreach (inputs | fromjson? | select(type == "object")) as $e (
           | (if $t.status != "running" and $t.result != null then
                # Calls run side by side and finish out of order, so each
                # says which it was.
-               (($t.args // {}) | .globPattern // .pattern // (.path | if . then split("/")[-1] else null end) // .command // $t.name
+               (($t.args // {}) | .globPattern // .pattern // (.path | if . then split("/")[-1] else null end) // .command // (select(.toolName) | toolname) // $t.name
                  | tostring | .[0:40]) as $which
                | .out += [{type: "output", error: ($t.status == "error" or $t.result.error != null),
                            text: ($which + ": " + ($t.result | returned($t.name)))}]
              else . end)
-        elif $e.event == "status" then .out += [{type: "otis", text: "tester \($e.data.status | ascii_downcase)"}]
+        # at, as say's lines have: when it came, for the views and the retrospective.
+        elif $e.event == "status" then .out += [{type: "otis", text: "tester \($e.data.status | ascii_downcase)", at: (now | floor)}]
         elif $e.event == "error" then
           # The stream falling over is not the tester failing; the run picks it up again.
-          .out += [{type: "otis", text: (if ($e.data.message | test("stream is no longer available")) then "tester's stream dropped; picking it up again" else "tester error: \($e.data.message)" end)}]
+          .out += [{type: "otis", at: (now | floor), text: (if ($e.data.message | test("stream is no longer available")) then "tester's stream dropped; picking it up again" else "tester error: \($e.data.message)" end)}]
         else .out += [{type: "result"}] end
     else . end;
   .out[] + {who: "tester"})

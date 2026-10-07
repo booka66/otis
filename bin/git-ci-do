@@ -12,8 +12,9 @@ if { [ "$action" = retry ] || [ "$action" = new ]; } &&
   jq -e --arg iid "$iid" '.mrs[] | select(.iid == $iid)' "$GIT_FZF_STATE/ci-merged.json" >/dev/null 2>&1; then
   exec git-fzf-note "!$iid is merged; r and N are for open MRs' pipelines, not main's"
 fi
-[ -n "$iid" ] || exec git-fzf-note "no MR on that row"
-[ "$action" = new ] && exec echo "execute(git-ci-run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+# A push to main's checks have no MR, only a pipeline (git-forge main-builds).
+[ -n "$iid" ] || [ -n "$id" ] || exec git-fzf-note "no MR on that row"
+[ "$action" = new ] && [ -n "$iid" ] && exec echo "execute(git-ci-run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
 [ -n "$id" ] || exec git-fzf-note "!$iid has no pipeline yet"
 case $action in
   jobs)     echo "execute(git-ci-jobs $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;

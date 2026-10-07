@@ -5,6 +5,7 @@
 # git-verify --marks                {key: {verifying, status, verdict, head}} of every run, for gmr's and gb's rows
 # git-verify --artifacts <dir>      what a run brought back, in a picker (a in its progress view)
 # git-verify --artifact <file>      one of them, for that picker's preview
+# git-verify --view <file>          an image over the whole terminal; a video played there
 # git-verify --attach <dir>        the report uploaded to the MR (a branch run: the branch's open MR) and linked at the end of its description (p in its progress view)
 # git-verify --keylines < <log>     the lines of test or build output that say how it went
 # git-verify --preview <iid> [b]    the verdict and where the evidence is, for the previews (b: gb's branch, when it has no MR)
@@ -19,7 +20,13 @@
 # least follows the change's value to its far end, through the real path, with
 # the row or the event it left read back. A second Claude, fresh, reads the
 # change the other way, sure it broke something its author was not looking
-# at, and adds checks for that (otis.verifyBreak). A Cursor Cloud agent
+# at, and adds checks for that (otis.verifyBreak). It reads the judge's plan
+# first, and what earlier verifications of the change found, so its checks
+# are about what the change did not set out to do; and the judge tells what
+# they find apart: what the change broke, which fails it, from what it only
+# changed beyond its description, which is a question for its author and
+# leaves a pass a pass. A verdict that fails every time is one nobody reads.
+# A Cursor Cloud agent
 # is the tester: a VM with the repo's environment (its .cursor/), booted and
 # its services started at the outset so it is warm when the plan is in, where it
 # can start the sandbox, click through the app and record it, and run tests.
@@ -34,8 +41,7 @@
 #
 # The tester works from what is on origin, so the branch must be pushed. From
 # gb, V on a branch origin does not have as it is here asks once to push it
-# and verify, in place of the usual confirm, and pushes it (with a lease,
-# when origin's has been rewritten under it); a branch with an MR waits for
+# and verify, in place of the usual confirm, and pushes it (push_it); a branch with an MR waits for
 # GitLab to see the push, since the run reads the MR's head from there. It is
 # told not to commit or push, and Cursor opens no MR for it, but a prompt is
 # all that holds it to that, the fix round included, where it edits the source. It needs CURSOR_API_KEY (Cursor's dashboard,
@@ -57,7 +63,7 @@
 # A run starts on the VM an earlier one left idle, this MR's or any other's
 # here, when Cursor still has one, rather than waiting on a cold boot.
 mode=
-case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--keylines|--attach) mode=$1; shift ;; esac
+case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--view|--keylines|--attach) mode=$1; shift ;; esac
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/repo.sh"
 common=$OTIS_GITDIR
@@ -66,12 +72,66 @@ pause() { otis-popup say "$1"; exit 0; }
 
 . "$share/claude-run.sh"
 
+# image <file> <lines>: drawn $cols wide at most, as the terminal can: its
+# own pixels in kitty and Ghostty, blocks of color anywhere else.
+image() {
+  # GHOSTTY_RESOURCES_DIR: Ghostty under a multiplexer that names itself in
+  # TERM_PROGRAM (herdr) and passes the images through.
+  if { [ "$TERM_PROGRAM" = ghostty ] || [ -n "$GHOSTTY_RESOURCES_DIR" ] || [ -n "$KITTY_WINDOW_ID" ]; } && command -v kitten >/dev/null; then
+    # The file itself, for the terminal to size (share/kitty-image.pl): a
+    # cell's size in pixels from the window's, and anything not a PNG made
+    # one, once, since a PNG is what the terminal reads.
+    png=$1
+    case $1 in *.png) ;; *)
+      png=${TMPDIR:-/tmp}/otis-image/$(printf '%s' "$1" | cksum | tr ' ' -).png
+      [ -s "$png" ] || { mkdir -p "${png%/*}" && ffmpeg -loglevel error -y -i "$1" "$png" 2>/dev/null; } || png= ;;
+    esac
+    cell=$({ kitten icat --print-window-size; echo; stty size; } 2>/dev/null < /dev/tty | tr 'x\n' '  ' |
+      awk '$1 > 0 && $4 > 0 { printf "%.3f %.3f", $1 / $4, $2 / $3 }')
+    [ -n "$png" ] && [ -n "$cell" ] && perl "$share/kitty-image.pl" "$png" "$cols" "$2" $cell && return
+    # Failing that, kitten's own: it sizes the image and sends the pixels,
+    # inline (stream), since shared memory is read only once.
+    img=$(kitten icat --transfer-mode=stream --unicode-placeholder --stdin=no --scale-up --place="${cols}x$2@0x0" "$1" 2>/dev/null) && [ -n "$img" ] &&
+      { printf '%s\n' "$img" | sed '$d' | sed "\$s/\$/$(printf '\033[m')/"; return; }
+  fi
+  # kitten gives up on a terminal that does not say its size in pixels (a
+  # program's own pseudo-terminal, often): then blocks of color, not nothing.
+  if command -v chafa >/dev/null; then
+    # As letters: left to choose, chafa sends an image of its own, which a pane cannot place.
+    chafa -f symbols -s "${cols}x$2" "$1"
+  else
+    printf "${GK_CONTEXT}nothing here draws images (chafa); enter opens it${GK_R}\n"
+  fi
+}
+
 case $mode in
+  --view)
+    # From a screen's enter: the image as large as the terminal has room
+    # for, until a key. A video plays there, under a bar to scrub it by,
+    # when flick is installed (else mpv, by its kitty output), and in its
+    # app when neither is.
+    f=$1
+    . "$share/palette.sh"
+    case $f in *.mp4|*.webm|*.mov|*.mkv)
+      command -v flick >/dev/null && exec flick "$f"
+      command -v mpv >/dev/null && exec mpv --really-quiet --vo=kitty "$f"
+      exec otis-open "$f" ;;
+    esac
+    size=$(stty size < /dev/tty); cols=${size#* } lines=${size% *}
+    printf '\033[2J\033[H'
+    image "$f" $((lines - 2))
+    printf "\n${GK_CONTEXT}%s · any key goes back${GK_R}" "${f##*/}"
+    saved=$(stty -g < /dev/tty); stty -icanon -echo < /dev/tty
+    dd bs=1 count=1 < /dev/tty > /dev/null 2>&1
+    stty "$saved" < /dev/tty
+    exit 0
+    ;;
   --check)
+    # <kind> <iid> [<its branch>]
     kind=$1 iid=$2
     [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
     [ "$kind" = merged ] && exec git-fzf-note "V verifies open MRs, and !$iid has merged"
-    echo "execute(git-verify $iid)"
+    echo "execute(git-verify $iid${3:+ '$3'})"
     exit 0
     ;;
   --marks)
@@ -117,10 +177,16 @@ case $mode in
       printf 'user = "%s:"\n' "$CURSOR_API_KEY" | curl -sS -m 5 -K - "https://api.cursor.com/v1/agents/$(cat "$d/agent")/usage" 2>/dev/null |
         jq -e 'select(.cost)' > "$d/usage.json.new" 2>/dev/null && mv "$d/usage.json.new" "$d/usage.json" || rm -f "$d/usage.json.new"
     fi
-    # What it found, a line a thing, each cut to the pane: the verdict and
-    # its gist, each criterion as a glyph and its claim, the concerns, how
-    # much looking back has to say. What any of it says in full is behind
-    # a key, which the footer names.
+    # What it found, short, as the two answers a verification has (tally,
+    # share/otis.jq). Whether the change does what it says, on one line with
+    # the verdict, and under it only its own claims that did not hold, each
+    # with what was seen. Then what it did around that, from the breaker's
+    # checks: BROKE, what the change broke, which fails it; ALSO CHANGED,
+    # where it only does more than its description says, a question for its
+    # author with how it was before, which does not. What else the report
+    # has is a line of facts under them. No ids: a sentence says it. Nothing
+    # is cut: a claim is said whole, and of what was seen, the sentences that
+    # fit (wrapl). All of it in full is behind a key, which the footer names.
     spent=$(costs "$d")
     # Under a run's preview, whose own line says what it cost.
     [ -n "$OTIS_REPORT_NO_COST" ] && spent=
@@ -135,57 +201,89 @@ case $mode in
         --arg spent "$spent" --argjson arts "$n" --argjson retro "${retro:-0}" --arg fix "$fix" --arg ask "$ask" --arg infra "$infra" '
         include "otis";
         def one: gsub("[\\s]+"; " ") | gsub("`|\\*\\*|_"; "") | ltrimstr(" ");
-        def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
+        # item: a sentence under its glyph, wrapped under itself; under: what
+        # goes with it, a line below.
+        def item($g; $c; $n): (one | wrapl($w - 6; $n)) as $ls | "  " + $g + r + "  " + $c + ($ls[0] // "") + r, ($ls[1:][] | "     " + $c + . + r);
+        def under($c; $n): one | wrapl($w - 6; $n)[] | "     " + $c + . + r;
         (($plan[0] // {}).criteria // [] | map({(.id): (.plain // .claim)}) | add // {}) as $claims |
-        (.criteria | length) as $total |
-        ([.criteria[] | select(.result == "verified")] | length) as $ok |
-        ([.criteria[] | select(.result == "failed")] | length) as $bad |
+        tally($plan[0] // {}) as $t |
+        ($fix == "a verified fix" and (($t.unmet | length) + ($t.broke | length)) > 0) as $fixed |
+        ("     " + good + "fix ready" + r + context + "  ·  f" + r) as $fixline |
         (if .verdict == "pass" then good + "passed" elif .verdict == "fail" then bad + "failed" else yours + "inconclusive" end) as $v |
-        "", context + "VERIFICATION" + r + "  " + $v + r + (if $fix == "a verified fix" then context + ", " + good + "fix verified" + r else "" end) + (if $spent != "" then faint + "  " + ($spent | ltrimstr(" · ") | ltrimstr("  ")) + r else "" end),
-        "",
-        ((.summary // "") | one | wrapl($w - 2; 3)[] | "  " + text + . + r),
-        "",
-        # A segment a criterion, as wide as the pane has room for beside its count.
-        ([[((($w - 22) / ([$total, 1] | max)) | floor) - 1, 3] | min, 1] | max) as $sw |
-        "  " + (reduce .criteria[] as $c (""; . + (if $c.result == "verified" then good + ("━" * $sw) elif $c.result == "failed" then bad + ("━" * $sw) else faint + ("─" * $sw) end) + r + (if ($w - 22) / ([$total, 1] | max) >= 2 then " " else "" end)))
-          + context + " \($ok) of \($total) verified" + (if $bad > 0 then ", " + bad + "\($bad) failed" + context else "" end) + r,
-        "",
-        (.criteria[] |
-          (if .result == "verified" then good + "✓" elif .result == "failed" then bad + "✗" else yours + "?" end) as $g |
-          # The claim wraps under itself, the glyph and the id left alone.
-          ((($claims[.id] // .evidence // "") | one | wrapl($w - 8; 3)) as $ls |
-           "  " + $g + r + " " + attention + (.id | .[0:4]) + r + (" " * (4 - ([(.id | length), 4] | min))) + text + $ls[0] + r,
-           ($ls[1:][] | "        " + text + . + r)),
-          (if .result != "verified" and (.saw // .evidence // "") != "" then
-             (.result) as $res | (.saw // .evidence | one | wrapl($w - 8; 2)[] | "        " + (if $res == "failed" then bad else context end) + . + r) else empty end)),
-        (if ((.concerns // []) | length) > 0 then
-           "", context + "CONCERNS" + r + "  " + yours + "\(.concerns | length)" + r,
-           (.concerns[0:3][] | (one | wrapl($w - 4; 2)) as $ls | "  " + yours + "!" + r + " " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r)),
-           (if (.concerns | length) > 3 then "  " + faint + "+ \(.concerns | length - 3) more in the report" + r else empty end)
+        "", context + "VERIFICATION" + r + "  " + $v + r + context + "  ·  does what it says, \($t.ok) of \($t.own)" + r,
+        # Its own claims that did not hold: the claim, then what was seen.
+        (if ($t.unmet | length) > 0 then "",
+           ($t.unmet[] |
+             (if .result == "failed" then bad + "✗" else yours + "?" end) as $g |
+             (if .result == "failed" then bad else context end) as $c |
+             (.saw // .evidence // "") as $saw |
+             (($claims[.id] // .evidence // "") | item($g; text; 3)),
+             (if $saw != "" then $saw | under($c; 2) else empty end)),
+           (if $fixed and ($t.broke | length) == 0 then $fixline else empty end)
          else empty end),
-        # The message drafted for whoever keeps the environment, as it would
-        # be sent, a line an ask; m in the run (V) copies it.
-        (if $ask != "" then
-           "", context + "FOR " + ($infra | ascii_upcase) + r + "  " + faint + "V, then m copies it" + r,
-           ($ask | split("\n")[] | select(test("\\S")) | wrapl($w - 6; 3) as $ls |
-             "  " + text + $ls[0] + r, ($ls[1:][] | "    " + text + . + r))
+        # What it broke around that: what happens now says it.
+        (if ($t.broke | length) > 0 then
+           (if ($t.unmet | length) > 0 then "" else empty end),
+           context + "BROKE" + r + "  " + bad + "\($t.broke | length)" + r, "",
+           ($t.broke[] | (.saw // $claims[.id] // .evidence // "") | item(bad + "✗"; text; 3)),
+           (if $fixed then $fixline else empty end)
+         else empty end),
+        # What it only changed, a question for its author, with how it was.
+        (if ($t.changed | length) > 0 then
+           (if (($t.unmet | length) + ($t.broke | length)) > 0 then "" else empty end),
+           context + "ALSO CHANGED" + r + "  " + yours + "\($t.changed | length)" + r + context + ", not in the description" + r, "",
+           ($t.changed[] |
+             (.was // "") as $was |
+             ((.saw // $claims[.id] // "") | item(yours + "?"; text; 3)),
+             (if $was != "" then "Before: " + $was | under(context; 2) else empty end))
          else empty end),
         "",
         # What there is beyond this, as facts: the footer names the key
         # for the screen this is under.
-        "  " + faint + ([(if $arts > 0 then "\($arts) artifacts" else empty end), "the full report",
+        ([(if $arts > 0 then "\($arts) artifacts" else empty end), "the full report",
+          (if $t.open > 0 then "\($t.open) " + plural($t.open; "check"; "checks") + " around it not run" else empty end),
+          (((.concerns // []) | length) as $c | if $c > 0 then "\($c) " + plural($c; "concern"; "concerns") else empty end),
+          (if $ask != "" then "a message for \($infra)" else empty end),
           (if $retro > 0 then "\($retro) things to change" else empty end),
-          (if $fix != "" then $fix else empty end)] | join("  ·  ") | cut($w - 2)) + r
+          (if $fix != "" and ($fixed | not) then $fix else empty end),
+          (if $spent != "" then $spent | ltrimstr(" · ") | ltrimstr("  ") else empty end)] | join("  ·  ") | wrapl($w - 2; 9)[] | "  " + faint + . + r)
       ' "$d/verdict.json" 2>/dev/null
     else
-      printf "\n${GK_CONTEXT}VERIFICATION${GK_R}  "
-      if running "$d"; then printf "${GK_ATTENTION}going${GK_R}"; else printf "${GK_CONTEXT}%s${GK_R}" "$(cat "$d/status" 2>/dev/null || echo stopped)"; fi
-      [ -n "$spent" ] && printf "${GK_FAINT}  %s${GK_R}" "${spent# · }"
-      printf '\n'
+      # Not over. On one line: that it is going (or how it stopped), for how
+      # long, how many of its claims have their evidence in, what it has
+      # cost. Then the claims themselves, each whole, with how it stands:
+      # the one the tester is on now, those whose evidence is in, the rest
+      # still to come; the ones a breaker added (break.json) after the
+      # plan's. Before there is a plan, the last thing it said, whole.
+      going=; running "$d" && going=1
+      plan=$d/plan.json; [ -s "$plan" ] || plan=/dev/null
+      brk=$d/break.json; [ -s "$brk" ] || brk=/dev/null
+      on=; [ -n "$going" ] && on=$(tail -n 300 "$d/events.jsonl" 2>/dev/null | jq -rs '[.[] | select(.who == "tester") | (.input.detail // .text // "") | capture("(^|[^a-zA-Z0-9_])(?<c>[bc][0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c] | last // ""' 2>/dev/null)
+      arts=$(ls "$d/artifacts" 2>/dev/null | sed -n 's/^\([bc][0-9]*\).*/\1/p' | sort -u | tr '\n' ' ')
       last=$(jq -r 'select(.type == "otis") | .text' "$d/events.jsonl" 2>/dev/null | tail -1)
-      # Two lines at most, broken between words, the second cut with … if
-      # there is more.
-      [ -n "$last" ] && { echo; pane_wrap "$last"; }
+      jq -nr -L "$share" --slurpfile plan "$plan" --slurpfile brk "$brk" --arg on "$on" --arg arts " $arts" \
+        --arg going "$going" --arg status "$(cat "$d/status" 2>/dev/null || echo stopped)" --arg spent "${spent# · }" \
+        --arg started "$(cat "$d/started" 2>/dev/null)" --arg last "$last" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} - 1 ))" '
+        include "otis";
+        ((($plan[0] // {}).criteria // []) + (($brk[0] // {}).attacks // []) | map({id, text: (.plain // .claim // "")})) as $all |
+        ($all | map(.id as $id | . + {s: (if $id == $on then "testing" elif ($arts | contains(" " + $id + " ")) then "in" else "planned" end)})) as $claims |
+        ([$claims[] | select(.s == "in")] | length) as $in |
+        "",
+        context + "VERIFICATION" + r + "  "
+          + (if $going != "" then attention + "going" else context + $status end) + r
+          + (if $going != "" and $started != "" then context + "  ·  " + ((now - ($started | tonumber)) | floor | span) + r else "" end)
+          + (if ($claims | length) > 0 then context + "  ·  \($in) of \($claims | length) claims in" + r else "" end)
+          + (if $spent != "" then context + "  ·  " + $spent + r else "" end),
+        (if ($claims | length) > 0 then "",
+           ($claims[] |
+             (if .s == "testing" then attention + "◐" elif .s == "in" then elsewhere + "●" else faint + "○" end) as $g |
+             (if .s == "planned" then context else text end) as $c |
+             (.text | wrapl($w - 8; 99)) as $ls |
+             "  " + $g + r + " " + attention + (.id | .[0:4]) + r + (" " * (4 - ([(.id | length), 4] | min)))
+               + $c + ($ls[0] // "") + r + (if .s == "testing" then attention + "  being tested" + r else "" end),
+             ($ls[1:][] | "        " + $c + . + r))
+         elif $last != "" then "", ($last | wrapl($w - 2; 99)[] | "  " + text + . + r)
+         else empty end)'
     fi
     exit 0
     ;;
@@ -214,6 +312,7 @@ case $mode in
         case $(printf '%s\n' "$results" | awk -F'\t' -v c="$claim" 'c != "" && $1 == c { print $2 }') in
           verified) mark="${GK_GOOD}\342\234\223${GK_R}" ;;
           failed)   mark="${GK_BAD}\342\234\227${GK_R}" ;;
+          changed)  mark="${GK_YOURS}?${GK_R}" ;;
           unverified) mark="${GK_CONTEXT}?${GK_R}" ;;
           *)        mark=" " ;;
         esac
@@ -227,9 +326,10 @@ case $mode in
     [ -n "$rows" ] || { otis-popup say 'the tester brought nothing back'; exit 0; }
     # A report opens as the reviewer's page (git-verify-html) once there is a
     # verdict to write it from; before that, as the tester wrote it.
-    printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (a report as the page; videos and images in their app; text in your editor),o=the folder in Finder,y=copy path' \
-      --ansi --delimiter='\t' --with-nth=1 \
-      --bind "enter:execute(case {2} in *.png|*.jpg|*.jpeg|*.gif|*.webp|*.mp4|*.webm|*.mov|*.mkv) otis-open {2} ;; */context/report-*.md) if [ -s '$d/report.html' ] || { [ -s '$d/verdict.json' ] && git-verify-html '$d'; }; then otis-open '$d/report.html'; else otis-edit -R -- {2}; fi ;; *) otis-edit -R -- {2} ;; esac)" \
+    # Each pattern in brackets: the picker ends a command at its first ) alone.
+    printf '%s\n' "$rows" | git-fzf 'artifacts ' 'enter=open (a report as the page; a video played here or in its app; an image in its app; text in your editor),o=the folder in Finder,y=copy path' \
+      --ansi --delimiter='\t' --with-nth=1 --preview-fill \
+      --bind "enter:execute(case {2} in (*.mp4|*.webm|*.mov|*.mkv) git-verify --view {2} ;; (*.png|*.jpg|*.jpeg|*.gif|*.webp) otis-open {2} ;; (*/context/report-*.md) if [ -s '$d/report.html' ] || { [ -s '$d/verdict.json' ] && git-verify-html '$d'; }; then otis-open '$d/report.html'; else otis-edit -R -- {2}; fi ;; (*) otis-edit -R -- {2} ;; esac)" \
       --bind "o:transform(otis-open --fzf '$d/artifacts')" \
       --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
       --preview 'git-verify --artifact {2}' >/dev/null
@@ -247,26 +347,27 @@ case $mode in
     case $iid in
       b-*)
         b=$(printf '%s' "${iid#b-}" | tr '%' '/')
-        iid=$(glab api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
+        iid=$(git-forge api "projects/:fullpath/merge_requests?state=opened&source_branch=$(printf '%s' "$b" | sed 's|/|%2F|g')" 2>/dev/null | jq -r '.[0].iid // empty')
         [ -n "$iid" ] || pause "$b has no open MR to link it from; gb's n opens one" ;;
       *[!0-9]*|'') pause "only a verification of an MR has a description to link it from" ;;
     esac
     [ -s "$d/verdict.json" ] || pause "no verdict yet, so no report"
+    git-forge can upload || pause "GitHub takes no uploads to link a report from; w opens it to share"
     [ -s "$d/report.html" ] || git-verify-html "$d" || pause "could not write the report"
-    mr=$(glab api "projects/:fullpath/merge_requests/$iid") || pause "could not read !$iid from GitLab"
+    mr=$(git-forge api "projects/:fullpath/merge_requests/$iid") || pause "could not read !$iid from GitLab"
     ask="Upload the report to !$iid and link it at the end of its description?"
     [ "$(printf '%s' "$mr" | jq -r .diff_refs.head_sha)" = "$(cat "$d/head")" ] ||
       ask="!$iid has moved on since this verified $(head -c 10 "$d/head"). Link it anyway?"
     git-confirm "$ask" || exit 0
     tmp=$(mktemp -d) && cp "$d/report.html" "$tmp/verification-$iid.html" || exit 1
-    up=$(glab api "projects/:fullpath/uploads" --form "file=@$tmp/verification-$iid.html" 2>&1)
+    up=$(git-forge api "projects/:fullpath/uploads" --form "file=@$tmp/verification-$iid.html" 2>&1)
     rm -rf "$tmp"
     url=$(printf '%s' "$up" | jq -r '.url // empty' 2>/dev/null)
     [ -n "$url" ] || pause "the upload failed: $(printf '%s' "$up" | head -c 200)"
     printf '%s' "$mr" | jq --arg url "$url" '{description: ((.description // "")
       | sub("\\s*\\[verification\\]\\(/uploads/[^)]*\\)\\s*$"; "")
       | if . == "" then "" else . + "\n\n" end + "[verification](\($url))")}' > "$d/attach.json"
-    glab api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
+    git-forge api -X PUT "projects/:fullpath/merge_requests/$iid" -H 'Content-Type: application/json' --input "$d/attach.json" >/dev/null 2>"$d/attach.err" ||
       pause "the report is uploaded but the description was not changed: $(head -c 200 "$d/attach.err")"
     rm -f "$d/attach.json" "$d/attach.err"
     pause "linked from !$iid's description"
@@ -283,19 +384,19 @@ case $mode in
     d=${f%/artifacts/*}; d=${d%/context/*}
     cols=${FZF_PREVIEW_COLUMNS:-100} lines=${FZF_PREVIEW_LINES:-40}
     . "$share/palette.sh"
-    # image <file> <lines>: drawn in the preview, as the terminal can.
-    image() {
-      if { [ "$TERM_PROGRAM" = ghostty ] || [ -n "$KITTY_WINDOW_ID" ]; } && command -v kitten >/dev/null; then
-        # Inline (stream), not shared memory: the picker sends the image
-        # again each time the row is shown, and memory is read only once.
-        kitten icat --clear --transfer-mode=stream --unicode-placeholder --stdin=no --place="${cols}x$2@0x0" "$1" |
-          sed '$d' | sed "\$s/\$/$(printf '\033[m')/"
-      elif command -v chafa >/dev/null; then
-        chafa -s "${cols}x$2" "$1"
-      else
-        printf "${GK_CONTEXT}nothing here draws images (chafa); enter opens it${GK_R}\n"
-      fi
-    }
+    # Over a file named after a claim (c1-...) or kept in its folder (c1/...):
+    # what that claim says, in the plan's plain words or the breaker's.
+    case $f in */artifacts/*)
+      name=${f#"$d/artifacts/"}
+      claim=$(printf '%s\n%s\n' "$name" "${name##*/}" | sed -n 's/^\([bc][0-9][0-9]*\)[-_./].*/\1/p' | head -1)
+      quip=
+      [ -n "$claim" ] && quip=$(cat "$d/plan.json" "$d/break.json" 2>/dev/null | jq -rs -L "$share" --arg id "$claim" --argjson w "$((cols - 1))" '
+        include "otis";
+        [.[] | (.criteria // .attacks // [])[] | select(.id == $id) | .plain // .claim // empty][0] // empty
+        | wrapl($w - ($id | length) - 2; 3) as $ls
+        | attention + $id + r + "  " + text + $ls[0] + r, ($ls[1:][] | (" " * (($id | length) + 2)) + text + . + r)' 2>/dev/null)
+      [ -n "$quip" ] && { printf '%s\n' "$quip"; lines=$((lines - $(printf '%s\n' "$quip" | wc -l))); } ;;
+    esac
     case $f in
       *.png|*.jpg|*.jpeg|*.gif|*.webp)
         printf "${GK_CONTEXT}%s · enter opens it${GK_R}\n" "${f##*/}"
@@ -383,13 +484,18 @@ case $mode in
   --branch)
     b=$1 iid=$2
     [ -n "$b" ] || exit 0
-    if [ -n "$iid" ]; then set -- "$iid"; else set -- "b-$(printf '%s' "$b" | tr '/' '%')"; fi
+    if [ -n "$iid" ]; then set -- "$iid" "$b"; else set -- "b-$(printf '%s' "$b" | tr '/' '%')"; fi
     ;;
 esac
 
 key=$1
 [ -n "$key" ] || exit 0
 d=$top/$key
+# An MR verified as its branch (<its branch>, before it had an MR, or from
+# its branch's row) and never under its own number: that run is this one's.
+if [ ! -d "$d" ] && [ -n "$2" ] && [ -d "$top/b-$(printf '%s' "$2" | tr '/' '%')" ]; then
+  key=b-$(printf '%s' "$2" | tr '/' '%'); d=$top/$key
+fi
 missing=$(otis-agent-run --ready) || pause "V's judge: $missing"
 who=$(otis-agent-run --name)
 [ -n "$CURSOR_API_KEY" ] || pause "V needs CURSOR_API_KEY (Cursor dashboard, Integrations, API keys) exported in your shell"
@@ -401,21 +507,22 @@ esac
 
 # gb's branch as origin has it against as it is here: nothing when they are
 # the same (or origin cannot be asked; the run says so), else the question
-# that replaces the confirm, and push, how to push it.
+# that replaces the confirm.
 unpushed() {
   here=$(git rev-parse -q --verify "refs/heads/$b") || return 1
   there=$(git ls-remote origin "refs/heads/$b" 2>/dev/null) || return 1
   there=${there%%	*}
   [ "$here" != "$there" ] || return 1
-  push="git push -u origin refs/heads/$b:refs/heads/$b"
   if [ -z "$there" ]; then ask="origin has no $b. Push it"
   elif git merge-base --is-ancestor "$there" "$here" 2>/dev/null; then ask="$b is ahead of origin. Push it"
-  else ask="$b and origin's ($(printf '%.8s' "$there")) have diverged. Force-push it, with a lease,"; push="$push --force-with-lease=refs/heads/$b:$there"; fi
+  else ask="$b and origin's ($(printf '%.8s' "$there")) have diverged. Force-push it, with a lease,"; fi
   ask="$ask then a Cursor Cloud agent tests it while $who judges (about 15-30 minutes, billed by Cursor)?"
 }
 
 # lessons <dir>: what the verification in <dir> ran into, for the next one:
-# its verdict and concerns, and from its retro what cost time and what to do
+# its verdict, what did not hold and what had changed beyond the description
+# (so the next breaker brings again only what still stands), its concerns,
+# and from its retro what cost time and what to do
 # differently (otis's own mechanics aside), then the two sections before it
 # that it carried, so a workaround the last run never needed, because it was
 # told, is not lost. Newest first.
@@ -423,6 +530,8 @@ lessons() {
   if [ -s "$1/verdict.json" ] || [ -s "$1/retro.json" ]; then
     printf '## The verification of %s\n' "$(cut -c1-8 "$1/head" 2>/dev/null)"
     jq -r '"", "Verdict: \(.verdict). \(.summary)",
+      ([.criteria[]? | select(.result == "failed")] | if length > 0 then "", "Did not hold:", (.[] | "- \(.id): \(.saw // .evidence)") else empty end),
+      ([.criteria[]? | select(.result == "changed")] | if length > 0 then "", "Changed beyond what the description says:", (.[] | "- \(.id): \(.saw // .evidence) Before: \(.was // "")") else empty end),
       (if (.concerns | length) > 0 then "", "Concerns:", (.concerns[] | "- " + .) else empty end)' "$1/verdict.json" 2>/dev/null
     jq -r '(if (.blockers | length) > 0 then "", "What cost time:", (.blockers[] | "- \(.who): \(.what) (\(.cost))") else empty end),
       ([.recommendations[] | select(.where != "otis")] | if length > 0 then "", "What to do differently:", (.[] | "- " + .change) else empty end)' "$1/retro.json" 2>/dev/null
@@ -431,16 +540,44 @@ lessons() {
   awk '/^## / { n++ } n >= 1 && n <= 2' "$1/lessons.md" 2>/dev/null
 }
 
+# push_it: push gb's branch from where it is checked out, or, when it is
+# nowhere, from otis's push worktree, switched to it for the push and
+# detached after, so nothing of yours is touched and the branch is free to
+# check out; a pre-push hook may refuse a branch that is not checked out. The
+# worktree is kept, as git-claude-worktree keeps its pool, so what a hook
+# builds there (a lint's node_modules) is warm the next time and moving it
+# rewrites only the files that differ. The lease is on origin's as unpushed
+# saw it, so nothing pushed since is lost. A hook that moves the branch as it
+# refuses (a lint-fix commit, a rebase) and asks for the push again gets it
+# once, and here is the head that went. Its output, when it still fails, is
+# in out.
+push_it() {
+  wt=$(git-worktree-path of "$b") mine=
+  if [ -z "$wt" ]; then
+    mine=1 wt=$(git-worktree-path named push)
+    if [ -e "$wt" ]; then out=$(git -C "$wt" switch -q --discard-changes "$b" 2>&1) || return 1
+    else out=$(git-worktree-add push "$b" 2>&1) || return 1; fi
+  fi
+  for _ in 1 2; do
+    out=$(git -C "$wt" push -u origin "HEAD:refs/heads/$b" --force-with-lease="refs/heads/$b:$there" 2>&1) && ok=0 || ok=1
+    now=$(git rev-parse "refs/heads/$b")
+    [ "$ok" = 1 ] && [ "$now" != "$here" ] || break
+    here=$now
+  done
+  [ -z "$mine" ] || git -C "$wt" switch -q --detach --discard-changes >/dev/null 2>&1
+  [ "$ok" = 0 ] && here=$now
+}
+
 start() {
   if [ -n "$b" ] && unpushed; then
     note=$(git-confirm --note "$ask") || return 1
-    $push || pause "the push failed, so nothing was started"
+    push_it || pause "$(printf '%s\n' "$out" | grep -v '^hint:' | tail -4; printf 'the push failed, so nothing was started')"
     # The run reads an MR's head from GitLab, which takes a moment to see
     # a push.
     if [ -n "$iid" ]; then
       printf 'waiting for GitLab to see the push\n'
       n=0
-      until [ "$(glab api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq -r .diff_refs.head_sha)" = "$here" ]; do
+      until [ "$(git-forge api "projects/:fullpath/merge_requests/$iid" 2>/dev/null | jq -r .diff_refs.head_sha)" = "$here" ]; do
         n=$((n + 1)); [ "$n" -le 30 ] || pause "GitLab has not seen the push after a minute; V again once it has"
         sleep 2
       done

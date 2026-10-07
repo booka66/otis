@@ -22,7 +22,7 @@ refspecs=$({ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.no
   | select(.author.username != $u.username)
   | [.iid, .targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json" |
   while IFS="$(printf '\t')" read -r iid target head base start; do
-    have "$head" || printf '+refs/merge-requests/%s/head:refs/mr/%s\n' "$iid" "$iid"
+    have "$head" || printf '+%s:refs/mr/%s\n' "$(git-forge head-ref "$iid")" "$iid"
     { have "$base" && { [ -z "$start" ] || have "$start"; }; } || printf '+refs/heads/%s:refs/remotes/origin/%s\n' "$target" "$target"
   done
   jq -r '.data.currentUser.authoredMergeRequests.nodes[]?

@@ -3,7 +3,7 @@
 #                                    (into <sha>), on stderr, exit 1; else exit 0
 # git-commit-fixup <sha>             fold what is staged into <sha>
 #
-# gfx and gl's f. Only this branch's commits take a fixup, since rewriting one
+# gl's f. Only this branch's commits take a fixup, since rewriting one
 # already on main would rewrite main here. Unstaged changes are refused up
 # front: the rebase would stop on them and leave a stray fixup! commit behind.
 base=$(otis-config base)

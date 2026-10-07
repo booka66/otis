@@ -61,7 +61,7 @@ if [ "$1" = "--run" ]; then
     cancel)          git-confirm "cancel $name?" || exit 0; path=jobs/$job/cancel ;;
     cancel-pipeline) git-confirm "cancel every job still going in pipeline $id?" || exit 0; path=pipelines/$id/cancel ;;
   esac
-  out=$(glab api -X POST "projects/:fullpath/$path" 2>&1) && exit 0
+  out=$(git-forge api -X POST "projects/:fullpath/$path" 2>&1) && exit 0
   otis-popup say "$(printf '%s\n' "$out" | tail -3; printf '%s failed' "$what")"
   exit 0
 fi
@@ -105,14 +105,14 @@ fi
 
 id=$1 iid=$2
 [ -n "$id" ] || exit 0
-git-fzf "!$iid jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job,ctrl-x=cancel pipeline,w=web,y=copy job link,u=refresh' --ansi \
+git-fzf "${iid:+!$iid }jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job,ctrl-x=cancel pipeline,w=web,y=copy job link,u=refresh' --ansi \
   --delimiter="$(printf '\t')" --with-nth=1 --track --id-nth=2 \
   --bind "every(5):transform(git-ci-jobs --tick preview $id {3})" \
   --bind "every(15):transform(git-ci-jobs --tick list $id)" \
   --bind "start:reload(git-ci-jobs --list $id | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "u:execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)" \
   --bind "enter:execute(git-ci-log --page {2} {3})" \
-  --bind "r:execute(git-confirm 'retry job {2}?' && glab api -X POST projects/:fullpath/jobs/{2}/retry >/dev/null)+execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)" \
+  --bind "r:execute(git-confirm 'retry job {2}?' && git-forge api -X POST projects/:fullpath/jobs/{2}/retry >/dev/null)+execute-silent(git-fzf-bg git-ci-jobs --list $id --refresh)" \
   --bind "P:transform(git-ci-jobs --key play $id {2} {3})" \
   --bind "X:transform(git-ci-jobs --key cancel $id {2} {3})" \
   --bind "ctrl-x:transform(git-ci-jobs --key cancel-pipeline $id {2} {3})" \

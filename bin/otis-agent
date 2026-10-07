@@ -1,7 +1,9 @@
 #!/usr/bin/env -S zsh -f
 # otis-agent <dir>: a background run of Claude's, drawn by hand: what C, V and
 # D open (git-claude-view, whose subcommands do the work here too), and gag's
-# enter. Exit 3 is r: the caller starts the run again.
+# enter. Exit 3 is r: the caller starts the run again. With OTIS_AGENT_UNTIL
+# a file, it leaves (exit 4) once that file is there: a walk's tour, which
+# lands minutes before the run is over.
 #
 # The screen says what the run is doing, not only what it has done. The
 # header is what it is and how it stands (running for, done in, what it
@@ -12,12 +14,13 @@
 # them (● read, ◐ searched for, ✎ drafted on); any other run's own lines. On
 # the right, what is happening now (the step running and for how long), then
 # the steps, one a row, as they land, and under them the step under the
-# cursor in full. The list follows the newest step until you move up; G
-# follows again. 1-9 show one criterion's steps alone, 0 all of them.
+# cursor in full, or the screenshot it names, drawn. The list follows the
+# newest step until you move up; G follows again. 1-9 show one criterion's steps alone, 0 all of them.
 #
 # The keys are git-claude-view's: enter opens the step in less, v more or
 # less detail (thinking, what tools returned), x stops the run, c picks up a
-# failed one, r runs it again, i acts on a verification's retrospective, f
+# failed one, r runs it again, i acts on a verification's retrospective, y
+# copies its folder for Claude, f
 # shows the fix it proposes, l
 # all of it in less, o the tester in Cursor, a its artifacts, w the report in
 # the browser, p links it from the MR.
@@ -35,7 +38,7 @@ mkdir $st/pv
 trace=${OTIS_AGENT_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/agent.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 . ${0:A:h:h}/share/screen.zsh
-keys_open run 'enter=this step in full,v=more or less detail,d=go through its drafts,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,m=copy the message for infra,f=the fix it proposes,l=all of it in less,o=the tester in Cursor,a=artifacts,w=the report in the browser,p=link the report from the MR,1-9=one criterion'"'"'s steps,0=all of them,?=keys'
+keys_open run 'enter=this step in full,v=more or less detail,d=go through its drafts,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,m=copy the message for infra,y=copy it for Claude,f=the fix it proposes,l=all of it in less,o=the tester in Cursor,a=artifacts,w=the report in the browser,p=link the report from the MR,1-9=one criterion'"'"'s steps,0=all of them,?=keys'
 screen_start
 integer code=0
 at_quit() { exit $code; }
@@ -72,7 +75,11 @@ costs() {
   sig="$a[1] $b[1]"
   [[ $sig == $costsig ]] && { REPLY=$costsval; return }
   c=$(jq -r 'select(.type == "result") | .total_cost_usd // empty' $d/events.jsonl 2>/dev/null | awk '{ s += $1 } END { if (s > 0) printf "Claude $%.2f", s }')
-  u=$(jq -r '.cost.chargedCents // empty' $d/usage.json 2>/dev/null | awk '{ if ($1 > 0) printf "Cursor $%.2f", $1 / 100 }')
+  # This run's own turns in the tester's VM, at Cursor's price for them
+  # (share/claude-run.sh's costs says why).
+  u=$(jq -r --arg mine "$({ print -l -- $d/*(N:t); cat -- /dev/null $d/run-*(N) } 2>/dev/null | grep -o 'run-[0-9a-f]\{8\}-[0-9a-f-]\{27\}' | sort -u)" \
+    '($mine | split("\n")) as $m | [.runs[]? | select(.id | IN($m[])) | .cost.rawCostCents // 0] | add // 0' $d/usage.json 2>/dev/null |
+    awk '{ if ($1 > 0) printf "Cursor $%.2f", $1 / 100 }')
   REPLY=${c}${c:+${u:+  ·  }}$u
   costsig=$sig costsval=$REPLY
 }
@@ -167,6 +174,8 @@ criteria() {
   for (( i = 1; i <= ncrit; i++ )); do
     r=${res[$cid[i]]}
     if [[ $r == verified ]]; then cstate+=(verified)
+    # A breaker's check where the change only does more than it says: the author's to answer.
+    elif [[ $r == changed ]]; then cstate+=(changed)
     elif [[ -n $r ]]; then cstate+=(failed)
     elif [[ $cid[i] == $now ]]; then cstate+=(now)
     elif [[ -n ${art[$cid[i]]} ]]; then cstate+=(in)
@@ -249,7 +258,8 @@ visible() {
 who_of() { case $1 in judge) REPLY=$A ;; tester) REPLY=$e"[${OTIS_T_MAIN}m" ;; breaker) REPLY=$X ;; retro) REPLY=$C ;; *) REPLY= ;; esac; }
 color_of() { case $1 in tool) REPLY=$EL ;; text) REPLY=$T ;; otis) REPLY=$Y ;; think) REPLY=$C ;; out) REPLY=$F ;; bad) REPLY=$X ;; *) REPLY=$T ;; esac; }
 # clock <epoch>: minutes and seconds since the run started, for a step.
-clock() { local s; [[ $1 == <-> ]] || { REPLY=; return }; (( s = $1 - ${started:-$1} )); REPLY="$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}"; }
+# A step from an earlier phase of the run, before this one started, is -m:ss.
+clock() { local s sign=; [[ $1 == <-> ]] || { REPLY=; return }; (( s = $1 - ${started:-$1} )); (( s < 0 )) && { sign=-; (( s = -s )); }; REPLY="$sign$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}"; }
 ckfor= ckok= cknote=
 # left <width>: the left column's lines, in L.
 left() {
@@ -257,17 +267,17 @@ left() {
   L=()
   if (( ncrit )); then
     integer got=0 nnow=0
-    for s in $cstate; do case $s in verified|failed|in) (( got++ )) ;; now) (( nnow++ )) ;; esac; done
+    for s in $cstate; do case $s in verified|failed|changed|in) (( got++ )) ;; now) (( nnow++ )) ;; esac; done
     line= used=0; put "$C" "CRITERIA"; pad $(( w - 22 )); put "$C" "$got of $ncrit in"; (( nnow )) && put "$C" " · 1 on it"; L+=("$line")
-    # How far along, as a bar: verified green, failed red, in or on it yours, the rest faint.
+    # How far along, as a bar: verified green, failed red, changed or in or on it yours, the rest faint.
     line= used=0
     for s in $cstate; do
-      case $s in verified) put "$G" "━━" ;; failed) put "$X" "━━" ;; in|now) put "$Y" "━━" ;; *) put "$F" "──" ;; esac
+      case $s in verified) put "$G" "━━" ;; failed) put "$X" "━━" ;; changed|in|now) put "$Y" "━━" ;; *) put "$F" "──" ;; esac
     done
     L+=("$line" "")
     for (( i = 1; i <= ncrit; i++ )); do
       case $cstate[i] in
-        verified) g="●" gc=$G ;; failed) g="✗" gc=$X ;; now) g="◌" gc=$Y ;; in) g="●" gc=$Y ;; *) g="○" gc=$F ;;
+        verified) g="●" gc=$G ;; failed) g="✗" gc=$X ;; changed) g="?" gc=$Y ;; now) g="◌" gc=$Y ;; in) g="●" gc=$Y ;; *) g="○" gc=$F ;;
       esac
       n=0; for s in $ec; do [[ $s == $cid[i] ]] && (( n++ )); done
       line= used=0
@@ -290,6 +300,7 @@ left() {
         in) L+=("       $C${cid[i]}.txt is in · $n step${${n:#1}:+s} · judged at the end$R") ;;
         verified) L+=("       ${G}verified$R$C · $n step${${n:#1}:+s}$R") ;;
         failed) L+=("       ${X}not verified$R$C · $n step${${n:#1}:+s}$R") ;;
+        changed) L+=("       ${Y}changed, not in the description$R$C · $n step${${n:#1}:+s}$R") ;;
       esac
     done
     # The judge's last word to the tester.
@@ -364,23 +375,44 @@ now() {
 # A step not drawn yet is drawn in the background, the pane keeping what
 # it showed until it lands (the loop looks for it), so the cursor moves at
 # once rather than after the step is read.
+#
+# A step that names a screenshot or a recording the run has brought back
+# (artifacts/) shows it instead: the image, or a frame of the video, drawn
+# by git-verify --artifact as its picker's preview is, to the pane's height.
 pwait=
+# art_of <step>: the image or video it names, where the run has it, in REPLY.
+art_of() {
+  REPLY=
+  [[ $1 == (#b)(|*[^A-Za-z0-9._-])([A-Za-z0-9._-]##.(png|jpg|jpeg|gif|webp|mp4|webm|mov|mkv))(|[^A-Za-z0-9._-]*) ]] || return 1
+  local -a m=($d/artifacts/**/$match[2](N.))
+  (( $#m )) && REPLY=$m[1]
+}
 pane() {
-  local i=$1 f
+  local i=$1 f art key out
   (( i )) || { P=() pshown=; return }
-  f=$pcache[$eid[i]]
+  # Kept apart from the step as words: the file may land after it was read.
+  art_of "$et[i]"; art=$REPLY key=$eid[i]${art:+.$ph.art}
+  f=$pcache[$key]
   if [[ -z $f ]]; then
-    f=$st/pv/$eid[i].$rw
+    f=$st/pv/$key.$rw
     if [[ ! -e $f ]]; then
-      [[ -e $f.tmp ]] || { : > $f.tmp; { git-claude-view --show $d $eid[i] 2>/dev/null | LC_ALL=C awk -v w=$rw -v cont=$f.cont "$wrap_awk" > $f.tmp; mv -f $f.tmp $f } &! }
+      [[ -e $f.tmp ]] || { : > $f.tmp; {
+        if [[ -n $art ]]; then
+          out=$(FZF_PREVIEW_LINES=$ph git-verify --artifact $art 2>/dev/null </dev/null)
+          if [[ $out == *$'\e_G'* ]]; then kitty_split "$out" $f; else print -r -- $out > $f.tmp; fi
+        else git-claude-view --show $d $eid[i] 2>/dev/null | LC_ALL=C awk -v w=$rw -v cont=$f.cont "$wrap_awk" > $f.tmp; fi
+        mv -f $f.tmp $f } >/dev/null &! }
       pwait=$f
       return
     fi
-    pcache[$eid[i]]=$f
+    pcache[$key]=$f
   fi
   pwait=
   [[ $f == $pshown ]] && return
   P=("${(@f)$(<$f)}") pshown=$f
+  # An image goes to the terminal once, as it is shown; its lines are the
+  # placeholders the terminal draws it in.
+  [[ -s $f.gfx ]] && print -rnu $tty -- "$(<$f.gfx)"
 }
 pshown=
 draw() {
@@ -455,11 +487,12 @@ draw() {
   if (( help )); then
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
-    for k v in enter "this step in full" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
+    for k v in enter "this step in full; a screenshot or recording it names, over the whole screen" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
       v "more or less detail: thinking, what tools returned, each criterion's exact claim" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective, on a branch off main" m "copy the message it drafted for infra" f "the fix it proposes" \
       l "all of it in less" o "the tester in Cursor" a "artifacts" w "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
+    panewrap $(( W - 3 ))
   else pane $cur; fi
   plen=$#P
   (( poff > plen - ph )) && (( poff = plen - ph )); (( poff < 0 )) && poff=0
@@ -473,12 +506,18 @@ draw() {
   # A note or a flash stays until the next key: the clock redraws every
   # second, and a note gone on the next frame was gone before it was read.
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R
+  elif working; then foot+=$A$REPLY$R" "$T${flash%…}$R$C"…"$R
   elif [[ -n $flash ]]; then foot+=$A$flash$R
   else
     # A review with drafts: going through them is what it wants of you.
     ndrafts
     if (( REPLY )); then foot+=$B$A"d go through its $REPLY draft${${REPLY:#1}:+s}"$UB$R$C"   ·   "$R$A"⏎"$R$C" this step  "$R
-    else foot+=$B$A"⏎ this step in full"$UB$R$C"   ·   "$R; fi
+    else
+      # On a step whose screenshot or recording is in, enter is that.
+      (( cur )) && art_of "$et[cur]"
+      if (( cur )) && [[ -n $REPLY ]]; then foot+=$B$A"⏎ ${${${(M)REPLY:#*.(png|jpg|jpeg|gif|webp)}:+the screenshot, full screen}:-play the recording}"$UB$R$C"   ·   "$R
+      else foot+=$B$A"⏎ this step in full"$UB$R$C"   ·   "$R; fi
+    fi
     (( ncrit )) && foot+=$A"1-$ncrit"$R$C" one criterion  "$R
     foot+=$A"v"$R$C" detail  "$A"x"$R$C" stop  "$A"r"$R$C" again  "
     [[ -s $d/agent-url ]] && foot+=$A"o"$R$C" Cursor  "$A"a"$R$C" artifacts  "$R
@@ -488,6 +527,9 @@ draw() {
     foot+=$A"?"$R$C" keys"$R
   fi
   fr+=("$foot")
+  # To the screen's last row: a screen that ran over this one (the artifacts'
+  # list) leaves its footer there, and only a row drawn here takes its place.
+  while (( $#fr < H )); do fr+=(""); done
   body=
   (( $#shown_rows )) || body+=$e'[2J'
   for (( y = 1; y <= $#fr; y++ )); do
@@ -515,15 +557,31 @@ drafts() {
   [[ $kind == gmr-claude ]] || { flash="only a review has drafts"; return }
   range=$(sed -n 4p $d/cmd 2>/dev/null)
   [[ -n $range ]] || { flash="this review does not say what range it read"; return }
-  screen_off
-  GMR_IID=$key GMR_RANGE=$range GMR_KIND=review git-mr-threads --drafts $key $range <&$tty >&$tty 2>&1
-  screen_on; shown_rows=()
+  flash="go through its drafts…"
+  run_tty "GMR_IID=${(q)key} GMR_RANGE=${(q)range} GMR_KIND=review git-mr-threads --drafts ${(q)key} ${(q)range}"
+  flash=
 }
-# act <subcommand...>: one of git-claude-view's, which prints fzf actions or
-# leaves a note; execute takes the screen, print(again) is r.
+# act <label> <subcommand...>: one of git-claude-view's, which prints fzf
+# actions or leaves a note; execute takes the screen, print(again) is r. It
+# runs in the background, some asking GitLab or Claude first, the footer
+# spinning with the label meanwhile and the keys still moving; what it
+# prints is carried out when it lands (acted). One at a time.
+apid=
+float at0=0
 act() {
+  [[ -n $apid ]] && { flash="still on the last one…"; return }
+  { git-claude-view "${@:2}" > $st/act.new 2>/dev/null </dev/null; mv -f $st/act.new $st/act } >/dev/null &!
+  apid=$! flash=$1… at0=$EPOCHREALTIME
+}
+# working: that command has been out long enough (0.15s) to spin for, in
+# REPLY the spinner's frame now.
+working() { [[ -n $apid ]] && (( EPOCHREALTIME - at0 >= 0.15 )) && spin_frame; }
+acted() {
+  [[ -n $apid ]] && ! kill -0 $apid 2>/dev/null || return 1
+  apid=
   local out s
-  out=$(git-claude-view "$@" 2>/dev/null </dev/null)
+  [[ -s $st/act ]] && out=$(<$st/act)
+  rm -f $st/act
   integer i depth q
   local c
   while [[ -n $out ]]; do
@@ -537,13 +595,16 @@ act() {
     done
     s=${out[1,i-1]} out=${out[i+1,-1]}
     case $s in
-      execute\(*) run_tty "${${s#execute\(}%\)}" ;;
+      execute\(*) run_tty "${${s#execute\(}%\)}"; pshown= ;;
       execute-silent\(*) zsh -fc "${${s#execute-silent\(}%\)}" </dev/null >/dev/null 2>&1 ;;
       print\(again\)) code=3 ;;
       accept) quit 0 ;;
       reload\(*) pcache=(); reload ;;
     esac
   done
+  flash=
+  (( code == 3 )) && quit 3
+  return 0
 }
 step() {
   local at=${vis[(Ie)$cur]}
@@ -554,7 +615,7 @@ step() {
 }
 handle() {
   local k=$1
-  flash=; rm -f $st/note
+  [[ -n $apid ]] || flash=; rm -f $st/note
   if [[ $k == $e'[<'* ]]; then
     local r=${k#$e\[<} b x y up
     [[ ${r[-1]} == m ]] && up=1
@@ -568,7 +629,7 @@ handle() {
     return
   fi
   keyname "$k"
-  case $REPLY in enter|v|d|x|c|r|i|m|f|l|o|a|w|p|0|'?') keys_used $REPLY ;; [1-9]) keys_used 1-9 ;; esac
+  case $REPLY in enter|v|d|x|c|r|i|m|y|f|l|o|a|w|p|0|'?') keys_used $REPLY ;; [1-9]) keys_used 1-9 ;; esac
   case $REPLY in
     j|down) step 1 ;;
     k|up) step -1 ;;
@@ -576,24 +637,32 @@ handle() {
     G) (( $#vis )) && cur=$vis[-1] follow=1 poff=0 ;;
     ctrl-d) (( poff += ph / 2 )) ;;
     ctrl-u) (( poff -= ph / 2, poff < 0 ? (poff = 0) : 0 )) ;;
-    enter) (( cur )) && { screen_off; git-claude-view --show $d $eid[cur] | less -R <&$tty >&$tty; screen_on; } ;;
+    enter) (( cur )) && {
+             art_of "$et[cur]"
+             # The view clears the terminal's images, the pane's with them: sent again.
+             if [[ -n $REPLY ]]; then flash="${REPLY:t}…"; run_tty "git-verify --view ${(q)REPLY}"; pshown=
+             else flash="this step in full…"; run_tty "git-claude-view --show ${(q)d} ${(q)eid[cur]} | less -R"; fi
+             flash=; } ;;
     v) detail=$(( !detail )); pcache=(); reload; flash="${${detail:#0}:+more}${${detail:#1}:+less} detail" ;;
-    x) act --x $d ;;
+    x) act "stop it" --x $d ;;
     d) drafts ;;
-    c) act --continue $d ;;
-    r) act --again $d; (( code == 3 )) && quit 3 ;;
-    i) act --improve $d ;;
-    m) act --ask $d ;;
-    f) act --fix $d ;;
-    l) screen_off; git-claude-view --less $d <&$tty >&$tty; screen_on ;;
-    o) [[ -s $d/agent-url ]] && act --open "$(<$d/agent-url)" ;;
-    a) act --artifacts $d ;;
-    w) act --html $d ;;
-    p) act --attach $d ;;
+    c) act "pick it up" --continue $d ;;
+    r) act "run it again" --again $d ;;
+    i) act "act on the retrospective" --improve $d ;;
+    m) act "copy the message for infra" --ask $d ;;
+    y) act "copy it for Claude" --copy $d ;;
+    f) act "the fix" --fix $d ;;
+    l) flash="all of it in less…"; run_tty "git-claude-view --less ${(q)d}"; flash= ;;
+    o) [[ -s $d/agent-url ]] && act "the tester in Cursor" --open "$(<$d/agent-url)" ;;
+    a) act "artifacts" --artifacts $d ;;
+    w) act "the report" --html $d ;;
+    p) act "link the report from the MR" --attach $d ;;
     [1-9]) if (( ncrit && REPLY <= ncrit )); then filter=c$REPLY; follow=1; flash="$filter's steps alone · 0 shows all"
            elif (( ncrit )); then flash="there is no c$REPLY: it has $ncrit criteria"; fi ;;
     0) filter=; follow=1 ;;
     '?') help=$(( !help )) poff=0 ;;
+    # With ? up, q and esc close it rather than the screen.
+    q|esc) (( help )) && { help=0 poff=0; return; } ;|
     q|esc|ctrl-c) quit 0 ;;
   esac
 }
@@ -605,6 +674,7 @@ size; layout
 reload; criteria; symbols
 draw
 integer stick=0
+wspun=
 while :; do
   reply=()
   zselect -t 5 -r $tty ${winch:+-r} $winch
@@ -619,12 +689,15 @@ while :; do
     if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
       orphaned && quit 1
+      [[ -n $OTIS_AGENT_UNTIL && -s $OTIS_AGENT_UNTIL ]] && { code=4; quit 4; }
       [[ -z $winch ]] && resize
       changed=1
     fi
     # The rows as they land, and the shape with them, looked for every tick,
     # so a burst of steps comes in one by one and not a second's worth at once.
     grown && { criteria; symbols; changed=1; }
+    acted && changed=1
+    working && [[ $REPLY != $wspun ]] && { wspun=$REPLY; changed=1; }
     # The step under the cursor, drawn in the background, has landed.
     [[ -n $pwait && -e $pwait ]] && changed=1
     (( changed )) && draw

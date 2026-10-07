@@ -1,21 +1,23 @@
 #!/bin/sh
-# otis-preview <kind> <iid> <row id> <extra>: the dashboard's preview pane.
+# otis-preview <kind> <iid> <row id> <extra> [<light>]: the dashboard's
+# preview pane, and what space reads in a pager.
 #
-# It opens the way the row does: a callout in the row's color saying what it
-# wants of you, why, and what enter does about it (the row's own words, from
-# otis-list's rows in the picker's state). Then the thing itself.
+# A change (a merge request, or a branch with none) is drawn here, a light
+# of the board (otis-board) at a time: what the change is in two lines, its
+# lights with this one lit (OTIS_TABS, which otis-dash draws), then only what
+# that light has to say: local (the branch, as gb previews it), verify
+# (git-verify's account), pipeline, review, ship. The light "all", and an
+# open merge request with no light named, is every one of them in turn under
+# its name: there is one account of a merge request, said in parts or whole.
+# Everything about the MR comes from the JSON otis-list left in the state, so
+# moving never waits on GitLab.
 #
-# A merge request is drawn here, for the pane beside the dashboard rather
-# than for gmr (git-mr-preview): its title, the pipeline as a bar and a bar a
-# stage with only what failed or is running named, where the review stands,
-# what Claude has on it, then its verification and its threads. One to
-# review ends with its description. Everything comes from the JSON otis-list
-# left in the state, so moving never waits on GitLab.
-#
-# Anything else hands over under the callout: one of Claude's runs as gag
-# shows it (git-agent-preview), a deploy as gd does, a merged MR as gmr
-# does. The here row and the trash are this script's own.
-kind=$1 iid=$2 row=$3 extra=$4
+# Any other row hands over to the script that owns it, which says what wants
+# you itself (share/pane.sh): one of Claude's runs as gag showed it
+# (git-agent-preview), a deploy (git-deploy-preview), a merged MR
+# (git-ci-preview), a worktree (git-worktree-preview). A push to main, the
+# here row and the trash are this script's own, under a callout.
+kind=$1 iid=$2 row=$3 extra=$4 gate=$5
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
@@ -28,39 +30,223 @@ EOF
 
 # callout <why>: the row's verb in its color, why it wants you, and the key.
 callout() {
+  # Read from the board (space), there is no row of otis-list's to speak for it.
+  [ -n "$verb$1" ] || return 0
   bar="${gc:-$GK_YOURS}┃$GK_R"
   printf '%b %b%s\033[22m%b\n' "$bar" "\033[1m${gc:-$GK_YOURS}" "$verb" "$GK_R"
   [ -n "$1" ] && printf '%b %b%s%b\n' "$bar" "$GK_TEXT" "$1" "$GK_R"
   [ -n "$does" ] && printf '%b %b⏎ %s%b\n' "$bar" "$GK_ATTENTION" "$does" "$GK_R"
   printf '\n'
 }
-# fit: each line cut to the pane with …, measured without its colors and
-# with a wide character as two columns: the pane wraps a line too long for
-# it, and a preview says one thing a line.
-fit() {
-  perl -CSD -Mutf8 -ne 'BEGIN { $w = shift @ARGV } chomp; my $v = $_; $v =~ s/\e\[[0-9;:]*[A-Za-z]//g;
-    my $n = 0; $n += (/\p{Ea=W}|\p{Ea=F}/ ? 2 : 1) for $v =~ /\X/g;
-    if ($n <= $w) { print "$_\n"; next }
-    my ($o, $m, $s) = ("", 0, $_);
-    while (length $s) {
-      if ($s =~ s/^(\e\[[0-9;:]*[A-Za-z])//) { $o .= $1; next }
-      $s =~ s/^(\X)//; my $c = $1; my $cw = ($c =~ /\p{Ea=W}|\p{Ea=F}/) ? 2 : 1;
-      last if $m + $cw > $w - 1; $o .= $c; $m += $cw;
-    }
-    print "$o\e[0m…\n"' "$w"
-}
 heading() { printf "${GK_CONTEXT}%s${GK_R}\n" "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"; }
 
+# branch_part: the branch as gb previews it, from gb's own row for it, which
+# the dashboard keeps (branches.tsv): what wants you there, where it is
+# checked out, how it stands against the base, its commits.
+branch_part() {
+  us=$(printf '\037')
+  line=$(awk -F'\t' -v b="$OTIS_BRANCH" -v us="$us" '$2 == b { print $2 us $3 us $6 us $4 us $5 us $7 us $8 us $9; exit }' "$st/branches.tsv" 2>/dev/null)
+  if [ -z "$line" ]; then
+    printf "${GK_CONTEXT}Not on this machine.${GK_R}\n"
+  else
+    IFS=$us read -r b bkind place wt biid ahead behind claude <<EOF
+$line
+EOF
+    git-branch-preview "$b" "$bkind" "$place" "$wt" "$biid" "$ahead" "$behind" "$claude" 2>/dev/null
+  fi
+}
+# One light of the board, or all of them in turn (gate all). In a pane a few
+# lines high (OTIS_BRIEF) a light says only its own part: no line spent on
+# what the change is, or on air.
+light() {
+  [ -s "$st/marks.json" ] || echo '{"gates": [], "watch": {}, "claude": {}, "fixes": {}, "verify": {}}' > "$st/marks.json"
+  threads=/dev/null
+  if { [ "$gate" = review ] || [ "$gate" = all ]; } && [ -n "$iid" ]; then
+    git-mr-threads --kick "$iid" "" "" >/dev/null 2>&1
+    threads=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/git-alias-cache/mr-$iid-threads.json
+    [ -s "$threads" ] || threads=/dev/null
+  fi
+  jq -nr -L "$share" --arg iid "$iid" --arg gate "$gate" --arg row "$row" --arg tabs "$OTIS_TABS" --argjson w "$w" \
+    --arg brief "$OTIS_BRIEF" \
+    --arg main "${OTIS_C_main:-$(otis-config main 2>/dev/null)}" \
+    --slurpfile mine "$st/ci.json" --slurpfile asked "$st/mrs.json" --slurpfile marks "$st/marks.json" \
+    --slurpfile disc "$threads" '
+    include "otis";
+    def B: "\u001b[1m"; def UB: "\u001b[22m";
+    def dot: context + "  ·  " + r;
+    def bar($n; $total; $parts): ([$total, ($parts | map(.[0]) | add)] | max) as $t |
+      (reduce $parts[] as $p ({s: "", used: 0};
+        (if $p[0] == 0 then 0 else ([(($p[0] * $n / $t) + 0.5 | floor), 1] | max) end) as $k |
+        ([$k, $n - .used] | min) as $k |
+        .s += (if $k > 0 then $p[1] + ("━" * $k) else "" end) | .used += $k)) as $b |
+      $b.s + (if $b.used < $n then faint + ("─" * ($n - $b.used)) else "" end) + r;
+    def who: .;
+    def joblines($js; $c; $g):
+      ($js[0:6][] | $c + $g + r + " " + text + .name + r + (if (.stage.name // "") != "" then context + "  " + .stage.name + r else "" end)),
+      (if ($js | length) > 6 then context + "+ \($js | length - 6) more" + r else empty end);
+
+    ($marks[0]) as {gates: $gates, claude: $claude, fixes: $fixes} |
+    ($asked[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me |
+    (($mine[0].data.currentUser.authoredMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $m |
+    (($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $a |
+    ($m // $a) as $mr |
+
+    # What it is: the title whole, then its number and its size. A branch
+    # with no merge request is its name.
+    (if $brief != "" then empty elif $mr then
+       ($mr.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i") | wrapl($w; 9)[] | B + text + . + UB + r),
+       (attention + "!\($mr.iid)" + r
+         + (if $mr.draft then dot + yours + "draft" + r else "" end)
+         + (if ($m | not) and $mr.author then dot + context + $mr.author.username + r else "" end)
+         + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
+              + dot + context + "\(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else "" end)),
+       (if $mr.targetBranch != $main then context + "on top of " + $mr.targetBranch + r else empty end)
+     else
+       (B + elsewhere + ($row | ltrimstr("c-b-")) + UB + r),
+       (context + "a branch with no merge request yet" + r)
+     end),
+    (if $brief != "" then empty else "", (if $tabs != "" then $tabs, "" else empty end) end),
+
+    (select($mr != null) |
+     ($mr.headPipeline.jobs.nodes // []) as $jobs |
+     [$jobs[] | select(.status == "FAILED" and (.allowFailure | not))] as $failed |
+     [$jobs[] | select(.status == "RUNNING")] as $running |
+     ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
+     ($claude[$iid] // {}) as $cl | ($fixes[$iid] // {}) as $fx |
+
+     def pipeline_part: (
+       ($mr.headPipeline | if . then effective($gates) else null end) as $eff |
+       (if $eff == "SUCCESS" then good + "Passed" elif $eff == "FAILED" then bad + "Failed"
+        elif $eff == "RUNNING" then attention + "Running" elif $eff == "APPROVAL" then elsewhere + "Waiting on approval gates"
+        elif $eff == null then context + "No pipeline yet" else context + ($eff | ascii_downcase) end) as $state |
+       $state + r
+         + (if ($jobs | length) == 0 then "" elif $done == ($jobs | length) then dot + context + "\($done) jobs" + r
+            else dot + context + "\($done) of \($jobs | length) jobs" + r end)
+         + (if $mr.headPipeline.createdAt then dot + context + "started \($mr.headPipeline.createdAt | ago) ago" + r else "" end),
+       # How far it has got, while it is going.
+       (if ($jobs | length) > 0 and ($eff | IN("RUNNING", "PENDING", "CREATED")) then
+          bar([$w, 40] | min; ($jobs | length); [[$done, good], [($failed | length), bad], [($running | length), attention]]) else empty end),
+       (if ($failed | length) + ($running | length) > 0 then "" else empty end),
+       joblines($failed; bad; "✗"), joblines($running; attention; "◐")
+     );
+     def review_part: (
+       (($mr.resolvableDiscussionsCount // 0) - ($mr.resolvedDiscussionsCount // 0)) as $th |
+       (if $m then
+          (if $mr.approved then good + "Approved" + r
+           else ($mr.approvalsLeft // 1) as $n | text + "Needs \($n) more \(plural($n; "approval"; "approvals"))" + r end)
+        else
+          ([$mr.reviewers.nodes[]? | select(.username == $me) | .mergeRequestInteraction.reviewState][0] // "UNREVIEWED") as $mys |
+          (if $mys == "APPROVED" then good + "You approved it" + r
+           elif ($mys | IN("REVIEWED", "REQUESTED_CHANGES")) then text + "You reviewed it: \($mr.author.username // "its author") has the next move" + r
+           else text + "\($mr.author.username // "Someone") is waiting on your review" + r end)
+          + (if $mr.updatedAt then dot + context + "updated \($mr.updatedAt | ago) ago" + r else "" end) end),
+       "",
+       # Who was asked, a line each; you by that name.
+       (($mr.reviewers.nodes // []) | if length == 0 then
+          (if $mr.draft then context else attention end) + "Nobody has been asked." + r + context + "  a asks someone" + r
+        else .[] | (.mergeRequestInteraction.reviewState // "UNREVIEWED") as $s |
+          (if $s == "APPROVED" then good + "✓" elif $s == "REQUESTED_CHANGES" then bad + "✗"
+           elif $s == "REVIEWED" then context + "●" elif .username == $me then yours + "○" else context + "○" end) + r + " "
+          + text + (if .username == $me then "you" else (.username | who) end) + r
+          + (if $s == "REQUESTED_CHANGES" then context + "  wants changes" + r elif $s == "REVIEWED" then context + "  commented" + r else "" end) end),
+       # What Claude has on it.
+       ([ (if $cl.reviewing then attention + "◌ Claude is reviewing it now" + r else empty end),
+          (if ($cl.drafts // 0) > 0 then yours + "✎ \($cl.drafts) draft \(plural($cl.drafts; "comment"; "comments")) to look over" + r else empty end),
+          (if $cl.clean != null and $cl.clean == $mr.diffRefs.headSha then good + "✓ Claude found nothing to comment on" + r else empty end),
+          (if $fx.fixing then attention + "◌ Claude is proposing fixes now" + r else empty end),
+          (if ($fx.fixes // 0) > 0 and ($fx.fixing | not) then yours + "✎ \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes")) to fold in" + r + context + "  ·  f" + r else empty end) ]
+        | if length > 0 then "", .[] else empty end),
+       # The threads still open: where, what it says first, who.
+       ([($disc[0] // [])[] | select(.resolvable and ((.notes | map(select(.resolvable)) | all(.resolved)) | not))] as $open |
+        if ($open | length) > 0 then
+          ($open[] | .notes[0] as $n | (.notes | last) as $last | ($n.position // {}) as $p |
+            (if $p.new_path // $p.old_path then "\($p.new_path // $p.old_path):\($p.new_line // $p.old_line // "")" else "on the MR" end) as $where |
+            "",
+            yours + "┃" + r + " " + elsewhere + $where + r,
+            (($n.body // "") | gsub("<!--[^>]*-->"; "") | gsub("!?\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; "\(.t)") | gsub("\\*\\*|`"; "") | gsub("\\\\(?<c>[^A-Za-z0-9\\s])"; "\(.c)")
+              | split("\n") | map(select(test("\\S")) | gsub("^[#>\\s]+"; "")) | (if length > 1 and (.[0] | test("^[^.]{0,30}$")) then .[1:] else . end) | join(" ")
+              # Its first sentences, whole (wrapl never cuts one); that there is more, said rather than trailed off.
+              | gsub("\\s+"; " ") as $body | ($body | wrapl($w - 2; 2)) as $ls |
+              ($ls[] | yours + "┃" + r + " " + text + . + r),
+              (if ($ls | join(" ") | length) < ($body | length) then yours + "┃" + r + " " + context + "and more: ⏎ opens the thread" + r else empty end)),
+            (yours + "┃" + r + " " + context + ([($n.author.username | who), ($n.created_at | ago) + " ago",
+               (if (.notes | length) > 1 then "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
+                  + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) else empty end)]
+               | join("  ·  ")) + r))
+        elif $th > 0 then "", yours + "\($th) unresolved \(plural($th; "thread"; "threads"))" + r
+        else empty end)
+     );
+     def ship_part: (
+       (($mr.detailedMergeStatus // "MERGEABLE") | ascii_upcase) as $ms |
+       (if $mr.autoMergeEnabled then good + "Merges itself once approved and green" + r
+          + (if $mr.mergeUser then dot + context + "set by \($mr.mergeUser.username)" + r else "" end)
+        elif $mr.draft then context + "A draft: not trying to merge yet" + r
+        elif ($ms | IN("MERGEABLE", "UNCHECKED", "CHECKING")) then
+          (if $mr.approved then good + "Nothing in the way" + r else context + "Nothing in the way but its review" + r end)
+        else (if ($ms | IN("CONFLICT", "NEED_REBASE")) then bad else context end)
+          + "Not yet: " + ($ms | ascii_downcase | gsub("_"; " ")) + r end),
+       (($mr.labels.nodes // []) | if length > 0 then "", context + (map(.title) | join(", ")) + r else empty end)
+     );
+     def part($t): context + ($t | ascii_upcase) + r;
+     if $gate == "pipeline" then pipeline_part
+     elif $gate == "review" then review_part
+     elif $gate == "ship" then ship_part
+     elif $gate == "all" then part("pipeline"), pipeline_part, "", part("review"), review_part, "", part("ship"), ship_part
+     else empty end)
+  ' 2>/dev/null
+  [ "$gate" = local ] && branch_part
+  if [ "$gate" = verify ]; then
+    key=${extra##*/}
+    if [ -z "$extra" ]; then
+      printf "${GK_CONTEXT}Not verified yet.  V verifies it.${GK_R}\n"
+    else
+      # git-verify's own account, less its heading: the lit light says that.
+      case $key in
+        b-*) git-verify --preview "" "$(printf '%s' "${key#b-}" | tr '%' '/')" 2>/dev/null ;;
+        *) git-verify --preview "$key" 2>/dev/null ;;
+      esac | perl -ne 'next if $. == 1 && /^\s*$/; s/^(?:\e\[[0-9;]*m)*VERIFICATION(?:\e\[[0-9;]*m)*\s+((?:\e\[[0-9;]*m)*)(\w)/$1\u$2/ if $. <= 2; print'
+    fi
+    [ -n "$OTIS_FIX" ] && printf "\n${GK_YOURS}✎ %s to fold in${GK_R}${GK_CONTEXT}  ·  f${GK_R}\n" \
+      "$(n=${OTIS_FIX#✎}; [ "$n" = 1 ] && echo "1 fix" || echo "$n fixes")"
+  fi
+  # All of it: after the lights the MR's JSON speaks for, what a
+  # verification made of it (by the MR, else by its branch), under
+  # git-verify's own heading; what its author says it is, for one to
+  # review; and last the branch, whose diff runs on.
+  if [ "$gate" = all ]; then
+    v=; [ -n "$iid" ] && v=$(git-verify --preview "$iid" 2>/dev/null)
+    [ -n "$v" ] || { [ -n "$OTIS_BRANCH" ] && v=$(git-verify --preview "" "$OTIS_BRANCH" 2>/dev/null); }
+    [ -n "$v" ] && printf '%s\n' "$v"
+    if [ "$kind" = review ]; then
+      desc=$(jq -r --arg iid "$iid" '.data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid) | .description // ""' "$st/mrs.json" 2>/dev/null)
+      if [ -n "$desc" ]; then
+        printf '\n'; heading "description"
+        printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | grep -v '^[[:space:]]*$'
+      fi
+    fi
+    [ -n "$OTIS_BRANCH" ] && { printf '\n'; heading "local"; branch_part; }
+  fi
+}
+if [ -n "$gate" ]; then
+  if [ -n "$OTIS_BRIEF" ]; then light | grep -v '^[[:space:]]*$'; else light; fi
+  exit 0
+fi
+
 case $kind in
-  run)
-    callout ""
-    exec git-agent-preview "$extra" ;;
-  deploy)
-    callout "Production is taking a new build."
-    exec git-deploy-preview "$extra" ;;
-  merged)
-    callout "Merged. Where it has got to on its way to production:"
-    exec git-ci-preview "$iid" ;;
+  # These say what wants you themselves (share/pane.sh's callout), so
+  # nothing is said over them here.
+  run) exec git-agent-preview "$extra" ;;
+  deploy) exec git-deploy-preview "$extra" ;;
+  merged) exec git-ci-preview "$iid" ;;
+  place)
+    # A worktree, as gw previews it, from gw's own row for it.
+    us=$(printf '\037')
+    line=$(awk -F'\t' -v p="$extra" -v us="$us" '$2 == p { print $2 us $3 us $4 us $6 us $7 us $8; exit }' "$st/worktrees.tsv" 2>/dev/null)
+    [ -n "$line" ] || exit 0
+    IFS=$us read -r wtp b bkind biid ahead behind <<EOF
+$line
+EOF
+    exec git-worktree-preview "$wtp" "$b" "$bkind" "$biid" "$ahead" "$behind" ;;
   trash)
     callout "Worktrees otis took out of your way instead of deleting."
     printf "${GK_CONTEXT}So what git would have dropped along with the directory, an .env, a\n"
@@ -76,7 +262,17 @@ case $kind in
       [ -n "$branch" ] && printf "${GK_FAINT}  on %s${GK_R}\n" "$branch"
     done
     exit 0 ;;
-  sep) exit 0 ;;
+  main)
+    # A push to main, and its checks: what failed or runs, one a line.
+    callout "A push to main, and what its checks say."
+    jq -r -L "$share" --arg sha "$extra" 'include "otis";
+      .[] | select(.sha == $sha) |
+      attention + .sha[0:8] + r + "  " + text + .title + r,
+      context + (.author // "") + " · " + (.at | ago) + " ago" + r, "",
+      ((.pipeline.jobs.nodes // []) | sort_by({FAILED: 0, RUNNING: 1, PENDING: 2}[.status] // 3)[] |
+        ({FAILED: (bad + "✗"), RUNNING: (attention + "◐"), PENDING: (attention + "○"), SUCCESS: (good + "✓")}[.status] // (context + "·"))
+        + r + " " + text + .name + r + context + "  " + .stage.name + r)' "$st/main.json" 2>/dev/null
+    exit 0 ;;
   here)
     # The checkout under you, git's own answers rather than a cache: what is
     # uncommitted by what state it is in, then what the branch carries.
@@ -117,205 +313,9 @@ case $kind in
     exit 0 ;;
 esac
 
-# A merge request, open: yours (the pipelines JSON, with its jobs) or one
-# you were asked to review (the review JSON, which has its description).
-# Only a merge request's number: a section heading's row has none.
+# An open merge request with no light asked for, as gmr previews one: all of
+# it. Only a merge request's number: a section heading's row has none.
 case $iid in ''|*[!0-9]*) exit 0 ;; esac
-# Its threads, from the cache the file picker shares (git-mr-threads), asked
-# to fetch in the background if old: the dashboard draws this again when it
-# lands.
-git-mr-threads --kick "$iid" "" "" >/dev/null 2>&1
-threads=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/git-alias-cache/mr-$iid-threads.json
-[ -s "$threads" ] || threads=/dev/null
-[ -s "$st/marks.json" ] || echo '{"gates": [], "watch": {}, "claude": {}, "fixes": {}, "verify": {}}' > "$st/marks.json"
-jq -nr -L "$share" --arg iid "$iid" --arg verb "$verb" --arg gc "$gc" --arg does "$does" --argjson w "$w" \
-  --slurpfile mine "$st/ci.json" --slurpfile asked "$st/mrs.json" --slurpfile marks "$st/marks.json" \
-  --slurpfile disc "$threads" '
-  include "otis";
-  def B: "\u001b[1m"; def UB: "\u001b[22m";
-  def heading($t): context + ($t | ascii_upcase) + r;
-  def since: if . == null then "" else ago end;
-  # A bar of $n cells for $total things, the counts by color in the order
-  # given ([[count, color, cell]]), what is left faint.
-  def bar($n; $total; $parts): ([$total, ($parts | map(.[0]) | add)] | max) as $t |
-    if $t == 0 then faint + ("─" * $n) + r else
-      (reduce $parts[] as $p ({s: "", used: 0, left: $t};
-        (if $p[0] == 0 then 0 else ([(($p[0] * $n / $t) + 0.5 | floor), 1] | max) end) as $k |
-        ([$k, $n - .used] | min) as $k |
-        .s += (if $k > 0 then $p[1] + ($p[2] * $k) else "" end) | .used += $k)) as $b |
-      $b.s + (if $b.used < $n then faint + ("─" * ($n - $b.used)) else "" end) + r end;
-  # A path by its last three parts; a name cut at 24.
-  def short: split("/") | if length > 3 then "…/" + (.[-3:] | join("/")) else join("/") end;
-  def who: if length > 24 then .[0:23] + "…" else . end;
-  def names($a; $max): ($a | length) as $n | ($a[0:$max] | join(", ")) + (if $n > $max then ", and \($n - $max) more" else "" end);
-
-  ($marks[0]) as {gates: $gates, claude: $claude, fixes: $fixes, verify: $verify} |
-  (($mine[0].data.currentUser.authoredMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $m |
-  (($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $a |
-  ($m // $a) as $mr | select($mr != null) |
-  ($mr.headPipeline.jobs.nodes // []) as $jobs |
-  [$jobs[] | select(.status == "FAILED" and (.allowFailure | not)) | .name] as $failed |
-  [$jobs[] | select(.status == "RUNNING") | .name] as $running |
-  ([$jobs[] | select(.status == "SUCCESS")] | length) as $done |
-  (($mr.resolvableDiscussionsCount // 0) - ($mr.resolvedDiscussionsCount // 0)) as $threads |
-  ($claude[$iid] // {}) as $cl | ($fixes[$iid] // {}) as $fx | ($verify[$iid] // {}) as $vf |
-  ($mr.headPipeline | if . then effective($gates) else null end) as $eff0 |
-  # Opened from gmr rather than the dashboard, there is no row to say what
-  # the MR wants of you: worked out here, the same way.
-  # Yours by its state; one you review by what is yours to do on it, since
-  # its pipeline and threads belong to the author.
-  (($asked[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me0 |
-   [$mr.reviewers.nodes[]? | select(.username == $me0) | .mergeRequestInteraction.reviewState][0] as $mine_review |
-   if $verb != "" then $verb
-   elif ($m | not) then
-     if ($cl.drafts // 0) > 0 then "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit"
-     elif ($mine_review // "UNREVIEWED" | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES") | not) then "review it"
-     else "" end
-   elif ($failed | length) > 0 or $eff0 == "FAILED" then "pipeline failed"
-   elif $threads > 0 then "\($threads) \(plural($threads; "thread"; "threads")) to address"
-   elif ($cl.drafts // 0) > 0 then "\($cl.drafts) \(plural($cl.drafts; "draft"; "drafts")) to submit"
-   elif ($fx.fixes // 0) > 0 and ($fx.fixing | not) then "fold in \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes"))"
-   elif ($running | length) > 0 or $eff0 == "RUNNING" then "pipeline running"
-   elif $m and $mr.approved and $eff0 == "SUCCESS" then "merge it"
-   elif (($mr.reviewers.nodes // []) | length) == 0 and ($mr.draft | not) then "ask for a review"
-   else "" end) as $verb |
-  (if $gc != "" then $gc elif $verb == "pipeline failed" then bad elif $verb == "merge it" then good
-   elif $verb == "pipeline running" then attention else yours end) as $gc |
-  # What enter does comes from the dashboard row; opened from gmr, the
-  # picker footer says it for the row, and this names no key.
-  $does as $does |
-
-  # Why the row wants you, in a sentence, from what it says.
-  (if $verb == "pipeline failed" then
-     if ($failed | length) > 0 then "It cannot go out as it is: " + names($failed; 4) + " failed." else "Its pipeline failed." end
-   elif ($verb | test("to address$")) then "A reviewer is waiting on you: \($threads) unresolved \(plural($threads; "thread"; "threads"))."
-   elif $verb == "review it" then "\($mr.author.username // "Someone") is waiting on your review" + (if $mr.updatedAt then ", updated \($mr.updatedAt | ago) ago." else "." end)
-   elif ($verb | test("to submit$")) then "\($cl.by // "Claude") drafted \($cl.drafts // 0) \(plural($cl.drafts // 0; "comment"; "comments")) on it: yours to keep, change or drop before they post."
-   elif $verb == "merge it" then "Approved, green and nothing in the way."
-   elif $verb == "ask for a review" then "Nobody has been asked to review it yet: a in gmr asks someone."
-   elif ($verb | test("^pipeline (running|queued)")) then
-     "\($done) of \($jobs | length) jobs done" + (if ($running | length) > 0 then ", \($running | length) running." else "." end)
-   elif ($verb | test("^fold in")) then "\($fx.by // "Claude") proposed fixes for it: enter shows each, to take or leave."
-   elif ($verb | test("^verified")) then "Its verification has a verdict; the report is below."
-   else "" end) as $why |
-
-  # The callout.
-  (if $verb != "" then
-     ($gc | if . == "" then yours else . end) as $bc |
-     ($bc + "┃" + r + " " + B + $bc + $verb + UB + r),
-     (if $why != "" then ($why | wrapl($w - 2; 2)[] | $bc + "┃" + r + " " + text + . + r) else empty end),
-     (if $does != "" then $bc + "┃" + r + " " + attention + "⏎ " + $does + r else empty end),
-     ""
-   else empty end),
-
-  # The merge request.
-  (attention + B + "!\($mr.iid)" + UB + r),
-  (B + text + $mr.title + UB + r),
-  (context + "\($mr.sourceBranch) → \($mr.targetBranch)"
-    + (if $a and $mr.author then "  ·  " + $mr.author.username else "" end)
-    + (if $mr.updatedAt then "  ·  updated \($mr.updatedAt | ago) ago" else "" end) + r),
-  # How big it is, from the cached list: absent on one fetched before
-  # the queries asked for it.
-  ($mr.diffStatsSummary | if . then good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
-     + context + "  ·  \(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else empty end),
-  (if $mr.draft then yours + "draft" + r else empty end),
-  "",
-
-  # The threads still open, each where it sits, who started it and what it
-  # says, the first few lines: what "threads to address" is about.
-  (($asked[0].data.currentUser.username // $mine[0].data.currentUser.username // "") as $me |
-   [($disc[0] // [])[] | select(.resolvable and ((.notes | map(select(.resolvable)) | all(.resolved)) | not))] as $open |
-   if ($open | length) == 0 then empty else
-     heading("threads") + "  " + yours + "\($open | length) unresolved" + r,
-     ($open[] | .notes[0] as $n | (.notes | last) as $last |
-       ($n.position // {}) as $p |
-       (if $p.new_path // $p.old_path then "\($p.new_path // $p.old_path | short):\($p.new_line // $p.old_line // "")" else "on the MR" end) as $where |
-       "",
-       "  " + yours + "┃" + r + " " + elsewhere + ($where | if length > ($w - 4) then "…" + .[length - $w + 5:] else . end) + r,
-       (($n.body // "") | gsub("<!--[^>]*-->"; "") | gsub("!?\\[(?<t>[^\\]]*)\\]\\([^)]*\\)"; "\(.t)") | gsub("\\*\\*"; "")
-         # What it says, wrapped to three lines, past a heading a review
-         # bot puts first ("AI review (medium)"): the rest is behind enter.
-         | split("\n") | map(select(test("\\S")) | gsub("^[#>\\s]+"; "")) | (if length > 1 and (.[0] | test("^[^.]{0,30}$")) then .[1:] else . end) | join(" ")
-         | wrapl($w - 6; 3)[] | "  " + yours + "┃" + r + " " + text + . + r),
-       # Who, when, and how it has gone since.
-       ("  " + yours + "┃" + r + " " + context + ([($n.author.username | who), ($n.created_at | ago) + " ago",
-          (if (.notes | length) > 1 then "\(.notes | length - 1) \(plural(.notes | length - 1; "reply"; "replies"))"
-             + (if $last.author.username == $me then ", yours last" else ", last from \($last.author.username | who)" end) else empty end)]
-          | join("  ·  ") | if length > ($w - 4) then .[0:$w - 5] + "…" else . end) + r)),
-     ""
-   end),
-
-  # The pipeline: one bar for all of it, one a stage, and by name only what
-  # failed or is running.
-  (if ($jobs | length) > 0 then
-     ($mr.headPipeline | effective($gates)) as $eff |
-     ([$w - 22, 40] | min) as $bw |
-     (if $eff == "SUCCESS" then good + "passed" elif $eff == "FAILED" then bad + "failed"
-      elif $eff == "RUNNING" then attention + "running" elif $eff == "APPROVAL" then elsewhere + "waiting on approval gates"
-      else context + ($eff // "" | ascii_downcase) end) as $state |
-     heading("pipeline") + "  " + $state + r
-       + context + (if $mr.headPipeline.createdAt then "  ·  started \($mr.headPipeline.createdAt | ago) ago" else "" end) + r,
-     "  " + bar($bw; ($jobs | length); [[$done, good, "━"], [($failed | length), bad, "━"], [($running | length), attention, "━"]])
-       + "  " + text + "\($done)" + context + "/\($jobs | length)" + r,
-     "",
-     ((($mr.headPipeline.stages.nodes // []) | map(.name)) as $order |
-      ($order + ([$jobs[] | .stage.name] | unique) | reduce .[] as $s ([]; if index([$s]) then . else . + [$s] end)) as $stages |
-      ([$stages[] | length] | max // 5) as $sw |
-      $stages[] as $s |
-      [$jobs[] | select(.stage.name == $s)] as $sj | select(($sj | length) > 0) |
-      ([$sj[] | select(.status == "SUCCESS")] | length) as $sd |
-      ([$sj[] | select(.status == "FAILED" and (.allowFailure | not))] | length) as $sf |
-      ([$sj[] | select(.status == "RUNNING")] | length) as $sr |
-      (if $sf > 0 then bad + "✗" elif $sr > 0 then attention + "◐" elif $sd == ($sj | length) then good + "✓" else faint + "○" end) as $g |
-      "  " + $g + r + " " + text + ($s | padr($sw)) + r + "  " + bar(12; ($sj | length); [[$sd, good, "━"], [$sf, bad, "━"], [$sr, attention, "━"]])
-        + "  " + context + "\($sd)/\($sj | length)" + r),
-     # What failed and what is running, a job a line: a list, not a sentence.
-     (if ($failed | length) > 0 then "", "  " + bad + "failed" + r + context + "  \($failed | length)" + r,
-        ($failed[0:5][] | "    " + bad + "✗ " + r + text + (if length > ($w - 8) then .[0:$w - 9] + "…" else . end) + r),
-        (if ($failed | length) > 5 then "    " + faint + "+ \($failed | length - 5) more" + r else empty end) else empty end),
-     (if ($running | length) > 0 then "", "  " + attention + "running" + r + context + "  \($running | length)" + r,
-        ($running[0:5][] | "    " + attention + "◐ " + r + text + (if length > ($w - 8) then .[0:$w - 9] + "…" else . end) + r),
-        (if ($running | length) > 5 then "    " + faint + "+ \($running | length - 5) more" + r else empty end) else empty end),
-     ""
-   elif $mr.headPipeline.status then
-     heading("pipeline") + "  " + (($mr.headPipeline.status | ascii_downcase) as $s |
-       (if $s == "success" then good elif $s == "failed" then bad elif $s == "running" then attention else context end) + $s) + r, ""
-   else empty end),
-
-  # Where the review stands.
-  heading("review"),
-  (if $mr.approved then "  " + good + "✓ approved" + r
-   else "  " + context + "○ needs \($mr.approvalsLeft // 1) more \(plural($mr.approvalsLeft // 1; "approval"; "approvals"))" + r end),
-  (($mr.reviewers.nodes // []) | if length == 0 then "  " + attention + "! nobody asked to review" + r else
-     "  " + (map((.username | who) + " " + (.mergeRequestInteraction.reviewState // "UNREVIEWED" |
-       if . == "APPROVED" then good + "approved" elif . == "REQUESTED_CHANGES" then bad + "wants changes"
-       elif . == "REVIEWED" then context + "reviewed" else faint + "not yet" end) + r + text) | join(context + "  ·  " + text)) + r end),
-  (if $threads > 0 then "  " + yours + "\($threads) unresolved \(plural($threads; "thread"; "threads"))" + r
-   else "  " + faint + "no unresolved threads" + r end),
-  (if $mr.autoMergeEnabled then "  " + good + "⏵ merges when the pipeline succeeds" + r
-     + (if $mr.mergeUser then context + "  ·  set by \($mr.mergeUser.username)" + r else "" end) else empty end),
-  (if ($mr.detailedMergeStatus // "MERGEABLE" | IN("MERGEABLE", "UNCHECKED", "CHECKING") | not) and ($mr.autoMergeEnabled | not) then
-     "  " + context + "not mergeable yet: " + ($mr.detailedMergeStatus | ascii_downcase | gsub("_"; " ")) + r else empty end),
-  (($mr.labels.nodes // []) | if length > 0 then "  " + context + "labels  " + r + text + (map(.title) | join(", ")) + r else empty end),
-  "",
-
-  # What Claude has on it.
-  ([ (if $cl.reviewing then attention + "◌ reviewing it now" + r else empty end),
-     (if ($cl.drafts // 0) > 0 then yours + "✎ \($cl.drafts) draft \(plural($cl.drafts; "comment"; "comments")) to look over" + r else empty end),
-     (if $cl.clean != null and $cl.clean == $mr.diffRefs.headSha then good + "✓ found nothing to comment on" + r else empty end),
-     (if $fx.fixing then attention + "◌ proposing fixes now" + r else empty end),
-     (if ($fx.fixes // 0) > 0 and ($fx.fixing | not) then yours + "✎ \($fx.fixes) \(plural($fx.fixes; "fix"; "fixes")) to fold in" + r else empty end),
-     (if $vf.verifying then attention + "◎ verifying in Cursor Cloud" + r else empty end) ] |
-   if length > 0 then heading("claude"), (.[] | "  " + .), "" else empty end)
-' 2>/dev/null | fit
-git-verify --preview "$iid" 2>/dev/null
-# One to review: what its author says it is.
-if [ "$kind" = review ]; then
-  desc=$(jq -r --arg iid "$iid" '.data.currentUser.reviewRequestedMergeRequests.nodes[]? | select(.iid == $iid) | .description // ""' "$st/mrs.json" 2>/dev/null)
-  if [ -n "$desc" ]; then
-    printf '\n'; heading "description"
-    # All of it: it comes last, and the preview scrolls.
-    printf '%s\n' "$desc" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | grep -v '^[[:space:]]*$'
-  fi
-fi
+gate=all
+light
 exit 0

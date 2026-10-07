@@ -21,7 +21,11 @@ CODEBG=$e"[${OTIS_T_CODEBG}m"
 # --- the terminal ------------------------------------------------------------------
 # screen_start: the terminal by name for keys and frames ($tty); what a
 # background job says goes to a file ($st/err), never over the screen, and
-# none of them reads the terminal. Whatever ends it, the terminal comes back
+# none of them reads the terminal; nor holds its stdout (>/dev/null on each
+# job started with &!): a caller reads what a screen hands back with $(...),
+# which waits for every process holding it, and a preview still rendering
+# kept the caller's screen frozen for seconds after this one had gone.
+# Whatever ends it, the terminal comes back
 # as it was: the traps are set here, at the file's level, since a trap on
 # EXIT set inside a function fires when that function returns.
 integer screen=0
@@ -63,6 +67,7 @@ screen_start() {
 # screen (an editor) finds it entered and drawn whole, as ever.
 screen_on() {
   local alt=$e'[?1049h'
+  loader_stop
   [[ -n $OTIS_ALT && -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; alt=; }
   stty -icanon -echo -isig min 1 time 0 <&$tty
   shown_rows=()
@@ -92,6 +97,22 @@ screen_off() {
   fi
   stty $saved <&$tty; screen=0
 }
+# kitty_split <preview> <file>: a preview that holds a kitty image (kitten
+# icat --unicode-placeholder), taken apart for a pane: the image itself into
+# <file>.gfx, sent to the terminal when the pane shows it, and the lines it
+# shows through into <file>.tmp as they are. icat has cut them to the pane,
+# and a wrap would drop the image's escape and count each placeholder's
+# marks as letters.
+kitty_split() {
+  print -rn -- $1 | perl -0777 -ne 'print $& while /\e_G.*?\e\\/sg' > $2.gfx
+  # icat also moves the cursor to where it would place the image on the
+  # screen (save, CUP, restore): in a pane that is somewhere else entirely,
+  # so of the rest only colors and the placeholders are kept. The image's
+  # color, which says which image a placeholder is, is set once and left to
+  # carry on; the pane draws each line on its own, so each line gets it.
+  print -r -- $1 | perl -0777 -pe 's/\e_G.*?\e\\//sg; s/\eP.*?\e\\//sg; s/\e[78]//g; s/\e\[[0-9;]*[A-HJKf]//g; s/\r//g' |
+    perl -ne 'if (/(\e\[38[:;][0-9:;]*m)/) { $c = $1 } elsif ($c && /\x{F4}\x{8E}\x{BB}\x{AE}/) { $_ = $c . $_ } print' > $2.tmp
+}
 # run_tty <command> [<shell>]: a command on the terminal, the screen's frame
 # left up under it rather than the terminal's own screen, so what the command
 # asks (otis-popup, git-confirm) goes in a box over the frame: the frame is
@@ -102,14 +123,38 @@ screen_off() {
 # meanwhile so ctrl-c belongs to the command: the screen's trap would end the
 # whole screen, and a command that signals INT as it starts
 # (terminal-browser) would only blip and never take the pane.
+#
+# Until the command takes the terminal, the footer spins with what it is
+# for (loader): the label of the key that ran it (bykey), else the flash
+# it left, else "opening".
 run_tty() {
   screen_hold $st/frame
   trap '' INT
-  OTIS_FRAME=$st/frame ${=2:-zsh -f} -c "$1" <&$tty >&$tty 2>&1
+  loader "${${bykey:-${flash%…}}:-opening}" >/dev/null &!
+  local lp=$!
+  OTIS_LOADER=$lp OTIS_FRAME=$st/frame ${=2:-zsh -f} -c "$1" <&$tty >&$tty 2>&1
+  kill $lp 2>/dev/null
   trap 'quit 1' INT
   rm -f -- $st/frame
   screen_on back
 }
+# loader <label>: the footer spinning with the label, under a command that
+# is getting going, so a second's start never looks like a screen that has
+# stuck. It stops when the command takes the terminal: a screen or a box
+# that asks stops it as it does (loader_stop), and anything else that reads
+# keys (an editor, a pager, a question) sets the terminal raw, which it
+# looks for between frames. run_tty stops it when the command is done.
+loader() {
+  local was=$(stty -g <&$tty 2>/dev/null)
+  integer n=0
+  zselect -t 15
+  while kill -0 $$ 2>/dev/null && [[ $(stty -g <&$tty 2>/dev/null) == $was ]]; do
+    print -nu $tty -- $e'7'$e"[$H;1H"$e'[2K  '$A${spin[n % $#spin + 1]}$R" "$T$1$R$C"…"$R$e'8'
+    (( n++ ))
+    zselect -t 10
+  done
+}
+loader_stop() { [[ -n $OTIS_LOADER ]] && kill $OTIS_LOADER 2>/dev/null; unset OTIS_LOADER; }
 # screen_hold <file>: the frame drawn whole into the file and left up, the
 # terminal as the screen found it otherwise, for a command to run over.
 screen_hold() {
@@ -226,6 +271,38 @@ cut() {
 line= used=0
 put() { line+=$1$2; (( used += ${(m)#2} )); }
 pad() { (( used < $1 )) && line+=${(l:$1-used:: :)} && used=$1; }
+# The pane's lines (P) never run past its edge: with no line wrap, the
+# terminal writes what is left of a line over its last column, and "pushed"
+# came out "pushd".
+# panewrap <width>: each line of P in that width, broken at spaces, colors
+# kept, what runs on under the line's own text (a key's, under its words;
+# the rest, two in from where it starts; a key is the words before the
+# first gap of two spaces). For what a screen writes itself,
+# its ? keys and glyphs.
+panewrap() {
+  local -a out words
+  local l at wd
+  integer w=$1 n ind wl lead first
+  for l in "${P[@]}"; do
+    vw "$l"; (( REPLY <= w )) && { out+=("$l"); continue; }
+    plain "$l"
+    if [[ $REPLY == (#b)([[:space:]]#[^[:space:]]##([[:space:]][^[:space:]]##)#[[:space:]][[:space:]]##)[^[:space:]]* ]]; then ind=${#match[1]}; else ind=$(( ${#${REPLY%%[^ ]*}} + 2 )); fi
+    lead=${#${REPLY%%[^[:space:]]*}}
+    at=${(l:lead:: :)} n=$lead first=1 words=("${(@s: :)${l#${(l:lead:: :)}}}")
+    for wd in "${words[@]}"; do
+      vw "$wd"; wl=$REPLY
+      if (( ! first && n + 1 + wl > w )); then out+=("$at$R"); at=${(l:ind:: :)}$wd; n=$(( ind + wl ))
+      else (( first )) || { at+=" "; (( n++ )); }; at+=$wd; (( n += wl )); fi
+      first=0
+    done
+    out+=("$at")
+  done
+  P=("${out[@]}")
+}
+# clip <width>: each line of P cut to that width with an ellipsis. For a
+# preview drawn at another width (the last screen's, kept), shown until this
+# width's lands.
+clip() { integer i; for (( i = 1; i <= $#P; i++ )); do cut "$P[i]" $1; P[i]=$REPLY; done; }
 # wrap <text> <width>: plain text in lines of at most that width, broken at
 # spaces, in reply.
 wrap() {
@@ -236,6 +313,26 @@ wrap() {
     s+=${s:+ }$t
   done
   [[ -n $s ]] && reply+=("$s")
+}
+# whole <text> <width>: the text in lines of at most that width, in reply:
+# broken at spaces, a word wider than a line (a long branch name) broken
+# where the line ends. Nothing on the board or in a box (otis-popup) is cut
+# short: what does not fit on a line goes on under it.
+whole() {
+  local t s=
+  integer w=$2
+  reply=()
+  (( w < 8 )) && w=8
+  for t in ${=1}; do
+    while (( ${(m)#t} > w )); do
+      [[ -n $s ]] && { reply+=("$s"); s=; }
+      reply+=("${t[1,w]}"); t=${t[w+1,-1]}
+    done
+    if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > w )); then reply+=("$s"); s=; fi
+    s+=${s:+ }$t
+  done
+  [[ -n $s ]] && reply+=("$s")
+  (( $#reply )) || reply=("")
 }
 
 # --- a selection in a pane --------------------------------------------------------------
@@ -315,7 +412,7 @@ memo_keep() {
   done
   rm -rf -- $memo.pv; mv -f -- $memo.pv.new $memo.pv
   # Every MR reviewed leaves one; a month unopened is gone.
-  { find ${memo:h} -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2>/dev/null } &!
+  { find ${memo:h} -mindepth 1 -maxdepth 1 -mtime +30 -exec rm -rf {} + 2>/dev/null } >/dev/null &!
 }
 # memo_restore: the kept previews into $st/pv.
 memo_restore() {
@@ -398,6 +495,89 @@ port_serve() {
   fi
 }
 
+# unlisten: a child of this screen lets go of the port, or a screen opened
+# after it on the same port (otis-test's) could not bind it.
+unlisten() { (( lfd )) && ztcp -c $lfd 2>/dev/null; lfd=0; }
+
+# --- commands out ------------------------------------------------------------------
+# A screen that runs fzf's actions (otis-pick, otis-symbols) runs the ones
+# that wait on a command here, off its loop. It has run, act, offout and
+# offin, and sync_list <file> to take a reload-sync's rows.
+# spawn <action> <command> <row> <then...>: the command in the background,
+# what it answers taken up when it lands (landed_jobs), and then the actions
+# that came after it in its chain. One of each at a time: an every(N) or a
+# result firing again while its command is still out lets that one land.
+# A key's command (bykey, the key's label) is the one the footer's spinner is
+# for, and the keys pressed after it wait for it (act).
+integer jn=0
+typeset -a jobs uq
+typeset -A jname jsrc jrow jrid jcur jkey jthen jt0
+bykey=
+spawn() {
+  local j
+  for j in $jobs; do [[ $jsrc[$j] == "$1 $2" ]] && return; done
+  (( ++jn )); jobs+=($jn)
+  jname[$jn]=$1 jsrc[$jn]="$1 $2" jrow[$jn]=$3 jrid[$jn]=${rid[$3]} jcur[$jn]=${rid[cur]} jkey[$jn]=$bykey jt0[$jn]=$EPOCHREALTIME
+  jthen[$jn]=${(pj:\0:)${(@)argv[4,-1]:#}}
+  [[ $1 == (execute-silent|transform) ]] && offout
+  (( $+functions[tell] )) && tell
+  { unlisten; zsh -fc "$2" </dev/null > $st/job.$jn.tmp 2>/dev/null; mv -f $st/job.$jn.tmp $st/job.$jn } >/dev/null &!
+}
+# landed_jobs: each command out that has finished, its answer taken up on the
+# row it was for (found again by its id, should the rows have moved), then
+# the rest of its chain; and once a key's is done, the next key waiting.
+landed_jobs() {
+  local j f row i was=$bykey
+  local -a then_
+  integer any=0
+  for j in $jobs; do
+    f=$st/job.$j
+    [[ -e $f ]] || continue
+    jobs=(${jobs:#$j}); any=1
+    row=$jrow[$j]
+    if [[ -n $jrid[$j] && $rid[row] != $jrid[$j] ]]; then
+      i=${rid[(ie)$jrid[$j]]}; (( i <= $#rid )) && row=$i
+    fi
+    then_=(${(ps:\0:)jthen[$j]})
+    bykey=$jkey[$j]
+    # What a command did to the preview's scroll counts only where you still are.
+    [[ $jname[$j] == (execute-silent|transform) && $rid[cur] == $jcur[$j] ]] && offin
+    case $jname[$j] in
+      transform) run "$(<$f)" $row "${then_[@]}" ;;
+      reload-sync) sync_list $f; (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
+      transform-header) header=$(<$f); (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
+      *) (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
+    esac
+    rm -f $f
+    unset "jname[$j]" "jsrc[$j]" "jrow[$j]" "jrid[$j]" "jcur[$j]" "jkey[$j]" "jthen[$j]" "jt0[$j]"
+  done
+  bykey=$was
+  (( any )) || return 1
+  if (( $#uq )) && ! busy; then local k=$uq[1]; shift uq; act $k; fi
+  return 0
+}
+# busy: a key's command is still out; in REPLY, what it is, and bt since when.
+float bt
+busy() {
+  local j
+  for j in $jobs; do [[ -n $jkey[$j] ]] && { REPLY=$jkey[$j]; bt=$jt0[$j]; return 0; }; done
+  return 1
+}
+# spinning: that command has been out long enough (0.15s) for the footer to
+# say so, rather than blink on every key; in REPLY what it is, and in spun
+# the spinner's frame now. It turns ten frames a second.
+spin=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+spun=
+spinning() {
+  busy && (( EPOCHREALTIME - bt >= 0.15 )) || return 1
+  spin_frame; spun=$REPLY
+}
+# spin_frame: the spinner's frame now, in REPLY.
+spin_frame() { REPLY=${spin[$(( int(EPOCHREALTIME * 10) % $#spin + 1 ))]}; }
+# spin_foot: the footer while it spins, and the keys waiting after it.
+spin_foot() { foot+=$A$spun$R" "$T$REPLY$R$C"…"$R; (( $#uq )) && foot+=$C"   then ${(j:, :)uq}"$R; }
+# spun_on: the spinner has a new frame to draw.
+spun_on() { local was=$spun; spinning && [[ $spun != $was ]]; }
 # --- the key log ---------------------------------------------------------------------
 # Every key that does something, a line each, in ~/.cache/otis/keys.tsv
 # (OTIS_KEY_LOG, or off for none), for otis-usage: which keys you use, and

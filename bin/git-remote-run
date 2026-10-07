@@ -109,7 +109,7 @@ GIT_BASE_REF=$OTIS_BASE_REF
 export GIT_BASE_REF
 # An ssh command runs no login files, so what claude needs in its environment
 # (a CLAUDE_CODE_OAUTH_TOKEN) goes in ~/.claude/env, and only claude gets it:
-# a check Claude asked for through the gate must not see the token.
+# no other command sees the token.
 case $OTIS_COMMAND in
   claude|claude\ *) [ -r "$HOME/.claude/env" ] && . "$HOME/.claude/env" ;;
 esac

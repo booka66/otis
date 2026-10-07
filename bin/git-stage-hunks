@@ -1,6 +1,6 @@
 #!/bin/sh
 # git-stage-hunks <status> <path>: pick which hunks of one changed file to
-# stage, with git add -p. gah's enter and ga's p. The path is relative to the
+# stage, with git add -p. ga's p. The path is relative to the
 # repo root, so this runs from there.
 #
 # An untracked file has no hunks until git knows of it, so it is added as

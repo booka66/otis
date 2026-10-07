@@ -80,11 +80,21 @@ umask 077
 # costs <dir>: what the run has cost so far, as " · Claude $1.20 · Cursor $0.68"
 # (empty parts left out): Claude from its turns' results in the progress,
 # Cursor from usage.json, which a verification keeps from Cursor's usage API.
+# That is everything the tester's VM has ever run, and a VM goes from one
+# verification to the next, so only this run's own turns there count
+# (cursor_runs). At Cursor's own price for them (rawCostCents): what it
+# charged is nothing for as long as a plan covers it, and they cost all the same.
 costs() {
   c=$(jq -r 'select(.type == "result") | .total_cost_usd // empty' "$1/events.jsonl" 2>/dev/null | awk '{ s += $1 } END { if (s > 0) printf " · Claude $%.2f", s }')
-  u=$(jq -r '.cost.chargedCents // empty' "$1/usage.json" 2>/dev/null | awk '{ if ($1 > 0) printf " · Cursor $%.2f", $1 / 100 }')
+  u=$(jq -r --arg mine "$(cursor_runs "$1")" '($mine | split("\n")) as $m | [.runs[]? | select(.id | IN($m[])) | .cost.rawCostCents // 0] | add // 0' "$1/usage.json" 2>/dev/null |
+    awk '{ if ($1 > 0) printf " · Cursor $%.2f", $1 / 100 }')
   printf '%s%s' "$c" "$u"
 }
+# cursor_runs <dir>: the ids of the tester's turns this verification started,
+# one a line: the ones its run-<n> files name, and the ones it followed
+# (stream-<id>.id), which a turn a check-in cut short still has when run-<n>
+# has gone on to name the one after it.
+cursor_runs() { { ls "$1"; find "$1" -maxdepth 1 -name 'run-*' -exec cat {} +; } 2>/dev/null | grep -o 'run-[0-9a-f]\{8\}-[0-9a-f-]\{27\}' | sort -u; }
 
 orphaned() { [ -s "$1/cmd" ] && [ ! -s "$1/status" ] && [ -r "$1/pid" ] && ! kill -0 "$(cat "$1/pid")" 2>/dev/null; }
 
