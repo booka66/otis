@@ -162,7 +162,9 @@ typeset -A open
 # How wide the moves are, so the titles after them start in one column: the
 # board's own rows in mvw[-], a group's in mvw[<group>], each the longest
 # move it has whether or not the group is open, so opening one moves nothing.
-typeset -A mvw
+# And how wide their MR numbers are (iww, the same way), for a column of
+# them at the right edge, the digits of one under the next's.
+typeset -A mvw iww
 integer n_need=0 n_draft=0 n_moving=0 col=1 fixkey=0
 # A screen too short for the board as it is draws it tight: no blank lines
 # between its parts. What the row says in full goes under the board, in a
@@ -175,7 +177,7 @@ load() {
   local line f c n=0 g
   lane=() id=() type=() title=() who=() when=() mark=() defc=() iid=() target=() url=() source=() head=() base=() pipeline=() purl=() start=() mrkind=() draft=() verb=() note=() prog=() sub=() dots=() fold=() count=() say=() rail=() own=() gpos=() move=() tone=()
   cg=() cc=() ck=() cv=() ce=() cd=() cm=() cf=() cw=()
-  mvw=()
+  mvw=() iww=()
   for line in ${(f)"$(<$st/board)"}; do
     f=("${(@ps:\t:)line}")
     if [[ $f[1] == '#' ]]; then n_need=$f[2] n_draft=$f[3] n_moving=$f[4]; continue; fi
@@ -193,6 +195,7 @@ load() {
     if [[ $f[3] != group ]]; then
       g=${f[65]:--}
       (( ${(m)#f[70]} > ${mvw[$g]:-0} )) && mvw[$g]=${(m)#f[70]}
+      [[ -n $f[9] ]] && (( $#f[9] + 1 > ${iww[$g]:-0} )) && iww[$g]=$(( $#f[9] + 1 ))
     fi
   done
   loaded=1
@@ -465,7 +468,7 @@ row() {
   # What did not fit on the row's line, said under it from column mind: the
   # rest of its title (more), then what stands beside the title (more2).
   local -a more=() more2=()
-  integer mind=0 rw=0 tx
+  integer mind=0 rw=0 tx mw=${iww[$g]:-0} iw=0
   (( i == cur )) && on=1
   line= used=0
   # The cursor, else the branch you are on.
@@ -489,8 +492,10 @@ row() {
     (( on )) && line+=$B
     put "${tone[i]:-$C}" "$move[i]"; line+=$UB
     pad $tx
-    # How long ago, at the row's right edge, where there is one to say.
+    # On the right: how long ago, where there is one to say, then its MR
+    # number, in a column at the edge that every row it sits with keeps.
     [[ -n $when[i] ]] && rw=5
+    (( mw )) && (( iw = mw + 2 ))
     case $type[i] in
       change)
         # One of a stack: its piece of the rail that joins the stack's rows,
@@ -521,28 +526,37 @@ row() {
         t=$title[i]
         # One of Claude's runs on a branch names the branch, then what it last said.
         [[ -n $note[i] ]] && t=$note[i]${t:+  ·  $t}
-        [[ -n $iid[i] ]] && t="!$iid[i]  $t"
         [[ -z $iid[i] && -n $dots[i] ]] && { put "$Y" "$dots[i]"; put "" "  "; }
         [[ -n $prog[i] ]] && (( rw += 18 )) ;;
     esac
     mind=$used
-    # A title that fits on its line only without how long ago beside it is
-    # said without: the title is what the row is, and under the board says
-    # when.
-    (( rw == 5 && ${(m)#t} > w - used - rw - 1 && ${(m)#t} <= w - used )) && rw=0
+    # A title that fits on its line only without what is on its right is
+    # said without it: the title is what the row is. First how long ago
+    # goes, then its number; under the board says both.
+    if (( ${(m)#t} > w - used - iw - rw - 1 )); then
+      if (( rw == 5 && ${(m)#t} <= w - used - iw - (iw ? 1 : 0) )); then rw=0
+      elif (( rw <= 5 && ${(m)#t} <= w - used )); then rw=0 iw=0
+      # Too long for a line whatever goes: with no number of its own, it
+      # takes the numbers' column for its text.
+      elif [[ -z $iid[i] ]]; then iw=0; fi
+    fi
     # The title whole: what of it does not fit on the line goes on under
     # it. What stands beside it is on its line when both fit, else under.
-    whole "$t" $(( w - used - (rw ? rw + 1 : 0) ))
+    whole "$t" $(( w - used - iw - rw - (iw + rw ? 1 : 0) ))
     put "$tc" "$reply[1]"; line+=$UB; more=("${(@)reply[2,-1]}")
     if [[ -n $s ]]; then
-      if (( ! $#more && used + 3 + ${(m)#s} <= w - rw - 1 )); then put "" "   "; put "$nc" "$s"
+      if (( ! $#more && used + 3 + ${(m)#s} <= w - iw - rw - 1 )); then put "" "   "; put "$nc" "$s"
       else whole "$s" $(( w - mind - 1 )); more2=("${reply[@]}"); fi
     fi
     if [[ -n $prog[i] ]]; then
-      pad $(( w - rw - 1 )); put "" "  "; bar "$prog[i]"; line+=$REPLY; (( used += 10 ))
+      pad $(( w - iw - rw - 1 )); put "" "  "; bar "$prog[i]"; line+=$REPLY; (( used += 10 ))
       put "$C" " ${(l:5:: :)prog[i]}"
     fi
-    (( rw )) && [[ -n $when[i] ]] && { pad $(( w - 6 )); put "" "  "; put "$C" "${(l:3:: :)when[i]}"; }
+    (( rw )) && [[ -n $when[i] ]] && { pad $(( w - iw - 6 )); put "" "  "; put "$C" "${(l:3:: :)when[i]}"; }
+    if (( iw )) && [[ -n $iid[i] ]]; then
+      pad $(( w - 1 - mw ))
+      (( on )) && put "$A" "${(l:mw:: :):-!$iid[i]}" || put "$C" "${(l:mw:: :):-!$iid[i]}"
+    fi
   fi
   pad $w
   # The last rows out of a group on its way, faint: out, they come up to

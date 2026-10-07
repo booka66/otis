@@ -637,8 +637,9 @@ otis() {
       out=$(otis-dash) || return 0
       at=$PWD on=$(git branch --show-current 2>/dev/null)
       case $out in
-        gb)  gb ;;
-        otis-config) otis-config ;;
+        # Each named for the key log, which would file its keys under otis.
+        gb)  OTIS_SCREEN=gb gb ;;
+        otis-config) OTIS_SCREEN=otis-config otis-config ;;
         # s on a change, or enter on a worktree: only a shell can go
         # there, and it is where the board was leaving you.
         goto$'\t'*) _g_goto_branch "${out#*$'\t'}"; return ;;

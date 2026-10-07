@@ -604,13 +604,17 @@ keys_used() {
   _klast=$1 _kat=$EPOCHREALTIME
   { print -r -- "$EPOCHSECONDS"$'\t'"$_kname"$'\t'"$1"$'\t'"$2" >> $_klog; } 2>/dev/null
 }
-# keys_caller: the otis command that opened this picker, by name (gb, gmr,
+# keys_caller: the otis command that opened this picker, by name (gb,
 # git-mr-lines), from the process that started it: the title a picker shows
 # carries an MR's number or a file's path, which would split one picker
-# into many. Once, as it opens.
+# into many. Once, as it opens. A list the board opens is started by the
+# board's own process, named otis, so the board says which it is opening
+# (OTIS_SCREEN): taken here once, so a picker this one opens in turn is
+# named for itself. Without it, gb's keys were logged as the board's.
 keys_caller() {
   local w bin=${ZSH_ARGZERO:A:h}
   REPLY=
+  if [[ -n $OTIS_SCREEN ]]; then REPLY=$OTIS_SCREEN; unset OTIS_SCREEN; return; fi
   for w in ${(z)"$(ps -o args= -p $PPID 2>/dev/null)"}; do
     [[ $w == */* && -e $bin/${w:t} && ${w:t} != (otis-pick|otis-symbols|git-fzf) ]] && { REPLY=${w:t}; return; }
   done

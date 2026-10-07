@@ -358,7 +358,14 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      elif $a.t == "verify" then ($a.branch | IN($open_branches[]))
      else ($a.branch | IN($on_branches[])) end);
 
-  ($events | map(select((.f[5] | IN("here", "trash") | not) and (lit | not)) | . + {a: about})) as $rest |
+  # A run still going is the exception: it is a row of its own among what is
+  # moving, so everything that is running is in one place to see, unless its
+  # change'"'"'s row says so itself (a verification, on a row with nothing above
+  # it). loud marks one that a light speaks for and is shown all the same.
+  ($changes | map(select(.defc == 2 and .cells[1].st == "moving")) | map(.iid, .source) | map(select(. != ""))) as $saying |
+  def said: about as $a | $a.t == "verify" and (if $a.branch == "" then $a.base else $a.branch end | IN($saying[]));
+  ($events | map(select(.f[5] | IN("here", "trash") | not) | . + {a: about, loud: (lit and .sec == "going" and (said | not))}
+                 | select((lit | not) or .loud))) as $rest |
 
   # A run kept under a branch'"'"'s name outlives the branch, and what it said of
   # a branch that is finished is history, not a move of yours: the branch'"'"'s
@@ -376,7 +383,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # A branch with no merge request: its verification, and a fix for it, as
   # the lights of a change of its own, unless the branch is finished and
   # none of its runs is still going.
-  ($rest | map(select(.a.branch != "" and (.a.t | IN("verify", "fix")))) | group_by(.a.branch) | map(
+  ($rest | map(select((.loud | not) and .a.branch != "" and (.a.t | IN("verify", "fix")))) | group_by(.a.branch) | map(
     . as $evs | $evs[0].a.branch as $branch |
     select(any($evs[]; .sec == "going")
            or ($branch | finished($evs | map($ended[.f[12] | split("/") | .[-2:] | join("/")] // 0) | max) | not)) |
@@ -415,7 +422,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      cells: [off + {g: $f[14], c: $f[15], kind: $f[5], vk: $f[13], extra: $f[12], does: $f[23]}, none, none, none, none],
      verb: $f[16], note: $f[20], prog: $f[21], sub: $f[24], dots: $f[25],
      move: (if $f[5] == "here" then "here" else $f[16] end), tone: (if $f[5] == "here" then elsewhere else $f[15] end)};
-  ($rest | map(select((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not)
+  ($rest | map(select(.loud or ((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not))
      | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end))) as $notices |
   ($events | map(select(.f[5] | IN("here", "trash")) | kept("here"))) as $here |
 

@@ -343,7 +343,7 @@ out=$(jq -nr -L "$share" \
     (if $run.kind == "gmr-claude" then { verb: "reviewing", g: "◌" }
      elif $run.kind == "gmr-fix" then { verb: "proposing fixes", g: "◌" }
      elif $run.kind == "gmr-watch" then { verb: "watching production", g: "◌" }
-     elif $run.kind == "otis-walk" then { verb: "tracing", g: "◌" }
+     elif $run.kind == "otis-walk" then { verb: "walking", g: "◌" }
      else { verb: "verifying", g: "◎" } end)
     + { rank: (0 - $run.started), gc: attention, kind: "run", extra: $run.dir, verb_key: "run",
         id: "g-\($run.kind)-\($key)", mark: false,

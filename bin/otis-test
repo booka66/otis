@@ -398,6 +398,19 @@ GIT_FZF_STATE=$tmp/board otis-board > "$tmp/board7.tsv"
 board_mr DISCUSSIONS_NOT_RESOLVED
 expect otis-board/verify-of-folded "$(board_lights)" "waiting c-7 Ship it light 4 ·✗✓✓· |"
 expect otis-board/says-how-it-stands "$(board_says)" "approved [|older verify broke|pipeline passed|approved|]|"
+# A run still going is a row of its own among what is moving, so all that
+# is running is in one place, unless its change's row says so itself: MR 7's
+# verification, while its row says merge it, then with nothing else on it.
+cp "$tmp/board/rows" "$tmp/board/rows.kept"; cp "$tmp/board/marks.json" "$tmp/board/marks.kept"
+printf 'g\t\t\t\t\tsep\t\t\t\t\tsep-going\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n' > "$tmp/board/rows"
+printf 'r\t7\t\t\t\trun\t\t\t\t\tg-otis-verify-7\t\t/v/7\trun\t◎\t\tverifying\t1 of 3 claims in\t\t\t\t\t\topen the run\t\t\n' >> "$tmp/board/rows"
+printf '{"verify": {"7": {"verifying": true, "status": "", "head": "new"}}}\n' > "$tmp/board/marks.json"
+board_going() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' 'NR > 1 && $3 != "group" && $65 == "" { printf "%s %s %s|", $1, $3, $70 }'; }
+board_mr UNCHECKED
+expect otis-board/going-run-shown "$(board_going)" "move change merge it|moving notice verifying|"
+board_mr DISCUSSIONS_NOT_RESOLVED
+expect otis-board/going-run-said "$(board_going)" "moving change verifying|"
+mv "$tmp/board/rows.kept" "$tmp/board/rows"; mv "$tmp/board/marks.kept" "$tmp/board/marks.json"
 # MRs built on one another are a stack: kept together, top first, in the
 # lane of the one that wants you most, each with its piece of the rail and
 # the lane it would be in alone. Here the bottom one is yours to merge, the
@@ -1472,6 +1485,8 @@ dash=$(PATH=$tmp/dashstub:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; 
   sleep 0.3; while zpty -rt d buf; do out+=$buf; done
   zpty -wn d q; sleep 0.3; zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
 expect otis/row-says-its-move "$(printf '%s\n' "$dash" | grep -o 'merge it *Ship it' | head -1 | tr -s ' ')" "merge it Ship it"
+# And its MR's number, at the row's right edge.
+expect otis/mr-number "$(printf '%s\n' "$dash" | grep -q 'merge it *Ship it  [^!]*!7 ' && echo on-its-row)" "on-its-row"
 # A login the forge no longer takes is said under the headline, with the key
 # that mends it: u logs in (git-forge login) and then refetches. A u pressed
 # while a refresh is on its way is not dropped: its refetch goes when that
