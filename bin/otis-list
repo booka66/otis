@@ -52,11 +52,16 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # running when the scans below look.
 ( . "$share/claude-run.sh" && resume_all )
 
-age=15 merged_age=60 now=
+# The dashboard has no picker to reload, so it names a file to be told by
+# when a fetch lands behind it (told, git-cached-json's OTIS_FETCHED), and
+# its caches are kept fresh without u: the merge requests a minute apart,
+# what merged and the deploys two, while it is open.
+age=60 merged_age=120 now=
 [ "$1" = --refresh ] && age=0 merged_age=0 now=--now
 reload="execute-silent(git-fzf-bg --then refresh-preview otis-list)"
 . "$share/repo.sh" || exit 1
 common=$OTIS_GITDIR
+told=$st/fetched
 # What Claude is doing and what it has left you, and every background run.
 # None of it needs a setting, so it starts before they are read.
 git-mr-watch --marks  > "$st/m.watch"  2>/dev/null &
@@ -127,29 +132,6 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 $(otis-config project base url gateJobs main)
 EOF
 
-# What the board's lights mean, for the dashboard's ? (otis-dash). A light is
-# allowed to be one glyph wide only because this is a keypress away.
-{
-  printf "  ${GK_CONTEXT}local${GK_R}      ${GK_ELSEWHERE}\342\226\270${GK_R} ${GK_ELSEWHERE}\342\214\202${GK_R} ${GK_CONTEXT}\342\227\213${GK_R}  its branch: you are on it \302\267 in a worktree \302\267 here to switch to; ${GK_ATTENTION}\342\206\2212${GK_R} never pushed\n"
-  printf "  ${GK_CONTEXT}verify${GK_R}     ${GK_GOOD}\342\234\223${GK_R} ${GK_BAD}\342\234\227${GK_R} ${GK_CONTEXT}?${GK_R}  what a verification made of this head; dim, of an older one\n"
-  printf "             ${GK_ATTENTION}\342\227\216${GK_R}      verifying now\n"
-  printf "  ${GK_CONTEXT}pipeline${GK_R}   ${GK_GOOD}\342\234\223${GK_R} ${GK_BAD}\342\234\227${GK_R} ${GK_ATTENTION}\342\227\220${GK_R} ${GK_ATTENTION}\342\227\213${GK_R}  passed, failed, running, queued; ${GK_ELSEWHERE}\342\217\270${GK_R} waiting on approval gates\n"
-  printf "  ${GK_CONTEXT}review${GK_R}     ${GK_YOURS}\342\227\2172${GK_R}     unresolved threads on yours\n"
-  printf "             ${GK_YOURS}!${GK_R} ${GK_ATTENTION}!${GK_R}    yours to give \302\267 nobody asked yet\n"
-  printf "             ${GK_CONTEXT}\342\227\213${GK_R} ${GK_GOOD}\342\234\223${GK_R}    asked, not in yet \302\267 approved\n"
-  printf "  ${GK_CONTEXT}ship${GK_R}       ${GK_GOOD}!${GK_R} ${GK_GOOD}\342\217\265${GK_R} ${GK_BAD}\342\234\227${GK_R}  ready for you to merge \302\267 merges itself when green \302\267 a conflict\n"
-  printf "  ${GK_CONTEXT}beside one${GK_R} ${GK_YOURS}\342\234\2161${GK_R} ${GK_ATTENTION}\342\227\214${GK_R}   a fix to fold in (f) \302\267 an agent working on it\n"
-  printf "  ${GK_CONTEXT}any${GK_R}        ${GK_FAINT}\302\267${GK_R}      nothing there yet\n"
-  printf "\n${GK_CONTEXT}the board${GK_R}\n"
-  printf "  a change a row, in lanes by whose move it is; ${GK_ELSEWHERE}\342\226\270${GK_R} is the branch you are on.\n"
-  printf "  ${GK_CONTEXT}\342\224\214 \342\224\234 \342\224\224${GK_R} join a stack: each MR is built on the one under it, and the bottom one merges first.\n"
-  printf "  a stack is kept whole, in the lane of the one in it that wants you most; the rest of it is dim.\n"
-  printf "  the cursor lands on the light that wants you most; enter opens it.\n"
-  printf "  under the lanes, the rest of your work in groups, a line each: enter opens one.\n"
-  printf "  ${GK_ATTENTION}d${GK_R} on a worktree, or under clean up, removes it; on the group's line, all that can go.\n"
-  printf "  ${GK_ATTENTION}gm gb ga gd gw${GK_R} open the full list of any of it; ${GK_ATTENTION}q${GK_R} there comes back here.\n"
-} > "$st/legend"
-
 # Only the first time: a redraw keeps the last ones, which the previews read
 # while the fetch is still going.
 [ -s "$st/mrs.json" ] || echo '{}' > "$st/mrs.json"
@@ -162,7 +144,7 @@ EOF
 # picker's state. A lookup that fails leaves the last one that worked, and
 # git-fzf-stale has already told the footer.
 fetch() {
-  json=$(git-cached-json $now "$1" "$2" "$reload" -- git-forge mrs "$4" 2>/dev/null) &&
+  json=$(OTIS_FETCHED=$told git-cached-json $now "$1" "$2" "$reload" -- git-forge mrs "$4" 2>/dev/null) &&
     cp "$json" "$st/$3"
 }
 
@@ -180,7 +162,7 @@ if otis-config gitlab >/dev/null 2>&1 || [ "$(otis-config forge)" = github ]; th
   # Your pushes to main, where a forge has no MR for them (git-forge
   # main-builds): their checks, as a pipeline of yours.
   if git-forge can main-builds; then
-    { mb=$(git-cached-json $now main-builds $age "$reload" -- git-forge main-builds 2>/dev/null) &&
+    { mb=$(OTIS_FETCHED=$told git-cached-json $now main-builds $age "$reload" -- git-forge main-builds 2>/dev/null) &&
         cp "$mb" "$st/main.json"; } &
   fi
   if git-forge can deploys; then
@@ -188,12 +170,12 @@ if otis-config gitlab >/dev/null 2>&1 || [ "$(otis-config forge)" = github ]; th
     # while a new one is fetched, and that fetch is slow. An answer older than
     # five minutes may say "not out yet" of an MR that went out since, so its
     # rows wait for the new one (ci-merged.old) rather than say that.
-    { merged=$(git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-forge merged 2>/dev/null) &&
+    { merged=$(OTIS_FETCHED=$told git-cached-json --no-wait ci-merged $merged_age "$reload" -- git-forge merged 2>/dev/null) &&
         cp "$merged" "$st/ci-merged.json" &&
         if [ $(( $(date +%s) - $(stat -c %Y "$merged" 2>/dev/null || stat -f %m "$merged") )) -gt 300 ]; then
           : > "$st/ci-merged.old"
         else rm -f "$st/ci-merged.old"; fi; } &
-    { deploys=$(git-cached-json --no-wait deploys 60 "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
+    { deploys=$(OTIS_FETCHED=$told git-cached-json --no-wait deploys $merged_age "$reload" -- git-deploy-list --fetch 2>/dev/null) &&
         cp "$deploys" "$st/deploys.json"; } &
   fi
 elif git remote get-url origin >/dev/null 2>&1; then
@@ -343,8 +325,9 @@ out=$(jq -nr -L "$share" \
     . as $run | ($run.dir | split("/") | last) as $key |
     (if $run.ended > 0 then $run.ended else $run.started end) as $at |
     select(seen($run.kind; $key; "\($at)") | not) |
-    ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify"}[$run.kind] // "run") as $label |
-    { rank: 4.5, g: "✗", gc: bad, verb: "\($label) \($run.state)", kind: "run", extra: $run.dir, verb_key: "run",
+    ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[$run.kind] // "run") as $label |
+    # Not red: what broke is the run, not your change, which a red row would say.
+    { rank: 4.5, g: "✗", gc: yours, verb: "\($label) never finished", kind: "run", extra: $run.dir, verb_key: "run",
       id: "w-failed-\($run.kind)-\($key)",
       mark: (($key | startswith("b-")) and ($key[2:] | gsub("%"; "/")) == $current),
       iid: (if ($key | test("^[0-9]+$")) then $key elif ($key | test("^v-[0-9]+$")) then $key[2:] else "" end),

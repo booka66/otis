@@ -1,11 +1,14 @@
 #!/bin/sh
 # otis-board: the dashboard's board, from what otis-list left in the state.
 #
-# This is the one place that decides what an open merge request needs: its
-# lights, the lane it is in, the light the cursor lands on. otis-list
-# fetches, and says only what is not an open MR's own state. The board is a
-# change a row, with a light for each gate it has to get through, the same
-# five in the same order on every row:
+# This is the one place that decides what an open merge request needs: the
+# one move it wants next, which is what its row says and what enter does,
+# and the lane it is in. otis-list fetches, and says only what is not an open
+# MR's own state. The board is a change a row. What a change needs is worked
+# out from five gates it has to get through (its lights, the same five in
+# the same order for every change), and its move is the gate that wants you
+# most; the dashboard draws the move on the row, and each gate's state in
+# words under the row the cursor is on:
 #
 #   local      where its branch is on this machine: here, in a worktree, a
 #              branch to switch to, or not here at all; and commits nobody
@@ -58,7 +61,9 @@
 # verb, note, jobs done, what it is doing and its dots; and last the group it
 # folds under, for a group's own row how many are in it and a word on them,
 # and for an MR of a stack its piece of the rail and the lane it would be in
-# alone. The first line is the counts: #, need you, drafts, moving.
+# alone; then the row's move in words and its color, and each of the five
+# lights in words ("" for one with nothing to say). The first line is the
+# counts: #, need you, drafts, moving.
 st=$GIT_FZF_STATE
 [ -s "$st/rows" ] || exit 1
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -132,7 +137,10 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # A light: its glyph and color, what enter does on it (vk, extra, does), a
   # mark beside it with the fix run it stands for, how soon it wants you
   # (rank, otis-list'"'"'s), and whether it does: you, moving, ok, wait or off.
-  def off: {g: "·", c: faint, vk: "", extra: "", does: "", m: "", fix: "", rank: 99, st: "off"};
+  # And in words: w, how it stands ("" when it has nothing to say), and mv,
+  # what the row says when this light is its move, where that is not w.
+  def off: {g: "·", c: faint, vk: "", extra: "", does: "", m: "", fix: "", rank: 99, st: "off", w: ""};
+  def fixes_say($n): "fold in \(if $n == 1 then "the fix" else "\($n) fixes" end)";
   def none: off + {g: ""};
 
   # local: where the branch is. Enter goes to it, which the otis function
@@ -143,10 +151,11 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     if $source == "" then none
     elif $b == null then off + {vk: "goto", extra: $source, does: "fetch it and switch to it"}
     else off + {vk: "goto", extra: $source} +
-      (if $b.place == "here" then {g: "▸", c: elsewhere, vk: "", does: ""}
-       elif $b.place == "worktree" then {g: "⌂", c: elsewhere, does: "go to its worktree"}
+      (if $b.place == "here" then {g: "▸", c: elsewhere, vk: "", does: "", w: "you are on it"}
+       elif $b.place == "worktree" then {g: "⌂", c: elsewhere, does: "go to its worktree", w: "in a worktree"}
        else {g: "○", c: context, does: "switch to it"} end)
       + (if $b.kind == "local" and $b.ahead > 0 then {m: "↑\($b.ahead)"} else {} end)
+      | if .m != "" then .w = ([.w, "\($b.ahead) not pushed"] | map(select(. != "")) | join(", ")) else . end
     end;
 
   # verify: the verification of this head if there is one, by the MR or by
@@ -163,28 +172,31 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
       ([$cands[].key | "f-" + ., "v-" + .] | map(select(($fixes[.].fixes // 0) > 0 and ($fixes[.].fixing | not))) | .[0]) as $fx |
       {vk: "run", extra: "\($common)/otis-verify/\($key)", does: "open the run",
        m: (if $fx then "✎\($fixes[$fx].fixes)" else "" end), fix: (if $fx then "\($common)/gmr-fix/\($fx)" else "" end)} +
-      (if $v.verifying then {g: "◎", c: attention, rank: 20, st: "moving"}
+      (if $v.verifying then {g: "◎", c: attention, rank: 20, st: "moving", w: "verifying"}
        elif $v.status == "done" and $v.verdict == "fail" then
-         (if $fresh and ($vseen | not) then {g: "✗", c: bad, rank: 4, st: "you"} else {g: "✗", c: context, rank: 99, st: "off"} end)
+         (if $fresh and ($vseen | not) then {g: "✗", c: bad, rank: 4, st: "you"} else {g: "✗", c: context, rank: 99, st: "off"} end) + {w: "verify broke"}
        elif $v.status == "done" and $v.verdict == "pass" then
          (if $fresh and fresh_run($key) and ($vseen | not) then {g: "✓", c: good, rank: 10, st: "you"}
-          elif $fresh then {g: "✓", c: good, rank: 99, st: "ok"} else {g: "✓", c: context, rank: 99, st: "off"} end)
+          elif $fresh then {g: "✓", c: good, rank: 99, st: "ok"} else {g: "✓", c: context, rank: 99, st: "off"} end) + {w: "verify passed"}
        elif $v.status == "done" then
-         (if $fresh and fresh_run($key) and ($vseen | not) then {g: "?", c: yours, rank: 10, st: "you"} else {g: "?", c: context, rank: 99, st: "off"} end)
+         (if $fresh and fresh_run($key) and ($vseen | not) then {g: "?", c: yours, rank: 10, st: "you"} else {g: "?", c: context, rank: 99, st: "off"} end) + {w: "verify inconclusive"}
        else {g: "·", c: faint, rank: 99, st: "off"} end)
+      # Of a commit the branch has moved on from: said so, since it is not news.
+      | if ($fresh | not) and (.w // "") != "" and ($v.verifying | not) then .w = "older " + .w else . end
       | if $fx and .st != "you" then .st = "you" | .rank = 8 else . end
+      | if $fx then .mv = fixes_say($fixes[$fx].fixes) | .mc = yours | .w = ([.w, "\($fixes[$fx].fixes) \(plural($fixes[$fx].fixes; "fix"; "fixes")) ready"] | map(select(. != "")) | join(", ")) else . end
     end;
 
   def pipeline_cell:
     (. | effective($gates)) as $e |
     if . == null or $e == null then off else
       {vk: "pipeline", extra: "", does: "see its jobs", m: "", fix: ""} +
-      (if $e == "FAILED" then {g: "✗", c: bad, rank: 5, st: "you"}
-       elif $e == "RUNNING" then {g: "◐", c: attention, rank: 20, st: "moving"}
-       elif ($e | IN("PENDING", "CREATED")) then {g: "○", c: attention, rank: 20, st: "moving"}
-       elif $e == "SUCCESS" then {g: "✓", c: good, rank: 99, st: "ok"}
-       elif $e == "APPROVAL" then {g: "⏸", c: elsewhere, rank: 99, st: "off"}
-       else {g: "·", c: context, rank: 99, st: "off"} end)
+      (if $e == "FAILED" then {g: "✗", c: bad, rank: 5, st: "you", w: "pipeline broke"}
+       elif $e == "RUNNING" then {g: "◐", c: attention, rank: 20, st: "moving", w: "pipeline running"}
+       elif ($e | IN("PENDING", "CREATED")) then {g: "○", c: attention, rank: 20, st: "moving", w: "pipeline queued"}
+       elif $e == "SUCCESS" then {g: "✓", c: good, rank: 99, st: "ok", w: "pipeline passed"}
+       elif $e == "APPROVAL" then {g: "⏸", c: elsewhere, rank: 99, st: "off", w: "pipeline waits on a gate"}
+       else {g: "·", c: context, rank: 99, st: "off", w: "pipeline \($e | ascii_downcase)"} end)
     end;
 
   # review, on one of yours: its threads first, since someone is waiting on
@@ -193,16 +205,24 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     ((.resolvableDiscussionsCount // 0) - (.resolvedDiscussionsCount // 0)) as $th |
     ($fixes[.iid] // {}) as $f | (($f.fixes // 0) > 0 and ($f.fixing | not)) as $hasfix |
     ([.reviewers.nodes[]? | .mergeRequestInteraction.reviewState // "UNREVIEWED"]) as $states |
-    {vk: "mr", extra: "", does: "open it",
+    ($states | map(select(. == "APPROVED")) | length) as $ok |
+    {vk: "mr", extra: "", does: "open it", w: "",
      m: (if $hasfix then "✎\($f.fixes)" elif $f.fixing then "◌" else "" end),
      fix: (if $hasfix then "\($common)/gmr-fix/\(.iid)" else "" end)} +
-    (if $th > 0 then {g: "●\($th)", c: yours, rank: 6, st: "you"}
-     elif any($states[]; . == "REQUESTED_CHANGES") then {g: "✗", c: bad, rank: 6, st: "you"}
-     elif .approved then {g: "✓", c: good, rank: 99, st: "ok"}
-     elif ($states | length) > 0 then {g: "○", c: context, rank: 99, st: "wait"}
-     elif (.draft | not) and ((.updatedAt | at) > ($NOW - 3 * 86400)) then {g: "!", c: attention, rank: 12, st: "you"}
-     else {g: "·", c: faint, rank: 99, st: "off"} end)
-    | if $hasfix and .st != "you" then .st = "you" | .rank = 8 else . end;
+    (if $th > 0 then {g: "●\($th)", c: yours, rank: 6, st: "you", does: "open its threads",
+                      w: "\($th) \(plural($th; "thread"; "threads")) to answer", mv: "answer \($th) \(plural($th; "thread"; "threads"))"}
+     elif any($states[]; . == "REQUESTED_CHANGES") then {g: "✗", c: bad, rank: 6, st: "you", w: "changes asked for"}
+     elif .approved then {g: "✓", c: good, rank: 99, st: "ok", w: "approved"}
+     elif ($states | length) > 0 then {g: "○", c: context, rank: 99, st: "wait",
+                                      w: (if $ok > 0 then "\($ok) of \($states | length) approved" else "in review" end)}
+     # Nobody asked: asking is the move, and what enter does (the dashboard'"'"'s a).
+     elif (.draft | not) and ((.updatedAt | at) > ($NOW - 3 * 86400)) then
+       {g: "!", c: attention, rank: 12, st: "you", vk: "reviewers", does: "ask someone to review it", w: "nobody asked to review", mv: "ask for review"}
+     elif .draft then {g: "·", c: faint, rank: 99, st: "off", mv: "draft"}
+     else {g: "·", c: faint, rank: 99, st: "off", vk: "reviewers", does: "ask someone to review it", w: "nobody asked to review", mv: "ask for review"} end)
+    | if $hasfix and .st != "you" then .st = "you" | .rank = 8 else . end
+    | if $hasfix then .mv = fixes_say($f.fixes) | .mc = yours | .w = ([.w, "\($f.fixes) \(plural($f.fixes; "fix"; "fixes")) ready"] | map(select(. != "")) | join(", "))
+      elif $f.fixing then .w = ([.w, "Claude is proposing fixes"] | map(select(. != "")) | join(", ")) else . end;
 
   # review, on one you were asked to: yours to give until you have.
   def review_asked:
@@ -211,11 +231,12 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     {extra: "", m: (if $cl.reviewing then "◌" else "" end), fix: ""} +
     (if ($s | IN("APPROVED", "REVIEWED", "REQUESTED_CHANGES")) then
        {g: (if $s == "APPROVED" then "✓" else "●" end), c: (if $s == "APPROVED" then good else context end),
-        vk: "mr", does: "open it", rank: 99, st: "ok"}
+        vk: "mr", does: "open it", rank: 99, st: "ok", w: (if $s == "APPROVED" then "you approved" else "you reviewed" end)}
      elif ($cl.drafts // 0) > 0 and ($cl.reviewing | not) then
        {g: "✎\($cl.drafts)", c: yours, vk: "run", extra: "\($common)/gmr-claude/\(.iid)",
-        does: "read the review and its drafts", rank: 3.6, st: "you"}
-     else {g: "!", c: yours, vk: "mr", does: "review it", rank: 3.5, st: "you"} end);
+        does: "read the review and its drafts", rank: 3.6, st: "you", w: "Claude'"'"'s review is ready", mv: "read Claude'"'"'s review"}
+     else {g: "!", c: yours, vk: "mr", does: "review it", rank: 3.5, st: "you", w: "waiting on your review", mv: "review it"} end)
+    | if $cl.reviewing then .w = ([.w, "Claude is reading it"] | map(select(. != "")) | join(", ")) else . end;
 
   # ship: set to merge itself, ready for you to merge, or stopped by
   # something no other light says (a conflict). Someone else'"'"'s is theirs.
@@ -224,18 +245,27 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # (git-ci-merge --check).
   def ship_cell($pipe; $yours):
     ((.detailedMergeStatus // "") | ascii_upcase) as $ms |
-    {extra: "", m: "", fix: ""} +
-    (if .autoMergeEnabled then {g: "⏵", c: good, vk: "mr", does: "open it", rank: 99, st: "ok"}
+    {extra: "", m: "", fix: "", w: ""} +
+    (if .autoMergeEnabled then {g: "⏵", c: good, vk: "mr", does: "open it", rank: 99, st: "ok", w: "merges itself when green"}
      elif $yours and .approved and $pipe == "SUCCESS" and ($ms | IN("MERGEABLE", "UNCHECKED", "CHECKING")) and (.draft | not) then
-       {g: "!", c: good, vk: "merge", does: "merge it", rank: 11, st: "you"}
+       {g: "!", c: good, vk: "merge", does: "merge it", rank: 11, st: "you", w: "ready to merge", mv: "merge it"}
      elif ($ms | IN("CONFLICT", "NEED_REBASE")) then
        (if $yours and (.draft | not) then {g: "✗", c: bad, vk: "mr", does: "open it", rank: 7, st: "you"}
         else {g: "✗", c: context, vk: "mr", does: "open it", rank: 99, st: "off"} end)
+       # Behind its target is a rebase, which enter asks for (the dashboard'"'"'s
+       # b); a conflict is yours to settle by hand.
+       + (if $ms == "CONFLICT" then {w: "conflicts with \(.targetBranch)", mv: "settle its conflicts"}
+          elif $yours then {w: "behind \(.targetBranch)", mv: "rebase it", vk: "rebase", does: "rebase it onto \(.targetBranch)"}
+          else {w: "behind \(.targetBranch)"} end)
      else {g: "·", c: faint, vk: "", does: "", rank: 99, st: "off"} end);
 
   # The light the cursor starts on: the one that wants you most; none does,
   # the review, which opens the MR.
   def defc: (map(.rank) | min) as $m | if $m >= 99 then 4 else (map(.rank) | index($m)) + 1 end;
+  # The row'"'"'s move: what that light says, in its color; grey when nothing
+  # on the row wants you, and it only says how the change stands.
+  def move: (map(.rank) | min) as $m | .[defc - 1] as $c |
+    {move: ($c.mv // $c.w // ""), tone: (if $m >= 99 then context else ($c.mc // $c.c) end)};
 
   # An open MR as a row. Its lane is whose move it is; with nothing lit it
   # has none, and folds under waiting (in someone'"'"'s hands) or unsent.
@@ -262,7 +292,15 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      base: (.diffRefs.baseSha // ""), pipeline: (.headPipeline.id | gid),
      purl: (if .headPipeline.path then $url + .headPipeline.path else .webUrl end),
      start: (.diffRefs.startSha // ""), mrkind: $mrkind, draft: (.draft // false),
-     cells: $cells, rank: ($cells | map(.rank) | min)};
+     cells: $cells, rank: ($cells | map(.rank) | min)}
+    + ($cells | move)
+    # Set to merge itself, with nothing for you: that is how it stands. A
+    # draft is not trying to go out, so its pipeline is not news.
+    | if .rank >= 99 and $mrkind == "mine" and $cells[4].st == "ok" then .move = "merging itself" else . end
+    # One you were asked to review and have: how your review stands, since
+    # its pipeline is its author'"'"'s to watch.
+    | if $mrkind == "review" and $lane == null then .defc = 4 | .move = $cells[3].w | .tone = context else . end
+    | if .draft and .defc == 3 then .tone = context else . end;
 
   # Stacks. An open MR that goes into the branch of another open MR is built
   # on it, and the board keeps the two together: a stack is whole and in
@@ -348,22 +386,25 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     ($evs | map(select(.a.t == "fix" and (.f[14] | startswith("✎") | not))) | .[0]) as $fixing |
     (if $v then
        {vk: $v.f[13], extra: $v.f[12], does: $v.f[23]} +
-       (if $v.sec == "going" then {g: "◎", c: attention, rank: 20, st: "moving"}
-        elif ($v.f[16] | startswith("verified: failed")) then {g: "✗", c: bad, rank: 4, st: "you"}
-        elif ($v.f[16] | startswith("verified: passed")) then {g: "✓", c: good, rank: 10, st: "you"}
-        else {g: "?", c: yours, rank: 10, st: "you"} end)
-     elif $vf then {g: "·", c: faint, vk: $vf.f[13], extra: $vf.f[12], does: $vf.f[23], rank: 8, st: "you"}
+       (if $v.sec == "going" then {g: "◎", c: attention, rank: 20, st: "moving", w: "verifying"}
+        elif ($v.f[16] | startswith("verified: failed")) then {g: "✗", c: bad, rank: 4, st: "you", w: "verify broke"}
+        elif ($v.f[16] | startswith("verified: passed")) then {g: "✓", c: good, rank: 10, st: "you", w: "verify passed"}
+        else {g: "?", c: yours, rank: 10, st: "you", w: "verify inconclusive"} end)
+     elif $vf then {g: "·", c: faint, vk: $vf.f[13], extra: $vf.f[12], does: $vf.f[23], rank: 8, st: "you", w: ""}
      else none end
-     | . + {m: (if $vf then $vf.f[14] else "" end), fix: (if $vf then $vf.f[12] else "" end)}) as $c1 |
-    (if $bf then {g: "·", c: faint, vk: $bf.f[13], extra: $bf.f[12], does: $bf.f[23], m: $bf.f[14], fix: $bf.f[12], rank: 8, st: "you"}
-     elif $fixing then none + {g: "◌", c: attention, vk: $fixing.f[13], extra: $fixing.f[12], does: $fixing.f[23], rank: 20, st: "moving"}
+     | . + {m: (if $vf then $vf.f[14] else "" end), fix: (if $vf then $vf.f[12] else "" end)}
+     | if $vf then .mv = fixes_say($vf.f[14] | ltrimstr("✎") | tonumber? // 1) | .mc = yours | .w = ([.w, "a fix ready"] | map(select(. != "")) | join(", ")) else . end) as $c1 |
+    (if $bf then {g: "·", c: yours, vk: $bf.f[13], extra: $bf.f[12], does: $bf.f[23], m: $bf.f[14], fix: $bf.f[12], rank: 8, st: "you",
+                  w: fixes_say($bf.f[14] | ltrimstr("✎") | tonumber? // 1)}
+     elif $fixing then none + {g: "◌", c: attention, vk: $fixing.f[13], extra: $fixing.f[12], does: $fixing.f[23], rank: 20, st: "moving", w: "Claude is \($fixing.f[16])"}
      else none end) as $c3 |
     ([local_cell($branch), $c1, none, $c3, none] | map(. + {kind: "run"})) as $cells |
     {lane: (if any($cells[]; .st == "you") then "move" else "moving" end), key: "c-b-\($branch)", type: "change", fold: "",
      title: $branch, who: "", when: ($evs | map(.f[19]) | map(select(. != "")) | .[0] // ""),
      mark: ($branch == $current), defc: ($cells | defc),
      iid: "", target: "", url: "", source: $branch, head: "", base: "", pipeline: "", purl: "", start: "",
-     mrkind: "run", draft: false, cells: $cells, rank: ($cells | map(.rank) | min)})) as $branches_on |
+     mrkind: "run", draft: false, cells: $cells, rank: ($cells | map(.rank) | min)}
+    + ($cells | move))) as $branches_on |
 
   # The rest, each as otis-list had it.
   def kept($lane): .f as $f |
@@ -372,7 +413,8 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      iid: $f[1], target: $f[2], url: $f[3], source: $f[4], head: $f[6], base: $f[7], pipeline: $f[8], purl: $f[9], start: $f[11],
      mrkind: $f[5], draft: false, rank: 50,
      cells: [off + {g: $f[14], c: $f[15], kind: $f[5], vk: $f[13], extra: $f[12], does: $f[23]}, none, none, none, none],
-     verb: $f[16], note: $f[20], prog: $f[21], sub: $f[24], dots: $f[25]};
+     verb: $f[16], note: $f[20], prog: $f[21], sub: $f[24], dots: $f[25],
+     move: (if $f[5] == "here" then "here" else $f[16] end), tone: (if $f[5] == "here" then elsewhere else $f[15] end)};
   ($rest | map(select((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not)
      | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end))) as $notices |
   ($events | map(select(.f[5] | IN("here", "trash")) | kept("here"))) as $here |
@@ -396,7 +438,10 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   def branch_row($fold): . as $b |
     ([local_cell($b.name), verify_cell(""; $b.name; ""), none, none, none] | map(. + {kind: "run"})) as $cells |
     blank + {lane: $fold, fold: $fold, key: "c-b-\($b.name)", type: "change", title: $b.name,
-             mark: ($b.name == $current), source: $b.name, mrkind: "run", cells: $cells};
+             mark: ($b.name == $current), source: $b.name, mrkind: "run", cells: $cells, tone: context,
+             move: (if $b.kind == "local" then (if $b.ahead > 0 then "\($b.ahead) not pushed" else "empty" end)
+                    elif $b.kind == "pushed" then "no MR yet"
+                    elif $b.kind == "merged-diff" then "new since merge" else "new since close" end)};
   ($open | map(select(.lane == null))) as $quiet |
   ($quiet | map(.source)) as $quiet_branches |
   # waiting: in someone else'"'"'s hands. unsent: in nobody'"'"'s yet.
@@ -414,19 +459,21 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
              when: (if .mergedAt then since(.mergedAt | at) else "" end),
              iid: .iid, target: .targetBranch, url: .webUrl, source: .sourceBranch, mrkind: "merged",
              pipeline: ((.deploy.pipeline // "") | tostring), purl: (.deploy.url // .webUrl),
-             cells: [off + $g + {kind: "merged", vk: "mr", does: "see its deploy"}, none, none, none, none],
+             cells: [off + $g + {kind: "merged", vk: "mr", does: "see its deploy"}, none, none, none, none], tone: $g.c,
              verb: (if .state == "live" then "live" elif .state == "rolledback" then "rolled back"
-                    elif .state == "deploying" then "deploying" elif .state == "queued" then "queued" else "not out yet" end)})) as $shipped |
+                    elif .state == "deploying" then "deploying" elif .state == "queued" then "queued" else "not out yet" end)}
+    | .move = .verb)) as $shipped |
   # cleanup: what can go. A branch whose MR merged or closed with nothing
   # since, not checked out anywhere; a worktree git-worktree-list calls safe.
   (($brs | map(select((.kind | IN("merged", "closed")) and .place == "") |
      blank + {lane: "cleanup", fold: "cleanup", key: "d-b-\(.name)", type: "change", title: .name, source: .name, iid: .iid, mrkind: "run",
+              move: (if .kind == "merged" then "merged" else "closed" end), tone: context,
               cells: ([{g: "○", c: context, vk: "delbranch", extra: .name, does: "delete it (asks first)", m: "", fix: "", rank: 99, st: "off"},
                        none, none, none, off + {g: (if .kind == "merged" then "✓" else "⊘" end), c: (if .kind == "merged" then good else context end)}]
                       | map(. + {kind: "run"}))}))
    + ($wts | map(select(.safe and (.own | not)) |
      blank + {lane: "cleanup", fold: "cleanup", key: "d-w-\(.path)", type: "place", title: (.path | split("/") | last),
-              source: .branch, iid: .iid, mrkind: "place",
+              source: .branch, iid: .iid, mrkind: "place", move: "worktree", tone: context,
               cells: [off + {g: "⌂", c: elsewhere, kind: "place", vk: "delwt", extra: .path, does: "remove it (asks first)"}, none, none, none, none],
               verb: "", note: ((if .branch != "" then .branch else "detached" end) + "  ·  nothing in it would be lost")}))) as $cleanup |
   # places: the worktrees that are staying, where you are aside. Clean, it
@@ -440,15 +487,27 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      blank + {lane: "places", fold: "places", key: "p-\(.path)", type: "place", title: (.path | split("/") | last),
               source: .branch, iid: .iid, mrkind: "place",
               cells: [off + {g: "⌂", c: elsewhere, kind: "place", vk: "cd", extra: .path, does: "go there"}, none, none, none, none],
-              verb: (if .dirty != "" then "dirty" elif .branch == "" and (.path | IN($stray[])) then "stray" else "clean" end),
+              verb: (if .dirty != "" then "dirty" elif .branch == "" and (.path | IN($stray[])) then "stray" else "clean" end), tone: context,
               note: ([(if .branch != "" then .branch else "detached" end), (if .dirty != "" then .dirty else empty end),
-                      (if .branch == "" and (.path | IN($stray[])) then "its commits are on no branch" else empty end)] | join("  ·  "))})) as $places |
+                      (if .branch == "" and (.path | IN($stray[])) then "its commits are on no branch" else empty end)] | join("  ·  "))}
+     | .move = {dirty: "has work", stray: "stray commits", clean: "clean"}[.verb])) as $places |
   ($places | map(select(.verb == "clean")) | length) as $canGo |
 
-  # runs: what Claude ran in the background and is over, newest first.
-  ($runs | map(select(.state != "running")) | map(. + {at: (if .ended > 0 then .ended else .started end)}) | sort_by(0 - .at) | map(
+  # runs: what Claude ran in the background and is over, newest first. Only
+  # those of a change that is on no row above (its merge request merged or
+  # closed, its branch gone), and of this week: a run of a change that is
+  # here is that change'"'"'s, reached from its row (V its verification, P its
+  # walk, enter on a review or a fix).
+  ($open | map(.iid)) as $open_iids |
+  def here_still: sub("^[vf]-"; "") | if test("^[0-9]+$") then IN($open_iids[])
+    elif startswith("b-") then (.[2:] | gsub("%"; "/")) as $b | ($br[$b] != null or ($b | IN($open_branches[]))) else false end;
+  ($runs | map(select(.state != "running")) | map(. + {at: (if .ended > 0 then .ended else .started end)})
+    | map(select(.at > $NOW - 7 * 86400 and ((.dir | split("/") | last) | here_still | not))) | sort_by(0 - .at) | map(
      (.dir | split("/") | last) as $key | ($key | sub("^[vf]-"; "")) as $base |
+     ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[.kind] // "run") as $what |
      blank + {lane: "runs", fold: "runs", key: "r-\(.kind)-\($key)", type: "notice", title: .last, when: since(.at),
+              move: (if .state == "done" then "\($what) done" else "\($what) never finished" end),
+              tone: (if .state == "done" then context else yours end),
               iid: (if ($base | test("^[0-9]+$")) then $base else "" end),
               note: (if ($base | startswith("b-")) then $base[2:] | gsub("%"; "/") else "" end), mrkind: "run",
               cells: [off + {g: (if .state == "done" then "✓" elif .state == "failed" then "✗" else "·" end),
@@ -466,8 +525,15 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
                              elif .status == "running" then {g: "◐", c: attention} elif .status == "canceled" then {g: "⊘", c: context}
                              else {g: "○", c: attention} end)
                       + {kind: "deploy", vk: "deployjobs", extra: (.id | tostring), does: "its jobs and logs"}, none, none, none, none],
-              verb: (if .kind == "rollback" then "rollback" else (.sha // "" | .[0:8]) end)})) as $deploys |
+              verb: (if .kind == "rollback" then "rollback" else (.sha // "" | .[0:8]) end),
+              move: (if .kind == "rollback" then "rolled back" elif .status == "success" then "went out"
+                     elif .status == "failed" then (if .duration == 0 then "never ran" else "broke" end)
+                     elif .status == "running" then "going out" elif .status == "canceled" then "canceled" else "queued" end)}
+     | .tone = .cells[0].c)) as $deploys |
 
+  # tally: how many of a group'"'"'s rows say each thing, the first said first.
+  def tally: reduce map(.move)[] as $m ([]; if any(.[]; .[0] == $m) then map(if .[0] == $m then [$m, .[1] + 1] else . end) else . + [[$m, 1]] end)
+    | map("\(.[1]) \(.[0])") | join(", ");
   def group($id; $name; $rows; $say):
     if ($rows | length) == 0 then empty else
       (blank + {lane: $id, fold: "", key: "g-\($id)", type: "group", title: $name, cells: [none, none, none, none, none],
@@ -479,17 +545,21 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   ($need[], lane("draft")[], lane("moving")[], $here[],
    group("waiting"; "waiting on others"; $waiting; "open, and nothing for you to do"),
    group("unsent"; "not sent yet"; $unsent; "no MR, or nobody asked to review it"),
-   group("shipped"; "shipped this week"; $shipped; ($shipped | map(.cells[0].c + .cells[0].g) | join("") + r)),
+   group("shipped"; "shipped this week"; $shipped; ($shipped | tally)),
    group("cleanup"; "clean up"; $cleanup; "merged or closed, safe to delete"),
    group("places"; "worktrees"; $places;
      ([(if $canGo > 0 then "\($canGo) with nothing uncommitted" else empty end),
        (if ($places | length) > $canGo then "\(($places | length) - $canGo) with work in \(plural(($places | length) - $canGo; "it"; "them"))" else empty end)] | join("  ·  "))),
-   group("runs"; "runs"; $ran; "what Claude ran, newest first"),
-   group("deploys"; "deploys"; $deploys; ($deploys[0:24] | map(.cells[0].c + .cells[0].g) | join("") + r))
+   group("runs"; "runs"; $ran; "what Claude ran this week for changes that are no longer here"),
+   group("deploys"; "deploys"; $deploys; ($deploys | tally))
    |
     [.lane, .key, .type, .title, .who, .when, (if .mark then "1" else "" end), .defc,
      .iid, .target, .url, .source, .head, .base, .pipeline, .purl, .start, .mrkind, (if .draft then "1" else "" end)]
-    + (.cells | map([.g, .c, (.kind // ""), .vk, .extra, .does, .m, .fix]) | add)
+    # A light that says how it stands in words is read, so never in the
+    # faintest grey, which is for what has nothing to say.
+    + (.cells | map((if (.w // "") != "" and .c == faint then .c = context else . end)
+                    | [.g, .c, (.kind // ""), .vk, .extra, .does, .m, .fix]) | add)
     + [(.verb // ""), (.note // ""), (.prog // ""), (.sub // ""), (.dots // ""), (.fold // ""), (.count // ""), (.say // ""),
-       (.rail // ""), (.own // "")]
+       (.rail // ""), (.own // ""), (.move // ""), (.tone // "")]
+    + (.cells | map(.w // ""))
     | map(clean) | join("\t"))'

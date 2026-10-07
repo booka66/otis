@@ -30,10 +30,13 @@
 # from the last fetch that worked. The cache's mtime is that time; attempts are
 # timed by $cache.tried, so a failing fetch is retried no more often than a
 # working one, and the picker reloads once when a fetch starts or stops failing.
-# With no picker to reload (the dashboard, which reads the cache again every
-# ten seconds and fetches on u), a cache whose last fetch failed is still
-# fetched again in the background: what broke it (a login that expired) once
-# mended, the failure goes by itself rather than stand until the next u.
+# With no picker to reload, a cache that works is left as it is: nobody is
+# there to show a new one to. One whose last fetch failed is still fetched
+# again in the background: what broke it (a login that expired) once mended,
+# the failure goes by itself. A screen that is no picker and wants its caches
+# kept fresh behind it names a file to be told by (OTIS_FETCHED, the
+# dashboard's): its stale caches are fetched as a picker's are, and the file
+# is written when one lands.
 refresh= nowait= sync= now=
 [ "$1" = --refresh ] && { refresh=1; shift; }
 [ "$1" = --no-wait ] && { nowait=1; shift; }
@@ -103,7 +106,10 @@ run() {
   rm -f "$new" "$new.stderr"
   return 1
 }
-tell() { [ -n "$FZF_PORT" ] && curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null; }
+tell() {
+  if [ -n "$FZF_PORT" ]; then curl -s -XPOST "127.0.0.1:$FZF_PORT" -H "x-api-key: $FZF_API_KEY" -d "$reload" >/dev/null
+  elif [ -n "$OTIS_FETCHED" ]; then : > "$OTIS_FETCHED"; fi
+}
 
 # A fetch with nothing cached yet holds the picker up on an empty list, which
 # is the one place otis makes you wait with nothing on the screen. So it says
@@ -205,7 +211,7 @@ last=$cache
 [ "$cache.tried" -nt "$cache" ] && last=$cache.tried
 # date -r reads a file's mtime on both macOS and Linux, where stat's flags differ.
 age=$(( $(date +%s) - $(date -r "$last" +%s) ))
-[ "$age" -ge "$stale" ] && { [ -n "$FZF_PORT" ] || [ -s "$cache.err" ]; } || exit 0
+[ "$age" -ge "$stale" ] && { [ -n "$FZF_PORT" ] || [ -n "$OTIS_FETCHED" ] || [ -s "$cache.err" ]; } || exit 0
 # Mark the attempt now so a burst of reloads starts one fetch, not several.
 touch "$cache.tried"
 (

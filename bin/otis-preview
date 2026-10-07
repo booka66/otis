@@ -2,13 +2,14 @@
 # otis-preview <kind> <iid> <row id> <extra> [<light>]: the dashboard's
 # preview pane, and what space reads in a pager.
 #
-# A change (a merge request, or a branch with none) is drawn here, a light
-# of the board (otis-board) at a time: what the change is in two lines, its
-# lights with this one lit (OTIS_TABS, which otis-dash draws), then only what
-# that light has to say: local (the branch, as gb previews it), verify
-# (git-verify's account), pipeline, review, ship. The light "all", and an
-# open merge request with no light named, is every one of them in turn under
-# its name: there is one account of a merge request, said in parts or whole.
+# A change (a merge request, or a branch with none) is drawn here, a gate
+# of the board (otis-board) at a time: what the change is in a line, how
+# each of its gates stands in words with this one lit (OTIS_STATES, which
+# otis-dash writes), then only what that gate has to say: local (the branch,
+# as gb previews it), verify (git-verify's account), pipeline, review, ship.
+# The gate "all", and an open merge request with no gate named, is its title
+# and every one of them in turn under its name: there is one account of a
+# merge request, said in parts or whole.
 # Everything about the MR comes from the JSON otis-list left in the state, so
 # moving never waits on GitLab.
 #
@@ -66,7 +67,7 @@ light() {
     threads=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/git-alias-cache/mr-$iid-threads.json
     [ -s "$threads" ] || threads=/dev/null
   fi
-  jq -nr -L "$share" --arg iid "$iid" --arg gate "$gate" --arg row "$row" --arg tabs "$OTIS_TABS" --argjson w "$w" \
+  jq -nr -L "$share" --arg iid "$iid" --arg gate "$gate" --arg row "$row" --arg states "$OTIS_STATES" --argjson w "$w" \
     --arg brief "$OTIS_BRIEF" \
     --arg main "${OTIS_C_main:-$(otis-config main 2>/dev/null)}" \
     --slurpfile mine "$st/ci.json" --slurpfile asked "$st/mrs.json" --slurpfile marks "$st/marks.json" \
@@ -91,21 +92,24 @@ light() {
     (($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // []) | map(select(.iid == $iid)) | .[0]) as $a |
     ($m // $a) as $mr |
 
-    # What it is: the title whole, then its number and its size. A branch
-    # with no merge request is its name.
-    (if $brief != "" then empty elif $mr then
-       ($mr.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i") | wrapl($w; 9)[] | B + text + . + UB + r),
+    # What it is, in a line: its number, whose it is, its size, and what it
+    # is built on. Its title is on its row, whole, so it is said here only
+    # when all of it is read at once (the gate all). A branch with no merge
+    # request says that. Then how each of its gates stands, in a line.
+    (if $mr then
+       (if $gate == "all" then ($mr.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i") | wrapl($w; 9)[] | B + text + . + UB + r) else empty end),
        (attention + "!\($mr.iid)" + r
          + (if $mr.draft then dot + yours + "draft" + r else "" end)
          + (if ($m | not) and $mr.author then dot + context + $mr.author.username + r else "" end)
          + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
-              + dot + context + "\(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else "" end)),
-       (if $mr.targetBranch != $main then context + "on top of " + $mr.targetBranch + r else empty end)
+              + dot + context + "\(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else "" end)
+         + (if $mr.targetBranch != $main then dot + context + "on top of " + $mr.targetBranch + r else "" end))
      else
-       (B + elsewhere + ($row | ltrimstr("c-b-")) + UB + r),
+       (if $gate == "all" then (B + elsewhere + ($row | ltrimstr("c-b-")) + UB + r) else empty end),
        (context + "a branch with no merge request yet" + r)
      end),
-    (if $brief != "" then empty else "", (if $tabs != "" then $tabs, "" else empty end) end),
+    (if $states != "" then $states else empty end),
+    (if $brief != "" then empty else "" end),
 
     (select($mr != null) |
      ($mr.headPipeline.jobs.nodes // []) as $jobs |

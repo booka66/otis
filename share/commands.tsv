@@ -7,7 +7,7 @@
 # section	group	name	also	args	summary	extra
 # Commands in one group share a line in gg, the first one's name padded to
 # a column and the rest run on after it; group is the first one's name.
-look	otis	otis			the dashboard: what wants you, what is running, where you are	m b a d and gw open the full lists, gc otis's settings
+look	otis	otis			the board: every change a row that says its next move, and enter does it; everything else in groups under them	? lists its keys
 look	gs	gs			status	
 look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r rewords	gl origin/main..
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
