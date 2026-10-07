@@ -526,7 +526,8 @@ row() {
         t=$title[i]
         # One of Claude's runs on a branch names the branch, then what it last said.
         [[ -n $note[i] ]] && t=$note[i]${t:+  ·  $t}
-        [[ -z $iid[i] && -n $dots[i] ]] && { put "$Y" "$dots[i]"; put "" "  "; }
+        # A verification's claims, a dot each, beside what it is running on.
+        [[ -n $dots[i] ]] && s=$dots[i] nc=$Y
         [[ -n $prog[i] ]] && (( rw += 18 )) ;;
     esac
     mind=$used

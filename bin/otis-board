@@ -422,8 +422,16 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      cells: [off + {g: $f[14], c: $f[15], kind: $f[5], vk: $f[13], extra: $f[12], does: $f[23]}, none, none, none, none],
      verb: $f[16], note: $f[20], prog: $f[21], sub: $f[24], dots: $f[25],
      move: (if $f[5] == "here" then "here" else $f[16] end), tone: (if $f[5] == "here" then elsewhere else $f[15] end)};
+  # A run still going says what it is running on, as the row of a change
+  # says its title: the title of its MR, else its branch. Not the last line
+  # of its log and the command it is on now, which were a paragraph a run on
+  # the board; how far it has got is said under the board, claim by claim.
+  ($open | map({key: .iid, value: .title}) | from_entries) as $titles |
   ($rest | map(select(.loud or ((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not))
-     | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end))) as $notices |
+     | . as $e | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end)
+     | if $e.sec == "going" and $e.f[5] == "run" then
+         .sub = "" | .title = ($titles[$e.f[1]] // (if $e.f[20] != "" then "" else .title end))
+       else . end)) as $notices |
   ($events | map(select(.f[5] | IN("here", "trash")) | kept("here"))) as $here |
 
   ($changes + $branches_on) as $changes |
