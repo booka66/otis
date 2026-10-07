@@ -17,13 +17,11 @@ top=$common/gmr-watch
 d=$top/$iid
 
 ctx=$d/context
-reload() { tell_picker "execute-silent(git-fzf-bg git-mr-list)"; }
 finish() {
   printf '%s\n' "$1" > "$d/status"
   date +%s > "$d/ended"
   say "$2"
   [ "$1" != stopped ] && alert "!$iid in production" "$2" "$1"
-  reload
   exit 0
 }
 epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | fromdateiso8601'; }
@@ -152,7 +150,6 @@ check() {
       printf '%s\n' "$verdict" > "$d/alerted"
       ;;
   esac
-  reload
 }
 
 cat > "$ctx/prompt-1" <<EOF

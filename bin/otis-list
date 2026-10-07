@@ -413,7 +413,9 @@ out=$(jq -nr -L "$share" \
       id: "g-deploy-\(.pipeline)", mark: false,
       tail: (faint + since(.at | at) + r + context + "  "
             + (if (.mrs | length) > 0 then (.mrs | map("!" + .) | join(" ")) else "no merge requests" end) + r),
-      title: (if (.mrs | length) > 0 then "carrying " + (.mrs | map("!" + .) | join(" ")) else "carrying no merge requests" end),
+      # How many it carries: which ones is said under the board, where
+      # there is room for them, not in three lines of numbers on its row.
+      title: "carrying \(.mrs | length) \(plural(.mrs | length; "merge request"; "merge requests"))",
       when: since(.at | at) }
     end;
 

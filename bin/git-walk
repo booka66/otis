@@ -298,7 +298,7 @@ start() {
   # From gag or the dashboard, an MR's shas are the last run's.
   if [ -z "$br" ] && [ -z "$head" ]; then
     head=$(cat "$d/head" 2>/dev/null) base=$(base_of "$d") start=$(cat "$d/start" 2>/dev/null)
-    [ -n "$head" ] || pause "P in gmr walks $what"
+    [ -n "$head" ] || pause "P on the board walks $what"
   fi
   rm -rf "$d"
   mkdir -p "$d" || return 1

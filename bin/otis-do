@@ -102,7 +102,7 @@ fi
 
 if [ "$what" = confirm ]; then
   if [ "$verb" = rollback ]; then
-    git-confirm "stop the dashboard showing that !$iid was rolled back? gmr keeps it" || exit 0
+    git-confirm "stop the board showing that !$iid was rolled back?" || exit 0
     printf 'rollback/%s\trolledback\n' "$iid" >> "$common/otis-dismissed"
     exit 0
   fi
@@ -115,7 +115,7 @@ if [ "$what" = confirm ]; then
       *) at= ;;
     esac
     if [ -n "$at" ]; then
-      git-confirm "stop the dashboard showing that this run $noun? gag keeps it" || exit 0
+      git-confirm "stop the board showing that this run $noun? its folder is kept" || exit 0
       printf '%s\n' "$at" > "$extra/seen"
       exit 0
     fi
@@ -130,7 +130,7 @@ if [ "$what" = confirm ]; then
         */otis-verify/*) saw=$(cat "$extra/head" 2>/dev/null); noun="verdict on $(cut -c1-8 "$extra/head" 2>/dev/null)" ;;
         *) saw=$(jq -r '.verdict // ""' "$extra/verdict.json" 2>/dev/null); noun="verdict" ;;
       esac
-      git-confirm "stop the dashboard showing that $noun? gag and gmr keep it, and it comes back if it changes" || exit 0
+      git-confirm "stop the board showing that $noun? it comes back if it changes" || exit 0
       printf '%s\n' "$saw" > "$extra/seen"
       exit 0 ;;
   esac
@@ -154,7 +154,7 @@ case $verb in
   pipeline)
     exec git-ci-do jobs "$pipeline" "$iid" ;;
   deploy)
-    echo "execute(gd $pipeline)"
+    echo "execute(git-ci-jobs $pipeline '')"
     exit 0 ;;
   trash)
     # The trash is the file manager's, not otis's, so otis opens it and stops

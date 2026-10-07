@@ -472,7 +472,7 @@ EOF
     k=$((k + 1))
   done
   made=$(ls "$d"/[0-9][0-9].patch 2>/dev/null | wc -l | tr -d ' ')
-  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; $(if [ "$kind" = retro ]; then echo "enter on it in gag shows them; B puts the accepted on a branch off $(otis-config main)"; else echo "C there shows them"; fi)"
+  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; $(if [ "$kind" = retro ]; then echo "enter on it on the board shows them; B puts the accepted on a branch off $(otis-config main)"; else echo "C there shows them"; fi)"
 fi
 
 # C: start a run after a confirm; while it runs, its progress; once it is

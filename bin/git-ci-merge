@@ -51,16 +51,16 @@ if [ "$1" = --check ]; then
     status=$(printf '%s' "$json" | jq -r .detailed_merge_status)
   done
   case $status in
-    mergeable) exec echo "execute(git-ci-merge $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+    mergeable) exec echo "execute(git-ci-merge $iid)" ;;
     ci_must_pass)
       [ "$(printf '%s' "$json" | jq -r '.head_pipeline == null')" = true ] &&
-        exec echo "execute(git-ci-merge --run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+        exec echo "execute(git-ci-merge --run $iid)" ;;
   esac
   why=$(waits "$status")
   if [ -n "$why" ]; then
     [ "$(printf '%s' "$json" | jq -r .merge_when_pipeline_succeeds)" = true ] &&
       exec git-fzf-note "!$iid is already set to merge itself: $why"
-    exec echo "execute(git-ci-merge --auto $iid $status)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+    exec echo "execute(git-ci-merge --auto $iid $status)"
   fi
   case $status in
     draft_status)       why="it is a draft; R marks it ready" ;;

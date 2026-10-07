@@ -106,7 +106,7 @@ fi
 if [ "$mode" = --step ]; then
   d=${1:-1}
   # 0 is P putting the cursor where the walk is; it says nothing of its own.
-  [ -e "$st/walk" ] || { [ "$d" = 0 ] || git-fzf-note "no walk here: P in gmr or gb walks a change"; exit 0; }
+  [ -e "$st/walk" ] || { [ "$d" = 0 ] || git-fzf-note "no walk here: P on the board or in gb walks a change"; exit 0; }
   file=$dir/$key.json
   [ -s "$file" ] || { [ "$d" = 0 ] || git-fzf-note "Claude is still walking it"; exit 0; }
   read -r k 2>/dev/null < "$st/walk"

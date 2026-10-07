@@ -133,7 +133,7 @@ awk -F'\t' -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}
       if (op[p] == "missing") lbl = GK_BAD "missing " GK_R
 
       mark = (p == here) ? GK_ELSEWHERE "▶ " GK_R : "  "
-      role = (p == main) ? "main checkout" : (p == review) ? "gmr: MRs you review" : (p == mine) ? "gmr: your MRs" \
+      role = (p == main) ? "main checkout" : (p == review) ? "otis: MRs you review" : (p == mine) ? "otis: your MRs" \
            : (name[i] ~ /^claude-fix/) ? "the agents\047, for fix runs" : (name[i] ~ /^claude-review/) ? "the agents\047, for reviews" : ""
       show = (b != "" && b != name[i] && b != prefix "/" name[i]) ? b : ""
 

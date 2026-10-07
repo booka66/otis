@@ -96,7 +96,7 @@ case $state in
       inconclusive) pane_callout yours "Inconclusive: yours to judge" "${GK_TEXT}${held}${GK_R}" ;;
       *)
         if [ "$drafts" -gt 0 ]; then
-          pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}$(pane_fit "gmr's review of it shows them, where they go" $((PANE_W - 2)))${GK_R}"
+          pane_callout yours "$drafts $( [ "$drafts" -eq 1 ] && echo draft || echo drafts) to read before you submit" "${GK_TEXT}$(pane_fit "its review shows them, where they go: enter on its row" $((PANE_W - 2)))${GK_R}"
         elif [ "$fixes" -gt 0 ]; then
           pane_callout yours "$fixes $( [ "$fixes" -eq 1 ] && echo fix || echo fixes) to accept or drop"
         fi ;;

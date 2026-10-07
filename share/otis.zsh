@@ -188,7 +188,7 @@ _g_goto_branch() {
     local name=${b##*/}
     [[ -e $(git-worktree-path named "$name") ]] && name=${b//\//-}
     wt=$(git-worktree-path named "$name")
-    [[ -e $wt ]] && { print -u2 "${wt/#$HOME/~} already exists; gw shows what is in it"; return 1 }
+    [[ -e $wt ]] && { print -u2 "${wt/#$HOME/~} already exists; the board lists it under worktrees"; return 1 }
     if git show-ref --verify --quiet "refs/heads/$b"; then
       git-worktree-add "$name" --quiet "$b" || return 1
     else
@@ -199,7 +199,7 @@ _g_goto_branch() {
     return
   fi
   if ! git switch "$b"; then
-    print -u2 "to leave this checkout as it is, open $b in a worktree of its own: W in gb or gmr"
+    print -u2 "to leave this checkout as it is, open $b in a worktree of its own: W in gb or on the board"
     return 1
   fi
 }
@@ -224,35 +224,6 @@ _g_free_branch() {
     git-worktree-trash "$wt" || return 1
     print "$b was in ${wt/#$HOME/~}, now in the Trash"
   fi
-}
-
-# Worktrees: where your work is, and what can go. Each row leads with its
-# branch's state as gb names it, then anything in the way: uncommitted changes,
-# a rebase left in progress (git-worktree-list). enter goes there. d removes the
-# marked worktrees, or the one under the cursor, leaving any with uncommitted
-# changes; a merged or closed branch goes with its worktree, any other stays
-# (git-worktree-remove). M marks the ones safe to remove. The picker runs from the main checkout, so removing the worktree you
-# are in cannot break it, and you land in the main checkout afterwards.
-gw() {
-  _g_repo || return 1
-  local main=$(git-worktree-path main) here=$(git rev-parse --show-toplevel) sel
-  sel=$(cd "$main" && GW_HERE=$here GW_MAIN=$main git-fzf 'worktree ' 'enter=go there,space=mark,d=remove,M=mark safe to remove,u=refresh' \
-      --multi --ansi --track --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys worktree {2} {3} {4} {5}' \
-      --bind 'start:reload(git-worktree-list | tee "$GIT_FZF_STATE/bg.shown")' \
-      --bind 'u:execute-silent(git-fzf-bg git-worktree-list --refresh)' \
-      --bind 'space:toggle' \
-      --bind 'M:transform(git-worktree-list --safe)' \
-      --bind 'result:unbind(result)+transform(git-worktree-list --safe-after)' \
-      --bind 'd:execute(git-worktree-remove {+2})+clear-multi+execute-silent(git-fzf-bg git-worktree-list --refresh)' \
-      --preview 'git-worktree-preview {2} {3} {4} {6} {7} {8}' </dev/null)
-  if [[ ! -d $PWD ]]; then
-    print "the worktree you were in is gone; now in the main checkout"
-    _g_cd "$main"
-  fi
-  [[ -n $sel ]] || return 0
-  local -a lines=("${(@f)sel}")
-  local -a f=("${(@ps:\t:)lines[1]}")
-  [[ -n $f[2] ]] && _g_cd "$f[2]"
 }
 
 # Your branch prefix, from git config otis.branchPrefix (otis-setup
@@ -287,7 +258,7 @@ _gbranch() {
     local wt=$(git-worktree-path of "$b")
     print -u2 "$cmd: $b already exists"
     if [[ -n $wt ]]; then
-      print -u2 "  it's checked out at $wt   jump there with gw"
+      print -u2 "  it's checked out at $wt   the board goes there, under worktrees"
     else
       print -u2 "  switch to it with gb, or: git switch $b"
     fi
@@ -307,7 +278,7 @@ gwn() {
   b=$(_gbranch gwn "$1") || return
   local name=${b#$(_gprefix gwn)/}
   dir=$(git-worktree-path named "$name")
-  [[ -e $dir ]] && { print -u2 "gwn: $dir already exists   jump there, or remove it, with gw"; return 1 }
+  [[ -e $dir ]] && { print -u2 "gwn: $dir already exists   the board goes there or removes it, under worktrees"; return 1 }
   git-worktree-add "$name" -b "$b" "${2:-$(otis-config base)}" && _g_cd "$dir"
 }
 
@@ -637,24 +608,23 @@ gundo() {
 # results themselves stay where they are used: drafts and fixes in gmr and
 # gb. Every 5s it reloads if a run has moved on (git-fzf-bg), keeping the
 # cursor and where the preview is scrolled to.
-# The dashboard, and the one command named after the tool: everything that
-# wants you, then what is running, then where you are (otis-list), drawn by
-# otis-dash: the thing that wants you most in a card of its own, the rest in
-# quiet sections under it, and the row's preview beside them on a wide
-# terminal. One row a thing and never one a fact, so a merge request with a
-# failed pipeline and three threads on it is one row, the pipeline, because
-# that is what you would do about it next. enter does exactly what the row
-# says, whatever that is: opens an MR for review, the proposals of a fix run,
-# the jobs of a failed pipeline, the stage panel for what is uncommitted here
-# (otis-do).
+# The board, and the one command named after the tool: every change a row
+# that says the one move it needs next, then what is moving without you and
+# where you are, and everything else there is in groups under them
+# (otis-list, otis-board), drawn by otis-dash. One row a change and never one
+# a fact, so a merge request with a failed pipeline and three threads on it
+# is one row, the pipeline, because that is what you would do about it next.
+# enter does exactly what the row says, whatever that is: opens an MR for
+# review, the proposals of a fix run, the jobs of a failed pipeline, the
+# stage panel for what is uncommitted here (otis-do).
 #
-# m, b, a, d and gw open the full list behind a section (gmr, gb, gag, gd, gw),
-# gc otis's own settings (otis-config), and q there comes back here, so the
-# dashboard is a hub rather than a detour; they are run here, since gb and gw
-# may move you, which otis-dash cannot. q here goes back to the shell. A
-# picker that moved you, though, hands you to the shell instead: gb switching
-# a branch and gw going to a worktree both say what they did, and redrawing
-# over that would be the dashboard eating it.
+# gb (branches) and gc (otis's settings) are lists of their own, which
+# otis-dash hands back to be opened here, since gb may move you, which
+# otis-dash cannot; q there comes back to the board. q here goes back to the
+# shell. A list that moved you, though, hands you to the shell instead: gb
+# switching a branch says what it did, and redrawing over that would be the
+# board eating it. Going to a branch or a worktree from a row is done here
+# too, for the same reason.
 otis() {
   _g_repo || return 1
   local out at on
@@ -667,14 +637,10 @@ otis() {
       out=$(otis-dash) || return 0
       at=$PWD on=$(git branch --show-current 2>/dev/null)
       case $out in
-        gmr) gmr ;;
         gb)  gb ;;
-        gag) gag ;;
-        gd)  gd ;;
-        gw)  gw ;;
         otis-config) otis-config ;;
-        # Enter on a change's local light, or on a worktree: only a shell
-        # can go there, and it is where the dashboard was leaving you.
+        # s on a change, or enter on a worktree: only a shell can go
+        # there, and it is where the board was leaving you.
         goto$'\t'*) _g_goto_branch "${out#*$'\t'}"; return ;;
         gotow$'\t'*) _g_goto_branch "${out#*$'\t'}" worktree; return ;;
         cd$'\t'*) _g_cd "${out#*$'\t'}"; return ;;
@@ -688,122 +654,8 @@ otis() {
   }
 }
 
-gag() {
-  _g_repo || return 1
-  git-fzf 'agents ' 'enter=every step (a fix run: its proposals),y=copy its folder for Claude,d=forget a finished run,u=refresh' --ansi --no-sort \
-    --delimiter=$'\t' --with-nth=1 --track --id-nth=5 --keys-from 'otis-keys run {2}' \
-    --bind 'start:reload(git-agent-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(2):execute-silent(git-fzf-bg git-agent-list)' \
-    --bind 'u:execute-silent(git-fzf-bg git-agent-list)' \
-    --bind 'enter:transform(git-agent-list --open {2})' \
-    --bind 'd:execute(git-agent-list --forget {2})+reload(git-agent-list)' \
-    --bind 'y:transform(otis-do copy run run {2})' \
-    --preview 'git-agent-preview {2}' </dev/null >/dev/null
-}
-
-# Production deploys, newest first (git-deploy-list): each with what it carried,
-# the ones carrying your MRs marked, and the last 40 as a strip of glyphs in
-# the footer, oldest left, so a bad afternoon reads as a run of ✗. The
-# preview is the deploy: the merge requests and commits it took out, and for
-# a failed one the end of its log (git-deploy-preview). enter is its
-# pipeline's jobs and logs, w opens the job, p the pipeline, y copies the
-# sha, u refetches. gd <pipeline id> opens on that pipeline's deploy, which is
-# what enter on a merged MR in gmr does. Reloads every 30s.
-gd() {
-  _g_repo || return 1
-  git-forge can deploys || { print -u2 "gd: deploys are GitLab's environments, and this repo is on GitHub"; return 1 }
-  local -a at
-  [[ -n $1 ]] && at=(--bind "result:transform(git-deploy-list --pos ${(q)1})+unbind(result)")
-  git-fzf 'deploys ' 'enter=jobs and logs,w=open the job,p=pipeline in browser,y=copy sha,u=refresh' --ansi --no-sort \
-    --delimiter=$'\t' --with-nth=1 --track --id-nth=2 \
-    --bind 'start:reload(git-deploy-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(30):execute-silent(git-fzf-bg git-deploy-list)' \
-    --bind 'u:execute-silent(git-fzf-bg git-deploy-list --refresh)' \
-    --bind 'enter:execute(git-ci-jobs {4} "")' \
-    --bind 'w:transform(otis-open --fzf {5})' \
-    --bind 'p:transform(otis-open --fzf "$(otis-config url)/$(otis-config project)/-/pipelines/"{4})' \
-    --bind 'y:execute-silent(printf %s {3} | otis-copy)+transform(git-fzf-note copied {3})' \
-    "${at[@]}" \
-    --preview 'git-deploy-preview {2}' </dev/null >/dev/null
-}
-
-# Every merge request in one picker (git-mr-list): MRs to review, yours with
-# their pipelines, and yours merged this week with whether each is live (f:
-# every open MR instead).
-#
-# enter does the obvious thing for the row: review an MR (a shared review
-# worktree moves to it, git-mr-review), address the comments on one of yours
-# (in its branch's checkout, git-mr-mine), or show a merged one's deploy jobs.
-# Either of the first two is a file picker over the whole diff with threads
-# inline; q in there comes back here, and q again returns you where you were.
-# c is CI jobs and logs, r retries failed jobs, m merges once GitLab says it
-# is ready, b has GitLab rebase it onto its target (git-mr-rebase), A approves, X closes one of yours, l and a manage labels and reviewers, s switches to the
-# branch (bringing it here from a worktree), W opens it in a worktree of its own, w and y open
-# m and b are the two keys whose answer comes from GitLab, and the only two
-# that ever made you wait: they run behind the picker (git-fzf-later), which
-# keeps it live and puts what they are doing in the footer until they answer.
-# and copy the MR, p opens its pipeline and v is glab's stage graph. C has
-# Claude draft comments on an MR to review, or propose fixes on one of yours,
-# as C in the file picker does (git-mr-do claude); D, on a merged one, has
-# Claude watch production for it (git-mr-watch); V verifies one in Cursor
-# Cloud; P walks it (git-walk), a run like V's: its own tests traced line by
-# line where they can run (git-trace), else inputs Claude follows through it;
-# its progress while it goes, the walk once it has landed. The list reloads every 30s, keeping the cursor.
-_gmr() {
-  _g_repo || return 1
-  local out keys='enter=review / address comments / its deploy,c=CI jobs and logs,m=merge,b=rebase onto target,A=approve,R=draft / ready (yours),X=close (yours),l=labels,a=reviewers,s=switch to branch,W=branch in its own worktree,C=review / propose fixes,D=Claude watches production (merged),V=verify in Cursor Cloud,P=walk it: its tests traced line by line or inputs Claude picks,r=retry failed,N=new pipeline,w=open MR,G=seam'"'"'s page in the browser,y=copy MR link,p=pipeline in browser,v=stage graph,f=all MRs or yours,u=refresh'
-  # What the forge has nothing behind (git-forge lacks) is left off the keys,
-  # and the key says so rather than failing.
-  local -a off
-  local lack
-  for lack in $(git-forge lacks); do
-    case $lack in
-      run-pipeline) keys=${keys/,N=new pipeline/}; off+=(--bind 'N:transform(git-fzf-note "starting a pipeline by hand is GitLab'"'"'s; push to run the checks again")') ;;
-      stage-graph) keys=${keys/,v=stage graph/}; off+=(--bind 'v:transform(git-fzf-note "the stage graph is GitLab'"'"'s; p opens the checks")') ;;
-      deploys) keys=${keys/,D=Claude watches production (merged)/}; off+=(--bind 'D:transform(git-fzf-note "watching production follows GitLab'"'"'s deploys")') ;;
-    esac
-  done
-  out=$(GMR_FIRST=$1 git-fzf 'MRs ' "$keys" --ansi \
-    --delimiter=$'\t' --with-nth=1 --track --id-nth=11 \
-    --keys-from 'otis-keys mr {6} {2} {9}' \
-    --bind 'start:reload(git-mr-list | tee "$GIT_FZF_STATE/bg.shown")' \
-    --bind 'every(30):execute-silent(git-fzf-bg git-mr-list)' \
-    --bind 'f:execute-silent(git-fzf-bg git-mr-list toggle)' \
-    --bind 'u:execute-silent(git-fzf-bg git-mr-list --refresh)' \
-    --bind 'enter:transform(git-mr-do open {6} {2} {3} {4} {5} {7} {8} {9} {12})' \
-    --bind 'C:transform(git-mr-do claude {6} {2} {3} {4} {5} {7} {8} {9} {12})' \
-    --bind 'c:transform(git-ci-do jobs {9} {2})' \
-    --bind 'r:transform(git-ci-do retry {9} {2})' \
-    --bind 'N:transform(git-ci-do new {9} {2})' \
-    --bind 'm:transform(git-fzf-later "asking GitLab whether !{2} can merge" git-ci-merge --check {2})' \
-    --bind 'b:transform(git-fzf-later "asking GitLab what !{2} would rebase onto" git-mr-rebase --check {6} {2})' \
-    --bind 'A:transform(git-mr-do approve {6} {2} {7} {8})' \
-    --bind 'R:transform(git-mr-do draft {6} {2})' \
-    --bind 'X:transform(git-mr-do close {6} {2})' \
-    --bind 'l:transform[git-mr-do labels {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
-    --bind 'a:transform[git-mr-do reviewers {2} "execute-silent(git-fzf-bg git-mr-list --refresh)"]' \
-    --bind 's:print(switch)+accept' \
-    --bind 'W:print(worktree)+accept' \
-    --bind 'w:transform(git-mr-do web {2})' \
-    --bind 'G:transform(git-mr-do page {6} {2} {7} {8} {12})' \
-    --bind 'y:transform(git-mr-do copy {2})' \
-    --bind 'p:transform(git-ci-do pipeline {9} {2} {10})' \
-    --bind 'v:execute(glab ci view -b {5})' \
-    --bind 'D:transform(git-mr-watch --check {6} {2})' \
-    --bind 'V:transform(git-verify --check {6} {2})' \
-    --bind 'P:transform(git-walk --check {6} {2})+execute-silent(git-fzf-bg git-mr-list --refresh)' \
-    "${off[@]}" \
-    --preview 'git-mr-preview {2} {6} {11}' </dev/null)
-  # s and W print "switch" or "worktree" and the MR's row; anything else leaves out empty.
-  local -a lines=("${(@f)out}")
-  [[ $lines[1] == (switch|worktree) ]] || return 0
-  local -a f=("${(@ps:\t:)lines[2]}")
-  _g_goto_branch "$f[5]" ${lines[1]:#switch}
-}
-gmr() { _gmr review }
-
 # This branch's commits as a glab stack, one branch and MR a commit, then
-# synced (git-stack). b in gmr rebases a glab stack onto origin/main.
+# synced (git-stack). b on the board rebases a glab stack onto origin/main.
 gstack() {
   _g_repo || return 1
   git-forge can stack || { print -u2 "gstack: stacks are glab's, and this repo is on GitHub; a branch on a branch still stacks (gp offers each its PR)"; return 1 }
@@ -973,7 +825,7 @@ _g_mr_new() {
         if [[ -z $wt ]]; then
           print -r -- "not checked out anywhere, so no stack from here (enter switches to it, then gstack); one MR for all of them instead:"
         elif git-confirm "make them a stack, one MR a commit (gstack)?"; then
-          (cd "$wt" && git-stack) && print -r -- "$b is a stack now; gmr has its MRs" > $said
+          (cd "$wt" && git-stack) && print -r -- "$b is a stack now; the board has its MRs" > $said
           return
         fi
         print

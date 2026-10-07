@@ -240,7 +240,7 @@ else
   offer_run claude "D watches production through Claude Code and Datadog's MCP server" \
     "$claude_install, then claude to log in" "$claude_install" claude
 fi
-offer_brew gh "repos on GitHub: their pull requests in gmr and on the dashboard, as MRs are" \
+offer_brew gh "repos on GitHub: their pull requests on the board, as MRs are" \
   "GitHub repos are your branches alone. $(install_hint gh 'see https://cli.github.com'), then gh auth login" gh
 if have gh && ! gh auth status >/dev/null 2>&1; then
   note gh "installed but not logged in: gh auth login, for GitHub repos"

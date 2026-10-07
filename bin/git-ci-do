@@ -14,10 +14,10 @@ if { [ "$action" = retry ] || [ "$action" = new ]; } &&
 fi
 # A push to main's checks have no MR, only a pipeline (git-forge main-builds).
 [ -n "$iid" ] || [ -n "$id" ] || exec git-fzf-note "no MR on that row"
-[ "$action" = new ] && [ -n "$iid" ] && exec echo "execute(git-ci-run $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+[ "$action" = new ] && [ -n "$iid" ] && exec echo "execute(git-ci-run $iid)"
 [ -n "$id" ] || exec git-fzf-note "!$iid has no pipeline yet"
 case $action in
-  jobs)     echo "execute(git-ci-jobs $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
-  retry)    echo "execute(git-ci-retry $id $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)" ;;
+  jobs)     echo "execute(git-ci-jobs $id $iid)" ;;
+  retry)    echo "execute(git-ci-retry $id $iid)" ;;
   pipeline) otis-open --fzf "$url" ;;
 esac

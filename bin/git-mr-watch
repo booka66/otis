@@ -44,7 +44,7 @@ case $mode in
     [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
     [ "$kind" = merged ] || exec git-fzf-note "D watches production for your merged MRs, and !$iid is not merged"
     command -v claude >/dev/null || exec git-fzf-note "D needs Claude Code (claude)"
-    echo "execute(git-mr-watch $iid)+execute-silent(git-fzf-bg git-mr-list)"
+    echo "execute(git-mr-watch $iid)"
     exit 0
     ;;
   --marks)

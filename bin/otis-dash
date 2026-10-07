@@ -1006,16 +1006,16 @@ act() {
   ask "$2" otis-do $1 "$reply[6]" "$reply[14]" "$reply[13]" "$reply[2]" "$reply[3]" "$reply[4]" "$reply[5]" "$reply[7]" "$reply[8]" "$reply[9]" "$reply[12]"
 }
 # --- a change's keys ---------------------------------------------------------------
-# rask <key> <command...>: a key whose command hands back fzf actions (the
-# --check modes gmr bound with transform), asked in the background, the
+# rask <key> <command...>: a key whose command hands back fzf actions (its
+# --check mode, written for a picker's transform), asked in the background, the
 # footer spinning with the key's words (KL) meanwhile.
 rask() { keys_used $1 "$KL[$1]"; ask "$KL[$1]" "${@:2}"; }
 # rtty <key> <command line>: one that takes the terminal itself, as gb's
 # execute did; the rows and the branches may have changed after it, here and
 # on the forge, which is asked again.
 rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh; again=1; relist --refresh; }
-# rowkey <key>: a key that acts on the change the row is: what that key did
-# in gmr (an open MR) or gb (a branch), by the same scripts. Where you are
+# rowkey <key>: a key that acts on the change the row is, an open MR or a
+# branch (what that key does in gb, by the same scripts). Where you are
 # (the here row) is the branch you are on, and takes what gb's row for it
 # took. 1 when it is not such a key, or the row is not one it acts on.
 # Enter is the row's move; each of the gates behind it has a key of its own
@@ -1116,7 +1116,7 @@ hub() {
 }
 
 # remove: d on a worktree or on something under clean up removes it, as d
-# does in gw and gb; on either group's line, all in it that can go: under
+# does in gb; on either group's line, all in it that can go: under
 # clean up everything, of the worktrees the ones with nothing uncommitted.
 # git-worktree-remove and git-branch-delete ask first, and say what they
 # did in the footer: a worktree goes to the trash with what git would have
@@ -1130,7 +1130,7 @@ remove() {
     else (( i == cur )) || continue; fi
     cell $i 1
     case $type[i]:$cv[k] in
-      # One of Claude's runs that is over: forgotten, after asking (gag's d).
+      # One of Claude's runs that is over: forgotten, after asking.
       notice:run) [[ $fold[i] == runs ]] && { keys_used d "forget a finished run"; run_tty "git-agent-list --forget ${(q)ce[k]}" sh; refresh; return; } ;;
       place:delwt) wts+=("$ce[k]") ;;
       place:cd) [[ $type[cur] != group || $verb[i] == clean ]] && wts+=("$ce[k]") ;;
@@ -1210,7 +1210,7 @@ handle() {
     # g starts a two-key name: gg the top, gb branches, gc otis's settings,
     # gs Slack.
     g) pre=$EPOCHREALTIME flash="g…" ;;
-    # On a worktree or under clean up, d removes, as it did in gw and gb.
+    # On a worktree or under clean up, d removes, as it does in gb.
     d) removable && { remove; return; }
        flash="nothing on this row can be removed" ;;
     m|b|a|P|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;

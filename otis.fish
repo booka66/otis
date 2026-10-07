@@ -35,7 +35,7 @@ function _otis_cd
     rm -f -- $f
     return $rc
 end
-for c in gb gw gwn gmr gci otis
+for c in gb gwn otis
     function $c --inherit-variable c
         _otis_cd $c $argv
     end

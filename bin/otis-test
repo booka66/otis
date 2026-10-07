@@ -882,7 +882,7 @@ EOF
   wdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-walk
   wr=$(git rev-parse --path-format=absolute --git-common-dir)/otis-walk
   mkdir -p "$wdir" "$wr/9" "$tmp/wst"
-  expect walk/step-off "$(GIT_FZF_STATE=$tmp/wst git-symbols-walk --step 1):$(cat "$tmp/wst/note")" "ignore:no walk here: P in gmr or gb walks a change"
+  expect walk/step-off "$(GIT_FZF_STATE=$tmp/wst git-symbols-walk --step 1):$(cat "$tmp/wst/note")" "ignore:no walk here: P on the board or in gb walks a change"
   printf '%s\n' "$base..$head" > "$wr/9/rev"; printf '%s\n' "$base-$head" > "$wr/9/key"
   printf '{"version":6,"walks":[{"kind":"intended","title":"a run twice","input":"run({a: 1}, true)","verdict":"it runs twice now","steps":[{"symbol":"run","path":"lib.ts","line":3,"side":"new","values":[{"name":"twice","now":"true","was":"n/a","confidence":"read"}],"next":"returns 2"},{"symbol":"fresh","path":"lib.ts","line":16,"side":"new","values":[{"name":"b","now":"xval","confidence":"assumed"}],"next":"done","was_next":"nothing"}]}]}' > "$wdir/$base-$head.json"
   # Its list: a heading and an overview a walk, then a row a step.
@@ -1604,8 +1604,8 @@ for n in zhop bhop nhop; do git worktree remove "$wt/$n" && git branch -qD "t/$n
 git config --unset otis.branchPrefix
 # An alias or function of the same name (oh-my-zsh's gb, gst) would win over
 # the command, so sourcing takes it away.
-expect shell/zsh-clash "$(zsh -fc "alias gst='git stash'; gd() { echo mine; }; source '$root/git.zsh'; whence -w gst gd gb")" "gst: command
-gd: command
+expect shell/zsh-clash "$(zsh -fc "alias gst='git stash'; gl() { echo mine; }; source '$root/git.zsh'; whence -w gst gl gb")" "gst: command
+gl: command
 gb: function"
 expect shell/bash-clash "$(bash --norc --noprofile -c "shopt -s expand_aliases; alias gst='git stash'; source '$root/otis.bash'; type -t gst gb")" "file
 function"
@@ -2032,14 +2032,13 @@ esac
 STUB
 chmod +x "$tmp/mgstub/glab"
 mcheck() { PATH=$tmp/mgstub:$PATH GIT_FZF_STATE=$tmp/mgstate git-ci-merge --check "$1"; }
-mafter='+execute-silent(git-fzf-bg git-mr-list --refresh)'
-expect ci-merge/mergeable-merges "$(mcheck 1)" "execute(git-ci-merge 1)$mafter"
-expect ci-merge/unapproved-sets-auto "$(mcheck 2)" "execute(git-ci-merge --auto 2 not_approved)$mafter"
+expect ci-merge/mergeable-merges "$(mcheck 1)" "execute(git-ci-merge 1)"
+expect ci-merge/unapproved-sets-auto "$(mcheck 2)" "execute(git-ci-merge --auto 2 not_approved)"
 expect ci-merge/already-set "$(mcheck 3; cat "$tmp/mgstate/note")" "ignore
 !3 is already set to merge itself: it still needs approval"
-expect ci-merge/failed-pipeline-sets-auto "$(mcheck 4)" "execute(git-ci-merge --auto 4 ci_must_pass)$mafter"
-expect ci-merge/no-pipeline-starts-one "$(mcheck 5)" "execute(git-ci-merge --run 5)$mafter"
-expect ci-merge/threads-set-auto "$(mcheck 6)" "execute(git-ci-merge --auto 6 discussions_not_resolved)$mafter"
+expect ci-merge/failed-pipeline-sets-auto "$(mcheck 4)" "execute(git-ci-merge --auto 4 ci_must_pass)"
+expect ci-merge/no-pipeline-starts-one "$(mcheck 5)" "execute(git-ci-merge --run 5)"
+expect ci-merge/threads-set-auto "$(mcheck 6)" "execute(git-ci-merge --auto 6 discussions_not_resolved)"
 expect ci-merge/draft-refused "$(mcheck 7; cat "$tmp/mgstate/note")" "ignore
 !7 can't merge yet: it is a draft; R marks it ready"
 expect ci-merge/conflict-refused "$(mcheck 8; cat "$tmp/mgstate/note")" "ignore
@@ -2168,10 +2167,11 @@ PATH=$ghp git-forge mr-update 5 --ready --label ready
 expect forge/mr-update "$(cat "$tmp/gh.posted")" "pr ready 5 -R o/r
 pr edit 5 -R o/r --add-label ready"
 expect forge/lacks-all "$(git-forge lacks)" "stack run-pipeline stage-graph upload"
-# gmr lists the pull request as yours, from the same JSON. Its prefetch is
-# held off (its lock taken), so nothing is left running behind the test.
+# The board lists the pull request as yours, from the same JSON (otis-list,
+# then otis-board). The prefetch is held off (its lock taken), so nothing is
+# left running behind the test.
 gst=$tmp/forge-state && mkdir -p "$gst" "$(git rev-parse --git-common-dir)/gmr-prefetch.lock"
-expect forge/gmr-row "$(PATH=$ghp GIT_FZF_STATE=$gst git-mr-list | awk -F'\t' '$6 == "mine" { print $2, $5 }')" "5 feat"
+expect forge/board-row "$(PATH=$ghp GIT_FZF_STATE=$gst otis-list > "$gst/rows"; PATH=$ghp GIT_FZF_STATE=$gst otis-board | awk -F'\t' '$18 == "mine" { print $9, $12 }')" "5 feat"
 cd "$here"
 
 # --- git-symbols-past: where the changed code broke before, from git alone.

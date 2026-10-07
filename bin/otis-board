@@ -28,8 +28,7 @@
 # the lane it belongs to.
 #
 # Under those, everything else there is, in groups the dashboard keeps folded
-# to a line each until you open one, so this is the one list of your work
-# (gmr's, gb's and gw's rows are all here):
+# to a line each until you open one, so this is the one list of your work:
 #
 #   waiting    open MRs with nothing for you to do: someone is reviewing
 #              yours, or you have reviewed theirs
@@ -39,11 +38,12 @@
 #   cleanup    merged or closed and still on this machine: a branch or a
 #              worktree with nothing in it that would be lost
 #   places     the worktrees that are yours to keep or remove: not the ones
-#              gmr and the agents keep for reuse, which are never listed
-#   runs       Claude's background runs that are over, newest first (what
-#              gag listed): enter opens one, d forgets it
-#   deploys    production's last deploys, whoever's (what gd listed): enter
-#              is a deploy's jobs and logs
+#              otis and the agents keep for reuse, which are never listed
+#   runs       Claude's background runs of this week that are over and whose
+#              change is on no row above, newest first: enter opens one, d
+#              forgets it
+#   deploys    production's last deploys, whoever's: enter is a deploy's jobs
+#              and logs
 #
 # The branches and worktrees are git-branch-list's and git-worktree-list's
 # rows, left in the state by the dashboard (branches.tsv, worktrees.tsv);

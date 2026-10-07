@@ -40,10 +40,7 @@ _otis_cd() {
   return $rc
 }
 gb()   { _otis_cd gb "$@"; }
-gw()   { _otis_cd gw "$@"; }
 gwn()  { _otis_cd gwn "$@"; }
-gmr()  { _otis_cd gmr "$@"; }
-gci()  { _otis_cd gci "$@"; }
 otis() { _otis_cd otis "$@"; }
 
 # Completion: every otis command offers --help, and the ones that take a ref, a

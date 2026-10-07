@@ -39,7 +39,7 @@ if [ "$1" = --check ]; then
   src=$(printf '%s' "$json" | jq -r .source_branch) target=$(printf '%s' "$json" | jq -r .target_branch)
   # A glab stack rebases as a whole, through glab (git-stack --update).
   stack=$(git-stack --of "$src") &&
-    exec echo "execute(git-stack --update $stack)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+    exec echo "execute(git-stack --update $stack)"
   [ "$target" = "$(otis-config main)" ] ||
     exec git-fzf-note "!$iid is stacked on $target; gup in the top branch's checkout rebases the stack"
   above=$(git-forge api "projects/:fullpath/merge_requests?state=opened&target_branch=$(printf '%s' "$src" | jq -sRr @uri)" 2>/dev/null | jq -r 'map("!\(.iid)") | join(", ")')
@@ -48,7 +48,7 @@ if [ "$1" = --check ]; then
   behind=$(printf '%s' "$json" | jq -r '.diverged_commits_count // 0')
   [ "$behind" -gt 0 ] ||
     exec git-fzf-note "!$iid already has everything on $(printf '%s' "$json" | jq -r .target_branch)"
-  exec echo "execute(git-mr-rebase $iid)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  exec echo "execute(git-mr-rebase $iid)"
 fi
 
 iid=$1
@@ -73,7 +73,7 @@ while :; do
   tries=$((tries + 1))
   state=$(mr "?include_rebase_in_progress=true") || { printf '\n'; pause "could not ask GitLab how the rebase went"; exit 1; }
   printf '%s' "$state" | jq -e '.rebase_in_progress' >/dev/null || break
-  [ $tries -lt 60 ] || { printf '\n'; pause "still rebasing after a minute; u in gmr shows when it lands"; exit 0; }
+  [ $tries -lt 60 ] || { printf '\n'; pause "still rebasing after a minute; the board shows when it lands"; exit 0; }
   printf '.'
 done
 printf '\n'

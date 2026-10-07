@@ -36,16 +36,15 @@ if [ "$1" = open ] || [ "$1" = claude ]; then
     mine)   act="execute(git-mr-mine $flag{2} {3} {4} {5} {7} {8} {12})" ;;
     merged)
       [ "$what" = claude ] && exec git-fzf-note "C is for open MRs, and !$iid has merged"
-      act="execute(gd $pipeline)" ;;
+      act="execute(git-ci-jobs $pipeline '')" ;;
   esac
-  [ "$what" = claude ] && act="$act+execute-silent(git-fzf-bg git-mr-list --refresh)"
   echo "$act"
   exit 0
 fi
 if [ "$1" = approve ]; then
   [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
   [ "$2" = review ] || exec git-fzf-note "approve is for MRs you review, and !$3 is not one"
-  echo "execute(git-mr-approve $3 $4 $5)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  echo "execute(git-mr-approve $3 $4 $5)"
   exit 0
 fi
 # close is gmr's X, on your own open MRs only: closing someone else's is
@@ -53,7 +52,7 @@ fi
 if [ "$1" = close ]; then
   [ "$2" = sep ] && exec git-fzf-note "that row is a section heading"
   [ "$2" = mine ] || exec git-fzf-note "X closes your own open MRs, and !$3 is not one"
-  echo "execute(git-mr-close $3)+execute-silent(git-fzf-bg git-mr-list --refresh)"
+  echo "execute(git-mr-close $3)"
   exit 0
 fi
 # page is gmr's G: seam's page for the MR in the browser, the diff the review
@@ -92,7 +91,6 @@ if [ "$1" = flip ]; then
       said="could not read !$iid from GitLab: $(printf '%s' "$mr" | head -1)"
     fi
     printf '%s\n' "$said" > "$GIT_FZF_STATE/note"
-    git-fzf-bg git-mr-list --refresh
   ) </dev/null >/dev/null 2>&1 &
   exit 0
 fi
