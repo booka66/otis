@@ -48,24 +48,6 @@ setopt extendedglob no_nomatch typeset_silent
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 . ${0:A:h:h}/share/in-root.sh
 in_root || eval "$(otis-config --env)"
-export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
-wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
-# Not under a picker: the scripts that would post to one must not find one.
-unset FZF_PORT FZF_API_KEY
-export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-dash.$$.$RANDOM
-mkdir -m 700 $GIT_FZF_STATE || exit 1
-st=$GIT_FZF_STATE
-mkdir $st/pv
-# The last run's, kept past its end: when it felt slow, it is still there
-# to read.
-trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
-mkdir -p ${trace:h} 2>/dev/null; : > $trace
-
-. ${0:A:h:h}/share/screen.zsh
-# The groups' names in one color that is not the grey of what is beside
-# them, so the eye finds where each starts: the theme's yellow, the one its
-# keys and ids are in.
-SEC=$A
 # The forge by name, in what the screen says.
 forge=GitLab
 [[ $(otis-config forge) == github ]] && forge=GitHub
@@ -116,16 +98,40 @@ typeset -a KEYS=(
 )
 # KL: a key's whole words, by the key. The log is told every key the screen
 # offers as it opens, less the ones that only move.
+# KL: a key's whole words, by the key. keylist: every key the screen offers
+# with its words, key=words with commas between, less the ones that only
+# move: what the key log is told as the screen opens, and what --keys
+# prints, for otis --help (otis-help).
 typeset -A KL
+keylist=
 () {
-  local k g f l list=
+  local k g f l
   for k g f l in "${KEYS[@]}"; do
     KL[$k]=$l
     [[ $g == move && $k != (enter|space|'?') ]] && continue
-    list+=${list:+,}${k// /}=$l
+    keylist+=${keylist:+,}${k// /}=$l
   done
-  keys_open otis $list
 }
+[[ $1 == --keys ]] && { print -r -- $keylist; exit 0; }
+export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
+wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
+# Not under a picker: the scripts that would post to one must not find one.
+unset FZF_PORT FZF_API_KEY
+export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-dash.$$.$RANDOM
+mkdir -m 700 $GIT_FZF_STATE || exit 1
+st=$GIT_FZF_STATE
+mkdir $st/pv
+# The last run's, kept past its end: when it felt slow, it is still there
+# to read.
+trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
+mkdir -p ${trace:h} 2>/dev/null; : > $trace
+
+. ${0:A:h:h}/share/screen.zsh
+keys_open otis $keylist
+# The groups' names in one color that is not the grey of what is beside
+# them, so the eye finds where each starts: the theme's yellow, the one its
+# keys and ids are in.
+SEC=$A
 screen_start
 # A window being dragged is a resize a step: each is drawn at once, and the
 # previews wait until the size has held for 0.3s (settle), so a drag draws

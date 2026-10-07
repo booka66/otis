@@ -102,6 +102,8 @@ elif [ -f "$(dirname "$0")/$name" ]; then
   src=$(cat "$(dirname "$0")/$name")
 fi
 spec=$(printf '%s\n' "$src" | sed -n "s/.*git-fzf '[^']*' '\\([^']*\\)'.*/\\1/p" | head -1)
+# The board is no picker: its keys are a table of its own, which it prints.
+[ "$name" = otis ] && spec=$(otis-dash --keys 2>/dev/null | tr ',' '\n' | grep -v '^?=' | paste -sd, -)
 if [ -n "$spec" ]; then
   # The colors as their bytes, since awk writes these lines rather than printf.
   key=$(printf "${GK_ELSEWHERE}") dim=$(printf "${GK_CONTEXT}") off=$(printf "${GK_R}")
