@@ -20,8 +20,10 @@
 #   ship       whether it can merge, or has
 #
 # and the rows in lanes by whose move it is: production unhappy about one of
-# yours, one to review, yours with a light that wants you, your drafts, what
-# is moving without you, and where you are. MRs built on one another (a
+# yours, one to review, yours with a light that wants you, your drafts,
+# yours that is with its reviewers (in review: nothing for you to do, and
+# still a row with the rest of yours), what is moving without you, and where
+# you are. MRs built on one another (a
 # stack) are kept together, in the lane of the one of them that wants you
 # most (stacks, below). What otis-list says that is not a light of an open
 # change (a run that broke, a deploy, the trash) keeps its row as it was, in
@@ -30,8 +32,8 @@
 # Under those, everything else there is, in groups the dashboard keeps folded
 # to a line each until you open one, so this is the one list of your work:
 #
-#   waiting    open MRs with nothing for you to do: someone is reviewing
-#              yours, or you have reviewed theirs
+#   waiting    someone else's open MRs with nothing for you to do: you
+#              have reviewed them
 #   unsent     in nobody's hands yet: a branch with no MR, an MR nobody was
 #              asked to review
 #   shipped    yours that merged this week, and whether each is live
@@ -267,22 +269,32 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   def move: (map(.rank) | min) as $m | .[defc - 1] as $c |
     {move: ($c.mv // $c.w // ""), tone: (if $m >= 99 then context else ($c.mc // $c.c) end)};
 
-  # An open MR as a row. Its lane is whose move it is; with nothing lit it
-  # has none, and folds under waiting (in someone'"'"'s hands) or unsent.
+  # An open MR as a row. Its lane is whose move it is. One of yours that is
+  # with its reviewers and wants nothing of you is sent: it stays a row with
+  # the rest of yours, saying how its review stands. With nothing lit, one
+  # you were asked to review folds under waiting, and one of yours nobody
+  # has been asked about under unsent.
+  # A verification still running is its run'"'"'s row to say, among what is
+  # moving: it keeps the change on the board, and is never the change'"'"'s
+  # move, so the change'"'"'s row is there to open beside its run'"'"'s.
   def mr_row($mrkind):
     (.diffRefs.headSha // "") as $head |
     (.headPipeline | effective($gates)) as $pipe |
     ([local_cell(.sourceBranch), verify_cell(.iid; .sourceBranch; $head), (.headPipeline | pipeline_cell),
       (if $mrkind == "review" then review_asked else review_mine end), ship_cell($pipe; $mrkind == "mine")]
-      | map(. + {kind: $mrkind})) as $cells |
+      | map(. + {kind: $mrkind})) as $lights |
+    ($lights[1].st == "moving") as $verifying |
+    ($lights | .[1] |= (if $verifying then .rank = 99 | .st = "wait" else . end)) as $cells |
+    (((.reviewers.nodes // []) | length) > 0 or .approved or .autoMergeEnabled) as $sent |
     (if $mrkind == "review" then (if $cells[3].st == "you" then "review" else null end)
-     elif .draft then (if any($cells[]; .st == "you" or .st == "moving") then "draft" else null end)
-     elif any($cells[]; .st == "you") then "move"
-     elif any($cells[]; .st == "moving") then "moving"
+     elif any($cells[]; .st == "you") then (if .draft then "draft" else "move" end)
+     elif .draft and (any($cells[]; .st == "moving") or ($verifying and ($sent | not))) then "draft"
+     elif (.draft | not) and any($cells[]; .st == "moving") then "moving"
+     elif $sent or $verifying then "sent"
      else null end) as $lane |
     {lane: $lane, key: "c-\(.iid)", type: "change",
      fold: (if $lane != null then ""
-            elif $mrkind == "review" or ((.reviewers.nodes // []) | length) > 0 or .approved or .autoMergeEnabled then "waiting"
+            elif $mrkind == "review" then "waiting"
             else "unsent" end),
      title: (.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i")),
      who: (if $mrkind == "review" then (.author.username // "") else "" end),
@@ -292,7 +304,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      base: (.diffRefs.baseSha // ""), pipeline: (.headPipeline.id | gid),
      purl: (if .headPipeline.path then $url + .headPipeline.path else .webUrl end),
      start: (.diffRefs.startSha // ""), mrkind: $mrkind, draft: (.draft // false),
-     cells: $cells, rank: ($cells | map(.rank) | min)}
+     cells: $cells, rank: ($cells | map(.rank) | min), verifying: $verifying}
     + ($cells | move)
     # Set to merge itself, with nothing for you: that is how it stands. A
     # draft is not trying to go out, so its pipeline is not news.
@@ -311,10 +323,11 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # an MR that is only waiting sits beside the one below it that is not; own
   # is the lane each would be in alone, which the dashboard colors it by and
   # the counts count it by. One nobody was asked to review wants you more
-  # than one that is with a reviewer: a stack is waiting on others only when
-  # all of it is.
+  # than one that is with a reviewer: a stack is in review only when all of
+  # it is, and with one of it nobody was asked about it is not sent yet,
+  # unless one of it is being verified, which keeps it all on the board.
   def stacks: . as $all |
-    {review: 0, move: 1, draft: 2, moving: 3, unsent: 4, waiting: 5} as $urgent |
+    {review: 0, move: 1, draft: 2, moving: 3, unsent: 4, sent: 5, waiting: 6} as $urgent |
     # What each is built on: the first other MR here whose branch it goes into.
     ([range(0; length) as $i | [range(0; length) | select(. != $i and $all[.].source == $all[$i].target)][0]]) as $on |
     def up($i; $d): (if $d < 30 then (range(0; $all | length) | select($on[.] == $i)) as $k | up($k; $d + 1) else empty end), {i: $i, d: $d};
@@ -324,7 +337,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     ($rooted + [range(0; length) | select(IN($reached[]) | not) | [{i: ., d: 0}]]) as $units |
     [$units | to_entries[] | .key as $useq | .value as $u |
       ($u | map($all[.i] | .lane // .fold)) as $owns |
-      ($owns | min_by($urgent[.])) as $best |
+      ($owns | min_by($urgent[.]) | if IN("unsent", "waiting") and any($u[]; $all[.i].verifying) then "sent" else . end) as $best |
       ($u | map($all[.i].rank) | min) as $urank |
       range(0; $u | length) as $p | $u[$p] as $m |
       $all[$m.i] + {own: $owns[$p], urank: $urank, useq: $useq, upos: $p,
@@ -359,12 +372,10 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
      else ($a.branch | IN($on_branches[])) end);
 
   # A run still going is the exception: it is a row of its own among what is
-  # moving, so everything that is running is in one place to see, unless its
-  # change'"'"'s row says so itself (a verification, on a row with nothing above
-  # it). loud marks one that a light speaks for and is shown all the same.
-  ($changes | map(select(.defc == 2 and .cells[1].st == "moving")) | map(.iid, .source) | map(select(. != ""))) as $saying |
-  def said: about as $a | $a.t == "verify" and (if $a.branch == "" then $a.base else $a.branch end | IN($saying[]));
-  ($events | map(select(.f[5] | IN("here", "trash") | not) | . + {a: about, loud: (lit and .sec == "going" and (said | not))}
+  # moving, so everything that is running is in one place to see, and its
+  # change'"'"'s row is still the change'"'"'s. loud marks one that a light speaks
+  # for and is shown all the same.
+  ($events | map(select(.f[5] | IN("here", "trash") | not) | . + {a: about, loud: (lit and .sec == "going")}
                  | select((lit | not) or .loud))) as $rest |
 
   # A run kept under a branch'"'"'s name outlives the branch, and what it said of
@@ -459,7 +470,8 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
                     elif $b.kind == "merged-diff" then "new since merge" else "new since close" end)};
   ($open | map(select(.lane == null))) as $quiet |
   ($quiet | map(.source)) as $quiet_branches |
-  # waiting: in someone else'"'"'s hands. unsent: in nobody'"'"'s yet.
+  # waiting: someone else'"'"'s, which you have reviewed. unsent: yours, in
+  # nobody'"'"'s hands yet.
   ($quiet | map(select(.fold == "waiting") | .lane = "waiting")) as $waiting |
   (($quiet | map(select(.fold == "unsent") | .lane = "unsent"))
    + ($brs | map(select((.kind | IN("local", "pushed", "merged-diff", "closed-diff"))
@@ -557,7 +569,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     end;
 
   "#\t\($owns | map(select(IN("prod", "review", "move"))) | length)\t\($owns | map(select(. == "draft")) | length)\t\($owns | map(select(. == "moving")) | length)",
-  ($need[], lane("draft")[], lane("moving")[], $here[],
+  ($need[], lane("draft")[], lane("sent")[], lane("moving")[], $here[],
    group("waiting"; "waiting on others"; $waiting; "open, and nothing for you to do"),
    group("unsent"; "not sent yet"; $unsent; "no MR, or nobody asked to review it"),
    group("shipped"; "shipped this week"; $shipped; ($shipped | tally)),

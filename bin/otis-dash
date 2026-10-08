@@ -587,10 +587,10 @@ row() {
         # One of a stack: its piece of the rail that joins the stack's rows,
         # each built on the one under it, the bottom one the first to merge.
         [[ -n $rail[i] ]] && put "$C" "$rail[i] "
-        # A draft and what is only moving a step back, as is one in a group
-        # or here only because its stack is; a branch with no merge request
+        # A draft, one in review and what is only moving a step back, as is
+        # one in a group or here only because its stack is; a branch with no merge request
         # in a branch's color.
-        [[ ${own[i]:-$lane[i]} == (draft|moving|waiting|unsent) || -n $fold[i] ]] && tc=$C
+        [[ ${own[i]:-$lane[i]} == (draft|sent|moving|waiting|unsent) || -n $fold[i] ]] && tc=$C
         [[ -z $iid[i] ]] && tc=$EL
         (( on )) && tc=$B$T
         t=$title[i] ;;
@@ -754,8 +754,9 @@ left() {
   fi
   (( tight )) || { line= used=0; emit 0; }
   # The rows, in three parts with a line between: what wants you, your
-  # drafts among it; what is moving without you, and where you are; then the
-  # groups, a line each, their rows under it when open.
+  # drafts among it, and under those yours that is in review; what is moving
+  # without you, and where you are; then the groups, a line each, their rows
+  # under it when open.
   curi= curb=
   if (( $#id )) && [[ $type[cur] != group ]]; then
     relkey $cur; curi=$ki curb=$kb
@@ -767,7 +768,7 @@ left() {
   for (( i = 1; i <= $#id; i++ )); do
     vis $i || continue
     if [[ $type[i] == group || -n $fold[i] ]]; then part=g
-    elif [[ $lane[i] == (prod|review|move|draft) ]]; then part=a
+    elif [[ $lane[i] == (prod|review|move|draft|sent) ]]; then part=a
     else part=b; fi
     [[ -n $last && $part != $last ]] && (( ! tight )) && { line= used=0; emit 0; }
     row $i $w; last=$part

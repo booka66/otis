@@ -379,7 +379,9 @@ mv "$tmp/dash/deploys.was" "$tmp/dash/deploys.json"
 # asks): a row under its title, the cursor on its ship light. A verification
 # of its branch at a commit it has moved on from is that row's verify light,
 # dim, and never a second row under the branch's name: not beside the MR,
-# and not when something is in the way and it folds under waiting.
+# and not when something is in the way and it is only in review. One of
+# yours that is with its reviewers is never folded under waiting on others:
+# it is a row with the rest of yours, and says how its review stands.
 mkdir -p "$tmp/board"
 printf 'w\t\t\t\t\tsep\t\t\t\t\tsep-waiting\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n' > "$tmp/board/rows"
 printf 'v\t\t\t\t\trun\t\t\t\t\tw-verify-b-feat\t\t/v/b-feat\trun\t●\t\tverified: failed\tfeat\t\t\t\t\t\topen the run\t\t\n' >> "$tmp/board/rows"
@@ -396,11 +398,12 @@ expect otis-board/says-its-move "$(board_says)" "merge it [|older verify broke|p
 # Kept for the dashboard's own test below (otis/row-says-its-move).
 GIT_FZF_STATE=$tmp/board otis-board > "$tmp/board7.tsv"
 board_mr DISCUSSIONS_NOT_RESOLVED
-expect otis-board/verify-of-folded "$(board_lights)" "waiting c-7 Ship it light 4 ·✗✓✓· |"
+expect otis-board/verify-of-folded "$(board_lights)" "sent c-7 Ship it light 4 ·✗✓✓· |"
 expect otis-board/says-how-it-stands "$(board_says)" "approved [|older verify broke|pipeline passed|approved|]|"
 # A run still going is a row of its own among what is moving, so all that
-# is running is in one place, unless its change's row says so itself: MR 7's
-# verification, while its row says merge it, then with nothing else on it.
+# is running is in one place, and its change's row is still the change's, to
+# open beside it: MR 7's verification, while its row says merge it, then
+# with nothing else on it, when its row says how its review stands.
 cp "$tmp/board/rows" "$tmp/board/rows.kept"; cp "$tmp/board/marks.json" "$tmp/board/marks.kept"
 printf 'g\t\t\t\t\tsep\t\t\t\t\tsep-going\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n' > "$tmp/board/rows"
 printf 'r\t7\t\t\t\trun\t\t\t\t\tg-otis-verify-7\t\t/v/7\trun\t◎\t\tverifying\t1 of 3 claims in\t\t\t\t\t\topen the run\t\t\n' >> "$tmp/board/rows"
@@ -409,7 +412,7 @@ board_going() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' 'NR > 1
 board_mr UNCHECKED
 expect otis-board/going-run-shown "$(board_going)" "move change merge it|moving notice verifying|"
 board_mr DISCUSSIONS_NOT_RESOLVED
-expect otis-board/going-run-said "$(board_going)" "moving change verifying|"
+expect otis-board/going-run-beside "$(board_going)" "sent change approved|moving notice verifying|"
 mv "$tmp/board/rows.kept" "$tmp/board/rows"; mv "$tmp/board/marks.kept" "$tmp/board/marks.json"
 # MRs built on one another are a stack: kept together, top first, in the
 # lane of the one that wants you most, each with its piece of the rail and
@@ -423,14 +426,24 @@ printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"n
   "$(stack_mr 7 Bottom feat main true '{"username": "ann", "mergeRequestInteraction": {"reviewState": "APPROVED"}}')" \
   "$(stack_mr 8 Middle feat2 feat false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" > "$tmp/board/ci.json"
 board=$(GIT_FZF_STATE=$tmp/board otis-board | strip)
-expect otis-board/stack "$(printf '%s\n' "$board" | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }')" "move c-9 ┌ unsent|move c-8 ├ waiting|move c-7 └ move|unsent c-10  unsent|"
+expect otis-board/stack "$(printf '%s\n' "$board" | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }')" "move c-9 ┌ unsent|move c-8 ├ sent|move c-7 └ move|unsent c-10  unsent|"
 expect otis-board/stack-counts "$(printf '%s\n' "$board" | head -1 | tr '\t' ' ')" "# 1 0 0"
-# A stack is waiting on others only when all of it is: with one of it that
-# nobody was asked to review, it is not sent yet.
+# A stack is in review only when all of it is: with one of it that nobody
+# was asked to review, it is not sent yet, unless one of it is being
+# verified, which keeps all of it on the board beside the run.
 printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s]}}}}\n' \
   "$(stack_mr 8 Bottom feat2 main false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" \
   "$(stack_mr 9 Top feat3 feat2 false '')" > "$tmp/board/ci.json"
-expect otis-board/stack-unsent "$(GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }')" "unsent c-9 ┌ unsent|unsent c-8 └ waiting|"
+board_stack() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s %s|", $1, $2, $68, $69 }'; }
+expect otis-board/stack-unsent "$(board_stack)" "unsent c-9 ┌ unsent|unsent c-8 └ sent|"
+cp "$tmp/board/marks.json" "$tmp/board/marks.kept"
+printf '{"verify": {"8": {"verifying": true, "status": "", "head": "new"}}}\n' > "$tmp/board/marks.json"
+expect otis-board/stack-verifying "$(board_stack)" "sent c-9 ┌ unsent|sent c-8 └ sent|"
+mv "$tmp/board/marks.kept" "$tmp/board/marks.json"
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s]}}}}\n' \
+  "$(stack_mr 8 Bottom feat2 main false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" \
+  "$(stack_mr 9 Top feat3 feat2 false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" > "$tmp/board/ci.json"
+expect otis-board/stack-in-review "$(board_stack)" "sent c-9 ┌ sent|sent c-8 └ sent|"
 # A verification kept under a branch's name outlives the branch. With no MR
 # open it is a change of its own that needs you, until the branch is
 # finished: its MR merged after the run ended, or the branch is gone from
