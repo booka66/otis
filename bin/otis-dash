@@ -9,10 +9,11 @@
 # joined by a rail, the first to merge at the bottom. j and k pick the row;
 # enter does what the row says (otis-do), and the footer says what that is.
 #
-# Under the board, the row the cursor is on in full (otis-preview): its merge
-# request, how each gate it has to get through stands, in words (verify,
-# pipeline, review, ship), and what the gate behind its move has to say.
-# space reads all of the change in a pager.
+# Beside the board on a wide screen, under it on a narrow one, the row the
+# cursor is on in full (otis-preview): its merge request, how each gate it
+# has to get through stands, in words (verify, pipeline, review, ship), and
+# what the gate behind its move has to say. space reads all of the change in
+# a pager.
 #
 # It is the one list of your work: under those rows, everything else there is
 # (every other open MR, the branches with none, what shipped, what can be
@@ -63,7 +64,7 @@ typeset -a KEYS=(
   space    move   ''       'read all of it in a pager'
   'g g  G' move   ''       'the top and the bottom'
   'h l'    move   ''       'fold a group or open it'
-  '^d ^u'  move   ''       'scroll what is under the board'
+  '^d ^u'  move   ''       'scroll what the row says in full'
   '?'      move   ''       'show these keys'
   q        move   ''       'quit'
   V        change verify   'verify it in Cursor Cloud'
@@ -839,11 +840,13 @@ scroll() {
 # longer be it (back from another program), which draws it whole.
 typeset -a shown_rows shown_pane
 shown_geom=
-# The layout: the board, and under it, below a rule, what the row the cursor
-# is on says in full (the pane), on a screen tall enough for both; else the
-# board alone, and space reads the row in a pager. rows is the board's
-# height; the pane is pw wide and ph high, from row py, column px.
-integer pw=0 py=1 ph=0 px=3
+# The layout: the board, and what the row the cursor is on says in full (the
+# pane): beside the board from 160 columns (side), where a row and the pane
+# both have the width; else under it, below a rule, on a screen tall enough
+# for both; else the board alone, and space reads the row in a pager. rows
+# is the board's height; the pane is pw wide and ph high, from row py,
+# column px.
+integer pw=0 side=0 py=1 ph=0 px=3
 pfile=
 # helpcell <key, a tab, its words | a tab, a heading | nothing>: one of them
 # onto the line.
@@ -887,19 +890,30 @@ helplines() {
 draw() {
   local t0=$EPOCHREALTIME
   local lw=$W y i f lo=0 hi=0 body foot rows avail hk hg hf hl
-  pw=0 py=1 tight=0 brief=0 bs=
+  pw=0 side=0 py=1 px=3 tight=0 brief=0 bs=
   (( avail = H - 2 ))
+  # Beside it, the board is no wider than a row has words for (120): the
+  # rest of a big screen is the pane's, which has lines that long.
+  if (( W >= 160 && ! help )); then
+    (( lw = W * 60 / 100, lw > 120 ? (lw = 120) : 0, pw = W - lw - 5, side = 1 ))
+  fi
   left $lw
-  # The board is as tall as it is: drawn tight when that would leave what is
-  # under it less than eight lines, and scrolling when even that leaves it
-  # under four. In under ten lines the row says only its own part (brief). A
-  # screen under 16 lines is all board, as is the ? help.
-  (( $#L + 9 > avail )) && { tight=1; left $lw; }
-  if (( avail >= 16 && ! help )); then
-    (( ph = avail - $#L - 1, ph < 4 ? (ph = 4) : 0 ))
-    (( rows = avail - ph - 1, py = rows + 2, pw = W - 4 ))
-    (( ph < 10 )) && brief=1 bs=b
-  else rows=$avail ph=0; fi
+  if (( side )); then
+    (( rows = avail, ph = rows, px = lw + 6 ))
+    (( $#L > rows )) && { tight=1; left $lw; }
+  else
+    # No room beside the board: the pane goes under it. The board is as tall
+    # as it is: drawn tight when that would leave what is under it less than
+    # eight lines, and scrolling when even that leaves it under four. In
+    # under ten lines the row says only its own part (brief). A screen under
+    # 16 lines is all board, as is the ? help.
+    (( $#L + 9 > avail )) && { tight=1; left $lw; }
+    if (( avail >= 16 && ! help )); then
+      (( ph = avail - $#L - 1, ph < 4 ? (ph = 4) : 0 ))
+      (( rows = avail - ph - 1, py = rows + 2, pw = W - 4 ))
+      (( ph < 10 )) && brief=1 bs=b
+    else rows=$avail ph=0; fi
+  fi
   brows=$rows
   # The cursor's row in view.
   local ghi=0
@@ -965,9 +979,10 @@ draw() {
     i=$(( y + top ))
     if (( i <= $#L )); then s=$L[i]$R; (( LU[i] < lw )) && s+=${(l:lw-LU[i]:: :)}
     else s=${(l:lw:: :)}; fi
+    (( side )) && s+=$R"  "$F"│"$R
     fr+=("$s") fy+=($y)
   done
-  (( pw > 0 )) && { fr+=("$F${(l:W::─:)}$R"); fy+=($(( rows + 1 ))); }
+  (( pw > 0 && ! side )) && { fr+=("$F${(l:W::─:)}$R"); fy+=($(( rows + 1 ))); }
   for (( y = 1; y <= ph && pw > 0; y++ )); do
     f=$(( y + poff )) s=
     if (( f <= $#P )); then
@@ -1007,7 +1022,7 @@ draw() {
   # The diff is line for line, so a frame laid out differently (the board
   # grown or shrunk, what is under it moved with it) is written whole, every
   # line over what is there: a clear first would blink, a frame of a fold.
-  local geom="$rows $py $ph $pw"
+  local geom="$side $rows $py $ph $pw"
   if [[ $geom != $shown_geom ]]; then
     shown_geom=$geom
     if (( $#shown_rows )); then shown_rows=(); repeat $H shown_rows+=($'\0'); shown_pane=("${shown_rows[@]}"); fi
@@ -1016,7 +1031,10 @@ draw() {
   (( $#shown_rows )) || { body+=$e'[2J'; shown_pane=(); }
   for (( y = 1; y <= $#fr; y++ )); do
     [[ $fr[y] == "$shown_rows[y]" ]] && continue
-    body+=$e"[$fy[y];1H"$fr[y]$R$e'[K'
+    body+=$e"[$fy[y];1H"$fr[y]$R
+    # A row with the pane beside it leaves the pane's side be; the rest (the
+    # rules, the footer, a narrow screen's rows) clear to the edge.
+    (( side && y <= rows )) || body+=$e'[K'
   done
   for (( y = 1; y <= $#pr; y++ )); do
     [[ $pr[y] == "$shown_pane[y]" ]] || body+=$e"[$(( py + y - 1 ));$(( px - 2 ))H  "$pr[y]$R$e'[K'
@@ -1160,17 +1178,18 @@ rowkey() {
 # the preview with a blank line above it). px is the screen column the pane
 # starts in.
 # mouse <report>: a press, drag or release (the SGR form, \e[<b;x;yM, m on
-# release). Under the board a press starts a selection, a drag carries it
-# and the release copies it; a press on the board moves to the row, and
-# opens or folds a group. The wheel scrolls what is under the board when
-# over it, and moves through the rows over the board.
+# release). In the pane a press starts a selection, a drag carries it and
+# the release copies it; a press on the board moves to the row, and opens or
+# folds a group. The wheel scrolls the pane when over it, and moves through
+# the rows over the board.
 mouse() {
   local r=${1#$e\[<} b x y up
   [[ ${r[-1]} == m ]] && up=1
   r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
   (( y > H - 2 )) && return
+  # In the pane: beside the board, right of it; under it, below it.
   local inpane=0 l
-  (( pw > 0 && y >= py )) && inpane=1
+  (( pw > 0 && (side ? x >= px : y >= py) )) && inpane=1
   (( l = y - py + 1 + poff ))
   if (( b == 64 || b == 65 )); then
     if (( inpane )); then scroll $(( b == 64 ? -3 : 3 ))

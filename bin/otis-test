@@ -1487,6 +1487,13 @@ dash=$(PATH=$tmp/dashstub:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; 
 expect otis/row-says-its-move "$(printf '%s\n' "$dash" | grep -o 'merge it *Ship it' | head -1 | tr -s ' ')" "merge it Ship it"
 # And its MR's number, at the row's right edge.
 expect otis/mr-number "$(printf '%s\n' "$dash" | grep -q 'merge it *Ship it  [^!]*!7 ' && echo on-its-row)" "on-its-row"
+# From 160 columns what the row says in full is beside the board, a line
+# between the two; narrower, as above, it is under it.
+wide=$(PATH=$tmp/dashstub:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 cols 170; otis-dash"; out=
+  for _ in {1..50}; do while zpty -rt d buf; do out+=$buf; done; [[ $out == *"Ship it"* ]] && break; sleep 0.1; done
+  sleep 0.3; while zpty -rt d buf; do out+=$buf; done
+  zpty -wn d q; sleep 0.3; zpty -d d 2>/dev/null; print -r -- $out' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+expect otis/pane-beside "$(printf '%s\n' "$wide" | grep -q '!7 *│' && echo beside):$(printf '%s\n' "$dash" | grep -q '!7 *│' || echo under)" "beside:under"
 # A login the forge no longer takes is said under the headline, with the key
 # that mends it: u logs in (git-forge login) and then refetches. A u pressed
 # while a refresh is on its way is not dropped: its refetch goes when that
