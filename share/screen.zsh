@@ -136,7 +136,10 @@ run_tty() {
   trap '' INT
   loader "${${bykey:-${flash%…}}:-opening}" >/dev/null &!
   local lp=$!
-  OTIS_LOADER=$lp OTIS_FRAME=$st/frame ${=2:-zsh -f} -c "$1" <&$tty >&$tty 2>&1
+  # less with no way to a shell (LESSSECURE): a stray ! in a pager left a
+  # shell under the screen, and whatever was run from it ran inside this
+  # screen, over its frame, on its /dev/tty (swoop waited there for a key).
+  LESSSECURE=1 OTIS_LOADER=$lp OTIS_FRAME=$st/frame ${=2:-zsh -f} -c "$1" <&$tty >&$tty 2>&1
   kill $lp 2>/dev/null
   trap 'quit 1' INT
   rm -f -- $st/frame
