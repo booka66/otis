@@ -342,6 +342,44 @@ stale_read() {
     [[ -n $stale_why ]] || stale_why="it did not say why"
   done
 }
+# What changes on this machine is seen as it happens, not at the next ten
+# seconds' look: a run that finishes says so in its folder (status, ended),
+# one that starts makes a folder, and a commit or a switch moves the
+# checkout's HEAD. wpaths is those paths (not watch, which is zsh's own):
+# the five folders runs are kept in, what a run a row is of writes when it
+# ends or starts again, and the checkout's HEAD and its log. moved says
+# they have changed since it last looked, five times a second. Not a run's
+# folder itself, which one that is going writes into all the time, nor the
+# index, which anything that so much as reads the checkout rewrites.
+typeset -a wpaths
+gdir=$(git rev-parse --absolute-git-dir 2>/dev/null)
+watching() {
+  local i c
+  wpaths=(${cache:h}/(otis-verify|otis-walk|gmr-claude|gmr-fix|gmr-watch) $gdir/HEAD $gdir/logs/HEAD)
+  for (( i = 1; i <= $#id; i++ )); do
+    [[ -z $fold[i] ]] || continue
+    for c in 1 2 3 4 5; do
+      cell $i $c
+      [[ $ce[k] == ${cache:h}/(otis-verify|otis-walk|gmr-claude|gmr-fix|gmr-watch)/* ]] && wpaths+=($ce[k]/status $ce[k]/ended $ce[k]/pid)
+    done
+  done
+}
+lastwatch= relook=0
+float wtick=0
+moved() {
+  (( EPOCHREALTIME - wtick >= 0.2 )) || return 1
+  wtick=$EPOCHREALTIME
+  # Which of them are there, and when each last changed: one that appears
+  # (a run's status, as it ends) is a change as much as one that moves.
+  local -a tm have=(${^wpaths}(N))
+  (( $#have )) || return 1
+  zstat -A tm +mtime -- $have
+  local sig="$have $tm"
+  [[ $sig == $lastwatch ]] && return 1
+  # The first look only notes them.
+  [[ -n $lastwatch ]] || { lastwatch=$sig; return 1; }
+  lastwatch=$sig
+}
 # The rows, then the board made of them. A board that could not be made
 # says so (landed), rather than leave the screen looking for good.
 refresh() {
@@ -383,12 +421,15 @@ landed() {
   stale_read
   if (( again )); then again=0; refresh --refresh
   elif [[ $flash == "refreshing from $forge…" ]]; then flash=; fi
+  # Something moved here while these rows were being made: made again.
+  (( relook )) && [[ -z $lpid ]] && { relook=0; refresh; }
   [[ -e $st/board.failed ]] && { rm -f $st/board.failed; flash="the board could not be made: $st/err says why"; }
   [[ -s $st/board ]] || return 1
   # The cursor stays on the row it was on, and what is under the board
   # where it was scrolled to.
   local was=$id[cur] wasoff=$poff i
   load
+  watching
   go 1
   for (( i = 1; i <= $#id; i++ )); do
     [[ $id[i] == $was ]] || continue
@@ -1318,6 +1359,7 @@ screen_on
 size
 cur=1
 [[ -n $memo && -s $memo ]] && { print -rn -- "$(<$memo)" > $st/board; load; early=1; memo_restore; (( $#id )) && go 1; }
+watching
 refresh
 relist
 draw
@@ -1355,6 +1397,11 @@ while :; do
     fi
     folding && changed=1
     landed && changed=1
+    # Something moved on this machine (a run finished or started, a commit,
+    # a switch): the rows again now, or once the ones being made have landed.
+    if moved; then
+      if [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null; then relook=1; else refresh; fi
+    fi
     # A fetch landed behind the board (the file otis-list names for
     # git-cached-json to write): the rows again, from what it brought.
     if [[ -e $st/fetched ]] && ! { [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null }; then rm -f $st/fetched; refresh; fi
