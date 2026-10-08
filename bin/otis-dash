@@ -505,15 +505,22 @@ under() {
     emit $i
   done
 }
-# relkey <row>: the change a row is of, in REPLY: its MR's number, else its
-# branch, which a run on a branch names in its note. The rows of the change
-# the cursor is on (curkey) are marked, so a change and its runs, each a row
-# of its own, are seen together.
-curkey=
+# relkey <row>: the change a row is of, by both its names: ki its MR's
+# number, kb its branch, which a run on a branch names in its note. The rows
+# of the change the cursor is on (curi, curb) are marked, so a change and
+# its runs, each a row of its own, are seen together. A run filed under the
+# branch and its change's row under the MR are one change: the cursor's
+# names are those of the change's own row when there is one, so either name
+# finds the rest.
+curi= curb= ki= kb=
 relkey() {
-  REPLY=${iid[$1]:+!$iid[$1]}
-  [[ -n $REPLY ]] || REPLY=$source[$1]
-  [[ -n $REPLY || $type[$1] != notice ]] || REPLY=$note[$1]
+  ki=${iid[$1]:+!$iid[$1]} kb=$source[$1]
+  [[ -n $kb || $type[$1] != notice ]] || kb=$note[$1]
+}
+# related <row>: it is of the change the cursor is on.
+related() {
+  relkey $1
+  [[ -n $curi && $ki == $curi ]] || [[ -n $curb && $kb == $curb ]]
 }
 row() {
   local i=$1 w=$2 on=0 s= t tc=$T nc=$C g=${fold[$1]:--}
@@ -525,9 +532,8 @@ row() {
   line= used=0
   # The cursor; else another row of the change the cursor is on, with a
   # thinner bar of the cursor's color; else the branch you are on.
-  relkey $i
   if (( on )); then put "$A" "▌ "
-  elif [[ -n $curkey && $REPLY == $curkey && $type[i] != group ]]; then put "$A" "▎ "
+  elif [[ $type[i] != group ]] && related $i; then put "$A" "▎ "
   elif [[ -n $mark[i] ]]; then put "$EL" "▸ "; else put "" "  "; fi
   # A group's rows sit in from its line.
   [[ -n $fold[i] ]] && put "" "  "
@@ -712,8 +718,14 @@ left() {
   # The rows, in three parts with a line between: what wants you, your
   # drafts among it; what is moving without you, and where you are; then the
   # groups, a line each, their rows under it when open.
-  curkey=
-  (( $#id )) && [[ $type[cur] != group ]] && { relkey $cur; curkey=$REPLY; }
+  curi= curb=
+  if (( $#id )) && [[ $type[cur] != group ]]; then
+    relkey $cur; curi=$ki curb=$kb
+    for (( i = 1; i <= $#id; i++ )); do
+      [[ $type[i] == change ]] && related $i || continue
+      curi=$ki curb=$kb; break
+    done
+  fi
   for (( i = 1; i <= $#id; i++ )); do
     vis $i || continue
     if [[ $type[i] == group || -n $fold[i] ]]; then part=g
