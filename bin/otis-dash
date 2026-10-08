@@ -464,6 +464,16 @@ under() {
     emit $i
   done
 }
+# relkey <row>: the change a row is of, in REPLY: its MR's number, else its
+# branch, which a run on a branch names in its note. The rows of the change
+# the cursor is on (curkey) are marked, so a change and its runs, each a row
+# of its own, are seen together.
+curkey=
+relkey() {
+  REPLY=${iid[$1]:+!$iid[$1]}
+  [[ -n $REPLY ]] || REPLY=$source[$1]
+  [[ -n $REPLY || $type[$1] != notice ]] || REPLY=$note[$1]
+}
 row() {
   local i=$1 w=$2 on=0 s= t tc=$T nc=$C g=${fold[$1]:--}
   # What did not fit on the row's line, said under it from column mind: the
@@ -472,8 +482,12 @@ row() {
   integer mind=0 rw=0 tx mw=${iww[$g]:-0} iw=0
   (( i == cur )) && on=1
   line= used=0
-  # The cursor, else the branch you are on.
-  if (( on )); then put "$A" "▌ "; elif [[ -n $mark[i] ]]; then put "$EL" "▸ "; else put "" "  "; fi
+  # The cursor; else another row of the change the cursor is on, with a
+  # thinner bar of the cursor's color; else the branch you are on.
+  relkey $i
+  if (( on )); then put "$A" "▌ "
+  elif [[ -n $curkey && $REPLY == $curkey && $type[i] != group ]]; then put "$A" "▎ "
+  elif [[ -n $mark[i] ]]; then put "$EL" "▸ "; else put "" "  "; fi
   # A group's rows sit in from its line.
   [[ -n $fold[i] ]] && put "" "  "
   if [[ $type[i] == group ]]; then
@@ -657,6 +671,8 @@ left() {
   # The rows, in three parts with a line between: what wants you, your
   # drafts among it; what is moving without you, and where you are; then the
   # groups, a line each, their rows under it when open.
+  curkey=
+  (( $#id )) && [[ $type[cur] != group ]] && { relkey $cur; curkey=$REPLY; }
   for (( i = 1; i <= $#id; i++ )); do
     vis $i || continue
     if [[ $type[i] == group || -n $fold[i] ]]; then part=g
