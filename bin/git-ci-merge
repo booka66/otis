@@ -79,6 +79,9 @@ auto= run=
 iid=$1 status=$2
 [ -n "$iid" ] || exit 0
 pause() { otis-popup say "$1"; }
+# did <what>: said in the footer of the screen whose key this was, which is
+# not held while this works and so does not see it end.
+did() { [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$1" > "$GIT_FZF_STATE/note"; }
 json=$(mr "") || { pause "could not load !$iid"; exit 1; }
 sha=$(printf '%s' "$json" | jq -r .sha)
 # What it is goes in the question, so a box over the screen shows it too.
@@ -112,7 +115,7 @@ fi
 if [ -n "$auto" ]; then
   out=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha&auto_merge=true" 2>&1) || { pause "setting auto-merge failed; m again sets it
 $(printf '%s\n' "$out" | head -3)"; exit 1; }
-  [ "$(printf '%s' "$out" | jq -r .merge_when_pipeline_succeeds 2>/dev/null)" = true ] && exit 0
+  [ "$(printf '%s' "$out" | jq -r .merge_when_pipeline_succeeds 2>/dev/null)" = true ] && { did "!$iid merges itself once everything passes"; exit 0; }
   pause "GitLab accepted it but did not set auto-merge (state $(printf '%s' "$out" | jq -r .state 2>/dev/null))"
   exit 1
 fi
@@ -122,5 +125,5 @@ merge it?" || exit 0
 out=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$iid/merge?sha=$sha" 2>&1) || { pause "merge failed
 $(printf '%s\n' "$out" | head -3)"; exit 1; }
 state=$(printf '%s' "$out" | jq -r .state 2>/dev/null)
-[ "$state" = merged ] && exit 0
+[ "$state" = merged ] && { did "merged !$iid"; exit 0; }
 pause "GitLab accepted it but says $state"

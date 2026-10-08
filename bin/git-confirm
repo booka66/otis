@@ -5,10 +5,11 @@
 # of your own for the agent being started, printed to stdout, so the question
 # goes to the terminal instead.
 # Over one of otis's screens (OTIS_FRAME), either is asked in a box on it
-# instead (otis-popup).
+# instead (otis-popup); so is one from a command the board runs behind it
+# with no terminal (OTIS_ASK), which the board asks for it.
 note=
 [ "$1" = --note ] && { note=1; shift; }
-[ -n "$OTIS_FRAME" ] && [ -e "$OTIS_FRAME" ] && exec otis-popup "$([ -n "$note" ] && echo note || echo confirm)" "$1"
+{ [ -n "$OTIS_ASK" ] || { [ -n "$OTIS_FRAME" ] && [ -e "$OTIS_FRAME" ]; }; } && exec otis-popup "$([ -n "$note" ] && echo note || echo confirm)" "$1"
 if [ -n "$note" ]; then printf '%s [y/N, a=add a note] ' "$1" >/dev/tty; else printf '%s [y/N] ' "$1"; fi
 # Switch off line mode and echo for one key, then switch them back on. Under
 # fzf, macOS stty can warn that "stdout appears redirected" while still

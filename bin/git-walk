@@ -3,8 +3,12 @@
 #                                         it has landed, asked whether to walk it again (y) or
 #                                         else the walk itself; or, after a confirm, started
 # git-walk --branch <branch>              gb's P: the same for a branch, as gdm reads it
-# git-walk --check <kind> <iid> <head> <base> <start>
-#                                         gmr's P, as fzf actions: only open MRs have it
+# git-walk --check <kind> <iid> [<head> <base>]
+#                                         gmr's P, as fzf actions: only open MRs have it. With
+#                                         its head and base (the board's), whether its tests
+#                                         can be traced is worked out here, behind the screen,
+#                                         and handed on (OTIS_WALK_CAN)
+# git-walk --check-branch <branch>        the same for --branch
 # git-walk --marks                        {iid or branch: {walking, status, head}} of every walk,
 #                                         for gmr's and gb's rows
 # git-walk --run <key>                    the walk itself, in the background (what resume runs)
@@ -51,12 +55,35 @@ base_of() { if [ -f "$1/base" ]; then cat "$1/base"; else cut -d' ' -f1 "$1/shas
 
 case $1 in
   --check)
-    kind=$2 iid=$3
+    # can: whether the change's tests can be traced (git-trace --can), which
+    # for one with no tests of its own searches the repository for those that
+    # import what it changed: ten seconds a screen was held for, with only a
+    # spinner to show. Worked out here it is behind the screen, which goes on
+    # working until the walk is ready to open.
+    kind=$2 iid=$3 head=$4 base=$5
     case $kind in
-      review|mine) echo "execute(git-walk $iid {7} {8} {12})" ;;
+      review|mine)
+        can=
+        if [ -n "$head" ]; then
+          if [ "$(cat "$top/$iid/engine" 2>/dev/null)" = trace ] && [ "$(cat "$top/$iid/head" 2>/dev/null)" = "$head" ]; then can=1
+          elif git-trace --can "$base" "$head"; then can=1
+          else can=0; fi
+        fi
+        echo "execute(${can:+OTIS_WALK_CAN=$can }git-walk $iid {7} {8} {12})" ;;
       sep) exec git-fzf-note "that row is a section heading" ;;
       *) exec git-fzf-note "P walks open MRs, and !$iid has merged" ;;
     esac
+    exit 0 ;;
+  --check-branch)
+    br=$2 can=
+    head=$(git rev-parse -q --verify "$br^{commit}" 2>/dev/null)
+    if [ -n "$head" ]; then
+      d=$top/b-$(printf '%s' "$br" | tr '/' '%')
+      if [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ "$(cat "$d/head" 2>/dev/null)" = "$head" ]; then can=1
+      elif git-trace --can "$(git merge-base "$(otis-config base)" "$br" 2>/dev/null)" "$head"; then can=1
+      else can=0; fi
+    fi
+    echo "execute(${can:+OTIS_WALK_CAN=$can }git-walk --branch {5})"
     exit 0 ;;
   --marks)
     # Going, how the last one ended, and the head it walked, so a row marks
@@ -284,11 +311,17 @@ d=$top/$key
 # and no model to have. Else the same run with no tests in it: the tour,
 # written from the diff alone, on the same screen, which needs an agent.
 trace=
-# A walk of this very head that traced says so: nothing to ask again.
-if [ -n "$head" ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ "$(cat "$d/head" 2>/dev/null)" = "$head" ]; then trace=1
-elif [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/null)" "$head" && trace=1
-elif [ -n "$head" ]; then git-trace --can "$base" "$head" && trace=1
-else [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && trace=1; fi
+case $OTIS_WALK_CAN in
+  # Worked out already, behind the screen that opened this (--check).
+  1) trace=1 ;;
+  0) ;;
+  *)
+    # A walk of this very head that traced says so: nothing to ask again.
+    if [ -n "$head" ] && [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && [ "$(cat "$d/head" 2>/dev/null)" = "$head" ]; then trace=1
+    elif [ -n "$br" ]; then git-trace --can "$(git merge-base "$main" "$br" 2>/dev/null)" "$head" && trace=1
+    elif [ -n "$head" ]; then git-trace --can "$base" "$head" && trace=1
+    else [ "$(cat "$d/engine" 2>/dev/null)" = trace ] && trace=1; fi ;;
+esac
 if [ -z "$trace" ]; then
   missing=$(otis-agent-run --ready) || pause "no test runs $what, so P tours it from the diff, which needs $missing"
   [ "$(git config --get otis.walkModel)" != off ] || pause "no test runs $what, and its tour is off (otis.walkModel)"

@@ -36,7 +36,9 @@
 # the failure goes by itself. A screen that is no picker and wants its caches
 # kept fresh behind it names a file to be told by (OTIS_FETCHED, the
 # dashboard's): its stale caches are fetched as a picker's are, and the file
-# is written when one lands.
+# is written when one lands. It never waits for one either: with <stale
+# seconds> 0 (its u) the cache is printed at once and fetched behind it, and
+# --no-wait holds for it as for a picker.
 refresh= nowait= sync= now=
 [ "$1" = --refresh ] && { refresh=1; shift; }
 [ "$1" = --no-wait ] && { nowait=1; shift; }
@@ -171,7 +173,7 @@ if [ -n "$now" ]; then
   exit 0
 fi
 
-if [ ! -s "$cache" ] && [ -n "$nowait" ] && [ -n "$FZF_PORT" ]; then
+if [ ! -s "$cache" ] && [ -n "$nowait" ] && { [ -n "$FZF_PORT" ] || [ -n "$OTIS_FETCHED" ]; }; then
   mark_stale
   # A burst of calls starts one fetch.
   [ -n "$(find "$cache.tried" -mmin -1 2>/dev/null)" ] && exit 1
@@ -212,21 +214,35 @@ last=$cache
 # date -r reads a file's mtime on both macOS and Linux, where stat's flags differ.
 age=$(( $(date +%s) - $(date -r "$last" +%s) ))
 [ "$age" -ge "$stale" ] && { [ -n "$FZF_PORT" ] || [ -n "$OTIS_FETCHED" ] || [ -s "$cache.err" ]; } || exit 0
-# Mark the attempt now so a burst of reloads starts one fetch, not several.
-touch "$cache.tried"
+# One fetch of a cache at a time ($cache.pid, the one that is out, trusted
+# for two minutes). Asked again while it is out (u twice, or u after a key
+# that changed the forge's side), the one that is out asks once more when it
+# lands ($cache.again): what it brings may be from before what was done.
+if [ -n "$(find "$cache.pid" -mmin -2 2>/dev/null)" ] && kill -0 "$(cat "$cache.pid" 2>/dev/null)" 2>/dev/null; then
+  : > "$cache.again"
+  exit 0
+fi
 (
-  failing=$([ -s "$cache.err" ] && echo 1)
-  if run "$@"; then
-    rm -f "$cache.err"
-    if ! cmp -s "$new" "$cache"; then
-      mv "$new" "$cache"
+  while :; do
+    rm -f "$cache.again"
+    # Mark the attempt now so a burst of reloads starts one fetch, not several.
+    touch "$cache.tried"
+    failing=$([ -s "$cache.err" ] && echo 1)
+    if run "$@"; then
+      rm -f "$cache.err"
+      if ! cmp -s "$new" "$cache"; then
+        mv "$new" "$cache"
+        tell
+      else
+        rm -f "$new"
+        touch "$cache"
+        [ -n "$failing" ] && tell
+      fi
+    elif [ -z "$failing" ]; then
       tell
-    else
-      rm -f "$new"
-      touch "$cache"
-      [ -n "$failing" ] && tell
     fi
-  elif [ -z "$failing" ]; then
-    tell
-  fi
+    [ -e "$cache.again" ] || break
+  done
+  rm -f "$cache.pid"
 ) >/dev/null 2>&1 &
+echo $! > "$cache.pid"

@@ -4,5 +4,8 @@
 iid=$1
 [ -n "$iid" ] || exit 0
 git-confirm "close !$iid without merging?" || exit 0
-out=$(git-forge close "$iid" 2>&1) && exit 0
+if out=$(git-forge close "$iid" 2>&1); then
+  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "closed !$iid" > "$GIT_FZF_STATE/note"
+  exit 0
+fi
 otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'close failed')"

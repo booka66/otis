@@ -65,13 +65,17 @@ screen_start() {
 # asked, otis-popup) finds it drawn again in place, every line rewritten
 # over what is there; a clear first would blink. One that left the alternate
 # screen (an editor) finds it entered and drawn whole, as ever.
+#
+# screen_on over: after a box the screen put up itself (otis-popup), which
+# never leaves the alternate screen, so the terminal is not asked: reading
+# its answer took any key typed in that moment with it.
 screen_on() {
   local alt=$e'[?1049h'
   loader_stop
   [[ -n $OTIS_ALT && -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; alt=; }
   stty -icanon -echo -isig min 1 time 0 <&$tty
   shown_rows=()
-  if [[ $1 == back ]] && on_alt; then
+  if [[ $1 == over ]] || { [[ $1 == back ]] && on_alt }; then
     # A line no frame has, a screen's worth: every line differs, none is
     # skipped, and the screen is not taken as empty (which clears it).
     alt=

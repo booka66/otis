@@ -15,8 +15,40 @@
 # command goes on; one that can take minutes puts busy's box up for that. With
 # no screen under it, text and say ask on the terminal's line as ever;
 # git-confirm, which sends its questions here, asks there itself.
+#
+# Behind a screen (OTIS_ASK, a folder the board gives a command it runs with
+# no terminal, otis-dash's work) nothing is drawn from here, since the
+# screen is still yours. A question is left in the folder (q, with q.msg and
+# q.text) and its answer waited for (a: how the box ended, and under that
+# what was typed): the board asks it in this same box once you are on the
+# row it is about. What say would say is left for the board to say on its
+# own lines (said.<pid>), and busy only names the log, for the board to say
+# the last line of on the row. With the board gone, a question is a no, and
+# what would have been said is a desktop notification.
 setopt extendedglob no_nomatch
 mode=$1 msg=$2 text=$3
+
+if [[ -n $OTIS_ASK ]]; then
+  d=$OTIS_ASK
+  if [[ ! -d $d ]]; then
+    [[ $mode == say ]] && otis-notify otis "${msg//$'\n'/ · }"
+    exit 1
+  fi
+  zmodload zsh/zselect
+  case $mode in
+    say) print -r -- "$msg" > $d/said.tmp.$$ && mv -f $d/said.tmp.$$ $d/said.$$; exit 0 ;;
+    busy) print -r -- "$text" > $d/busy; exit 0 ;;
+    confirm|note|text)
+      print -rn -- "$msg" > $d/q.msg; print -rn -- "$text" > $d/q.text
+      print -r -- $mode > $d/q.tmp && mv -f $d/q.tmp $d/q
+      while [[ -d $d && ! -e $d/a ]]; do zselect -t 5; done
+      [[ -e $d/a ]] || exit 1
+      a=("${(@f)$(<$d/a)}"); rm -f $d/a
+      (( $#a > 1 )) && print -r -- "${(F)a[2,-1]}"
+      exit $a[1] ;;
+  esac
+  exit 2
+fi
 
 if [[ -z $OTIS_FRAME || ! -e $OTIS_FRAME ]]; then
   case $mode in
@@ -128,6 +160,18 @@ done_() {
   quit $1
 }
 keys() { local s= k l; for k l in "$@"; do s+="$A$k$R $C$l$R   "; done; REPLY=${s%   }; }
+# answer: the key that answers the box, in REPLY. A box the board put up by
+# itself (OTIS_GRACE: a command behind it was ready to ask) takes none for
+# its first 0.3s: one on its way to the board when the box appeared is not
+# an answer to a question you had not seen.
+answer() {
+  float t0=$EPOCHREALTIME
+  while :; do
+    readkey
+    [[ -n $OTIS_GRACE ]] && (( EPOCHREALTIME - t0 < 0.3 )) && continue
+    return
+  done
+}
 # tick <hint>: the box's last line alone drawn again, the cursor put back.
 tick() {
   vw "$1"
@@ -168,10 +212,10 @@ ask() {
 case $mode in
   confirm)
     keys y yes n no; box "$REPLY"
-    readkey; [[ $REPLY == y ]] && done_ 0 busy; done_ 1 ;;
+    answer; [[ $REPLY == y ]] && done_ 0 busy; done_ 1 ;;
   note)
     keys y yes a "yes, with a note" n no; box "$REPLY"
-    readkey
+    answer
     [[ $REPLY == y ]] && done_ 0 busy
     [[ $REPLY == a ]] || done_ 1
     body+=("" "${C}a note for it; none is a plain yes$R")

@@ -1757,6 +1757,7 @@ sync_list() { mv -f $1 $st/list.$(( ++rgen )); landed; }
 # preview jumping to the new place and then changing under it.
 integer pwant=-1 pgen=0
 typeset -A held
+lastn=
 act() {
   busy && { (( ${uq[(Ie)$1]} )) || uq+=($1); return }
   local was=$poff g=$gen
@@ -2077,7 +2078,8 @@ handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
   (( cfocus )) && { chat_key "$1"; return; }
   local k=$1
-  keyname "$k"; local n=$REPLY
+  keyname "$k"; local n=$REPLY was=$lastn
+  lastn=$n
   if (( searching )); then
     case $n in
       enter) searching=0 dirty=1; [[ -n $bind[enter] ]] && act enter; return ;;
@@ -2130,9 +2132,11 @@ handle() {
   # A picker's key held down is one press: its repeats, arriving while it
   # runs or within 0.3s of the last of them, are dropped. p held ran the
   # peeks and a preview for every repeat, and the renders piled up. Keys the
-  # picker says are cheap (--repeat) act on every repeat.
+  # picker says are cheap (--repeat) act on every repeat. A repeat is the
+  # same key again with no other between: v, j, v quickly is two files
+  # marked, and the second v was dropped as if v were held.
   if [[ -n $bind[$n] ]]; then
-    if [[ -z $repeat[$n] ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
+    if [[ -z $repeat[$n] && $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
     used $n
     act $n; held[$n]=$EPOCHREALTIME
     return

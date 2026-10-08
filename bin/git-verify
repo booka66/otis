@@ -2,6 +2,14 @@
 # git-verify <iid>                  gmr's V: verify an MR in a Cursor Cloud agent's VM
 # git-verify --branch <b> [iid]     gb's V: the same for a branch (its MR's run, if it has one)
 # git-verify --check <kind> <iid>   gmr's V, as fzf actions: only open MRs have it
+# git-verify --ask <kind> <iid> <branch> [1]
+#                                   the board's V, as fzf actions (1: the row is the branch, which
+#                                   is pushed first when origin is behind): a run there is opened
+#                                   as ever; with none, one is asked for and started (--start)
+# git-verify --start <as V>         only that: asked, pushed if it must be and started, its
+#                                   progress not opened. Behind the board, which is not held
+#                                   for the push or for GitLab to see it, and shows the run
+#                                   as a row of its own once it is going
 # git-verify --marks                {key: {verifying, status, verdict, head}} of every run, for gmr's and gb's rows
 # git-verify --artifacts <dir>      what a run brought back, in a picker (a in its progress view)
 # git-verify --artifact <file>      one of them, for that picker's preview
@@ -62,8 +70,9 @@
 #
 # A run starts on the VM an earlier one left idle, this MR's or any other's
 # here, when Cursor still has one, rather than waiting on a cold boot.
-mode=
-case $1 in --branch|--check|--marks|--preview|--artifacts|--artifact|--view|--keylines|--attach) mode=$1; shift ;; esac
+mode= start_only=
+[ "$1" = --start ] && { start_only=1; shift; }
+case $1 in --branch|--check|--ask|--marks|--preview|--artifacts|--artifact|--view|--keylines|--attach) mode=$1; shift ;; esac
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/repo.sh"
 common=$OTIS_GITDIR
@@ -132,6 +141,19 @@ case $mode in
     [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
     [ "$kind" = merged ] && exec git-fzf-note "V verifies open MRs, and !$iid has merged"
     echo "execute(git-verify $iid${3:+ '$3'})"
+    exit 0
+    ;;
+  --ask)
+    # <kind> <iid> <branch> [1]. The row's own fields name the MR and the
+    # branch in what is handed back ({2}, {5}), never their text.
+    kind=$1 iid=$2 br=$3 asb=$4
+    [ "$kind" = sep ] && exec git-fzf-note "that row is a section heading"
+    [ "$kind" = merged ] && [ -z "$asb" ] && exec git-fzf-note "V verifies open MRs, and !$iid has merged"
+    bkey=; [ -n "$br" ] && bkey=b-$(printf '%s' "$br" | tr '/' '%')
+    how=--start
+    { [ -n "$iid" ] && [ -d "$top/$iid" ]; } || { [ -n "$bkey" ] && [ -d "$top/$bkey" ]; } && how=
+    if [ -n "$asb" ]; then echo "execute(git-verify ${how:+$how }--branch {5} {2})"
+    else echo "execute(git-verify ${how:+$how }{2} {5})"; fi
     exit 0
     ;;
   --marks)
@@ -619,6 +641,7 @@ if [ ! -d "$d" ]; then
 elif orphaned "$d"; then
   resume "$d"
 fi
+[ -z "$start_only" ] || exit 0
 while :; do
   git-claude-view "$d"
   [ $? -eq 3 ] || exit 0

@@ -8,7 +8,10 @@
 id=$1 iid=$2
 [ -n "$id" ] || exit 0
 git-confirm "retry the failed jobs in !$iid pipeline $id?" || exit 0
-out=$(git-forge api -X POST "projects/:fullpath/pipelines/$id/retry" 2>&1) && exit 0
+if out=$(git-forge api -X POST "projects/:fullpath/pipelines/$id/retry" 2>&1); then
+  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "retrying the failed jobs of !$iid" > "$GIT_FZF_STATE/note"
+  exit 0
+fi
 # A 409 on a stale job is GitLab saying those jobs were retried already (a
 # retry from here or the web a moment ago), which is what was asked for.
 case $out in *"stale job"*) exit 0 ;; esac

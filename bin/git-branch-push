@@ -10,8 +10,11 @@
 # Over a screen it goes to a file, and a box says the last line of it and how
 # long it has been (otis-popup busy), until the push is done or gp asks about
 # an MR; the footer then says what came of it, and a failure's last lines are
-# shown in a box. With no screen under it (gb) it goes on the terminal as it
-# comes, gp's question with it.
+# shown in a box. Behind the board (OTIS_ASK), which is not held for it, there
+# is no box: the board says the last line under the branch's row, asks gp's
+# question for it, and says a failure under its top line (otis-popup). With
+# no screen at all (gb) it goes on the terminal as it comes, gp's question
+# with it.
 b=$1
 [ -n "$b" ] || exit 0
 git-confirm "force-push $b with gp?" || exit 0
@@ -25,7 +28,7 @@ push() {
     git push origin "refs/heads/$b:refs/heads/$b" --force-with-lease --force-if-includes
   fi
 }
-if [ -n "$OTIS_FRAME" ] && [ -e "$OTIS_FRAME" ]; then
+if [ -n "$OTIS_ASK" ] || { [ -n "$OTIS_FRAME" ] && [ -e "$OTIS_FRAME" ]; }; then
   otis-popup busy "pushing $b" "$log" &
   # The next box (gp's question, the failure) takes the busy one down, as it
   # does a screen's loader.

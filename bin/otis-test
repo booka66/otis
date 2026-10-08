@@ -1048,6 +1048,21 @@ EOF
   expect review/open-head "$(GMR_MOVING=$(git rev-parse --git-common-dir)/gmr-review-moving git-mr-wait quiet; git -C "$(git-worktree-path named review)" rev-parse HEAD)" "$head"
   # Once it is there (--ready, as P opened), enter only opens: nothing moved.
   expect review/open-again "$(PATH=$od/bin:$PATH git-mr-review --open 7 "$head" "$base" "" lib.ts 3; [ -e "$(git rev-parse --git-common-dir)/gmr-review-moving" ] && echo moved)" "commit-open base=$rb iid=7 pwd=review $rb..$head lib.ts 3"
+  # --ready, as P's screen opens: the worktree is moved behind it, and
+  # nothing is asked. Off the head, it is on it once the move has landed.
+  # With an edit in it, it is left where it is, and whoever waits for the
+  # move is told why.
+  rvw=$(git-worktree-path named review); rvm=$(git rev-parse --git-common-dir)/gmr-review-moving
+  git -C "$rvw" switch -q --detach "$base"
+  git-mr-review --ready 7 "$head" "$base" ""
+  expect review/ready-behind "$(GMR_MOVING=$rvm git-mr-wait quiet; echo "rc=$?"; git -C "$rvw" rev-parse HEAD)" "rc=0
+$head"
+  git -C "$rvw" switch -q --detach "$base"; echo edit >> "$rvw/lib.ts"
+  git-mr-review --ready 7 "$head" "$base" ""
+  expect review/ready-leaves-edits "$(GMR_MOVING=$rvm git-mr-wait quiet; echo "rc=$?"; [ "$(git -C "$rvw" rev-parse HEAD)" = "$base" ] && echo left; grep -c 'it has edits' "$rvm.err")" "rc=1
+left
+1"
+  rm -f "$rvm" "$rvm.err"
   git worktree remove --force "$(git-worktree-path named review)"; git update-ref -d refs/mr/7
   # c there: the review's line picker (git-mr-lines), as a review, on the
   # line; none on the base's side, whose lines it starts at the top of.
@@ -1433,6 +1448,20 @@ else
 fi
 git branch -qD stale; rm -f "$(git rev-parse --git-common-dir)/branch-mrs.tsv"
 
+# A key that runs a command, pressed again at once, is a key held down, and
+# one press. With another key between, it is a second press: x, x, j, x in a
+# breath runs it on the first row once and on the second once, where the
+# last x was dropped as a repeat of the first.
+rk="git-fzf held '' --bind 'start:reload(printf \"a\\\\nb\\\\n\")' --bind 'x:execute-silent(echo {1} >> $tmp/held-x)'"
+if picker_open "$rk"; then
+  picker_rows >/dev/null
+  printf 'key:x\nkey:x\nkey:j\nkey:x\n' >&7; sleep 1.5
+  expect pick/repeat-is-the-same-key "$(tr '\n' ' ' < "$tmp/held-x")" "a b "
+  picker_close
+else
+  expect pick/repeat-opens "no picker on port $port" "opened"
+fi
+
 # A picker opens on the rows it had when it last closed, while its list
 # runs again behind them; a key that runs something waits for that list.
 slow="git-fzf memo '' --bind 'start:reload(sleep 2; printf \"a\\\\nb\\\\n\")' --bind 'x:execute-silent(touch $tmp/memo-x)'"
@@ -1533,6 +1562,87 @@ expect otis/login-says "$(printf '%s\n' "$dash" | grep -o 'GitLab login expired 
 expect otis/u-not-dropped "$(sed -n '2p' "$dl/cache/log" | grep -c -e '^--refresh|stale\.mrs\.json')" "1"
 expect otis/u-logs-in "$([ -e "$dl/cache/logged-in" ] && echo ran):$(sed -n '3p' "$dl/cache/log")" "ran:--refresh|"
 expect otis/gone-error-mark-swept "$(sed -n '1p;2p' "$dl/cache/log" | cut -d'|' -f2 | tr '\n' '/')" "stale.mrs.json stale.old.json /stale.mrs.json /"
+# A key's command never holds the board. m here is stand-ins that each take
+# a while: its check (a second), its question, then the merge (a second).
+# While the check is out the keys go on working: j moves off the row, and the
+# question, ready, waits on its row (? answer) rather than come up over
+# another; back on the row it is asked in a box; answered, the row says
+# merging while the board is yours again, and the footer says when it has
+# merged. One that fails says why under the top line, until esc.
+do=$tmp/dashout; mkdir -p "$do/stubs" "$do/state"
+bnode() { printf '{"iid": "%s", "title": "%s", "sourceBranch": "%s", "targetBranch": "main", "webUrl": "u", "draft": false, "approved": true, "autoMergeEnabled": false, "detailedMergeStatus": "MERGEABLE", "updatedAt": "2026-01-01T00:00:00Z", "diffRefs": {"headSha": "new"}, "headPipeline": {"status": "SUCCESS"}, "reviewers": {"nodes": [{"username": "ann", "mergeRequestInteraction": {"reviewState": "APPROVED"}}]}}' "$1" "$2" "$3"; }
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s]}}}}\n' "$(bnode 7 'Ship it' feat)" "$(bnode 8 'Fix it' fix)" > "$do/state/ci.json"
+printf 'w\t\t\t\t\tsep\t\t\t\t\tsep-waiting\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n' > "$do/state/rows"
+GIT_FZF_STATE=$do/state otis-board > "$do/board.tsv"
+cp "$tmp/dashstub/otis-list" "$tmp/dashstub/otis-preview" "$do/stubs/"
+printf '#!/bin/sh\ncat "%s"\n' "$do/board.tsv" > "$do/stubs/otis-board"
+cat > "$do/stubs/git-ci-merge" <<EOF
+#!/bin/sh
+if [ "\$1" = --check ]; then sleep 1; echo "execute(git-ci-merge \$2)"; exit 0; fi
+git-confirm "merge !\$1?" || { echo "\$1 no" >> "$do/log"; exit 0; }
+echo "\$1 yes" >> "$do/log"
+sleep 1
+[ "\$1" = 8 ] && { otis-popup say "merge failed
+405 Method Not Allowed"; exit 1; }
+printf 'merged !%s\n' "\$1" > "\$GIT_FZF_STATE/note"
+EOF
+chmod +x "$do/stubs"/*
+dash=$(PATH=$do/stubs:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob; zpty -b d "stty rows 40 cols 100; otis-dash"; out= all=
+  upto() { for _ in {1..80}; do while zpty -rt d buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"$1"* ]] && { print -n "ok "; all+=$out; out=; return; }; sleep 0.1; done; print -n "x "; all+=$out; out=; }
+  upto "Fix it"; sleep 0.3
+  zpty -wn d m; sleep 0.2; zpty -wn d j; upto "? answer"
+  [[ ${all//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"merge !7?"* ]] && print -n "asked-elsewhere "
+  zpty -wn d k; upto "merge !7?"; sleep 0.5
+  zpty -wn d y; zpty -wn d j; upto "merging"; upto "merged !7"
+  zpty -wn d m; upto "merge !8?"; sleep 0.5; zpty -wn d y; upto "esc clears that"
+  zpty -wn d $'"'"'\e'"'"'; sleep 0.4; while zpty -rt d buf; do out+=$buf; done
+  [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"Fix it"* ]] && zpty -t d && print -n "still-up "
+  zpty -wn d q; sleep 0.3; zpty -d d 2>/dev/null; print; print -r -- $all' | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r')
+# Each step seen in turn: the rows (these, not the last screen's, which it
+# opens on), the question waiting on its row while the cursor is on another,
+# the box once back, merging, merged, the second question, and how to clear
+# what its failure said; and esc cleared that, not the board.
+expect otis/behind-steps "$(printf '%s\n' "$dash" | head -1)" "ok ok ok ok ok ok ok still-up "
+expect otis/behind-answered "$(tr '\n' ' ' < "$do/log")" "7 yes 8 yes "
+expect otis/behind-failure-said "$(printf '%s\n' "$dash" | grep -c '!8 merge failed · 405 Method Not Allowed')" "1"
+# A command the board runs with no terminal (OTIS_ASK, its folder there)
+# asks by leaving its question in the folder and waiting for the answer the
+# board leaves: how the box ended, and under that what was typed into it.
+# What it would say in a box it leaves there too. The board gone, the folder
+# with it, a question is a no.
+ad=$tmp/ask; mkdir -p "$ad"
+( OTIS_ASK=$ad git-confirm "really?"; echo "rc=$?" > "$tmp/ask.rc" ) &
+for _ in $(seq 1 40); do [ -e "$ad/q" ] && break; sleep 0.1; done
+expect popup/behind-asks "$(cat "$ad/q"):$(cat "$ad/q.msg")" "confirm:really?"
+printf '0\n' > "$ad/a.new"; mv "$ad/a.new" "$ad/a"; wait
+expect popup/behind-yes "$(cat "$tmp/ask.rc")" "rc=0"
+( OTIS_ASK=$ad git-confirm --note "go?" > "$tmp/ask.note"; echo "rc=$?" > "$tmp/ask.rc" ) &
+for _ in $(seq 1 40); do [ -e "$ad/q" ] && break; sleep 0.1; done
+printf '0\nmind the gap\n' > "$ad/a.new"; mv "$ad/a.new" "$ad/a"; wait
+expect popup/behind-note "$(cat "$ad/q.msg" 2>/dev/null; cat "$tmp/ask.note" "$tmp/ask.rc")" "go?mind the gap
+rc=0"
+OTIS_ASK=$ad otis-popup say "it broke"
+expect popup/behind-says "$(cat "$ad"/said.*)" "it broke"
+expect popup/behind-gone "$(OTIS_ASK=$tmp/nowhere git-confirm "x?"; echo "rc=$?")" "rc=1"
+# A cache asked for with nothing kept and --no-wait, by a screen that names
+# a file to be told by (the board), is fetched behind it and the file
+# written when it lands. Asked again at once (stale 0, the board's u), what
+# is kept is printed at once, the old answer still in it, and fetched behind
+# that; a second and a third u while that fetch is out start none of their
+# own, and the one that is out asks once more when it lands, so what it
+# brings is never from before the last u: three fetches in all.
+cj=$tmp/cj; mkdir -p "$cj"
+printf '#!/bin/sh\necho run >> "%s/runs"\nsleep 1\nprintf '"'"'{"n": %%s}\\n'"'"' "$(grep -c . "%s/runs")"\n' "$cj" "$cj" > "$cj/fetch"; chmod +x "$cj/fetch"
+cjc=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/lazy.json
+expect cached/no-wait-first "$(OTIS_FETCHED=$cj/told git-cached-json --no-wait lazy 60 x -- "$cj/fetch"; echo "rc=$?")" "rc=1"
+for _ in $(seq 1 40); do [ -e "$cj/told" ] && break; sleep 0.25; done
+expect cached/told-when-landed "$(cat "$cjc")" '{"n": 1}'
+rm -f "$cj/told"
+expect cached/kept-at-once "$(cat "$(OTIS_FETCHED=$cj/told git-cached-json --no-wait lazy 0 x -- "$cj/fetch")")" '{"n": 1}'
+OTIS_FETCHED=$cj/told git-cached-json --no-wait lazy 0 x -- "$cj/fetch" >/dev/null
+OTIS_FETCHED=$cj/told git-cached-json --no-wait lazy 0 x -- "$cj/fetch" >/dev/null
+for _ in $(seq 1 60); do [ -e "$cjc.pid" ] || break; sleep 0.25; done
+expect cached/one-at-a-time "$(grep -c . "$cj/runs"):$(cat "$cjc")" '3:{"n": 3}'
 # What a failed call said, whole and in a line, past glab's banner and its
 # own line breaks; a login it no longer takes is exit 3, with how to log in.
 expect forge/why-login "$(git-forge why "$dl/cache/old.json.err" 2>/dev/null; printf 'rc=%s ' $?; printf '   ERROR  \n\n  Oauth2: "invalid_grant" "expired".\n' > "$dl/e"; git-forge why "$dl/e"; echo "rc=$?")" "rc=1 your GitLab login expired: glab auth login --hostname gitlab.com logs in again
@@ -2194,8 +2304,14 @@ pr edit 5 -R o/r --add-label ready"
 expect forge/lacks-all "$(git-forge lacks)" "stack run-pipeline stage-graph upload"
 # The board lists the pull request as yours, from the same JSON (otis-list,
 # then otis-board). The prefetch is held off (its lock taken), so nothing is
-# left running behind the test.
+# left running behind the test. The rows never wait for the forge, not even
+# the first time in a repo: the first list is what is here alone, the forge
+# asked behind it, and the list made again once it has answered has the
+# pull request.
 gst=$tmp/forge-state && mkdir -p "$gst" "$(git rev-parse --git-common-dir)/gmr-prefetch.lock"
+PATH=$ghp GIT_FZF_STATE=$gst otis-list > "$gst/rows"
+expect forge/board-first-is-local "$(PATH=$ghp GIT_FZF_STATE=$gst otis-board | awk -F'\t' '$18 == "mine" { print $9, $12 }')" ""
+for _ in $(seq 1 40); do [ -s "$(git rev-parse --git-common-dir)/git-alias-cache/ci-mine.json" ] && break; sleep 0.25; done
 expect forge/board-row "$(PATH=$ghp GIT_FZF_STATE=$gst otis-list > "$gst/rows"; PATH=$ghp GIT_FZF_STATE=$gst otis-board | awk -F'\t' '$18 == "mine" { print $9, $12 }')" "5 feat"
 cd "$here"
 

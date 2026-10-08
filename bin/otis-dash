@@ -32,10 +32,20 @@
 # branch or a worktree prints where and exits, for the otis function to do
 # (it moves your shell, which a script cannot).
 #
+# Nothing a key starts holds the board (commands out, below): its command
+# runs behind it, its row spinning with what is being done, and the keys go
+# on working there and on every other row. A command that asks first (merge,
+# rebase, push) asks in a box once it is ready and you are on its row, and
+# the board is yours again the moment you answer, while it does the work.
+# Only what is a screen of its own (a review, a pipeline's jobs, a pager)
+# takes the terminal.
+#
 # It keeps itself fresh: the rows again every 10s from what is on this
 # machine, and the forge asked behind it a minute apart while it is open
 # (otis-list, git-cached-json), with when it last answered on the top line.
-# u asks now. The cursor stays on the row it was on.
+# u asks now, and waits for nothing: the rows are what is here at once, and
+# each thing the forge answers changes them as it lands. The cursor stays on
+# the row it was on.
 #
 # It keeps a line a frame (OTIS_DASH_TRACE, else ~/.cache/otis/dash.log): how
 # long it took to build and to write, its size, and how long after the key
@@ -127,6 +137,9 @@ mkdir $st/pv
 # to read.
 trace=${OTIS_DASH_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/dash.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
+# Opened once (tfd): a line a frame was the file opened and closed a frame,
+# on a disk other work may be keeping busy.
+exec {tfd}>>$trace
 
 . ${0:A:h:h}/share/screen.zsh
 keys_open otis $keylist
@@ -142,7 +155,7 @@ float settle=0
 resize() {
   local oh=$H ow=$W
   size
-  print -r -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H" >> $trace
+  print -ru $tfd -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H"
   (( H != oh || W != ow )) || return 1
   shown_rows=(); draw
   (( settle = EPOCHREALTIME + 0.3 ))
@@ -420,8 +433,7 @@ landed() {
   # The refresh u asked for is done; one asked for while this was on its
   # way starts now.
   stale_read
-  if (( again )); then again=0; refresh --refresh
-  elif [[ $flash == "refreshing from $forge…" ]]; then flash=; fi
+  if (( again )); then again=0; refresh --refresh; fi
   # Something moved here while these rows were being made: made again.
   (( relook )) && [[ -z $lpid ]] && { relook=0; refresh; }
   [[ -e $st/board.failed ]] && { rm -f $st/board.failed; flash="the board could not be made: $st/err says why"; }
@@ -531,9 +543,16 @@ row() {
   integer mind=0 rw=0 tx mw=${iww[$g]:-0} iw=0
   (( i == cur )) && on=1
   line= used=0
-  # The cursor; else another row of the change the cursor is on, with a
-  # thinner bar of the cursor's color; else the branch you are on.
-  if (( on )); then put "$A" "▌ "
+  # A command out for the row: its spinner where the row's mark is, and
+  # what it is at where its move is, so nothing on the row moves aside for
+  # it; the cursor's row is still the one with a ground. Else the cursor;
+  # else another row of the change the cursor is on, with a thinner bar of
+  # the cursor's color; else the branch you are on.
+  local dw=
+  integer at=0
+  doing $i "$move[i]" && at=1 dw=$REPLY
+  if (( at )); then put "$A" "$dglyph "
+  elif (( on )); then put "$A" "▌ "
   elif [[ $type[i] != group ]] && related $i; then put "$A" "▎ "
   elif [[ -n $mark[i] ]]; then put "$EL" "▸ "; else put "" "  "; fi
   # A group's rows sit in from its line.
@@ -544,7 +563,8 @@ row() {
     tc=$SEC; (( on )) && tc=$B$SEC
     put "$tc" "${(r:18:: :)${(U)title[i]}}"; line+=$UB
     put "$T" "${(l:3:: :)count[i]}"
-    if [[ -n $say[i] ]]; then
+    if (( at )); then put "" "   "; put "$A" "$dw"
+    elif [[ -n $say[i] ]]; then
       put "" "   "; mind=$used
       whole "$say[i]" $(( w - used - 1 )); put "$C" "$reply[1]"; more2=("${(@)reply[2,-1]}")
     fi
@@ -553,7 +573,10 @@ row() {
     # one column, after the longest move among the rows it sits with.
     (( tx = used + ${mvw[$g]:-0} + 2 ))
     (( on )) && line+=$B
-    put "${tone[i]:-$C}" "$move[i]"; line+=$UB
+    if (( at )); then put "$A" "$dw"; else put "${tone[i]:-$C}" "$move[i]"; fi
+    line+=$UB
+    # Words longer than the moves' column still stand clear of the title.
+    (( used + 2 > tx )) && (( tx = used + 2 ))
     pad $tx
     # On the right: how long ago, where there is one to say, then its MR
     # number, in a column at the edge that every row it sits with keeps.
@@ -634,6 +657,11 @@ row() {
   if [[ $type[i] == notice && -n $sub[i] && $sub[i] != $title[i] ]]; then
     whole "› $sub[i]" $(( w - mind - 1 )); more2+=("${reply[@]}")
   fi
+  # And so does a command out that takes a while (a push, under its hook):
+  # the last thing it printed.
+  if [[ -n $ojob[$id[i]] && -n $osaid[$ojob[$id[i]]] ]]; then
+    whole "› $osaid[$ojob[$id[i]]]" $(( w - mind - 1 )); more2+=("${reply[@]}")
+  fi
   (( $#more )) && under $i $w $mind "$tc" "${more[@]}"
   (( $#more2 )) && under $i $w $mind "$nc" "${more2[@]}"
 }
@@ -710,6 +738,15 @@ left() {
     whole "could not refresh from $forge: $stale_why" $(( w - 4 ))
     for sl in $reply; do line= used=0; put "" "  "; put "$X" "$sl"; emit 0; done
   fi
+  # What a command behind the board had to say (said), each whole, until
+  # esc: red for what failed, the rest in the color of a thing to look at.
+  local nt nc
+  for nt in $notes; do
+    nc=$A; [[ $nt == *(failed|could not|would not)* ]] && nc=$X
+    whole "$nt" $(( w - 4 ))
+    for sl in $reply; do line= used=0; put "" "  "; put "$nc" "$sl"; emit 0; done
+  done
+  (( $#notes )) && { line= used=0; put "" "  "; put "$A" "esc"; put "$C" " clears that"; emit 0; }
   # Why there is no forge in it, when there is none (otis-list's footer).
   local foot=${(S)${:-$(<$st/footer)}//$e\[[0-9;]#m/}
   if [[ $foot == *alone ]]; then
@@ -825,7 +862,7 @@ warm() {
 }
 
 # --- the frame -------------------------------------------------------------------
-top=0 help=0 flash= pre=
+top=0 help=0 flash= pre= notet=
 # The pane's scroll: poff where it is; plen its lines, for where it stops.
 integer poff=0 plen=0
 # scroll <lines>: the wheel, ctrl-d and ctrl-u, in one frame. A glide sent a
@@ -998,6 +1035,7 @@ draw() {
   # A note or a flash stays until the next key: a preview landing redraws
   # the frame, and a note gone then was gone before it was read.
   if [[ -s $st/note ]]; then
+    [[ -n $notet ]] || notet=$EPOCHREALTIME
     foot+=$A$(<$st/note)$R
   elif working; then foot+=$A$REPLY$R" "$T${flash%…}$R$C"…"$R
   elif [[ -n $flash ]]; then foot+=$A$flash$R
@@ -1042,15 +1080,233 @@ draw() {
   shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
   local t1=$EPOCHREALTIME
   print -rnu $tty -- $body
-  print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk last=${(q)lastkey}" >> $trace
+  print -ru $tfd -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk last=${(q)lastkey}"
   kt= nk=0
 }
 
+# --- commands out -------------------------------------------------------------
+# A key's command never holds the board. It is out behind it (ask, behind):
+# any number at once, each for the row its key was pressed on, which spins
+# with what is being done to it (doing) until that is over, while the keys go
+# on working, on that row and every other.
+#
+# What a command hands back is fzf's actions, the row keys being shared with
+# the pickers, and run carries them out for the row they were asked about,
+# execute and execute-silent each a command in its turn. One that only asks
+# and then works (BEHIND) goes on behind the board, with no terminal: what it
+# asks (git-confirm, otis-popup) it leaves in its folder (OTIS_ASK), and the
+# board asks it in a box once you are on its row and have stopped typing
+# (asked, serve). The answer given, the board is yours again while the
+# command does the work. What it would have said in a box when something
+# went wrong goes under the top line instead (said, notes), until esc. Only a
+# command that is a screen of its own (a review, a pipeline's jobs, a pager)
+# takes the terminal, as it must.
+#
+# BEHIND: the commands that only ask and then work, by how their line starts,
+# and what a row says while one is at it.
+typeset -a BEHIND=(
+  'git-ci-merge *'                    merging
+  'git-mr-rebase *'                   rebasing
+  'git-stack --update *'              rebasing
+  'git-ci-run *'                      'new pipeline'
+  'git-ci-retry *'                    retrying
+  'git-verify --start *'              starting
+  'git-mr-approve *'                  approving
+  'git-mr-close *'                    closing
+  'git-mr-do flip *'                  marking
+  'git-branch-push *'                 pushing
+  'git-branch-delete *'               removing
+  '(cd * && |)git-worktree-remove *'  removing
+  'git-agent-list --forget *'         forgetting
+  'otis-do confirm *'                 clearing
+)
+behindable() {
+  local p w
+  for p w in "${BEHIND[@]}"; do [[ $1 == ${~p} ]] && { REPLY=$w; return 0; }; done
+  return 1
+}
+# The commands out, by number (outs, the folder of each $st/out/<n>): the row
+# each is for (orow, and ojob the newest for a row), its key's words (owhat),
+# the row's fields as they were when it was pressed (ofld), what it is at
+# once it works behind the board (odo), the actions still to come after that
+# (orest), since when (ot0), and the last thing a long one printed (osaid).
+# oj is the one whose actions run is carrying out.
+integer oj=0 outn=0
+typeset -a outs notes
+typeset -A orow ojob owhat ofld odo orest ot0 osaid
+# When the last key came: a box asks nothing under your typing (asked).
+float keyt=0
+ospun=
+# out_new <label>: a command out for the row the cursor is on, its number in
+# REPLY. 1 when that key's is still out for that row.
+out_new() {
+  local n
+  for n in $outs; do
+    [[ $orow[$n] == $id[cur] && $owhat[$n] == $1 ]] && { flash="still at it: $1"; return 1; }
+  done
+  (( n = ++outn )); outs+=($n)
+  fields
+  orow[$n]=$id[cur] owhat[$n]=$1 ofld[$n]=${(pj:\0:)reply} ot0[$n]=$EPOCHREALTIME odo[$n]= orest[$n]= osaid[$n]=
+  ojob[$id[cur]]=$n
+  mkdir -p $st/out/$n
+  REPLY=$n
+}
+# ask <label> <command...>: a row key's command, which hands back actions:
+# some ask GitLab first (merge checks the MR is ready).
+ask() {
+  out_new "$1" || return
+  local d=$st/out/$REPLY
+  { "${@:2}" > $d/ask.new 2>/dev/null; mv -f $d/ask.new $d/ask } >/dev/null &!
+}
+# behind <label> <command line>: one that only asks and then works, straight
+# from its key (p, d).
+behind() {
+  out_new "$1" || return
+  oj=$REPLY; work "$2"
+}
+# work <command line>: the next command of that one (oj), behind the
+# board: no terminal, what it prints kept (log), how it ended left when it
+# has (rc).
+work() {
+  local d=$st/out/$oj
+  behindable "$1" && odo[$oj]=$REPLY || odo[$oj]=$owhat[$oj]
+  { OTIS_ASK=$d OTIS_FRAME= OTIS_LOADER= sh -c "$1" </dev/null >>$d/log 2>&1; print -r -- $? > $d/rc.new; mv -f $d/rc.new $d/rc } >/dev/null &!
+}
+# follow <n> <actions>: what its command handed back, or what was still to
+# come after one that worked behind the board, carried out for the row it
+# was asked about. With none of it out any more, it is over.
+follow() {
+  oj=$1 fld=("${(@ps:\0:)ofld[$1]}") odo[$1]= orest[$1]=
+  run "$2"
+  [[ -n $odo[$1] ]] || drop $1
+}
+drop() {
+  local n r=$orow[$1]
+  outs=(${outs:#$1})
+  rm -rf -- $st/out/$1
+  unset "orow[$1]" "owhat[$1]" "ofld[$1]" "odo[$1]" "orest[$1]" "ot0[$1]" "osaid[$1]"
+  # Its row is another's still out for it, if one is.
+  ojob[$r]=
+  for n in $outs; do [[ $orow[$n] == $r ]] && ojob[$r]=$n; done
+}
+# said <n>: what it would have said in a box (otis-popup say), onto the lines
+# under the top one: in a line, with the change it is about.
+said() {
+  local f t ref
+  local -a fl=("${(@ps:\0:)ofld[$1]}") ls
+  for f in $st/out/$1/said.<->(N); do
+    ls=()
+    for t in "${(@f)$(<$f)}"; do plain "$t"; t=${${REPLY##[[:space:]]#}%%[[:space:]]#}; [[ -n $t ]] && ls+=("$t"); done
+    rm -f -- $f
+    t=${(j: · :)ls}
+    [[ -n $t ]] || continue
+    ref=${fl[2]:+!$fl[2]}; ref=${ref:-$fl[5]}
+    [[ -z $ref || $t == *$ref* ]] || t="$ref $t"
+    (( ${notes[(Ie)$t]} )) || notes+=("$t")
+  done
+}
+# outs_in: the commands out that have come back, each taken up. 0 when any
+# has, or has said something.
+outs_in() {
+  local n d f
+  integer any=1 was=$#notes
+  for n in $outs; do
+    d=$st/out/$n
+    if [[ -e $d/ask ]]; then
+      any=0; f=$(<$d/ask); rm -f $d/ask
+      follow $n "$f"
+    elif [[ -e $d/rc ]]; then
+      any=0; rm -f $d/rc $d/busy
+      said $n
+      # What it did may have changed the rows, here and on the forge's side,
+      # which is asked again (again, in landed); and what it removed, the
+      # branches and the worktrees.
+      refresh; again=1
+      [[ $odo[$n] == removing ]] && relist --refresh
+      follow $n "$orest[$n]"
+    else said $n
+    fi
+  done
+  (( $#notes != was )) && any=0
+  return $any
+}
+# asked: one of them has a question, and you are there to be asked it: on its
+# row, or its row has left the board, and no key in the last 0.4s, so its box
+# never comes up under a key meant for the board. 0 when it was asked.
+asked() {
+  local n i
+  (( $#outs )) && (( EPOCHREALTIME - keyt >= 0.4 )) || return 1
+  for n in $outs; do
+    [[ -e $st/out/$n/q ]] || continue
+    if [[ $id[cur] != $orow[$n] ]]; then
+      i=${id[(ie)$orow[$n]]}
+      (( i <= $#id )) && vis $i && continue
+    fi
+    serve $n; return 0
+  done
+  return 1
+}
+# serve <n>: its question, in a box over the board (otis-popup, the frame
+# held under it as run_tty does), and the answer left for it: how the box
+# ended, and under that anything typed into it. The box takes no key typed
+# before it was up, nor for a moment after (OTIS_GRACE).
+serve() {
+  local d=$st/out/$1 mode msg text a rc
+  mode=$(<$d/q) msg=$(<$d/q.msg) text=$(<$d/q.text)
+  rm -f $d/q
+  while zselect -t 0 -r $tty; do readkey; done
+  screen_hold $st/frame
+  trap '' INT
+  a=$(OTIS_ASK= OTIS_GRACE=1 OTIS_FRAME=$st/frame otis-popup $mode "$msg" "$text" 2>/dev/null); rc=$?
+  trap 'quit 1' INT
+  rm -f -- $st/frame
+  screen_on over
+  print -r -- $rc > $d/a.new; [[ -n $a ]] && print -r -- "$a" >> $d/a.new
+  mv -f $d/a.new $d/a
+  keyt=$EPOCHREALTIME
+}
+# doing <row> <its move>: what a command out for the row is at, in REPLY: its
+# own word for the work (merging), and until it has got that far the row's
+# move; and in dglyph the spinner's frame now. Once it has asked and is
+# waiting for you to be there, "answer" and a ?. 1 with none out, or none
+# for long enough (0.15s) to say so rather than blink.
+dglyph=
+doing() {
+  local n=$ojob[$id[$1]]
+  [[ -n $n ]] || return 1
+  [[ -e $st/out/$n/q ]] && { REPLY=answer dglyph="?"; return 0; }
+  (( EPOCHREALTIME - ot0[$n] >= 0.15 )) || return 1
+  spin_frame; dglyph=$REPLY REPLY=${odo[$n]:-$2}
+}
+# busy_says: what each long one last printed (the log otis-popup busy named
+# for it), and for how long it has been at it; once a second. 0 when one of
+# them has something new to say.
+busy_says() {
+  local n l line took
+  integer secs new=1
+  for n in $outs; do
+    [[ -s $st/out/$n/busy ]] || continue
+    line=
+    for l in ${(Oa)${(f)"$(tail -c 2048 -- "$(<$st/out/$n/busy)" 2>/dev/null)"}}; do
+      l=${l%%$'\r'#}; plain "${l##*$'\r'}"; l=${REPLY//[[:cntrl:]]/ }
+      l=${${l##[[:space:]]#}%%[[:space:]]#}
+      [[ -n $l ]] && { line=$l; break; }
+    done
+    (( secs = EPOCHREALTIME - ot0[$n] ))
+    took=${secs}s; (( secs >= 60 )) && took="$(( secs / 60 ))m ${(l:2::0:)$(( secs % 60 ))}s"
+    line="$took${line:+  $line}"
+    [[ $line != $osaid[$n] ]] && { osaid[$n]=$line; new=0; }
+  done
+  return $new
+}
+
 # --- keys ------------------------------------------------------------------
-# run <fzf actions>: what a row key handed back, for the row in fld. execute
-# takes the screen, execute-silent runs out of sight, and both mean the rows
-# may have changed; a footer note is already in $st/note; the rest (reload,
-# refresh-preview, rebind) are this loop's to do anyway.
+# run <fzf actions>: what a row key handed back, for the row in fld and the
+# command out they came from (oj). execute takes the screen, unless its command only
+# asks and then works (BEHIND); that one, and execute-silent, goes on behind
+# the board, and the actions after it wait until it is back (orest). All mean
+# the rows may have changed. A footer note is already in $st/note; the rest
+# (reload, refresh-preview, rebind) are this loop's to do anyway.
 typeset -a fld
 run() {
   local s=$1 name arg i c q depth
@@ -1072,40 +1328,27 @@ run() {
     while [[ $arg == (#b)(*)\{([0-9]##)\}(*) ]]; do done_=${(qq)fld[$match[2]]}$match[3]$done_ arg=$match[1]; done
     arg=$arg$done_
     case $name in
-      # What it did may have changed the forge's side too: the rows at
-      # once from what is here, then the forge asked (again, in landed).
-      execute) run_tty "$arg" sh; refresh; again=1 ;;
-      execute-silent) sh -c "$arg" </dev/null >/dev/null 2>&1; refresh; again=1 ;;
+      execute|execute-silent)
+        if [[ $name == execute ]] && ! behindable "$arg"; then
+          # A screen of its own. What it did may have changed the forge's
+          # side too: the rows at once from what is here, then the forge
+          # asked (again, in landed).
+          bykey=$owhat[$oj]; run_tty "$arg" sh; bykey=; refresh; again=1
+        else orest[$oj]=$s; work "$arg"; return; fi ;;
     esac
   done
 }
-# ask <label> <command...>: a row key's command, in the background, since
-# some ask GitLab first (merge checks the MR is ready): the footer spins with
-# the label, the keys keep working, and what it hands back is run when it
-# lands, for the row it was asked about, a command it opens spinning with
-# the label until it is up. One at a time; a key meanwhile says so.
-apid= afld=
-float at0=0
-ask() {
-  if [[ -n $apid ]]; then flash="still on the last one…"; return; fi
-  fields; afld=("${reply[@]}")
-  { "${@:2}" > $st/ask.new 2>/dev/null; mv -f $st/ask.new $st/ask } >/dev/null &!
-  apid=$! flash=$1… at0=$EPOCHREALTIME
-}
-answered() {
-  [[ -n $apid ]] && ! kill -0 $apid 2>/dev/null || return 1
-  apid=
-  fld=("${afld[@]}")
-  [[ -s $st/ask ]] && run "$(<$st/ask)"
-  flash=
-  rm -f $st/ask
-  return 0
-}
-# working: a key's answer, or the refresh u asked for, has been out long
-# enough (0.15s) for the footer to spin, rather than blink on every key; in
-# REPLY the spinner's frame now, ten a second.
+# working: a key pressed before the rows were in, or the refresh u asked
+# for, has been out long enough (0.15s) for the footer to spin, rather than
+# blink on every key; in REPLY the spinner's frame now, ten a second. A
+# command out spins on its row instead (doing).
+# uask: u has asked the forge, 1 until it is seen being asked and 2 from
+# then until it has answered (as_of's fetching), which is when the footer
+# stops saying so; ut when u was pressed, for a forge that is never asked.
+float at0=0 ut=0
+integer uask=0
 working() {
-  { [[ -n $apid ]] || (( $#pend )) || [[ -n $lpid && $flash == "refreshing from $forge…" ]]; } && (( EPOCHREALTIME - at0 >= 0.15 )) || return 1
+  { (( $#pend )) || { (( uask )) && [[ $flash == "refreshing from $forge…" ]] }; } && (( EPOCHREALTIME - at0 >= 0.15 )) || return 1
   spin_frame
 }
 # The light, as otis-do takes it: kind, verb, extra, then gmr's fields.
@@ -1123,6 +1366,9 @@ rask() { keys_used $1 "$KL[$1]"; ask "$KL[$1]" "${@:2}"; }
 # execute did; the rows and the branches may have changed after it, here and
 # on the forge, which is asked again.
 rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh; again=1; relist --refresh; }
+# rbehind <key> <command line>: one that only asks and then works, behind
+# the board.
+rbehind() { keys_used $1 "$KL[$1]"; behind "$KL[$1]" "$2"; }
 # rowkey <key>: a key that acts on the change the row is, an open MR or a
 # branch (what that key does in gb, by the same scripts). Where you are
 # (the here row) is the branch you are on, and takes what gb's row for it
@@ -1131,7 +1377,15 @@ rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh
 # whatever the move is: s its branch, V its verification, J its pipeline's
 # jobs, o the merge request, m merging it.
 rowkey() {
-  (( $#id && ! early )) || return 1
+  (( $#id )) || return 1
+  # The rows are still the last screen's (early): a change's key waits for
+  # the ones being made, as enter does, and is pressed then, on the row the
+  # cursor is on. It was refused before, as a key the row had nothing for.
+  if (( early )); then
+    [[ $1 == (P|V|C|c|p|n|W|s|o|J|m|b|A|R|X|L|a|r|N|D) ]] || return 1
+    pend=(handle $1); flash="$KL[$1]…" at0=$EPOCHREALTIME
+    return 0
+  fi
   local i=$iid[cur] br=$source[cur] kind=$mrkind[cur] mr= own= asb=
   # An open MR (mr), yours (own); a branch, with no MR or the one you are
   # on (asb); or one that shipped.
@@ -1140,17 +1394,20 @@ rowkey() {
   [[ -z $mr && -n $br ]] && [[ $type[cur] == (change|here) ]] && asb=1
   [[ $type[cur] == change || $kind == merged || -n $asb ]] || return 1
   case $1 in
-    P) if [[ -n $mr ]]; then rask P git-walk --check $kind $i
-       elif [[ -n $asb ]]; then rtty P "git-walk --branch ${(q)br}"
+    # What either has to find out before it has anything to open or to ask
+    # (whether the tests can be traced, whether a run is there already) is
+    # found out behind the board.
+    P) if [[ -n $mr ]]; then rask P git-walk --check $kind $i "$head[cur]" "$base[cur]"
+       elif [[ -n $asb ]]; then rask P git-walk --check-branch "$br"
        else return 1; fi ;;
-    V) if [[ -n $mr ]]; then rask V git-verify --check $kind $i $br
-       elif [[ -n $asb ]]; then rtty V "git-verify --branch ${(q)br} ${(q)i}"
+    V) if [[ -n $mr ]]; then rask V git-verify --ask $kind "$i" "$br"
+       elif [[ -n $asb ]]; then rask V git-verify --ask "$kind" "$i" "$br" 1
        else return 1; fi ;;
     C) if [[ -n $mr ]]; then rask C git-mr-do claude $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]"
        elif [[ -n $asb ]]; then rtty C "git-branch-fix ${(q)br} ${(q)i}"
        else return 1; fi ;;
     c) [[ -n $br ]] && [[ $type[cur] == (change|here) ]] || return 1; rtty c "git-branch-log ${(q)br}" ;;
-    p) [[ -n $br && $kind != review ]] && [[ $type[cur] == (change|here) ]] || return 1; rtty p "git-branch-push ${(q)br}" ;;
+    p) [[ -n $br && $kind != review ]] && [[ $type[cur] == (change|here) ]] || return 1; rbehind p "git-branch-push ${(q)br}" ;;
     n) [[ -n $asb ]] && [[ -z $i || $type[cur] == here ]] || return 1; rask n git-mr-new --check $br "$i" ;;
     W) [[ $type[cur] == change && -n $br ]] || return 1; keys_used W "$KL[W]"; leave gotow "$br" ;;
     s) [[ $type[cur] == change && -n $br ]] || return 1
@@ -1241,7 +1498,7 @@ remove() {
     cell $i 1
     case $type[i]:$cv[k] in
       # One of Claude's runs that is over: forgotten, after asking.
-      notice:run) [[ $fold[i] == runs ]] && { keys_used d "forget a finished run"; run_tty "git-agent-list --forget ${(q)ce[k]}" sh; refresh; return; } ;;
+      notice:run) [[ $fold[i] == runs ]] && { keys_used d "forget a finished run"; behind "forget it" "git-agent-list --forget ${(q)ce[k]}"; return; } ;;
       place:delwt) wts+=("$ce[k]") ;;
       place:cd) [[ $type[cur] != group || $verb[i] == clean ]] && wts+=("$ce[k]") ;;
       change:delbranch) brs+=("$ce[k]") ;;
@@ -1249,9 +1506,8 @@ remove() {
   done
   (( $#wts + $#brs )) || { flash="nothing there can go as it is: what is left has uncommitted work"; return; }
   keys_used d "remove what can go"
-  (( $#brs )) && run_tty "git-branch-delete ${(j: :)${(@q)brs}}" sh
-  (( $#wts )) && run_tty "cd ${(q)wmain} && git-worktree-remove ${(j: :)${(@q)wts}}" sh
-  relist --refresh
+  (( $#brs )) && behind "remove the branches" "git-branch-delete ${(j: :)${(@q)brs}}"
+  (( $#wts )) && behind "remove the worktrees" "cd ${(q)wmain} && git-worktree-remove ${(j: :)${(@q)wts}}"
 }
 # removable: the cursor is on something d removes rather than on deploys.
 removable() { (( $#id )) && [[ $type[cur] == place || $fold[cur] == (cleanup|runs) || ( $type[cur] == group && $lane[cur] == (places|cleanup) ) ]]; }
@@ -1289,8 +1545,10 @@ handle() {
     (( foldto == 0 )) && unset "open[$foldg]"
     foldg=
   fi
-  [[ -n $apid ]] || flash=
-  rm -f $st/note
+  flash=
+  # A note is up for a second at least: one a command behind the board left
+  # as it ended lands under your typing, and went with the next key.
+  [[ -n $notet ]] && (( EPOCHREALTIME - notet < 1 )) || { rm -f $st/note; notet=; }
   sel=0
   # The second key of a g name, within 1.5s of the g; any other key is
   # itself, as if no g had come before it.
@@ -1328,6 +1586,8 @@ handle() {
     # ctrl-c is a key here (-isig), since a signal's trap would never run.
     # With ? up, q and esc close it rather than the dashboard.
     q|$e) (( help )) && { help=0 poff=0; return; } ;|
+    # And esc what a command behind the board had to say, once it is read.
+    $e) (( $#notes )) && { notes=(); return; } ;|
     q|$e|$'\x03') quit ;;
     $'\n'|$'\r') keys_used enter "$KL[enter]"
        (( $#id )) || return
@@ -1342,8 +1602,8 @@ handle() {
        case $type[cur]:$cv[k] in
          group:*) toggle $lane[cur] ;;
          *:goto|*:cd) (( early )) || leave $cv[k] "$ce[k]" ;;
-         *:delbranch) run_tty "git-branch-delete ${(q)ce[k]}" sh; relist --refresh ;;
-         *:delwt) run_tty "cd ${(q)wmain} && git-worktree-remove ${(q)ce[k]}" sh; relist --refresh ;;
+         *:delbranch) behind "remove it" "git-branch-delete ${(q)ce[k]}" ;;
+         *:delwt) behind "remove it" "cd ${(q)wmain} && git-worktree-remove ${(q)ce[k]}" ;;
          *:deployjobs) run_tty "git-ci-jobs ${(q)pipeline[cur]} ''" sh; refresh ;;
          *:reviewers) (( early )) || ask "$KL[a]" git-mr-do reviewers "$iid[cur]" 'execute-silent(:)' ;;
          *:rebase) (( early )) || ask "$KL[b]" git-mr-rebase --check "$mrkind[cur]" "$iid[cur]" ;;
@@ -1365,7 +1625,7 @@ handle() {
     # logs in first, in the terminal, as the line under the top one says.
     u) keys_used u "$KL[u]"
        (( stale_login )) && { bykey="log in to $forge"; run_tty "git-forge login" sh; bykey=; }
-       refresh --refresh; relist --refresh; flash="refreshing from $forge…" at0=$EPOCHREALTIME ;;
+       refresh --refresh; relist --refresh; flash="refreshing from $forge…" at0=$EPOCHREALTIME ut=$EPOCHREALTIME uask=1 ;;
     # Your editor's own fuzzy finder, on the checkout you are in (otis-find).
     F) keys_used F "$KL[F]"; bykey=$KL[F]; run_tty "otis-find" sh; bykey=; refresh ;;
     '?') keys_used '?' "${KL[?]}"; help=$(( !help )) poff=0 ;;
@@ -1399,6 +1659,16 @@ draw
 # tick every 50ms takes in whatever landed: rows, previews, a key's answer.
 integer tmo=5 stick=0
 wspun= lastasof=
+# lap <step>: the upkeep's slowest step so far and how long it took, for the
+# trace: which of them a slow tick was waiting on.
+float lapt=0
+integer slowms=0
+slow=
+lap() {
+  integer ms=$(( (EPOCHREALTIME - lapt) * 1000 ))
+  (( ms > slowms )) && slow=$1 slowms=$ms
+  lapt=$EPOCHREALTIME
+}
 while :; do
   reply=()
   # A fold on its way is a frame every 30ms; else a tick every 50.
@@ -1408,13 +1678,16 @@ while :; do
     resize
   fi
   if (( ${reply[(I)$tty]} )); then
-    kt=$EPOCHREALTIME nk=1
+    kt=$EPOCHREALTIME nk=1 keyt=$EPOCHREALTIME
     readkey; lastkey=$REPLY; handle $REPLY
     while zselect -t 0 -r $tty; do readkey; lastkey=$REPLY; handle $REPLY; (( nk++ )); done
     draw
+    # A key that took long, whatever it was waiting on.
+    (( EPOCHREALTIME - keyt > 0.05 )) && print -ru $tfd -- "$EPOCHREALTIME key ${(q)lastkey} $(( int((EPOCHREALTIME - keyt) * 1000) ))ms"
   else
     float ti=$EPOCHREALTIME
-    changed=0
+    changed=0 slow= slowms=0
+    (( lapt = ti ))
     # Once a second: whatever opened this is still there (else it goes,
     # rather than read keys under a shell's prompt); without perl, the size;
     # and when the forge last answered and whether it is being asked now,
@@ -1425,9 +1698,22 @@ while :; do
       [[ -z $winch ]] && resize
       as_of
       [[ "$REPLY $fetching $old" == $lastasof ]] || { lastasof="$REPLY $fetching $old"; changed=1; }
+      busy_says && changed=1
     fi
+    # u's refresh is over when the forge has answered, not when the rows
+    # were made again from what was here: until then the footer says so.
+    if (( uask )); then
+      as_of
+      (( fetching )) && uask=2
+      if (( uask == 2 && ! fetching )) || (( uask == 1 && EPOCHREALTIME - ut > 3 )); then
+        uask=0 changed=1
+        [[ $flash == "refreshing from $forge…" ]] && flash=
+      fi
+    fi
+    lap second
     folding && changed=1
     landed && changed=1
+    lap landed
     # Something moved on this machine (a run finished or started, a commit,
     # a switch): the rows again now, or once the ones being made have landed.
     if moved; then
@@ -1436,19 +1722,28 @@ while :; do
     # A fetch landed behind the board (the file otis-list names for
     # git-cached-json to write): the rows again, from what it brought.
     if [[ -e $st/fetched ]] && ! { [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null }; then rm -f $st/fetched; refresh; fi
+    lap moved
     listed
     (( EPOCHSECONDS - btick >= 60 )) && relist
-    answered && changed=1
+    lap listed
+    outs_in && changed=1
+    (( help )) || { asked && changed=1; }
+    lap outs
+    # A row with a command out spins, ten frames a second.
+    if (( $#outs )); then spin_frame; [[ $REPLY != $ospun ]] && { ospun=$REPLY; changed=1; }; fi
     working && [[ $REPLY != $wspun ]] && { wspun=$REPLY; changed=1; }
     # What the row says in full has landed.
     (( pw > 0 && ! help )) && { shown $pw; [[ $REPLY != $lastpv ]] && changed=1; }
     (( EPOCHSECONDS - ltick >= 10 )) && { refresh; changed=1; }
+    lap refresh
     (( changed )) && draw
+    lap draw
     # The size has held since the last resize: the previews at it.
     (( settle && EPOCHREALTIME >= settle )) && { settle=0; warm; }
     # The row you have stopped on, drawn if it is not kept yet; not while a
     # resize is still settling.
     (( ! help && ! settle )) && want $pw
-    (( EPOCHREALTIME - ti > 0.02 )) && print -r -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed" >> $trace
+    lap want
+    (( EPOCHREALTIME - ti > 0.02 )) && print -ru $tfd -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed slowest=$slow:$slowms"
   fi
 done

@@ -42,7 +42,12 @@
 # Nothing here fetches anything gmr does not: the same three caches under the
 # same names (git-cached-json, share/mr-query.sh), so opening one warms the
 # other, and the JSON lands in the picker's state where the MR previews expect
-# it (git-mr-preview). --refresh (u) refetches now.
+# it (git-mr-preview). --refresh (u) asks the forge again now, and does not
+# wait for it: the rows are printed at once from what the caches hold, each
+# cache is fetched behind them, and each that lands says so (told), for the
+# rows to be made again from what it brought. So what GitLab is slow to say
+# (your MRs with their pipelines, four seconds) never holds up what is on
+# this machine, nor what it was quicker to say.
 st=$GIT_FZF_STATE
 [ -n "$st" ] || { st=$(mktemp -d) || exit 1; trap 'rm -rf "$st"' EXIT; }
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -56,8 +61,8 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # when a fetch lands behind it (told, git-cached-json's OTIS_FETCHED), and
 # its caches are kept fresh without u: the merge requests a minute apart,
 # what merged and the deploys two, while it is open.
-age=60 merged_age=120 now=
-[ "$1" = --refresh ] && age=0 merged_age=0 now=--now
+age=60 merged_age=120
+[ "$1" = --refresh ] && age=0 merged_age=0
 reload="execute-silent(git-fzf-bg --then refresh-preview otis-list)"
 . "$share/repo.sh" || exit 1
 common=$OTIS_GITDIR
@@ -144,7 +149,7 @@ EOF
 # picker's state. A lookup that fails leaves the last one that worked, and
 # git-fzf-stale has already told the footer.
 fetch() {
-  json=$(OTIS_FETCHED=$told git-cached-json $now "$1" "$2" "$reload" -- git-forge mrs "$4" 2>/dev/null) &&
+  json=$(OTIS_FETCHED=$told git-cached-json --no-wait "$1" "$2" "$reload" -- git-forge mrs "$4" 2>/dev/null) &&
     cp "$json" "$st/$3"
 }
 
@@ -162,7 +167,7 @@ if otis-config gitlab >/dev/null 2>&1 || [ "$(otis-config forge)" = github ]; th
   # Your pushes to main, where a forge has no MR for them (git-forge
   # main-builds): their checks, as a pipeline of yours.
   if git-forge can main-builds; then
-    { mb=$(OTIS_FETCHED=$told git-cached-json $now main-builds $age "$reload" -- git-forge main-builds 2>/dev/null) &&
+    { mb=$(OTIS_FETCHED=$told git-cached-json --no-wait main-builds $age "$reload" -- git-forge main-builds 2>/dev/null) &&
         cp "$mb" "$st/main.json"; } &
   fi
   if git-forge can deploys; then

@@ -8,6 +8,7 @@ iid=$1 head=$2 base=$3
 git-confirm "approve !$iid at $(printf '%.8s' "$head")?" || exit 0
 if out=$(git-forge approve "$iid" "$head" 2>&1); then
   git-mr-since record "$iid" "$head" "$base"
+  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "approved !$iid" > "$GIT_FZF_STATE/note"
   exit 0
 fi
 otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"

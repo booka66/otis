@@ -926,6 +926,7 @@ sync_list() { take $1; }
 # pressed.
 integer pwant=-1 pgen=0
 typeset -A held
+lastn=
 act() {
   (( early )) && { pend=(act $1); flash="…"; return }
   busy && { (( ${uq[(Ie)$1]} )) || uq+=($1); return }
@@ -1001,7 +1002,8 @@ used() { keys_used $1 "${hv[${hk[(ie)$1]}]}"; }
 handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
   local k=$1
-  kname "$k"; local n=$REPLY
+  kname "$k"; local n=$REPLY was=$lastn
+  lastn=$n
   if (( searching )); then
     case $n in
       bspace) query=${query[1,-2]} qdirty=1; return ;;
@@ -1031,10 +1033,12 @@ handle() {
   flushq
   sel=0
   # A key that runs a command, held down, is one press: its repeats within
-  # 0.3s of the last are dropped. One that only moves or marks repeats.
+  # 0.3s of the last are dropped. One that only moves or marks repeats. A
+  # repeat is the same key again with no other between: v, j, v quickly is
+  # two rows marked, and the second v was dropped as if v were held.
   if [[ -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
     if [[ $bind[$n] == *[\(:]* ]]; then
-      if (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
+      if [[ $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
       used $n; act $n; held[$n]=$EPOCHREALTIME
     else
       [[ $n == (j|k|down|up|g|G|home|end|page-down|page-up|shift-down|shift-up) ]] || used $n
