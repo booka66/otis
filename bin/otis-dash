@@ -96,7 +96,7 @@ typeset -a KEYS=(
   A        mr     ''       'approve'
   L        mr     ''       'labels'
   m        mr     ''       'merge'
-  b        mr     ''       'rebase onto its target'
+  b        mr     ''       'rebase, with any stack it is in'
   R        mr     ''       'draft or ready'
   X        mr     ''       'close'
   r        mr     ''       'retry the failed jobs'

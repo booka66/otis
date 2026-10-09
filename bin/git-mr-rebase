@@ -1,9 +1,10 @@
 #!/bin/sh
 # git-mr-rebase --check <kind> <iid>   gmr's b, as fzf actions for a transform binding
 # git-mr-rebase <iid>                  confirm, then rebase the MR onto its target
+# git-mr-rebase --stack <iid>          confirm, then rebase the whole stack the MR is in
 #
-# GitLab does the rebase, on its side, onto the branch the MR targets: main,
-# or the branch below it in a stack. Nothing local is touched, so it works for
+# An MR alone GitLab rebases, on its side, onto the branch the MR targets
+# (a stack is below). Nothing local is touched, so it works for
 # a branch checked out nowhere, or in a worktree with uncommitted changes, and
 # a rebase that would conflict is refused with GitLab's reason rather than
 # left half done in a checkout. For that, gup in the branch's checkout.
@@ -17,15 +18,196 @@
 # (--force-if-includes) until git pull --rebase there picks it up.
 #
 # --check says in the footer when there is nothing to do: already on top of
-# its target, a rebase already running, or not an open MR. It also refuses an
-# MR that is part of a stack. Rebasing one layer on GitLab leaves the MRs above
-# it carrying the old copies of its commits, and glab stack keeps each layer's
-# sha in .git/stacked, so its next sync would push the old commits back over
-# the rebase. A stack moves as a whole: b on any layer of a glab stack rebases
-# all of it (git-stack --update), and gup with --update-refs moves a branch
-# stack.
+# its target, a rebase already running, or not an open MR.
+#
+# A stack moves as a whole, from b on any layer of it: an MR into another
+# open MR's branch, or with one into its own. Rebasing one layer on GitLab
+# would leave the layers above it carrying the old copies of its commits. A
+# glab stack goes through glab (git-stack --update), which keeps each layer's
+# sha in .git/stacked. Any other is rebased here (--stack), with no checkout
+# touched: each layer's own commits, those past the layer below as it was and
+# not the same change as one in it, are picked onto that layer as rebased (the
+# bottom onto origin/main), in memory (merge-tree, commit-tree), the way
+# rebase picks them. A commit already sitting where it goes is kept, one that
+# comes out empty is dropped, and one that conflicts stops it all with nothing
+# changed. Every layer is then pushed at once (--atomic), each leased on the
+# commit fetched, so GitLab gets all of it or none, and each local branch
+# moves to its layer's new commit as for one MR above.
+#
+# Local and GitLab end up the same. A layer starts from your local branch
+# where that is GitLab's plus commits of yours (they go up with it), and from
+# GitLab's where yours is behind or absent. A branch that has moved both here
+# and on GitLab, or a checkout with uncommitted changes in files the rebase
+# changes, is refused before anything is pushed. The push skips the pre-push
+# hook (--no-verify), as GitLab's own rebase does: a hook may take only one
+# checked-out branch a push (git-stack), and CI lints all of it.
 mr() { git-forge api "projects/:fullpath/merge_requests/$iid$1"; }
 pause() { otis-popup say "$1"; }
+main=$(otis-config main)
+
+# opened <source_branch|target_branch> <branch>: the open MRs from, or into,
+# that branch, a line each: iid, source, target, title.
+opened() {
+  got=$(git-forge api "projects/:fullpath/merge_requests?state=opened&$1=$(printf '%s' "$2" | jq -sRr @uri)") || return 1
+  printf '%s' "$got" | jq -r '.[] | "\(.iid) \(.source_branch) \(.target_branch) \(.title)"'
+}
+# layers <line>: the stack the MR on that line (as opened has it) is a layer
+# of, the same lines, each after the layer it is on. Down while the MR is on
+# another open MR's branch, then up from that bottom through every MR on one
+# of theirs. A line alone is an MR with no stack.
+layers() {
+  line=$1
+  while :; do
+    read -r _ _ t _ <<EOF
+$line
+EOF
+    [ "$t" != "$main" ] || break
+    below=$(opened source_branch "$t") || return 1
+    [ -n "$below" ] || break
+    line=$(printf '%s\n' "$below" | head -1)
+  done
+  printf '%s\n' "$line"
+  read -r _ s _ <<EOF
+$line
+EOF
+  above "$s"
+}
+above() {
+  got=$(opened target_branch "$1") || return 1
+  [ -n "$got" ] || return 0
+  printf '%s\n' "$got" | while read -r i s t title; do
+    echo "$i $s $t $title"
+    above "$s" || exit 1
+  done
+}
+# replay <onto> <old base> <tip> [<fork>]: the tip's own commits picked onto
+# <onto>, and the new tip. Its own: past the old base and the fork, less any
+# that are the same change as one there (rev-list --cherry-pick, as rebase
+# does). One that conflicts fails it, its sha and the files on stderr.
+replay() {
+  cur=$1
+  for c in $(git rev-list --reverse --no-merges --right-only --cherry-pick "$2...$3" ${4:+"^$4"}); do
+    if [ "$(git rev-parse "$c^")" = "$cur" ]; then cur=$c; continue; fi
+    tree=$(git merge-tree --write-tree --name-only --merge-base="$c^" "$cur" "$c") ||
+      { { echo "$c"; printf '%s\n' "$tree" | sed -n '2,/^$/p' | sed '/^$/d'; } >&2; return 1; }
+    [ "$tree" != "$(git rev-parse "$cur^{tree}")" ] || continue
+    cur=$(git cat-file commit "$c" | sed '1,/^$/d' |
+      GIT_AUTHOR_NAME=$(git log -1 --format=%an "$c") GIT_AUTHOR_EMAIL=$(git log -1 --format=%ae "$c") \
+      GIT_AUTHOR_DATE=$(git log -1 --format=%ad --date=raw "$c") git commit-tree "$tree" -p "$cur") || return 1
+  done
+  echo "$cur"
+}
+# follow <branch> <from> <to>: the local branch moved from the commit it was
+# at to the new one, checked out or not, or why not on stdout.
+follow() {
+  wt=$(git-worktree-path of "$1")
+  if [ -z "$wt" ]; then
+    git update-ref "refs/heads/$1" "$3" "$2" 2>/dev/null || echo "your local $1 moved meanwhile, so it was left alone"
+  elif [ "$(git -C "$wt" rev-parse HEAD)" != "$2" ]; then
+    echo "$1 in $wt moved meanwhile, so it was left alone"
+  elif ! git -C "$wt" reset --quiet --keep "$3" 2>/dev/null; then
+    echo "uncommitted changes in $wt are in files the rebase changed, so $1 there was left alone"
+  fi
+}
+
+if [ "$1" = --stack ]; then
+  iid=$2
+  json=$(mr) || { pause "could not load !$iid"; exit 1; }
+  stack=$(layers "$(printf '%s' "$json" | jq -r '"\(.iid) \(.source_branch) \(.target_branch) \(.title)"')") ||
+    { pause "could not load the MRs stacked with !$iid"; exit 1; }
+  tmp=$(mktemp -d) || exit 1
+  trap 'rm -rf "$tmp"' EXIT
+  printf '%s\n' "$stack" > "$tmp/stack"
+  base=$(head -1 "$tmp/stack" | cut -d' ' -f3)
+  refs="+refs/heads/$base:refs/remotes/origin/$base"
+  for b in $(cut -d' ' -f2 "$tmp/stack"); do refs="$refs +refs/heads/$b:refs/remotes/origin/$b"; done
+  printf 'fetching ...\n'
+  # shellcheck disable=SC2086
+  git fetch --quiet origin $refs || { pause "could not fetch the stack's branches"; exit 1; }
+  # Each layer, bottom first: where it starts, and where it goes. In files
+  # by iid: .remote, .local, .start, .new.
+  printf 'rebasing ...\n'
+  said= work=
+  while read -r i b t title; do
+    # Yours where it is GitLab's and more, or GitLab's rewritten here (a gup,
+    # a conflict fixed by hand): your branch was at GitLab's commit once, by
+    # its reflog, as gp's --force-if-includes asks.
+    r=$(git rev-parse "refs/remotes/origin/$b") l=$(git rev-parse -q --verify "refs/heads/$b") start=$r mine=
+    if [ -n "$l" ] && [ "$l" != "$r" ] && ! git merge-base --is-ancestor "$l" "$r"; then
+      if git merge-base --is-ancestor "$r" "$l"; then mine="with $(git rev-list --count "$r..$l") of yours not on GitLab yet"
+      elif git log -g --format=%H "refs/heads/$b" | grep -qx "$r"; then mine="as you rebased it here"
+      else pause "your $b and GitLab's each have commits the other does not; git pull --rebase in its checkout puts them together, then b. nothing was changed"; exit 1; fi
+      start=$l
+    fi
+    # On a layer, past where it was cut from that layer, by the tips GitLab's
+    # branch for it has had (fork-point): if that layer has been rebased since,
+    # its old commits are not this one's.
+    below=$(awk -v t="$t" '$2 == t { print $1 }' "$tmp/stack")
+    if [ -n "$below" ]; then
+      old=$(cat "$tmp/$below.start") onto=$(cat "$tmp/$below.new") on="!$below"
+      fork=$(git merge-base --fork-point "refs/remotes/origin/$t" "$start")
+    else old=refs/remotes/origin/$t onto=$(git rev-parse "refs/remotes/origin/$t") on=$t fork=; fi
+    new=$(replay "$onto" "$old" "$start" "$fork" 2> "$tmp/conflict") || {
+      c=$(head -1 "$tmp/conflict") n=$(($(wc -l < "$tmp/conflict") - 1))
+      files=$(sed '1d; s|.*/||' "$tmp/conflict" | head -3 | paste -sd, - | sed 's/,/, /g')
+      [ "$n" -le 3 ] || files="$files and $((n - 3)) more"
+      wt=$(git-worktree-path of "$b" | sed "s|^$HOME/|~/|")
+      if [ -n "$below" ]; then how="rebase it onto $on by hand in its checkout, then b"
+      else how="gup in ${wt:-a checkout of $b}, fix it there, then b again does the rest"; fi
+      pause "nothing was changed: !$i's commit $(git log -1 --format='%h "%s"' "$c") conflicts with $on$([ -n "$below" ] && echo " as rebased"), in $files. $how"
+      exit 1
+    }
+    echo "$r" > "$tmp/$i.remote"; echo "$l" > "$tmp/$i.local"; echo "$start" > "$tmp/$i.start"; echo "$new" > "$tmp/$i.new"
+    # A checkout of it has to be able to move with it.
+    if [ -n "$l" ] && [ "$l" != "$new" ] && wt=$(git-worktree-path of "$b") && [ -n "$wt" ]; then
+      [ "$(git -C "$wt" rev-parse HEAD)" = "$l" ] ||
+        { pause "$b in $wt is partway through something (its HEAD is not the branch); finish it there, then b. nothing was changed"; exit 1; }
+      git diff --name-only "$l" "$new" > "$tmp/moved"
+      hit=$(git -C "$wt" diff --name-only HEAD | grep -Fxf "$tmp/moved" | head -3 | paste -sd, - | sed 's/,/, /g')
+      [ -z "$hit" ] ||
+        { pause "uncommitted changes in $wt are in files the rebase changes ($hit); commit them, or gwip there, then b. nothing was changed"; exit 1; }
+    fi
+    n=$(git rev-list --count "$onto..$new")
+    s="!$i  $title
+  $n commit$([ "$n" = 1 ] || echo s) onto $on"
+    if [ "$new" = "$r" ]; then s="$s, already there"
+    else
+      work=1
+      [ -n "$below" ] || s="$s, $(git rev-list --count "$start..$onto") new there"
+      [ -z "$mine" ] || s="$s, $mine"
+    fi
+    said="$said$s
+"
+  done < "$tmp/stack"
+
+  if [ -n "$work" ]; then
+    git-confirm "${said}every layer is pushed at once, each with a new pipeline; your branches here follow
+
+rebase the stack?" || exit 0
+    leases= pushes=
+    while read -r i b _; do
+      r=$(cat "$tmp/$i.remote") new=$(cat "$tmp/$i.new")
+      [ "$new" = "$r" ] && continue
+      leases="$leases --force-with-lease=refs/heads/$b:$r" pushes="$pushes $new:refs/heads/$b"
+    done < "$tmp/stack"
+    printf 'pushing ...\n'
+    # shellcheck disable=SC2086
+    out=$(git push --quiet --atomic --no-verify $leases origin $pushes 2>&1) ||
+      { pause "GitLab took none of it, so nothing changed:
+$(printf '%s\n' "$out" | grep -v '^ *$' | tail -3)"; exit 1; }
+  fi
+  left=
+  while read -r i b _; do
+    l=$(cat "$tmp/$i.local") new=$(cat "$tmp/$i.new")
+    [ -n "$l" ] && [ "$l" != "$new" ] || continue
+    why=$(follow "$b" "$l" "$new")
+    [ -z "$why" ] || left="$left$why
+"
+  done < "$tmp/stack"
+  if [ -n "$left" ]; then pause "$([ -n "$work" ] && echo "rebased and pushed, but ")$left"
+  elif [ -z "$work" ]; then pause "$(cut -d' ' -f1 "$tmp/stack" | sed 's/^/!/' | paste -sd, - | sed 's/,/, /g') are already in place on $base"; fi
+  exit 0
+fi
 
 if [ "$1" = --check ]; then
   kind=$2 iid=$3
@@ -40,11 +222,9 @@ if [ "$1" = --check ]; then
   # A glab stack rebases as a whole, through glab (git-stack --update).
   stack=$(git-stack --of "$src") &&
     exec echo "execute(git-stack --update $stack)"
-  [ "$target" = "$(otis-config main)" ] ||
-    exec git-fzf-note "!$iid is stacked on $target; gup in the top branch's checkout rebases the stack"
-  above=$(git-forge api "projects/:fullpath/merge_requests?state=opened&target_branch=$(printf '%s' "$src" | jq -sRr @uri)" 2>/dev/null | jq -r 'map("!\(.iid)") | join(", ")')
-  [ -z "$above" ] ||
-    exec git-fzf-note "$above stack on !$iid, and would keep its old commits; gup in the top branch's checkout rebases the stack"
+  # Any other stack, here.
+  stack=$(layers "$iid $src $target") || exec git-fzf-note "could not reach GitLab for the MRs stacked with !$iid"
+  [ "$(printf '%s\n' "$stack" | grep -c .)" = 1 ] || exec echo "execute(git-mr-rebase --stack $iid)"
   behind=$(printf '%s' "$json" | jq -r '.diverged_commits_count // 0')
   [ "$behind" -gt 0 ] ||
     exec git-fzf-note "!$iid already has everything on $(printf '%s' "$json" | jq -r .target_branch)"
@@ -54,7 +234,7 @@ fi
 iid=$1
 [ -n "$iid" ] || exit 0
 json=$(mr "?include_diverged_commits_count=true") || { pause "could not load !$iid"; exit 1; }
-old=$(printf '%s' "$json" | jq -r .sha)
+old=$(printf '%s' "$json" | jq -r .sha) b=$(printf '%s' "$json" | jq -r .source_branch)
 git-confirm "$(printf '%s' "$json" | jq -r '
   "!\(.iid)  \(.title)",
   "  \(.source_branch) onto \(.target_branch), \(.diverged_commits_count) new commit\(if .diverged_commits_count == 1 then "" else "s" end) there",
@@ -65,28 +245,35 @@ out=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$iid/rebase" 2>&1)
   { pause "GitLab would not start the rebase
 $(printf '%s\n' "$out" | head -3)"; exit 1; }
 
-# The rebase runs in the background on GitLab; wait for it to say how it went.
+# The rebase runs in the background on GitLab; wait for it to say how it went,
+# and then for the branch there to have moved. Where it moved to is read from
+# the branch, not from the MR: GitLab says the rebase is over a moment before
+# the MR shows its new commit, and a local branch moved to the MR's commit in
+# that moment stays on the old one, with nothing said.
 printf 'rebasing ...'
 tries=0
 while :; do
   sleep 1
   tries=$((tries + 1))
   state=$(mr "?include_rebase_in_progress=true") || { printf '\n'; pause "could not ask GitLab how the rebase went"; exit 1; }
-  printf '%s' "$state" | jq -e '.rebase_in_progress' >/dev/null || break
+  if ! printf '%s' "$state" | jq -e '.rebase_in_progress' >/dev/null; then
+    err=$(printf '%s' "$state" | jq -r '.merge_error // empty')
+    [ -z "$err" ] || { printf '\n'; pause "the rebase failed: $err"; exit 1; }
+    git fetch --quiet origin "+refs/heads/$b:refs/remotes/origin/$b" ||
+      { printf '\n'; pause "rebased, but fetching it failed; git pull --rebase in $b picks it up"; exit 1; }
+    new=$(git rev-parse "refs/remotes/origin/$b")
+    [ "$new" = "$old" ] || break
+  fi
   [ $tries -lt 60 ] || { printf '\n'; pause "still rebasing after a minute; the board shows when it lands"; exit 0; }
   printf '.'
 done
 printf '\n'
-err=$(printf '%s' "$state" | jq -r '.merge_error // empty')
-[ -z "$err" ] || { pause "the rebase failed: $err"; exit 1; }
-b=$(printf '%s' "$state" | jq -r .source_branch) new=$(printf '%s' "$state" | jq -r .sha)
 local=$(git rev-parse -q --verify "refs/heads/$b") || exit 0
 [ "$local" != "$new" ] || exit 0
 if [ "$local" != "$old" ]; then
   pause "rebased. your local $b has commits the MR did not, so it was left alone; git pull --rebase there picks the rebase up"
   exit 0
 fi
-git fetch --quiet origin "+refs/heads/$b:refs/remotes/origin/$b" || { pause "rebased, but fetching it failed; git pull --rebase in $b picks it up"; exit 1; }
 wt=$(git-worktree-path of "$b")
 if [ -z "$wt" ]; then
   git update-ref "refs/heads/$b" "$new" "$old" || pause "rebased, but your local $b moved meanwhile, so it was left alone"

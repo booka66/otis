@@ -2192,6 +2192,130 @@ expect ci-merge/draft-refused "$(mcheck 7; cat "$tmp/mgstate/note")" "ignore
 expect ci-merge/conflict-refused "$(mcheck 8; cat "$tmp/mgstate/note")" "ignore
 !8 can't merge yet: it has conflicts; gup to rebase"
 
+# --- git-mr-rebase: b has GitLab rebase the MR, and the local branch follows
+# it to the rebased commit. GitLab is a stub: its rebase moves the branch on
+# origin, and its MR still shows the commit from before the rebase when it
+# says the rebase is over, as the real one does for a moment.
+here=$PWD rb=$tmp/rb
+mkdir -p "$rb/stub" && git init -q --bare "$rb/origin.git"
+git init -q "$rb/work" && cd "$rb/work" && git config user.email t@t && git config user.name t
+printf 'a\n' > f && git add f && git commit -qm base && git branch -qM main
+git checkout -qb feat && printf 'b\n' > g && git add g && git commit -qm change
+git remote add origin "$rb/origin.git" && git push -q origin main feat
+git clone -q "$rb/origin.git" "$rb/gitlab" 2>/dev/null && git -C "$rb/gitlab" config user.email g@g && git -C "$rb/gitlab" config user.name g
+cat > "$rb/stub/glab" <<'STUB'
+#!/bin/sh
+case "$*" in
+  *"-X PUT"*/rebase) (cd "$RB/gitlab" && git fetch -q origin && git checkout -q -B feat origin/feat && git rebase -q origin/main && git push -q --force origin feat) >/dev/null 2>&1; echo '{}' ;;
+  *) printf '{"iid":9,"title":"change","sha":"%s","source_branch":"feat","target_branch":"main","diverged_commits_count":1,"rebase_in_progress":false,"merge_error":null}\n' "$(cat "$RB/old")" ;;
+esac
+STUB
+printf '#!/bin/sh\nexit 0\n' > "$rb/stub/git-confirm"
+printf '#!/bin/sh\necho "$2" >> "$RB/said"\n' > "$rb/stub/otis-popup"
+chmod +x "$rb/stub/"*
+# rb_rebase: main gets a commit on origin, then b on the MR.
+rb_n=0
+rb_rebase() {
+  rb_n=$((rb_n + 1))
+  (cd "$rb/gitlab" && git fetch -q origin && git checkout -q -B main origin/main && echo $rb_n >> f && git commit -qam later && git push -q origin main) >/dev/null 2>&1
+  git --git-dir="$rb/origin.git" rev-parse feat > "$rb/old"
+  PATH=$rb/stub:$PATH RB=$rb git-mr-rebase 9 >/dev/null 2>&1
+}
+rb_origin() { git --git-dir="$rb/origin.git" rev-parse feat; }
+git checkout -q main
+rb_rebase
+expect mr-rebase/branch-follows-while-the-mr-lags "$(git rev-parse feat | grep -vx "$(cat "$rb/old")")" "$(rb_origin)"
+git checkout -q feat && printf 'wip\n' >> g
+rb_rebase
+expect mr-rebase/checkout-follows-keeping-changes "$(git rev-parse HEAD | grep -vx "$(cat "$rb/old")"; git status --short)" "$(rb_origin)
+ M g"
+git commit -qam mine && rb_mine=$(git rev-parse feat)
+rb_rebase
+expect mr-rebase/own-commits-left-alone "$(git rev-parse feat; grep -c 'left alone' "$rb/said")" "$rb_mine
+1"
+cd "$here"
+
+# --- git-mr-rebase on a stack: b on any layer rebases all of it here, the
+# bottom onto origin/main and each layer onto the one below as rebased, pushes
+# it all at once, and the local branches follow. GitLab is a stub answering
+# from a list of MRs; origin is a bare repo. !2 (high) was cut from !1 (low)
+# before low's last commit, as a stack is once its bottom moves on.
+here=$PWD rs=$tmp/rs
+mkdir -p "$rs/stub" && git init -q --bare "$rs/origin.git"
+printf '1 low main make it low\n2 high low make it high\n' > "$rs/mrs"
+cat > "$rs/stub/glab" <<'STUB'
+#!/bin/sh
+p=${2#projects/:fullpath/merge_requests}
+mr() { jq -R 'split(" ") | {iid: (.[0] | tonumber), source_branch: .[1], target_branch: .[2], title: (.[3:] | join(" "))}'; }
+case $p in
+  \?*) q=${p#*opened&}; f=${q%%=*} v=${q#*=}; [ "$f" = source_branch ] && c=2 || c=3
+    awk -v c=$c -v v="$v" '$c == v' "$RS/mrs" | mr | jq -s . ;;
+  /*) i=${p#/}; awk -v i="${i%%\?*}" '$1 == i' "$RS/mrs" | mr ;;
+esac
+STUB
+printf '#!/bin/sh\n[ -z "$RS_NO" ] && exit 0; echo "$1" > "$RS/asked"; exit 1\n' > "$rs/stub/git-confirm"
+printf '#!/bin/sh\necho "$2" >> "$RS/said"\n' > "$rs/stub/otis-popup"
+chmod +x "$rs/stub/"*
+git init -q "$rs/work" && cd "$rs/work" && git config user.email t@t && git config user.name t
+seq 1 9 > f && echo k > k && git add f k && git commit -qm base && git branch -qM main
+git checkout -qb low && echo l1 > l && git add l && git commit -qm l1
+git checkout -qb high && echo h1 > h && git add h && git commit -qm h1
+git checkout -q low && echo l2 >> l && git commit -qam l2
+git remote add origin "$rs/origin.git" && git push -q origin main low high
+git clone -q -b main "$rs/origin.git" "$rs/gitlab" 2>/dev/null && git -C "$rs/gitlab" config user.email g@g && git -C "$rs/gitlab" config user.name g
+(cd "$rs/gitlab" && sed -i.x 1s/1/one/ f && git commit -qam later && git push -q origin main) >/dev/null 2>&1
+git worktree add -q "$rs/wt" high && echo wip >> "$rs/wt/k" && rs_orig=$(git rev-parse high)
+rs() { PATH=$rs/stub:$PATH RS=$rs git-mr-rebase "$@" 2>&1; }
+rs_subjects() { git log --format=%s "$1" | paste -sd' ' -; }
+expect mr-rebase/stack-check-from-either-layer "$(rs --check mine 1; rs --check mine 2)" "execute(git-mr-rebase --stack 1)
+execute(git-mr-rebase --stack 2)"
+(RS_NO=1 rs --stack 2 >/dev/null)
+expect mr-rebase/stack-asks-first "$(cat "$rs/asked"; git --git-dir="$rs/origin.git" rev-parse high | grep -cx "$rs_orig")" "!1  make it low
+  2 commits onto main, 1 new there
+!2  make it high
+  1 commit onto !1
+every layer is pushed at once, each with a new pipeline; your branches here follow
+
+rebase the stack?
+1"
+rs --stack 2 >/dev/null
+expect mr-rebase/stack-rebased-on-origin "$(git --git-dir="$rs/origin.git" log --format=%s high | paste -sd' ' -)" "h1 l2 l1 later base"
+expect mr-rebase/stack-local-follows "$(git rev-parse low high | tr '\n' ' '; git -C "$rs/wt" status --short)" "$(git --git-dir="$rs/origin.git" rev-parse low high | tr '\n' ' ') M k"
+expect mr-rebase/stack-in-place "$(rs --stack 1 >/dev/null; tail -1 "$rs/said")" "!1, !2 are already in place on main"
+# Your own commit on high, not pushed yet, goes up with it.
+(cd "$rs/gitlab" && git pull -q && echo more >> f && git commit -qam later2 && git push -q origin main) >/dev/null 2>&1
+(cd "$rs/wt" && echo h2 >> h && git commit -qm h2 h)
+rs --stack 1 >/dev/null
+expect mr-rebase/stack-takes-your-commits "$(git --git-dir="$rs/origin.git" log --format=%s high | paste -sd' ' -)|$(git rev-parse high)" "h2 h1 l2 l1 later2 later base|$(git --git-dir="$rs/origin.git" rev-parse high)"
+# Moved both here and on GitLab: refused, nothing changed.
+(cd "$rs/gitlab" && git fetch -q && git checkout -q -B low origin/low && echo l3 >> l && git commit -qam l3 && git push -q origin low) >/dev/null 2>&1
+git checkout -q low && echo l4 >> l && git commit -qam l4 && git checkout -q main
+rs_before=$(git --git-dir="$rs/origin.git" rev-parse low high)
+rs --stack 2 >/dev/null
+expect mr-rebase/stack-diverged-refused "$(tail -1 "$rs/said" | grep -c 'each have commits'; git --git-dir="$rs/origin.git" rev-parse low high | grep -cxF "$rs_before")" "1
+2"
+# The bottom conflicting with main: refused, nothing changed, and gup there
+# is the way on. Fixed by hand (a rebase taking low's side), b takes your
+# rebased low over GitLab's, and high brings only its own commits along, not
+# the copies of low's it was cut from.
+git branch -qf low origin/low
+(cd "$rs/gitlab" && git checkout -q main && git pull -q && echo theirs > l && git add l && git commit -qm clash-l && git push -q origin main) >/dev/null 2>&1
+rs_before=$(git --git-dir="$rs/origin.git" rev-parse low high)
+rs --stack 2 >/dev/null
+expect mr-rebase/stack-bottom-conflict-refused "$(tail -1 "$rs/said" | grep -c "commit .* \"l1\" conflicts with main, in l. gup in a checkout of low, fix it there, then b again does the rest"; git --git-dir="$rs/origin.git" rev-parse low high | grep -cxF "$rs_before")" "1
+2"
+git checkout -q low && git rebase -q -X theirs origin/main >/dev/null 2>&1 && git checkout -q main
+rs --stack 2 >/dev/null
+expect mr-rebase/stack-after-a-fix-by-hand "$(git --git-dir="$rs/origin.git" log --format=%s high | paste -sd' ' -)|$(git rev-parse low high | grep -cxF "$(git --git-dir="$rs/origin.git" rev-parse low high)")" "h2 h1 l3 l2 l1 clash-l later2 later base|2"
+# A layer conflicting with the one below as rebased: refused, nothing changed.
+(cd "$rs/gitlab" && git pull -q && echo theirs > h && git add h && git commit -qm clash && git push -q origin main) >/dev/null 2>&1
+rs_before=$(git --git-dir="$rs/origin.git" rev-parse low high)
+rs --stack 1 >/dev/null
+expect mr-rebase/stack-conflict-refused "$(tail -1 "$rs/said" | grep -c "commit .* \"h1\" conflicts with !1 as rebased, in h. rebase it onto !1 by hand"; git --git-dir="$rs/origin.git" rev-parse low high | grep -cxF "$rs_before")" "1
+2"
+git worktree remove --force "$rs/wt"
+cd "$here"
+
 # --- git-forge: GitLab's calls pass to glab untouched; on GitHub the same
 # calls are answered from gh in GitLab's shapes. gh is a stub answering from
 # fixtures, and the repo is a local one set to GitHub, so nothing is fetched.
