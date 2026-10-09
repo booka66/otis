@@ -20,8 +20,10 @@ running() { [ ! -s "$1/status" ] && [ -r "$1/pid" ] && kill -0 "$(cat "$1/pid")"
 # say <text>: a line in $d's progress.
 say() { jq -nc --arg t "$*" '{type: "otis", text: $t, at: (now | floor)}' >> "$d/events.jsonl"; }
 oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
-# stopping: x in git-claude-view leaves $d/stopping; the run ends at its next look.
-stopping() { [ -e "$d/stopping" ] && finish stopped "stopped"; }
+# stopping: x in git-claude-view leaves $d/stopping; the run ends at its next
+# look. Its last word is what the file says, when what stopped it said why
+# (git-claude-view --halt); x leaves it empty.
+stopping() { [ -e "$d/stopping" ] && finish stopped "$(grep . "$d/stopping" 2>/dev/null || echo stopped)"; }
 # alert <title> <body> [state]: a desktop notification, through the terminal
 # tab the run was started from, or from the system when that tab is gone or
 # cannot send one (otis-notify). A failed state marks it ✗.

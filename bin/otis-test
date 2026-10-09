@@ -2478,6 +2478,60 @@ for _ in $(seq 1 40); do [ -s "$(git rev-parse --git-common-dir)/git-alias-cache
 expect forge/board-row "$(PATH=$ghp GIT_FZF_STATE=$gst otis-list > "$gst/rows"; PATH=$ghp GIT_FZF_STATE=$gst otis-board | awk -F'\t' '$18 == "mine" { print $9, $12 }')" "5 feat"
 cd "$here"
 
+# --- git-walk --settle: a walk goes on while its MR is still yours to decide.
+# Someone else's you approved, and any that merged, are stopped, saying why;
+# one you review and have not approved, one of yours others approved, and a
+# branch's walk go on. The board's lists say it for open MRs; GitLab, a
+# stub, is asked about the rest, once. Each walk is a run that ends as a
+# walk does when it sees it is stopping (share/claude-run.sh).
+here=$PWD ws=$tmp/settle
+mkdir -p "$ws/stub" && git init -q "$ws/repo" && cd "$ws/repo" && git remote add origin git@gitlab.com:t/t.git
+wr=$(git rev-parse --path-format=absolute --git-common-dir)/otis-walk
+cat > "$ws/stub/glab" <<'STUB'
+#!/bin/sh
+echo "$2" >> "$WS/asked"
+case $2 in
+  */merge_requests/14) echo '{"state":"merged","author":{"username":"ann"}}' ;;
+  */merge_requests/15) echo '{"state":"merged","author":{"username":"me"}}' ;;
+  */merge_requests/1[67]) echo '{"state":"opened","author":{"username":"ann"}}' ;;
+  */merge_requests/16/approvals) echo '{"approved_by":[{"user":{"username":"bob"}}]}' ;;
+  */merge_requests/17/approvals) echo '{"approved_by":[{"user":{"username":"me"}}]}' ;;
+esac
+STUB
+cat > "$ws/run" <<RUN
+#!/bin/sh
+d=\$1
+finish() { echo "\$1" > "\$d/status"; echo "\$2" > "\$d/said"; exit 0; }
+. "$share/claude-run.sh"
+while :; do stopping; sleep 0.1; done
+RUN
+chmod +x "$ws/stub/glab" "$ws/run"
+echo '{"data":{"currentUser":{"username":"me","reviewRequestedMergeRequests":{"nodes":[
+  {"iid":"11","author":{"username":"ann"},"approvedBy":{"nodes":[{"username":"me"}]}},
+  {"iid":"12","author":{"username":"ann"},"approvedBy":{"nodes":[{"username":"bob"}]}}]}}}}' > "$ws/review.json"
+echo '{"data":{"currentUser":{"username":"me","authoredMergeRequests":{"nodes":[{"iid":"13","approved":true}]}}}}' > "$ws/mine.json"
+for k in 11 12 13 14 15 16 17 b-x; do
+  mkdir -p "$wr/$k"
+  case $k in b-*) ;; *) echo "$k" > "$wr/$k/iid" ;; esac
+  "$ws/run" "$wr/$k" 2>/dev/null & echo $! > "$wr/$k/pid"
+done
+settle() { PATH=$ws/stub:$PATH WS=$ws git-walk --settle "$ws/review.json" "$ws/mine.json"; }
+settle
+for _ in $(seq 1 40); do [ -s "$wr/11/said" ] && [ -s "$wr/14/said" ] && [ -s "$wr/15/said" ] && [ -s "$wr/17/said" ] && break; sleep 0.1; done
+ended() { for k in "$@"; do printf '%s %s|' "$k" "$(cat "$wr/$k/said" 2>/dev/null || { kill -0 "$(cat "$wr/$k/pid")" && echo going; })"; done; }
+expect settle/approved-review-stopped "$(ended 11)" "11 stopped: you approved !11|"
+expect settle/merged-stopped "$(ended 14 15)" "14 stopped: !14 merged|15 stopped: !15 merged|"
+expect settle/still-to-decide-goes-on "$(ended 12 13 16 b-x)" "12 going|13 going|16 going|b-x going|"
+expect settle/unlisted-approved-stopped "$(ended 17)" "17 stopped: you approved !17|"
+settle
+expect settle/asks-once "$(grep -c 'merge_requests/16$' "$ws/asked")" "1"
+# x leaves no word of its own: the run says stopped.
+touch "$wr/12/stopping"
+for _ in $(seq 1 40); do [ -s "$wr/12/said" ] && break; sleep 0.1; done
+expect settle/x-says-stopped "$(ended 12)" "12 stopped|"
+for k in 11 12 13 14 15 16 17 b-x; do kill "$(cat "$wr/$k/pid")" 2>/dev/null; wait "$(cat "$wr/$k/pid")" 2>/dev/null; done
+cd "$here"
+
 # --- git-symbols-past: where the changed code broke before, from git alone.
 # A change, a fix to its lines five days on (laid at it), a fix that only
 # adds (laid at no one) and a fix of the types (not a fix of what it does).

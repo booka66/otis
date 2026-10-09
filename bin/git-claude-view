@@ -1,6 +1,8 @@
 #!/bin/sh
 # git-claude-view <dir>             a background Claude run's progress, full screen
 # git-claude-view --events [who]    claude's stream-json on stdin as the progress events
+# git-claude-view --halt <dir> <why>  x without the confirm, for a run something else has
+#                                     made pointless; <why> is its last word
 #
 # Shared by Claude's MR review (git-mr-claude), its fix runs (git-mr-fix), its
 # production watch (git-mr-watch) and verification (git-verify), whose Cursor
@@ -177,6 +179,13 @@ case $1 in
       touch "$d/stopping"
       stop_children "$(cat "$d/pid")"
     fi
+    exit 0 ;;
+  # --halt <dir> <why>: the same stop, unasked (git-walk --settle).
+  --halt)
+    d=$2
+    running "$d" || exit 0
+    printf '%s\n' "$3" > "$d/stopping"
+    stop_children "$(cat "$d/pid")"
     exit 0 ;;
   # --again <dir>: r, only once it is over.
   --again)

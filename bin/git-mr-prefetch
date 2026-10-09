@@ -43,11 +43,12 @@ wait
 # Their own tests, traced for P before you open them (git-walk --ahead), those
 # you review first, then yours: once a push, one at a time, never while a build
 # of yours runs, and only MRs opened since ahead tracing began here
-# (git-walk --ahead-since), not every one already open then.
+# (git-walk --ahead-since), not every one already open then. Not one you have
+# approved, whose walk git-walk --settle would stop.
 since=$(git-walk --ahead-since)
 new='def made: (.createdAt // "") | sub("\\.[0-9]+"; "") | (try fromdateiso8601 catch 0);'
 { jq -r --argjson since "${since:-0}" "$new"'.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
-    | select(.author.username != $u.username and made >= $since)
+    | select(.author.username != $u.username and made >= $since and (any(.approvedBy.nodes[]?; .username == $u.username) | not))
     | [.iid, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$json"
   jq -r --argjson since "${since:-0}" "$new"'.data.currentUser.authoredMergeRequests.nodes[]? | select(made >= $since)
     | [.iid, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // "")] | @tsv' "$mine" 2>/dev/null; } |

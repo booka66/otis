@@ -11,6 +11,8 @@
 # git-walk --check-branch <branch>        the same for --branch
 # git-walk --marks                        {iid or branch: {walking, status, head}} of every walk,
 #                                         for gmr's and gb's rows
+# git-walk --settle <review> <mine>       the MR walks there is no more point in, stopped: the
+#                                         board's lists (otis-list) say which
 # git-walk --run <key>                    the walk itself, in the background (what resume runs)
 # git-walk --view <key>                   the walk, on a screen of its own: its steps the list, the
 #                                         step the preview, its code under it
@@ -100,6 +102,48 @@ case $1 in
       n=$((n + 1))
     done
     printf '}\n'
+    exit 0 ;;
+  --settle)
+    # A walk is for reading a change before you decide on it, so one goes on
+    # only while there is still that to decide. Someone else's MR you have
+    # approved is decided, and any MR that has merged, yours or not, is past
+    # deciding: those walks are stopped as x stops one (git-claude-view
+    # --halt), saying why. Your own open MR goes on whoever has approved it,
+    # and a branch's walk has no MR to say so.
+    # The board's lists, which it has just drawn from (the review and mine
+    # JSON, share/mr-query.sh), say it for an open MR. One in neither may have
+    # merged, so the forge is asked, at most every two minutes a walk.
+    review=$2 mine=$3
+    for d in "$top"/*/; do
+      d=${d%/}
+      [ -s "$d/iid" ] && running "$d" || continue
+      iid=$(cat "$d/iid")
+      said=$(jq -nr --slurpfile r "$review" --slurpfile m "$mine" --arg iid "$iid" '
+        ($r[0].data.currentUser // {}) as $ru | ($m[0].data.currentUser // {}) as $mu |
+        ($ru.username // $mu.username // "") as $me |
+        [$ru.reviewRequestedMergeRequests.nodes[]? | select((.iid | tostring) == $iid)][0] as $rv |
+        if $rv and $rv.author.username != $me and any($rv.approvedBy.nodes[]?; .username == $me) then "stop\tyou approved !\($iid)"
+        elif $rv or any($mu.authoredMergeRequests.nodes[]?; (.iid | tostring) == $iid) then "open"
+        else "ask\t\($me)" end' 2>/dev/null)
+      why=
+      case $said in
+        stop*) why=${said#*	} ;;
+        ask*)
+          me=${said#*	}
+          [ -n "$(find "$d/settled" -mmin -2 2>/dev/null)" ] && continue
+          : > "$d/settled"
+          mr=$(git-forge api "projects/:fullpath/merge_requests/$iid" 2>/dev/null) || continue
+          case $(printf '%s' "$mr" | jq -r .state) in
+            merged) why="!$iid merged" ;;
+            opened)
+              [ -n "$me" ] && [ "$(printf '%s' "$mr" | jq -r .author.username)" != "$me" ] &&
+                git-forge api "projects/:fullpath/merge_requests/$iid/approvals" 2>/dev/null |
+                  jq -e --arg me "$me" 'any(.approved_by[]?; .user.username == $me)' >/dev/null &&
+                why="you approved !$iid" ;;
+          esac ;;
+      esac
+      [ -n "$why" ] && git-claude-view --halt "$d" "stopped: $why"
+    done
     exit 0 ;;
   --open)
     # enter on a line in P, as the symbol view's enter: in a checkout of
