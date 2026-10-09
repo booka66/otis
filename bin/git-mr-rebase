@@ -1,13 +1,13 @@
 #!/bin/sh
 # git-mr-rebase --check <kind> <iid>   gmr's b, as fzf actions for a transform binding
 # git-mr-rebase <iid>                  confirm, then rebase the MR onto its target
-# git-mr-rebase --stack <iid>          confirm, then rebase the whole stack the MR is in
+# git-mr-rebase --here <iid>           confirm, then rebase here the whole stack the MR is in,
+#                                      or the MR alone when it has conflicts, Claude settling them
 #
 # An MR alone GitLab rebases, on its side, onto the branch the MR targets
-# (a stack is below). Nothing local is touched, so it works for
-# a branch checked out nowhere, or in a worktree with uncommitted changes, and
-# a rebase that would conflict is refused with GitLab's reason rather than
-# left half done in a checkout. For that, gup in the branch's checkout.
+# (a stack, or one with conflicts, is below). Nothing local is touched, so it
+# works for a branch checked out nowhere, or in a worktree with uncommitted
+# changes.
 #
 # The branch on GitLab moves to new commits and a new pipeline starts. Your
 # local branch follows when that loses nothing: when it is exactly the commit
@@ -24,15 +24,21 @@
 # open MR's branch, or with one into its own. Rebasing one layer on GitLab
 # would leave the layers above it carrying the old copies of its commits. A
 # glab stack goes through glab (git-stack --update), which keeps each layer's
-# sha in .git/stacked. Any other is rebased here (--stack), with no checkout
+# sha in .git/stacked. Any other is rebased here (--here), with no checkout
 # touched: each layer's own commits, those past the layer below as it was and
 # not the same change as one in it, are picked onto that layer as rebased (the
 # bottom onto origin/main), in memory (merge-tree, commit-tree), the way
-# rebase picks them. A commit already sitting where it goes is kept, one that
-# comes out empty is dropped, and one that conflicts stops it all with nothing
-# changed. Every layer is then pushed at once (--atomic), each leased on the
-# commit fetched, so GitLab gets all of it or none, and each local branch
-# moves to its layer's new commit as for one MR above.
+# rebase picks them. A commit already sitting where it goes is kept, and one
+# that comes out empty is dropped. Every layer is then pushed at once
+# (--atomic), each leased on the commit fetched, so GitLab gets all of it or
+# none, and each local branch moves to its layer's new commit as for one MR
+# above. An MR alone with conflicts, which GitLab would refuse to rebase,
+# goes the same way, as a stack of one.
+#
+# A commit that conflicts is Claude's to settle (resolve), in a worktree of
+# its own, and the confirm says what it did before anything is pushed. One it
+# cannot settle, or with no Claude here, stops it all with nothing changed,
+# and says where to settle it by hand.
 #
 # Local and GitLab end up the same. A layer starts from your local branch
 # where that is GitLab's plus commits of yours (they go up with it), and from
@@ -44,6 +50,7 @@
 mr() { git-forge api "projects/:fullpath/merge_requests/$iid$1"; }
 pause() { otis-popup say "$1"; }
 main=$(otis-config main)
+common=$(git rev-parse --path-format=absolute --git-common-dir)
 
 # opened <source_branch|target_branch> <branch>: the open MRs from, or into,
 # that branch, a line each: iid, source, target, title.
@@ -80,22 +87,94 @@ above() {
     above "$s" || exit 1
   done
 }
-# replay <onto> <old base> <tip> [<fork>]: the tip's own commits picked onto
-# <onto>, and the new tip. Its own: past the old base and the fork, less any
-# that are the same change as one there (rev-list --cherry-pick, as rebase
-# does). One that conflicts fails it, its sha and the files on stderr.
+# replay <onto> <old base> <tip> <fork> <iid> <onto's name>: the tip's own
+# commits picked onto <onto>, and the new tip. Its own: past the old base and
+# the fork, less any that are the same change as one there (rev-list
+# --cherry-pick, as rebase does). One that conflicts Claude settles (resolve);
+# one it cannot fails it, its sha and the files on stderr.
 replay() {
   cur=$1
   for c in $(git rev-list --reverse --no-merges --right-only --cherry-pick "$2...$3" ${4:+"^$4"}); do
     if [ "$(git rev-parse "$c^")" = "$cur" ]; then cur=$c; continue; fi
-    tree=$(git merge-tree --write-tree --name-only --merge-base="$c^" "$cur" "$c") ||
-      { { echo "$c"; printf '%s\n' "$tree" | sed -n '2,/^$/p' | sed '/^$/d'; } >&2; return 1; }
-    [ "$tree" != "$(git rev-parse "$cur^{tree}")" ] || continue
-    cur=$(git cat-file commit "$c" | sed '1,/^$/d' |
-      GIT_AUTHOR_NAME=$(git log -1 --format=%an "$c") GIT_AUTHOR_EMAIL=$(git log -1 --format=%ae "$c") \
-      GIT_AUTHOR_DATE=$(git log -1 --format=%ad --date=raw "$c") git commit-tree "$tree" -p "$cur") || return 1
+    if ! tree=$(git merge-tree --write-tree --name-only --merge-base="$c^" "$cur" "$c"); then
+      printf '%s\n' "$tree" | sed -n '2,/^$/p' | sed '/^$/d' > "$tmp/files"
+      cur=$(resolve "$cur" "$c" "$5" "$6") && continue
+      { echo "$c"; cat "$tmp/files"; } >&2
+      return 1
+    fi
+    [ "$tree" != "$(git rev-parse "$cur^{tree}")" ] || { echo "$c" >> "$tmp/dropped"; continue; }
+    cur=$(commit_as "$c" "$tree" "$cur") || return 1
   done
   echo "$cur"
+}
+# commit_as <commit> <tree> <parent>: a commit of <tree> on <parent> with
+# <commit>'s message and author, as rebase makes one.
+commit_as() {
+  git cat-file commit "$1" | sed '1,/^$/d' |
+    GIT_AUTHOR_NAME=$(git log -1 --format=%an "$1") GIT_AUTHOR_EMAIL=$(git log -1 --format=%ae "$1") \
+    GIT_AUTHOR_DATE=$(git log -1 --format=%ad --date=raw "$1") git commit-tree "$2" -p "$3"
+}
+# step <line>: what it is at, for the board to say under the row (otis-popup
+# busy names this file to it).
+step() { printf '%s\n' "$*" >> "$tmp/progress"; }
+# names <file>: the paths in it, a line each, by their last part, in a line.
+names() { sed 's|.*/||' "$1" | paste -sd, - | sed 's/,/, /g'; }
+# resolve <onto> <commit> <iid> <onto's name>: Claude settles the conflicts
+# <commit> has on <onto> ($tmp/files), and the commit made of that, as the
+# commit was; else 1, and why in $tmp/why. As a fix run does (git-mr-fix): in
+# a worktree of its own from the pool (git-claude-worktree), with the file
+# tools alone, no shell. The pick is made there, conflict markers and all
+# (zdiff3, so it sees what both sides started from), and of what it leaves
+# only the conflicted files are taken, and only with no marker left in them
+# and Claude saying they are settled. A line on each it settled is in
+# $tmp/settled. Its run stays in otis-rebase/<iid>-<sha>, to see how it went.
+resolve() {
+  r_onto=$1 r_c=$2 r_short=$(git rev-parse --short "$2")
+  : > "$tmp/why"
+  r_missing=$(otis-agent-run --ready) || { echo "$r_missing" > "$tmp/why"; return 1; }
+  d=$common/otis-rebase/$3-$r_short
+  rm -rf "$d" && mkdir -p "$d" && echo $$ > "$d/pid" && cp "$tmp/files" "$d/files"
+  step "Claude is settling the conflicts in $(names "$d/files") (!$3's $r_short)"
+  r_wt=$(git-claude-worktree take fix "$d" "$r_onto" 2> "$tmp/why") || return 1
+  git -C "$r_wt" -c merge.conflictStyle=zdiff3 cherry-pick --no-commit "$r_c" >/dev/null 2>&1
+  git show "$r_c" > "$d/commit.patch"
+  tr '\n' '\0' < "$d/files" | xargs -0 git diff "$r_c^" "$r_onto" -- > "$d/base.patch"
+  cat > "$d/prompt" <<EOF
+You are finishing a rebase. Commit $r_short, "$(git log -1 --format=%s "$r_c")", of merge request !$3, is being put onto $4, which has moved on since the commit was made, and some of it conflicts. The working directory is the repository at $4 with the commit applied, except where it conflicted. These files have conflict markers in them:
+$(sed 's/^/- /' "$d/files")
+
+In each conflict, between <<<<<<< and ||||||| is what $4 has now; between ||||||| and ======= is what both sides started from; between ======= and >>>>>>> is what the commit made of that.
+- The commit, its message and its whole diff: $d/commit.patch
+- What changed in those files on the other side, from where the commit started to $4: $d/base.patch
+
+Settle every conflict: keep everything $4 has, and make the commit's change on top of it, as its author would have written it against this code. Edit only the files listed, and leave no conflict markers in them. You have no shell, so you cannot build or test: read the code around each conflict, and what it calls, to get it right.
+
+If a conflict needs a decision only the author can make, or you are not sure the result is right, leave it and answer resolved false, saying why.
+
+Answer resolved (whether every conflict is settled) and summary: one sentence for the author on what you did with them, or why not.
+EOF
+  schema='{"type":"object","additionalProperties":false,"required":["resolved","summary"],"properties":{"resolved":{"type":"boolean"},"summary":{"type":"string"}}}'
+  (cd "$r_wt" && otis-agent-run -p --restricted --tools Read,Grep,Glob,Edit,Write --add-dir "$d" --strict-mcp-config --disable-slash-commands \
+    --permission-prompts none --permission-mode acceptEdits --output-format stream-json --verbose --json-schema "$schema" < "$d/prompt" 2>> "$d/claude.err") |
+    tee -a "$d/claude.jsonl" | git-claude-view --events >> "$d/events.jsonl"
+  r_said=$(jq -c 'select(.type == "result")' "$d/events.jsonl" 2>/dev/null | tail -1)
+  r_sum=$(printf '%s' "$r_said" | jq -r '.structured_output.summary // .result // empty' 2>/dev/null)
+  r_left=$(cd "$r_wt" && tr '\n' '\0' < "$d/files" | xargs -0 grep -lE '^(<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)( |$)|^=======$' 2>/dev/null)
+  r_new=
+  if printf '%s' "$r_said" | jq -e '(.is_error | not) and .structured_output.resolved == true' >/dev/null 2>&1 && [ -z "$r_left" ]; then
+    (cd "$r_wt" && tr '\n' '\0' < "$d/files" | xargs -0 git add --) && r_tree=$(git -C "$r_wt" write-tree) &&
+      if [ "$r_tree" = "$(git rev-parse "$r_onto^{tree}")" ]; then r_new=$r_onto; echo "$r_c" >> "$tmp/dropped"
+      else r_new=$(commit_as "$r_c" "$r_tree" "$r_onto"); fi
+  fi
+  git -C "$r_wt" reset -q --hard
+  git-claude-worktree release "$r_wt"
+  echo done > "$d/status"
+  if [ -z "$r_new" ]; then
+    echo "Claude could not settle it: ${r_sum:-it stopped without an answer}" > "$tmp/why"
+    return 1
+  fi
+  printf '  Claude settled %s in %s: %s\n' "$r_short" "$(names "$d/files")" "$r_sum" >> "$tmp/settled"
+  echo "$r_new"
 }
 # follow <branch> <from> <to>: the local branch moved from the commit it was
 # at to the new one, checked out or not, or why not on stdout.
@@ -110,25 +189,27 @@ follow() {
   fi
 }
 
-if [ "$1" = --stack ]; then
+if [ "$1" = --here ]; then
   iid=$2
   json=$(mr) || { pause "could not load !$iid"; exit 1; }
   stack=$(layers "$(printf '%s' "$json" | jq -r '"\(.iid) \(.source_branch) \(.target_branch) \(.title)"')") ||
     { pause "could not load the MRs stacked with !$iid"; exit 1; }
   tmp=$(mktemp -d) || exit 1
   trap 'rm -rf "$tmp"' EXIT
+  : > "$tmp/progress"
+  [ -z "$OTIS_ASK" ] || otis-popup busy rebasing "$tmp/progress"
   printf '%s\n' "$stack" > "$tmp/stack"
   base=$(head -1 "$tmp/stack" | cut -d' ' -f3)
   refs="+refs/heads/$base:refs/remotes/origin/$base"
   for b in $(cut -d' ' -f2 "$tmp/stack"); do refs="$refs +refs/heads/$b:refs/remotes/origin/$b"; done
-  printf 'fetching ...\n'
+  step "fetching"
   # shellcheck disable=SC2086
   git fetch --quiet origin $refs || { pause "could not fetch the stack's branches"; exit 1; }
   # Each layer, bottom first: where it starts, and where it goes. In files
   # by iid: .remote, .local, .start, .new.
-  printf 'rebasing ...\n'
   said= work=
   while read -r i b t title; do
+    step "rebasing !$i"
     # Yours where it is GitLab's and more, or GitLab's rewritten here (a gup,
     # a conflict fixed by hand): your branch was at GitLab's commit once, by
     # its reflog, as gp's --force-if-includes asks.
@@ -147,14 +228,15 @@ if [ "$1" = --stack ]; then
       old=$(cat "$tmp/$below.start") onto=$(cat "$tmp/$below.new") on="!$below"
       fork=$(git merge-base --fork-point "refs/remotes/origin/$t" "$start")
     else old=refs/remotes/origin/$t onto=$(git rev-parse "refs/remotes/origin/$t") on=$t fork=; fi
-    new=$(replay "$onto" "$old" "$start" "$fork" 2> "$tmp/conflict") || {
+    : > "$tmp/settled"; : > "$tmp/dropped"
+    new=$(replay "$onto" "$old" "$start" "$fork" "$i" "$([ -n "$below" ] && echo "!$below as just rebased" || echo "$t as it is now")" 2> "$tmp/conflict") || {
       c=$(head -1 "$tmp/conflict") n=$(($(wc -l < "$tmp/conflict") - 1))
       files=$(sed '1d; s|.*/||' "$tmp/conflict" | head -3 | paste -sd, - | sed 's/,/, /g')
       [ "$n" -le 3 ] || files="$files and $((n - 3)) more"
       wt=$(git-worktree-path of "$b" | sed "s|^$HOME/|~/|")
       if [ -n "$below" ]; then how="rebase it onto $on by hand in its checkout, then b"
       else how="gup in ${wt:-a checkout of $b}, fix it there, then b again does the rest"; fi
-      pause "nothing was changed: !$i's commit $(git log -1 --format='%h "%s"' "$c") conflicts with $on$([ -n "$below" ] && echo " as rebased"), in $files. $how"
+      pause "nothing was changed: !$i's commit $(git log -1 --format='%h "%s"' "$c") conflicts with $on$([ -n "$below" ] && echo " as rebased"), in $files. $(sed 's/\.$//' "$tmp/why"). $how"
       exit 1
     }
     echo "$r" > "$tmp/$i.remote"; echo "$l" > "$tmp/$i.local"; echo "$start" > "$tmp/$i.start"; echo "$new" > "$tmp/$i.new"
@@ -175,22 +257,28 @@ if [ "$1" = --stack ]; then
       work=1
       [ -n "$below" ] || s="$s, $(git rev-list --count "$start..$onto") new there"
       [ -z "$mine" ] || s="$s, $mine"
+      gone=$(grep -c . "$tmp/dropped")
+      [ "$gone" = 0 ] || s="$s; $gone more dropped, as $on has $([ "$gone" = 1 ] && echo its change || echo theirs) already"
     fi
+    settled=$(cat "$tmp/settled")
     said="$said$s
-"
+${settled:+$settled
+}"
   done < "$tmp/stack"
 
   if [ -n "$work" ]; then
-    git-confirm "${said}every layer is pushed at once, each with a new pipeline; your branches here follow
+    one=$([ "$(grep -c . "$tmp/stack")" = 1 ] && echo 1)
+    git-confirm "${said}$([ -n "$one" ] && echo "it is pushed with a new pipeline; your branch here follows" ||
+      echo "every layer is pushed at once, each with a new pipeline; your branches here follow")
 
-rebase the stack?" || exit 0
+rebase $([ -n "$one" ] && echo it || echo the stack)?" || exit 0
     leases= pushes=
     while read -r i b _; do
       r=$(cat "$tmp/$i.remote") new=$(cat "$tmp/$i.new")
       [ "$new" = "$r" ] && continue
       leases="$leases --force-with-lease=refs/heads/$b:$r" pushes="$pushes $new:refs/heads/$b"
     done < "$tmp/stack"
-    printf 'pushing ...\n'
+    step "pushing"
     # shellcheck disable=SC2086
     out=$(git push --quiet --atomic --no-verify $leases origin $pushes 2>&1) ||
       { pause "GitLab took none of it, so nothing changed:
@@ -222,9 +310,11 @@ if [ "$1" = --check ]; then
   # A glab stack rebases as a whole, through glab (git-stack --update).
   stack=$(git-stack --of "$src") &&
     exec echo "execute(git-stack --update $stack)"
-  # Any other stack, here.
+  # Any other stack, here; and an MR alone with conflicts, which GitLab would
+  # refuse, for Claude to settle.
   stack=$(layers "$iid $src $target") || exec git-fzf-note "could not reach GitLab for the MRs stacked with !$iid"
-  [ "$(printf '%s\n' "$stack" | grep -c .)" = 1 ] || exec echo "execute(git-mr-rebase --stack $iid)"
+  [ "$(printf '%s\n' "$stack" | grep -c .)" = 1 ] || exec echo "execute(git-mr-rebase --here $iid)"
+  printf '%s' "$json" | jq -e '.has_conflicts == true' >/dev/null && exec echo "execute(git-mr-rebase --here $iid)"
   behind=$(printf '%s' "$json" | jq -r '.diverged_commits_count // 0')
   [ "$behind" -gt 0 ] ||
     exec git-fzf-note "!$iid already has everything on $(printf '%s' "$json" | jq -r .target_branch)"
