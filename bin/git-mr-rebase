@@ -10,12 +10,14 @@
 # changes.
 #
 # The branch on GitLab moves to new commits and a new pipeline starts. Your
-# local branch follows when that loses nothing: when it is exactly the commit
-# the MR was at before the rebase, it moves to the rebased one, checked out or
-# not (reset --keep where it is checked out, which keeps uncommitted changes
-# and refuses if the rebase touched a file they are in). With commits of its
-# own it is left alone and you are told; gp refuses to push over the rebase
-# (--force-if-includes) until git pull --rebase there picks it up.
+# local branch follows when that loses nothing: when it is the commit the MR
+# was at before the rebase, or behind it, or an old copy of it (a commit
+# GitLab's branch was at before a push from somewhere else rewrote it), it
+# moves to the rebased one, checked out or not (reset --keep where it is
+# checked out, which keeps uncommitted changes and refuses if the rebase
+# touched a file they are in). With commits of its own it is left alone and
+# you are told; gp refuses to push over the rebase (--force-if-includes)
+# until git pull --rebase there picks it up.
 #
 # --check says in the footer when there is nothing to do: already on top of
 # its target, a rebase already running, or not an open MR.
@@ -42,11 +44,12 @@
 #
 # Local and GitLab end up the same. A layer starts from your local branch
 # where that is GitLab's plus commits of yours (they go up with it), and from
-# GitLab's where yours is behind or absent. A branch that has moved both here
-# and on GitLab, or a checkout with uncommitted changes in files the rebase
-# changes, is refused before anything is pushed. The push skips the pre-push
-# hook (--no-verify), as GitLab's own rebase does: a hook may take only one
-# checked-out branch a push (git-stack), and CI lints all of it.
+# GitLab's where yours is behind, an old copy of it, or absent. A branch that
+# has moved both here and on GitLab, or a checkout with uncommitted changes in
+# files the rebase changes, is refused before anything is pushed. The push
+# skips the pre-push hook (--no-verify), as GitLab's own rebase does: a hook
+# may take only one checked-out branch a push (git-stack), and CI lints all
+# of it.
 mr() { git-forge api "projects/:fullpath/merge_requests/$iid$1"; }
 pause() { otis-popup say "$1"; }
 main=$(otis-config main)
@@ -176,6 +179,19 @@ EOF
   printf '  Claude settled %s in %s: %s\n' "$r_short" "$(names "$d/files")" "$r_sum" >> "$tmp/settled"
   echo "$r_new"
 }
+# was_at <ref> <commit>: that ref has been at that commit, by its reflog here.
+was_at() { git log -g --format=%H "$1" 2>/dev/null | grep -qx "$2"; }
+# behind <branch> <yours> <GitLab's>: your branch has nothing of its own, so
+# it follows GitLab's with nothing lost. Its commit is in GitLab's, or is one
+# GitLab's branch was at before it was rewritten there (a push from another
+# checkout, or from an agent, leaves yours on the old copy). Not when yours
+# has commits past GitLab's, or has been at GitLab's commit and moved off it:
+# then the difference is yours.
+behind() {
+  git merge-base --is-ancestor "$2" "$3" 2>/dev/null && return
+  git merge-base --is-ancestor "$3" "$2" 2>/dev/null && return 1
+  was_at "refs/remotes/origin/$1" "$2" && ! was_at "refs/heads/$1" "$3"
+}
 # follow <branch> <from> <to>: the local branch moved from the commit it was
 # at to the new one, checked out or not, or why not on stdout.
 follow() {
@@ -212,11 +228,12 @@ if [ "$1" = --here ]; then
     step "rebasing !$i"
     # Yours where it is GitLab's and more, or GitLab's rewritten here (a gup,
     # a conflict fixed by hand): your branch was at GitLab's commit once, by
-    # its reflog, as gp's --force-if-includes asks.
+    # its reflog, as gp's --force-if-includes asks. GitLab's where yours has
+    # nothing of its own (behind).
     r=$(git rev-parse "refs/remotes/origin/$b") l=$(git rev-parse -q --verify "refs/heads/$b") start=$r mine=
-    if [ -n "$l" ] && [ "$l" != "$r" ] && ! git merge-base --is-ancestor "$l" "$r"; then
+    if [ -n "$l" ] && [ "$l" != "$r" ] && ! behind "$b" "$l" "$r"; then
       if git merge-base --is-ancestor "$r" "$l"; then mine="with $(git rev-list --count "$r..$l") of yours not on GitLab yet"
-      elif git log -g --format=%H "refs/heads/$b" | grep -qx "$r"; then mine="as you rebased it here"
+      elif was_at "refs/heads/$b" "$r"; then mine="as you rebased it here"
       else pause "your $b and GitLab's each have commits the other does not; git pull --rebase in its checkout puts them together, then b. nothing was changed"; exit 1; fi
       start=$l
     fi
@@ -360,16 +377,10 @@ done
 printf '\n'
 local=$(git rev-parse -q --verify "refs/heads/$b") || exit 0
 [ "$local" != "$new" ] || exit 0
-if [ "$local" != "$old" ]; then
+if [ "$local" != "$old" ] && ! behind "$b" "$local" "$old"; then
   pause "rebased. your local $b has commits the MR did not, so it was left alone; git pull --rebase there picks the rebase up"
   exit 0
 fi
-wt=$(git-worktree-path of "$b")
-if [ -z "$wt" ]; then
-  git update-ref "refs/heads/$b" "$new" "$old" || pause "rebased, but your local $b moved meanwhile, so it was left alone"
-elif [ "$(git -C "$wt" rev-parse HEAD)" != "$old" ]; then
-  pause "rebased, but $b in $wt moved meanwhile, so it was left alone"
-elif ! git -C "$wt" reset --quiet --keep "$new"; then
-  pause "rebased, but uncommitted changes in $wt are in files the rebase changed, so $b there was left alone"
-fi
+why=$(follow "$b" "$local" "$new")
+[ -z "$why" ] || pause "rebased, but $why"
 exit 0

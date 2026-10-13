@@ -2291,6 +2291,13 @@ git commit -qam mine && rb_mine=$(git rev-parse feat)
 rb_rebase
 expect mr-rebase/own-commits-left-alone "$(git rev-parse feat; grep -c 'left alone' "$rb/said")" "$rb_mine
 1"
+# An old copy of GitLab's branch, with nothing of yours in it: pushed from
+# here, then rewritten on GitLab from somewhere else. It follows too.
+git push -q --force origin feat && git checkout -q main
+(cd "$rb/gitlab" && git fetch -q origin && git checkout -q -B feat origin/feat && git commit -q --amend -m reworded && git push -q --force origin feat) >/dev/null 2>&1
+rb_rebase
+expect mr-rebase/old-copy-follows "$(git rev-parse feat; grep -c 'left alone' "$rb/said")" "$(rb_origin)
+1"
 cd "$here"
 
 # --- git-mr-rebase on a stack: b on any layer rebases all of it here, the
@@ -2396,6 +2403,14 @@ expect mr-rebase/stack-claude-settled "$(git --git-dir="$rs/origin.git" log --fo
 (cd "$rs/wt" && printf 'x\ny\n' > same && git add same && git commit -qm same)
 (RS_NO=1 rs --here 1 >/dev/null)
 expect mr-rebase/stack-says-what-dropped "$(grep -c '^  2 commits onto !1, with 1 of yours not on GitLab yet; 1 more dropped, as !1 has its change already$' "$rs/asked")" "1"
+# An old copy of GitLab's low, with nothing of yours in it (pushed from here,
+# then rewritten on GitLab from somewhere else), is not refused: the layer
+# starts from GitLab's, and yours follows.
+(cd "$rs/gitlab" && git fetch -q && git checkout -q -B low origin/low && git commit -q --amend -m l3-reworded && git push -q --force origin low) >/dev/null 2>&1
+rs --here 1 >/dev/null
+expect mr-rebase/stack-old-copy-follows "$(grep -c 'each have commits' "$rs/said"; git --git-dir="$rs/origin.git" log -1 --format=%s low; git rev-parse low | grep -cxF "$(git --git-dir="$rs/origin.git" rev-parse low)")" "1
+l3-reworded
+1"
 git worktree remove --force "$(git-worktree-path named claude-fix)"
 git worktree remove --force "$rs/wt"
 cd "$here"
