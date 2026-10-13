@@ -90,6 +90,21 @@ tmp=$(mktemp -d) && tmp=$(cd "$tmp" && pwd -P) || exit 1
 # The pickers run here log their keys here, not in your own key log.
 export OTIS_KEY_LOG=$tmp/keys.tsv
 
+# --- share/delta.sh: a removed line that opens what its added twin opens
+# again ("export function old({", then "export function fresh({") does not
+# cost the lines after it their colors: each side's code is colored as its
+# own file has it, so no keyword is left in one run with the word after it.
+# Side by side too, each half of a row, with the text and its columns as
+# delta draws them.
+mkdir "$tmp/delta"
+printf '%s\n' 'export function old({' '  a,' '}: {' '  a: number;' '}) {' '  return a;' '}' > "$tmp/delta/a.ts"
+printf '%s\n' 'export function fresh({' '  b,' '}: {' '  b: number;' '}) {' '  if (!b) {' '    return 0;' '  }' '  return b;' '}' > "$tmp/delta/b.ts"
+git diff --no-index -U9 "$tmp/delta/a.ts" "$tmp/delta/b.ts" > "$tmp/delta/d"
+drawn() { (. "$share/delta.sh"; OTIS_C_ROOT=1; OTIS_C_sideBySide=$1; FZF_PREVIEW_COLUMNS=100; gk_delta --file-style omit < "$tmp/delta/d"); }
+expect delta/each-side-colored-as-its-file "$(drawn | grep -c 'return [ab0];\|export function\|if (')|$(drawn | strip | grep -c 'return [ab0];')" "0|3"
+expect delta/side-by-side-too "$(drawn always | grep -c 'return [ab0];\|export function\|if (')|$(drawn always | strip | grep -c '│ *6 *│  return a; *│ *7 *│    return 0;')" "0|1"
+rm -rf "$tmp/delta"
+
 # --- otis-keys only names keys its picker declares: a key renamed in one and
 # not the other labels a key that does nothing, or leaves one unlabelled.
 # A picker whose keys the forge can trim (git-forge lacks) names them in

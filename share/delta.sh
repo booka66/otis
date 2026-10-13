@@ -30,14 +30,46 @@ gk_delta() {
     *) set -- --file-style "${OTIS_T_FILE:-6}" --file-decoration-style "${OTIS_T_RULE:-8} ul" "$@" ;;
   esac
   [ -n "$sides" ] && set -- --side-by-side "$@"
-  if [ -n "$OTIS_T_MINUS" ]; then
-    set -- --minus-style "syntax $OTIS_T_MINUS" --plus-style "syntax $OTIS_T_PLUS" \
-      --minus-emph-style "syntax $OTIS_T_MINUS_EMPH" --plus-emph-style "syntax $OTIS_T_PLUS_EMPH" "$@"
-  fi
   [ -n "$OTIS_T_LIGHT" ] && set -- --light "$@"
-  delta --no-gitconfig --paging=never --width="$w" \
+  set -- --no-gitconfig --paging=never --width="$w" \
     --syntax-theme="${OTIS_T_DELTA_SYNTAX:-ansi}" \
     --hunk-header-style 'line-number syntax' \
     --hunk-header-decoration-style "${OTIS_T_RULE:-8} box" \
     --line-numbers "$@"
+  # No grounds of the theme's: delta's own, which leave removed lines uncolored.
+  [ -n "$OTIS_T_MINUS" ] || { delta "$@"; return; }
+  # delta colors a hunk's code as one text, a block's removed lines and then
+  # its added ones, as if both were there: "export function old({" removed
+  # and "export function new({" added leave it two deep in a function's
+  # parameters, and every keyword from there to the hunk's end is plain. So
+  # two passes at once, each with one side's lines kept from the colorer (a
+  # style with no "syntax" in it is), which then reads the other side as the
+  # file has it: the removed lines are taken from the pass that colored them
+  # and the rest from the other. Side by side a row is both, so each pass
+  # draws the bar that starts its right half as a mark, and a row is cut
+  # there. In the bar's place, since delta counts a mark beside it as a column.
+  gk_in=$(cat)
+  [ -n "$gk_in" ] || return 0
+  [ -n "$sides" ] && set -- --line-numbers-right-format "$(printf '\037'){np:^4}│" "$@"
+  printf '%s\n' "$gk_in" | delta --minus-style "normal $OTIS_T_MINUS" --minus-emph-style "normal $OTIS_T_MINUS_EMPH" \
+    --plus-style "syntax $OTIS_T_PLUS" --plus-emph-style "syntax $OTIS_T_PLUS_EMPH" "$@" | {
+    exec 3<&0
+    printf '%s\n' "$gk_in" | delta --minus-style "syntax $OTIS_T_MINUS" --minus-emph-style "syntax $OTIS_T_MINUS_EMPH" \
+      --plus-style "normal $OTIS_T_PLUS" --plus-emph-style "normal $OTIS_T_PLUS_EMPH" "$@" 3<&- |
+      awk -v sides="$sides" '{
+        old = $0
+        if ((getline new < "/dev/fd/3") <= 0) new = old
+        if (sides != "") {
+          i = index(old, "\037"); j = index(new, "\037")
+          print (i && j) ? substr(old, 1, i - 1) "│" substr(new, j + 1) : new
+          next
+        }
+        if (old != new) {
+          # A removed line has its number in the first column and none in the second.
+          v = new; gsub(/\033\[[0-9;]*[mK]/, "", v)
+          if (v ~ /^ *[0-9]+ *⋮ +│/) { print old; next }
+        }
+        print new
+      }'
+  }
 }
