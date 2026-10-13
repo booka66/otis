@@ -1474,8 +1474,12 @@ ${tests}
 `}`;
 }
 // What a chapter's tour is written from: its files' diff and what its tests
-// ran of them, and where it sits among the others.
-function tourPrompt(r, ci) {
+// ran of them, and where it sits among the others. look: its writer can read
+// the code at the head (git-trace's tour), and is told to look up what the
+// diff uses and does not define. Written from the diff alone, a tour named
+// the two values a new column's settings were given and said nothing of what
+// either does: both are defined in files the change never touched.
+function tourPrompt(r, ci, look) {
   const cover = readCover(r);
   const p = plan(r), ch = p.chapters[ci], many = p.chapters.length > 1;
   const files = new Set(ch.files);
@@ -1534,13 +1538,15 @@ Then pick the stops: ${many ? "3 to 10" : "5 to 15"}, in the order that tells th
 - proves: when there is a test, one plain sentence on what that test shows the code does, with the real values in backticks ("when nobody is set up to answer, it writes a note and gives up: \`resolver = undefined\`"). Else "".
 
 The tour has to stand alone. The reader sees only it: your summary, then each stop's title, says, the lines you pick and the test values under them, one after another. They will not open a file, search, or run anything. When they finish the last stop they must understand what ${many ? "this part of the change" : "the change"} does and how, well enough to explain it. So:
-- Explain a name before you lean on it. A type, helper, table, flag or constant the reader has not met yet is explained where it first appears, or gets a stop of its own first; order the stops so no stop uses a name a later stop introduces. Show a data shape (a type, a schema) at the stop where it first matters. A name from outside the change (an import) gets a phrase saying what it is.
+- Explain a name before you lean on it. A type, helper, table, flag or constant the reader has not met yet is explained where it first appears, or gets a stop of its own first; order the stops so no stop uses a name a later stop introduces. Show a data shape (a type, a schema) at the stop where it first matters. A name from outside the change gets a phrase saying what it is and what it does: an import, a helper the diff calls, and just as much a value a setting is given (\`retry: "backoff"\`) or a label put on something (\`kind: "ledger"\`). ${look ? "Look it up first, as below." : "One you cannot explain from what is here is said to be so (\"\`backoff\`, set up outside this change\"), never guessed at and never left bare."}
 - Back each branch with its own test where one exists: the timeout stop cites the test that times out, the skip stop the test that skips, with that test's values.
 - Each stop follows from the one before; when the link is not obvious, say it ("Once the token is claimed, ...").
 - Cover all of it. Every file below is in some stop. Plumbing (build files, package manifests, exports, a new flag's key) can share one stop near the end whose says names each and what it adds; show the lines of the one that matters most.
 - End the story: the last stop says where the result goes and what is left out or for later, when the commits say.
 Stop where the behavior is decided, not on glue. Do not invent values: use only the ones below.
-
+${look ? `
+You can read the code: your working directory is the repository at the change's head, and you have Read, Grep and Glob. The diff uses names it does not define: a helper it calls, a type, a value a setting is given. Before you write, look up each one you will put in front of the reader and cannot explain from the diff alone. First where it is defined: the comment on it, the other values it could have had. Then what the code does because of it: search the whole repository for the name, past the file that defines it, to the code that acts on it, and read that. Say what happens there, in a phrase where the name first appears: "\`retry\` is set to \`"backoff"\` (after a failure the job waits, then tries again, waiting twice as long each time)". A name's own words are not its explanation ("\`"backoff"\` backs off"), and neither is a guess. Put in says only the names the reader needs to follow the change; each one there is explained. One the repository says nothing more about is said to be so in a few words ("\`x\` (nothing in the code says what it is for)").
+` : ""}
 The commits:
 ${log}
 
@@ -2982,7 +2988,7 @@ switch (cmd) {
   case "tour-size": console.log(tourSize(run(args[0]))); break;
   case "tour-plan-prompt": process.stdout.write(tourPlanPrompt(run(args[0]))); break;
   case "tour-plan-default": process.stdout.write(tourPlanDefault(run(args[0]))); break;
-  case "tour-prompt": process.stdout.write(tourPrompt(run(args[0]), +args[1] || 0)); break;
+  case "tour-prompt": process.stdout.write(tourPrompt(run(args[0]), +args[1] || 0, args[2] === "look")); break;
   case "tour-assemble": tourAssemble(run(args[0])); break;
   case "tour-values-prompt": process.stdout.write(tourValuesPrompt(run(args[0]), +args[1] || 0)); break;
   case "tour-values-apply": tourValuesApply(run(args[0]), +args[1] || 0, args[2]); break;

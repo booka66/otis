@@ -1157,6 +1157,30 @@ true"
   # nothing said to be untested.
   : > "$hd/specs"; rm -rf "$hd/trace" "$hd/walks"; mkdir -p "$hd/trace"; node "$share/walk.mjs" cover "$hd"
   expect trace/tour-untraced "$(node "$share/walk.mjs" tour-prompt "$hd" 0 | grep -c 'No test runs this change\|What the tests ran of it\|no test runs:')" "1"
+  # Its writer reads the code at the head, to look up the names the diff uses
+  # and does not define: its turn is in a review worktree there, with tools
+  # that only read, and is told so; the chapter's reader, asked next, has
+  # none. Claude is a stub that says where it ran and with what.
+  mkdir -p "$tmp/tourstub"; echo "!9" > "$hd/what"
+  cat > "$tmp/tourstub/claude" <<'EOF'
+#!/bin/sh
+tools=; while [ $# -gt 0 ]; do [ "$1" = --tools ] && tools=$2; [ "$1" = --json-schema ] && schema=$2; shift; done
+cat > /dev/null
+case $schema in
+  *'"stops"'*) echo "writer [$tools] $(basename "$PWD") $(git rev-parse HEAD)" >> "$TOUR_SEEN"
+    echo '{"type":"result","structured_output":{"intent":"grows things","stops":[{"title":"runs it","says":"s","path":"lib.ts","start":2,"end":4,"focus":3,"test":"","proves":""}]}}' ;;
+  *) echo "reader [$tools] $(basename "$PWD")" >> "$TOUR_SEEN"; echo '{"type":"result","structured_output":{"clear":true,"gaps":[]}}' ;;
+esac
+EOF
+  printf '#!/bin/sh\n' > "$tmp/tourstub/otis-notify"; chmod +x "$tmp/tourstub/"*
+  PATH=$tmp/tourstub:$PATH TOUR_SEEN=$tmp/tour.asked git-trace --phase "$hd" tour >/dev/null 2>&1
+  expect trace/tour-writer-reads-the-head "$(tr '\n' '|' < "$tmp/tour.asked")$(grep -c 'You can read the code' "$hd/tour.c0.prompt")|$(jq -r '.chapters[0].stops[0].title' "$hd/tour.json")|$(ls "$(git rev-parse --git-common-dir)/otis-claude-slots")" \
+    "writer [Read,Grep,Glob] $(basename "$(git-worktree-path named claude-review)") $head|reader [] $(basename "$hd")|1|runs it|"
+  # With no worktree to be had, from the diff alone, as before.
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/tourstub/git-claude-worktree"; chmod +x "$tmp/tourstub/git-claude-worktree"; rm -f "$tmp/tour.asked"
+  PATH=$tmp/tourstub:$PATH TOUR_SEEN=$tmp/tour.asked git-trace --phase "$hd" tour >/dev/null 2>&1
+  expect trace/tour-writer-without-a-worktree "$(tr '\n' '|' < "$tmp/tour.asked")$(grep -c 'You can read the code' "$hd/tour.c0.prompt")" "writer [] $(basename "$hd") |reader [] $(basename "$hd")|0"
+  git worktree remove --force "$(git-worktree-path named claude-review)"; rm -rf "$tmp/tourstub" "$tmp/tour.asked"
   rm -rf "$hd"
   unset FZF_PREVIEW_COLUMNS
   rm -rf "$td" "$tmp/tst"

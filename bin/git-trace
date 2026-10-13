@@ -229,7 +229,9 @@ esac
 # is: only the tests run there, and the rest is done here as before. Nothing
 # runs in one of those but what its agent runs, so every run is a prompt to
 # it, on otis.walkCursorModel (else otis.cursorModel): a small model does,
-# since all it is asked is to run two commands and say when they are done.
+# since all it is asked is to run one command until it says it is done.
+# Each VM has databases of its own, so there a package's spec files are dealt
+# across the slots instead of kept in one: otis.walkSlotCount VMs at once.
 remote=$(git config --get otis.walkRemote)
 # OTIS_WALK_HERE (git-trace --ci): no slots and no workspace. The checkout the
 # run is in is at the head already and is the one place there is to run.
@@ -340,10 +342,12 @@ rsh() { ssh $keep "$remote" "$@"; }
 # does, and files come back as artifacts. So the kit is a commit, its parents
 # the commits the run needs, pushed to a ref of the slot's own under
 # refs/otis/walk (no branch, so no pipeline; written over by the next run and
-# deleted after this one), and the agent is asked for two commands: one
-# fetches and unpacks it, the other (go.sh) starts the run detached and waits
-# on it four minutes a call, since an agent's shell call is not one to hold
-# for half an hour. The run is in the VM's own checkout, where the image's
+# deleted after this one), and the agent is asked for one command, again
+# until it says it is done: it fetches and unpacks the kit the first time,
+# then go.sh starts the run detached and waits on it three minutes a call,
+# since an agent's shell call is not one to hold for half an hour. One
+# command, because asked for two a model ran them at once, the second before
+# the first had unpacked it. The run is in the VM's own checkout, where the image's
 # build is warm, and its output, status and trace come back gzipped.
 # A VM that ended its turn without finishing is not asked again: the next run
 # boots another.
@@ -370,17 +374,22 @@ VM
   } > "$t/run.sh"
   cat > "$t/go.sh" <<'VM'
 k=$(cd "$(dirname "$0")" && pwd)
+a=/opt/cursor/artifacts/otis-walk n=$(basename "$k")
 if [ ! -e "$k/pid" ]; then
   # One run a VM: one still going is a walk that was stopped on your side.
   old=$(cat /var/tmp/otis-walk/pid 2>/dev/null); [ -n "$old" ] && kill -- "-$old" 2>/dev/null
   for other in /var/tmp/otis-walk/kit-*; do [ "$other" = "$k" ] || rm -rf "$other"; done
+  rm -rf "$a"; mkdir -p "$a"
   setsid nohup sh -c "sh $k/run.sh > $k/log 2>&1; echo \$? > $k/done" < /dev/null > /dev/null 2>&1 &
   echo $! > "$k/pid"; cp "$k/pid" /var/tmp/otis-walk/pid
 fi
-i=0; while [ ! -e "$k/done" ] && [ "$i" -lt 48 ]; do sleep 5; i=$((i + 1)); done
+# What the runner says for P's progress (its "otis: " lines), saved as it grows.
+i=0; while [ ! -e "$k/done" ] && [ "$i" -lt 36 ]; do
+  sleep 5; i=$((i + 1))
+  grep '^otis: ' "$k/log" > "$k/said" 2>/dev/null
+  [ -s "$k/said" ] && ! cmp -s "$k/said" "$a/$n.said" && cp "$k/said" "$a/$n.said"
+done
 [ -e "$k/done" ] || { echo "otis-walk: still running"; exit 0; }
-a=${OTIS_WALK_ARTIFACTS:-/opt/cursor/artifacts}/otis-walk n=$(basename "$k")
-rm -rf "$a"; mkdir -p "$a"
 gzip -c "$k/log" > "$a/$n.log.gz"
 [ -e "$k/out.jsonl" ] && gzip -c "$k/out.jsonl" > "$a/$n.out.jsonl.gz"
 # Last, and saying whether a trace goes with it: with this one there, all of it is.
@@ -392,17 +401,11 @@ VM
     out=$(git push -q -f --no-verify origin "$kc:$ref" 2>&1) || { echo "could not push the run's kit to origin as $ref: $(oneline "$out")"; rm -rf "$t"; return 2; }
   rm -rf "$t"
   cat > "$slot.prompt" <<EOF
-Run two shell commands in this repository's checkout, exactly as written, and do nothing else. They run the repository's own tests for a tool that reads the result itself, so nothing they print is yours to act on: a failing test or an error included, do not look into it, fix it, retry it or change any file.
+Run one shell command in this repository's checkout, exactly as written, and do nothing else. It runs the repository's own tests for a tool that reads the result itself, so nothing it prints is yours to act on: a failing test or an error included, do not look into it, fix it or change any file.
 
-1. Once:
+k=/var/tmp/otis-walk/$n; [ -e \$k/go.sh ] || { git fetch -q origin +$ref:$ref && mkdir -p \$k && git archive $ref | tar -x -C \$k && git rev-parse --show-toplevel > \$k/repo; }; sh \$k/go.sh
 
-git fetch -q origin +$ref:$ref && mkdir -p /var/tmp/otis-walk/$n && git archive $ref | tar -x -C /var/tmp/otis-walk/$n && git rev-parse --show-toplevel > /var/tmp/otis-walk/$n/repo
-
-2. Then this, and again each time it ends with "otis-walk: still running" (a call waits four minutes at most, and the tests can take half an hour):
-
-sh /var/tmp/otis-walk/$n/go.sh
-
-When it prints "otis-walk: finished", end your turn with that line and nothing more.
+Run that same command again each time it ends with "otis-walk: still running" (a call waits three minutes at most, and the tests can take half an hour). When it prints "otis-walk: finished", end your turn with that line and nothing more.
 EOF
   # The slot's VM, booted on the model asked for now; one gone, or still on a
   # run a stopped walk left it, gets that run canceled and is asked again.
@@ -426,25 +429,30 @@ EOF
     echo "otis: booting a VM in Cursor Cloud$( [ -n "$env" ] && echo ", in $env")"
   fi
   printf '%s\n' "$run" > "$slot.run"
-  # The agent's turn, an hour at most, then what it saved: Cursor lists a
-  # file some time after it is written, so the last one written is waited
-  # for, three minutes.
-  until=$(($(date +%s) + 3600)) st=
-  while out=$(cursor GET "/v1/agents/$agent/runs/$run") && printf '%s' "$out" | jq -e '.status | IN("CREATING", "RUNNING")' >/dev/null; do
-    [ "$(date +%s)" -lt "$until" ] || { cursor POST "/v1/agents/$agent/runs/$run/cancel" >/dev/null 2>&1; out='{"result": "still running after an hour, so it was canceled"}'; break; }
-    sleep 10
-  done
-  said_last=$(printf '%s' "$out" | jq -r '.result // .status // empty' 2>/dev/null)
-  rm -f "$slot.run"
-  git push -q --no-verify origin ":$ref" 2>/dev/null
+  # saved <name>: where the VM's artifacts have this run's file of that name.
+  # got <path>: that file.
+  saved() { cursor GET "/v1/agents/$agent/artifacts" | jq -r --arg n "$n.$1" '.items[]? | .path | select(endswith("/" + $n))' | head -1; }
   got() {
     link=$(cursor GET "/v1/agents/$agent/artifacts/download?path=$(printf '%s' "$1" | jq -Rr @uri)") &&
       curl -sSfL "$(printf '%s' "$link" | jq -r .url)" 2>/dev/null
   }
+  # The agent's turn, an hour at most, what the runner has said so far looked
+  # for every half minute; then what it saved: Cursor lists a file some time
+  # after it is written, so the last one written is waited for, three minutes.
+  until=$(($(date +%s) + 3600)) st= i=0 shown=0
+  while out=$(cursor GET "/v1/agents/$agent/runs/$run") && printf '%s' "$out" | jq -e '.status | IN("CREATING", "RUNNING")' >/dev/null; do
+    [ "$(date +%s)" -lt "$until" ] || { cursor POST "/v1/agents/$agent/runs/$run/cancel" >/dev/null 2>&1; out='{"result": "still running after an hour, so it was canceled"}'; break; }
+    sleep 10; i=$((i + 1))
+    [ $((i % 3)) -eq 0 ] && p=$(saved said) && [ -n "$p" ] && got "$p" | tail -n "+$((shown + 1))" > "$slot.said" && [ -s "$slot.said" ] &&
+      { cat "$slot.said"; shown=$((shown + $(wc -l < "$slot.said"))); }
+  done
+  said_last=$(printf '%s' "$out" | jq -r '.result // .status // empty' 2>/dev/null)
+  rm -f "$slot.run" "$slot.said"
+  git push -q --no-verify origin ":$ref" 2>/dev/null
   i=0 done_at=
   case $said_last in *"otis-walk: finished"*)
     while [ -z "$done_at" ] && [ "$i" -lt 18 ]; do
-      done_at=$(cursor GET "/v1/agents/$agent/artifacts" | jq -r --arg n "$n.done" '.items[]? | .path | select(endswith("/" + $n))' | head -1)
+      done_at=$(saved done)
       [ -n "$done_at" ] || { sleep 10; i=$((i + 1)); }
     done ;;
   esac
@@ -456,7 +464,7 @@ EOF
     rm -f "$slot.agent"
     return 2
   fi
-  got "${done_at%.done}.log.gz" | gunzip -c 2>/dev/null
+  got "${done_at%.done}.log.gz" | gunzip -c 2>/dev/null | awk -v s="$shown" '/^otis: / && ++c <= s { next } { print }'
   [ -n "$trace" ] && { got "${done_at%.done}.out.jsonl.gz" | gunzip -c > "$o.jsonl" 2>/dev/null || { echo "could not bring the trace back from Cursor's VM"; return 2; }; }
   return "$st"
 }
@@ -593,13 +601,20 @@ trace_specs() {
   sha=$1 sub=$2 tg=$3; shift 3
   case ${sub##*/} in base) side=base ;; again) side=again ;; *) side=head ;; esac
   mkdir -p "$sub"; rm -f "$sub"/w*
-  # The packages, biggest first, each to the slot with the least so far.
+  # The packages, biggest first, each to the slot with the least so far. On
+  # Cursor a slot is a VM with databases of its own, so a package need not
+  # stay in one: the spec files are dealt evenly, a package's side by side.
   for i in "$@"; do printf '%s\t%s\n' "$(pkg_of "$(sed -n "$((i + 1))p" "$d/specs")")" "$i"; done > "$sub/groups"
   np=$(cut -f1 "$sub/groups" | sort -u | wc -l | tr -d ' ')
-  take_slots "$np" || { [ "$side" = head ] || return 1; rm -rf "$d"; exit 0; }
+  want=$np; [ "$remote" = cursor ] && want=$#
+  take_slots "$want" || { [ "$side" = head ] || return 1; rm -rf "$d"; exit 0; }
   k=0; for s in $slots; do k=$((k + 1)); done
-  cut -f1 "$sub/groups" | sort | uniq -c | sort -rn | awk -v k="$k" '{ best = 0; for (w = 1; w < k; w++) if (load[w] < load[best]) best = w; load[best] += $1; print $2 "\t" best }' > "$sub/assign"
-  awk -F'\t' 'NR == FNR { w[$1] = $2; next } { print $2 > (dir "/w" w[$1] ".specs") }' dir="$sub" "$sub/assign" "$sub/groups"
+  if [ "$remote" = cursor ]; then
+    sort -s -t "$(printf '\t')" -k1,1 "$sub/groups" | awk -F'\t' -v k="$k" -v n="$#" '{ print $2 > (dir "/w" int((NR - 1) * k / n) ".specs") }' dir="$sub" -
+  else
+    cut -f1 "$sub/groups" | sort | uniq -c | sort -rn | awk -v k="$k" '{ best = 0; for (w = 1; w < k; w++) if (load[w] < load[best]) best = w; load[best] += $1; print $2 "\t" best }' > "$sub/assign"
+    awk -F'\t' 'NR == FNR { w[$1] = $2; next } { print $2 > (dir "/w" w[$1] ".specs") }' dir="$sub" "$sub/assign" "$sub/groups"
+  fi
   say "running $# spec file$( [ $# = 1 ] || echo s) in $np package$( [ "$np" = 1 ] || echo s), on $k slot$( [ "$k" = 1 ] || echo s) at once"
   ahead=; [ -e "$d/ahead" ] && ahead=1
   w=0
@@ -657,8 +672,12 @@ cover() {
 # instead what the tour failed to explain, half of what it said was that a
 # line was not shown, which is nothing to act on. Writing the tour again
 # against its gaps was tried: on a big chapter it dropped as much as it
-# fixed, at twice the cost. Each is one turn with no tools, everything in
-# the prompt. Nothing without an agent, or with
+# fixed, at twice the cost. The reader is one turn with no tools, everything
+# in the prompt. The writer has the diff in its prompt too, and reads the code
+# at the head besides (look, a review worktree, or the run's own checkout in
+# CI): a name the diff uses and does not define, a setting's value say, it
+# could only pass on unexplained. With no worktree free it writes from the
+# diff alone. Nothing without an agent, or with
 # otis.walkModel off; the tests' walk is still there. otis.walkReaderModel is
 # the reader's model.
 #
@@ -684,8 +703,11 @@ tour() {
   n=$(jq '.chapters | length' "$d/tour.plan.json")
   i=0; while [ "$i" -lt "$n" ]; do echo writing > "$d/tour.c$i.state"; i=$((i + 1)); done
   rm -f "$d/tour.state"; tassemble
+  if [ -n "${OTIS_WALK_HERE:-}" ]; then look=$(git rev-parse --show-toplevel)
+  else mkdir -p "$d/look"; echo $$ > "$d/look/pid"; look=$(git-claude-worktree take review "$d/look" "$head" 2>>"$d/log"); fi
   i=0; while [ "$i" -lt "$n" ]; do chapter "$i" & i=$((i + 1)); done
   wait
+  [ -n "$look" ] && [ -z "${OTIS_WALK_HERE:-}" ] && git-claude-worktree release "$look"
 }
 tassemble() { $walk tour-assemble "$d" 2>>"$d/log"; }
 stops='{"type":"object","additionalProperties":false,"required":["intent","stops"],"properties":{"intent":{"type":"string"},"stops":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","says","path","start","end","focus","test","proves"],"properties":{"title":{"type":"string"},"says":{"type":"string"},"path":{"type":"string"},"start":{"type":"integer"},"end":{"type":"integer"},"focus":{"type":"integer"},"test":{"type":"string"},"proves":{"type":"string"}}}}}}'
@@ -694,9 +716,11 @@ gaps='{"type":"object","additionalProperties":false,"required":["clear","gaps"],
 chapter() {
   i=$1 c=$d/tour.c$1
   what=$([ "$n" -gt 1 ] && echo "chapter $(($1 + 1))" || echo "the tour")
-  $walk tour-prompt "$d" "$i" > "$c.prompt" 2>>"$d/log" || { rm -f "$c.state"; tassemble; return; }
+  $walk tour-prompt "$d" "$i" ${look:+look} > "$c.prompt" 2>>"$d/log" || { rm -f "$c.state"; tassemble; return; }
   say "Claude is writing $what"
-  ask "$model" "$stops" "$c.prompt" "writing $what" > "$c.new"
+  # In a subshell: sh keeps what is set before a function's call, and the
+  # chapter's reader, asked next, is to have no tools.
+  (adir=$look atools=${look:+Read,Grep,Glob}; ask "$model" "$stops" "$c.prompt" "writing $what") > "$c.new"
   jq -e '.stops | length > 0' "$c.new" >/dev/null 2>&1 || { rm -f "$c.new" "$c.state"; tassemble; say "no tour came back for $what"; return; }
   mv "$c.new" "$c.json"
   if [ -s "$d/cover.json" ]; then echo checking > "$c.state"; tassemble; read_chapter "$i"
