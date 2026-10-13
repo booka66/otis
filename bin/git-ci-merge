@@ -38,17 +38,25 @@ waits() {
   esac
 }
 
+# merge_status <json>: its detailed_merge_status. GitLab goes on saying conflict
+# after a push has put that answer out of date, and says it once more in the
+# answer to the call that asks for the recheck: has_conflicts is true only of
+# a conflict it has checked, so one it has not is unchecked, and waited for.
+merge_status() {
+  printf '%s' "$1" | jq -r 'if .detailed_merge_status == "conflict" and .has_conflicts == false then "unchecked" else .detailed_merge_status end'
+}
+
 if [ "$1" = --check ]; then
   iid=$2
   [ -n "$iid" ] || exit 0
   json=$(mr "?with_merge_status_recheck=true") || exec git-fzf-note "could not reach GitLab for !$iid"
   tries=0
-  status=$(printf '%s' "$json" | jq -r .detailed_merge_status)
+  status=$(merge_status "$json")
   while { [ "$status" = unchecked ] || [ "$status" = checking ] || [ "$status" = approvals_syncing ]; } && [ $tries -lt 8 ]; do
     sleep 0.5
     tries=$((tries + 1))
     json=$(mr "") || exec git-fzf-note "could not reach GitLab for !$iid"
-    status=$(printf '%s' "$json" | jq -r .detailed_merge_status)
+    status=$(merge_status "$json")
   done
   case $status in
     mergeable) exec echo "execute(git-ci-merge $iid)" ;;

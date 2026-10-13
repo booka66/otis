@@ -2234,6 +2234,8 @@ case $2 in
   */6\?*) mr discussions_not_resolved false '{"id":1}' ;;
   */7\?*) mr draft_status false '{"id":1}' ;;
   */8\?*) mr conflict false '{"id":1}' ;;
+  */9\?*) mr conflict false '{"id":1}' | jq -c '. + {has_conflicts: false}' ;;
+  */9) mr mergeable false '{"id":1}' ;;
 esac
 STUB
 chmod +x "$tmp/mgstub/glab"
@@ -2249,6 +2251,9 @@ expect ci-merge/draft-refused "$(mcheck 7; cat "$tmp/mgstate/note")" "ignore
 !7 can't merge yet: it is a draft; R marks it ready"
 expect ci-merge/conflict-refused "$(mcheck 8; cat "$tmp/mgstate/note")" "ignore
 !8 can't merge yet: it has conflicts; gup to rebase"
+# A conflict GitLab found before a push it has not looked at since
+# (has_conflicts false) is not one yet: m waits for the recheck it asked for.
+expect ci-merge/stale-conflict-rechecked "$(mcheck 9)" "execute(git-ci-merge 9)"
 
 # --- git-mr-rebase: b has GitLab rebase the MR, and the local branch follows
 # it to the rebased commit. GitLab is a stub: its rebase moves the branch on
@@ -2436,6 +2441,35 @@ expect forge/gitlab-can "$(git-forge can deploys; echo $?)" "0"
 expect forge/gitlab-lacks "$(git-forge lacks)" "main-builds"
 expect forge/gitlab-mr-update "$(PATH=$tmp/fgstub:$PATH git-forge mr-update 7 --ready --label x)" "mr|update|7|--ready|--label|x|"
 expect forge/gitlab-approve "$(PATH=$tmp/fgstub:$PATH git-forge approve 7 abc)" "mr|approve|7|--sha|abc|"
+# A list says CONFLICT of an MR whose conflict GitLab found before a push it
+# has not looked at since (conflicts false): the list asks GitLab to look,
+# and says what it finds. GitLab is a stub: its list is $FM/list, and its REST
+# list notes what was asked and answers $FM/rest, the recheck done by then
+# ($FM/next becomes the list). One GitLab does not get to is unchecked; a
+# conflict it has checked is a conflict, and nothing is asked.
+fm=$tmp/fm
+mkdir -p "$fm/stub"
+cat > "$fm/stub/glab" <<'STUB'
+#!/bin/sh
+case $2 in
+  graphql) cat "$FM/list" ;;
+  *) printf '%s\n' "$2" >> "$FM/asked"
+     [ -e "$FM/rest" ] || exit 1
+     cat "$FM/rest"
+     [ ! -e "$FM/next" ] || mv "$FM/next" "$FM/list" ;;
+esac
+STUB
+chmod +x "$fm/stub/glab"
+fm_list() { printf '{"data": {"currentUser": {"authoredMergeRequests": {"nodes": [{"iid": "7", "detailedMergeStatus": "%s", "conflicts": %s}, {"iid": "8", "detailedMergeStatus": "NOT_APPROVED", "conflicts": false}]}}}}\n' "$1" "$2"; }
+fm_mrs() { PATH=$fm/stub:$PATH FM=$fm git-forge mrs mine | jq -c '[.data.currentUser.authoredMergeRequests.nodes[] | [.iid, .detailedMergeStatus]]'; }
+fm_list CONFLICT false > "$fm/list"; fm_list MERGEABLE false > "$fm/next"; echo '[{"merge_status": "can_be_merged"}]' > "$fm/rest"
+expect forge/gitlab-stale-conflict-rechecked "$(fm_mrs; cat "$fm/asked")" '[["7","MERGEABLE"],["8","NOT_APPROVED"]]
+projects/:fullpath/merge_requests?per_page=100&with_merge_status_recheck=true&iids[]=7'
+fm_list CONFLICT false > "$fm/list"; rm -f "$fm/rest" "$fm/asked"
+expect forge/gitlab-stale-conflict-unchecked "$(fm_mrs)" '[["7","UNCHECKED"],["8","NOT_APPROVED"]]'
+fm_list CONFLICT true > "$fm/list"; rm -f "$fm/asked"
+expect forge/gitlab-conflict-kept "$(fm_mrs; [ -e "$fm/asked" ] || echo not asked)" '[["7","CONFLICT"],["8","NOT_APPROVED"]]
+not asked'
 git config otis.forge github; git config otis.host github.com; git config otis.project o/r
 pr='{"number":5,"title":"T","body":"d","url":"https://github.com/o/r/pull/5","isDraft":false,"createdAt":"2026-09-01T00:00:00Z",
  "updatedAt":"2026-09-02T00:00:00Z","headRefName":"feat","baseRefName":"main","headRefOid":"'$h'","baseRefOid":"'$b'",

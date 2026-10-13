@@ -4,11 +4,14 @@
 # through git-cached-json under the same cache names, so whichever picker you
 # open first warms the other, and a field added here lands in both.
 #
+# conflicts is there for git-forge, which reads detailedMergeStatus by it:
+# GitLab goes on answering CONFLICT after that answer has gone out of date.
+#
 #   mr_fields        the node body of an MR in a list you did not author
 #   mr_review_query  the MRs requesting your review
 #   mr_mine_query    your open MRs, with their pipelines and jobs
 #   mr_all_query     every open MR in the project, most recently updated first
-mr_fields='nodes { iid title author { username } sourceBranch targetBranch webUrl detailedMergeStatus createdAt updatedAt description
+mr_fields='nodes { iid title author { username } sourceBranch targetBranch webUrl detailedMergeStatus conflicts createdAt updatedAt description
   resolvableDiscussionsCount resolvedDiscussionsCount approved approvalsLeft autoMergeEnabled diffRefs { headSha baseSha startSha }
   diffStatsSummary { additions deletions fileCount }
   approvedBy { nodes { username } } headPipeline { id status path }
@@ -22,7 +25,7 @@ mr_all_query='query($repo: ID!) { currentUser { username } project(fullPath: $re
 
 mr_mine_query='query($repo: String!) { currentUser { username authoredMergeRequests(state: opened, first: 100, projectPath: $repo, sort: UPDATED_DESC) { nodes {
   iid title draft sourceBranch targetBranch webUrl approved approvalsRequired approvalsLeft autoMergeEnabled mergeUser { username }
-  detailedMergeStatus createdAt updatedAt resolvableDiscussionsCount resolvedDiscussionsCount diffRefs { headSha baseSha startSha }
+  detailedMergeStatus conflicts createdAt updatedAt resolvableDiscussionsCount resolvedDiscussionsCount diffRefs { headSha baseSha startSha }
   diffStatsSummary { additions deletions fileCount }
   reviewers { nodes { username mergeRequestInteraction { reviewState } } }
   labels { nodes { title } }
