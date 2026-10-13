@@ -20,18 +20,18 @@
 @media (prefers-color-scheme: light){
   :root:not([data-theme="dark"]){
     color-scheme:light;
-    --ground:#fbf1c7; --panel:#f9f5d7; --code:#f2e5bc; --lift:#e5d5ad; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+    --ground:#fbf1c7; --panel:#f9f5d7; --code:#f3ead0; --lift:#e3d3a8; --rule:#ebdbb2; --rule-strong:#d5c4a1;
     --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#928374;
     --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
-    --plus:#e6e4bd; --minus:#f5d9c4; --plus-strong:#d2d38e; --minus-strong:#efbfa6;
+    --plus:#d9e3ad; --minus:#f2cdb9; --plus-strong:#bfd27a; --minus-strong:#e9ab93;
   }
 }
 :root[data-theme="light"]{
   color-scheme:light;
-  --ground:#fbf1c7; --panel:#f9f5d7; --code:#f2e5bc; --lift:#e5d5ad; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+  --ground:#fbf1c7; --panel:#f9f5d7; --code:#f3ead0; --lift:#e3d3a8; --rule:#ebdbb2; --rule-strong:#d5c4a1;
   --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#928374;
   --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
-  --plus:#e6e4bd; --minus:#f5d9c4; --plus-strong:#d2d38e; --minus-strong:#efbfa6;
+  --plus:#d9e3ad; --minus:#f2cdb9; --plus-strong:#bfd27a; --minus-strong:#e9ab93;
 }
 
 *{box-sizing:border-box}
@@ -98,18 +98,20 @@ table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; fon
 .facts th.was{color:var(--red)} .facts th.now{color:var(--green)}
 .facts th .why{text-transform:none; letter-spacing:0; font-weight:400; color:var(--faint); margin-left:8px}
 .facts td{padding:6px 14px; vertical-align:top}
-.facts td.q{color:var(--soft); padding-left:0; width:30%}
+.facts td.q{color:var(--soft); padding-left:0; width:28%}
 .facts td.was{background:var(--minus); border-radius:6px 0 0 6px}
 .facts td.now{background:var(--plus); border-radius:0 6px 6px 0; color:var(--ink)}
 .facts td.now:first-of-type, .facts td.solo{border-radius:6px}
-.facts .tested{color:var(--green); margin-left:6px}
+.facts td.pin{padding-left:10px; font:12.5px var(--mono); color:var(--faint); white-space:nowrap; width:1%}
+.facts td.pin b{color:var(--green); font-weight:700; margin-right:5px}
+.facts td.pin code{display:block; margin-top:2px; white-space:pre-wrap; font-size:11.5px; color:var(--soft); background:none; padding:0}
 .facts caption{caption-side:bottom; text-align:left; font-size:13px; color:var(--faint); padding-top:6px}
 
 .said{margin:20px 0 0; display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:4px 14px; max-width:60em; font-size:15px}
 .said dt{color:var(--faint)}
 .said dd{margin:0}
 .said blockquote{margin:0; font-style:italic; color:var(--soft)}
-.said .none{color:var(--orange)}
+.said .none{color:var(--faint); font-style:italic}
 
 /* the route: who calls whom as the case runs, every function's code in one column, notes in another */
 .route{margin:28px 0 0}
@@ -123,6 +125,9 @@ table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; fon
 .head .mk{font-size:13px}
 .head code{font-size:14px; font-weight:650; padding:.12em .45em}
 .head .file{font:13px var(--mono); color:var(--faint)}
+.head .step{font:600 12.5px var(--mono); color:var(--faint); min-width:1.6ch; text-align:right}
+.head .file code{font-size:12.5px; font-weight:400; padding:.05em .35em}
+.ln.del .no, .ln .no.old{color:var(--red)}
 .purpose{padding:0 0 6px; color:var(--soft); font-size:15px}
 .ln{display:grid; grid-template-columns:5ch 2.2ch minmax(0,1fr); align-content:center; background:var(--code); font:12.5px/1.65 var(--mono); color:var(--comment); min-width:0}
 .ln .no{text-align:right; padding-right:.6ch; color:var(--comment); user-select:none}
@@ -153,7 +158,8 @@ table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; fon
 .tests ul{margin:0; padding:0; list-style:none}
 .tests li::before{content:"◦ "; color:var(--faint)}
 .tests .file{font:13px var(--mono); color:var(--faint); margin-top:4px}
-.tests .none{color:var(--orange)}
+.tests .none{color:var(--faint); font-style:italic}
+.tests .data{font:13px var(--mono); color:var(--soft)}
 
 /* what no case runs, as a plain diff */
 .plain{margin:18px 0 0}
@@ -299,12 +305,13 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
     + " Claude chose the cases and wrote the words. otis found every line it cites in the code, drew who calls whom from the code itself, and dropped what it could not find."));
   const legend = el("div", "legend");
   const chip = (cls) => { const c = el("span", "chip"); c.style.background = "var(--" + cls + ")"; return c; };
+  // Only the marks this page uses.
+  const used = new Set(cases.flatMap((c) => (c.stops || []).map((s) => s.mark)));
   legend.append(
     el("span", null, chip("plus-strong"), "a line that decides the case"),
     el("span", null, el("b", "m-changed", "◀"), " what holds on it, in Claude's words"),
-    el("span", null, el("span", "m-changed", "◆"), " changed here"),
-    el("span", null, el("span", "m-touched", "●"), " in changed code"),
-    el("span", null, el("span", "m-outside", "○"), " not in this change"));
+    ...[["◆", "m-changed", " changed here"], ["●", "m-touched", " in changed code"], ["○", "m-outside", " not in this change"]]
+      .filter(([mark]) => used.has(mark)).map(([mark, cls, says]) => el("span", null, el("span", cls, mark), says)));
   main.append(legend);
 
   // A case's route: rows in one grid, so the notes of every function line up in one column however deep it sits.
@@ -330,10 +337,15 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       ...kids[i].map((k) => ({ ...stops[k].call, mine: true })),
     ].sort((a, b) => a.n - b.n).filter((l, at, all) => !at || all[at - 1].n !== l.n);
 
+    // Each function a step, numbered in the order the route reaches it.
+    let step = 0;
     function draw(i, depth) {
       const s = stops[i];
       const mark = s.mark === "◆" ? "m-changed" : s.mark === "●" ? "m-touched" : "m-outside";
-      const hd = el("div", "head", el("span", "mk " + mark, s.mark), el("code", null, s.name), el("span", "file", s.where + (s.inChange ? "" : ", not in this change")));
+      const file = el("span", "file", s.where);
+      if (s.inside) file.append(", inside ", el("code", null, s.inside));
+      if (!s.inChange) file.append(", not in this change");
+      const hd = el("div", "head", el("span", "step", String(++step)), el("span", "mk " + mark, s.mark), el("code", null, s.name), file);
       row(depth, hd);
       if (s.is) row(depth + 1, para("purpose", s.is));
       const code = codeOf(i);
@@ -351,10 +363,10 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
         const src = el("span", "src");
         const text = l.t.replace(/\t/g, "    ");
         src.innerHTML = dedent(l.html != null ? l.html : esc(text), Number.isFinite(cut) ? cut : 0);
-        ln.append(el("span", "no", String(l.n)), el("span", "sg", l.sign === "-" ? "−" : l.sign === "+" ? "+" : ""), src);
+        ln.append(el("span", "no" + (l.mine === false ? " old" : ""), String(l.n)), el("span", "sg", l.sign === "-" ? "−" : l.sign === "+" ? "+" : ""), src);
         const note = el("div", "note" + (l.cited && l.value ? " lit" : calls.length ? " call" : ""));
         if (l.cited && l.value) note.append(prose(l.value));
-        else if (calls.length) note.append("uses ", ...calls.flatMap((k, n) => [n ? " and " : "", el("code", null, stops[k].name)]), ", below");
+        else if (calls.length) note.append((stops[calls[0]].call.verb || "uses") + " ", ...calls.flatMap((k, n) => [n ? " and " : "", el("code", null, stops[k].name)]), ", below");
         row(depth + 1, ln, note);
         run.push(ln);
         if (calls.length) {
@@ -367,8 +379,16 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       for (const k of kids[i]) if (!drawn.has(k)) draw(k, depth + 1);
     }
     roots.forEach((i, at) => {
-      if (at && !c.hops[i]) box.append(el("p", "hop", "Nothing above calls this or hands it anything: that it runs next is Claude's reading."));
-      else if (at) box.append(el("div", "hop"));
+      // What ties it to the code above when nothing there calls it, so that it runs next is Claude's reading.
+      const hop = c.hops[i];
+      if (at && hop !== true && hop != null) {
+        const p = el("p", "hop");
+        if (hop === "seam") p.append("Nothing above calls this; seam links it to the code above");
+        else if (hop) p.append("Nothing above calls this; it shares ", el("code", null, hop), " with the code above");
+        else p.append("Nothing above calls this or hands it anything");
+        p.append(", so that it runs next is Claude's reading.");
+        box.append(p);
+      } else if (at) box.append(el("div", "hop"));
       draw(i, 0);
     });
     return box;
@@ -377,13 +397,14 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
   function facts(c) {
     if (!c.facts.length) return null;
     const t = el("table", "facts");
-    const tested = c.facts.some((f) => f.known === "test");
+    const pins = c.facts.filter((f) => f.pinned).length;
     const hr = el("tr", null, el("th"));
     if (c.fresh) {
       const th = el("th", "now", "now");
       th.append(el("span", "why", "new code: the route starts in code this change adds, so there is no before"));
       hr.append(th);
     } else hr.append(el("th", "was", "before"), el("th", "now", "after"));
+    if (pins) hr.append(el("th", null, "asserted at"));
     t.append(el("thead", null, hr));
     const tb = el("tbody");
     for (const f of c.facts) {
@@ -392,11 +413,16 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       tr.append(q);
       if (!c.fresh) { const was = el("td", "was"); was.append(prose(f.before || "·")); tr.append(was); }
       const now = el("td", "now" + (c.fresh ? " solo" : "")); now.append(prose(f.after || "·"));
-      if (f.known === "test") { const dot = el("span", "tested", "●"); dot.title = "a test in this change checks it"; now.append(dot); }
       tr.append(now);
+      if (pins) {
+        const pin = el("td", "pin");
+        if (f.pinned) { pin.append(el("b", null, "✓"), f.pinned.where, el("code", null, f.pinned.t)); pin.title = f.pinned.path + ":" + f.pinned.n; }
+        tr.append(pin);
+      }
       tb.append(tr);
     }
-    t.append(tb, el("caption", null, tested ? "● a test in this change checks it; the rest is Claude's reading of the code" : "Claude's reading of the code: no test in this change checks these answers"));
+    t.append(tb, el("caption", null, pins ? "✓ the test line that asserts it" + (pins < c.facts.length ? "; the rest is Claude's reading of the code" : "")
+      : c.runs.length ? "Claude's reading of the code: no test line here asserts these answers" : "Claude's reading of the code: no test in this change asserts these answers"));
     return t;
   }
 
@@ -430,6 +456,10 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       const ul = el("ul");
       for (const r of c.runs.filter((x) => x.where === file)) ul.append(el("li", null, r.name));
       td.append(ul);
+    }
+    if (c.data && c.data.length) {
+      td.append(el("div", "file", "runs on data in"));
+      for (const path of c.data) td.append(el("div", "data", path));
     }
     tests.append(td);
     body.append(tests);

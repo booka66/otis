@@ -138,9 +138,12 @@ function showCase() {
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
   // Where in the system this happens, for a reader who has never seen this code.
+  // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
   if (part.where) {
     say(`  ${C}WHERE THIS RUNS${R}`);
-    for (const line of prose(part.where, Math.min(W - 4, 100))) say(`  ${line}`);
+    const first = part.where.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? part.where;
+    if (!part.whereAt || part.whereAt === part.num || first === part.where) for (const line of prose(part.where, Math.min(W - 4, 100))) say(`  ${line}`);
+    else for (const line of prose(`${first} The rest of it is on case ${part.whereAt}.`, Math.min(W - 4, 100))) say(`  ${line}`);
     say();
   }
 
@@ -154,20 +157,23 @@ function showCase() {
   const facts = part.facts;
   if (facts.length) {
     const whatW = Math.min(Math.max(18, Math.floor(W / 4)), 36, Math.max(...facts.map((fact) => [...fact.what.replace(/`/g, "")].length)));
+    // An answer a test asserts says which test line, where the pane has room for it, else only that one does.
+    const pins = facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where.length);
+    const pinW = !pins.length ? 0 : W - 4 - whatW - 2 - 3 - Math.max(...pins) - 3 >= 40 ? Math.max(...pins) + 3 : 2;
     const row = (fact, cells) => {
       const what = prose(fact.what, whatW, C);
       const tall = Math.max(what.length, ...cells.map((cell) => cell.lines.length));
       for (let i = 0; i < tall; i++) {
-        const mark = i === 0 && fact.known === "test" ? `${G}●${R}` : " ";
-        say(`  ${pad(what[i] ?? "", whatW)}  ${cells.map(({ lines, w, ground }) => `${ground} ${lines[i] ?? ""}${ground}${" ".repeat(Math.max(0, w - width(lines[i] ?? "")))} ${R}`).join(" ")} ${mark}`);
+        const pin = i === 0 && fact.pinned ? `${G}✓${R}${pinW > 2 ? ` ${C}${fact.pinned.where}${R}` : ""}` : "";
+        say(`  ${pad(what[i] ?? "", whatW)}  ${cells.map(({ lines, w, ground }) => `${ground} ${lines[i] ?? ""}${ground}${" ".repeat(Math.max(0, w - width(lines[i] ?? "")))} ${R}`).join(" ")} ${pin}`);
       }
     };
     if (part.fresh) {
-      const nowW = Math.min(W - 4 - whatW - 2 - 4, 90);
+      const nowW = Math.min(W - 4 - whatW - 2 - 4 - pinW, 90);
       for (const [at, line] of prose("new code: the route starts in code this change adds, so there is no before", nowW - 4, C).entries()) say(`  ${" ".repeat(whatW + 2)}${at ? "     " : `${G} now${R} `}${line}`);
       for (const fact of facts) row(fact, [{ lines: prose(fact.after || "·", nowW - 2, T, PLUS), w: nowW - 2, ground: PLUS }]);
     } else {
-      const room = W - 4 - whatW - 2 - 3;
+      const room = W - 4 - whatW - 2 - 3 - pinW;
       const beforeW = Math.max(12, Math.floor(room * 0.45)), afterW = Math.max(12, room - beforeW - 2);
       say(`  ${" ".repeat(whatW + 2)}${X} before${R}${" ".repeat(Math.max(1, beforeW - 6))}${G} after${R}`);
       for (const fact of facts) {
@@ -177,19 +183,20 @@ function showCase() {
         ]);
       }
     }
-    const checked = part.facts.some((fact) => fact.known === "test");
-    const key = checked ? "● a test in this change checks it; the rest is Claude's reading of the code" : "Claude's reading of the code: no test in this change checks these answers";
-    for (const line of prose(key, W - 4 - whatW - 2, C)) say(`  ${" ".repeat(whatW + 2)}${line.replace("●", `${G}●${R}${C}`)}`);
+    const key = pins.length ? `✓ the test line that asserts it${pins.length < facts.length ? "; the rest is Claude's reading of the code" : ""}`
+      : part.runs.length ? "Claude's reading of the code: no test line here asserts these answers" : "Claude's reading of the code: no test in this change asserts these answers";
+    for (const line of prose(key, W - 4 - whatW - 2, C)) say(`  ${" ".repeat(whatW + 2)}${line.replace("✓", `${G}✓${R}${C}`)}`);
     say();
   }
   if (part.quote) band("the author", C, `“${part.quote}”`, C + I);
-  else if (part.kind === "also") band("the author", C, "never mentions this", A);
-  else band("the author", C, "said nothing about this", A);
+  else band("the author", C, part.kind === "also" ? "never mentions this" : "said nothing about this", C + I);
 
   // The route: who calls whom as the case runs. A stop under another is called from the line just above it,
   // which is drawn in the caller's code; a rail on the left runs down what is inside each function.
   say();
-  const legend = `${A}◆${R}${C} changed here  ${T}●${R}${C} in changed code  ○ not in this change${R}`;
+  const marks = new Set(part.stops.map((stop) => stop.mark));
+  const legend = [["◆", A, "changed here"], ["●", T, "in changed code"], ["○", C, "not in this change"]].filter(([mark]) => marks.has(mark))
+    .map(([mark, color, says]) => `${color}${mark}${R}${C} ${says}${R}`).join("  ");
   const title = `${C}WHO CALLS WHOM, as this case runs${R}`;
   if (width(title) + width(legend) + 6 <= W - 2) say(`  ${pad(title, W - 4 - width(legend))}${legend}`);
   else { say(`  ${title}`); say(`  ${legend}`); }
@@ -215,11 +222,13 @@ function showCase() {
   const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)));
   const edge = Math.min(W - 4, longest + 1, Math.max(W - 4 - Math.min(noted, 60) - 3, usual + 1)), aside = W - 4 - edge - 3;
 
+  // Each function a step, numbered in the order the route reaches it.
+  let step = 0;
   function drawStop(i, depth) {
     const stop = part.stops[i];
     const markColor = stop.mark === "◆" ? A : stop.mark === "●" ? T : C;
-    const head = `${markColor}${stop.mark}${R} ${RAISE}${B}${T}${stop.name}${R}`;
-    const place = `${C}in ${stop.where}${stop.inChange ? "" : ", not in this change"}${R}`;
+    const head = `${C}${++step}${R} ${markColor}${stop.mark}${R} ${RAISE}${B}${T}${stop.name}${R}`;
+    const place = `${C}in ${stop.where}${stop.inside ? `, inside ${RAISE}${T}${stop.inside}${R}${C}` : ""}${stop.inChange ? "" : ", not in this change"}${R}`;
     const room = W - 4 - 2 * depth;
     if (width(head) + width(place) + 2 <= room) say(`  ${rail(depth)}${head}  ${place}`);
     else { say(`  ${rail(depth)}${head}`); say(`  ${rail(depth + 1)}${place}`); }
@@ -236,8 +245,9 @@ function showCase() {
       const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
       const text = line.t.replace(/\t/g, "    ");
       const body = dent(line.cited || calls.length ? (line.paint ?? T + text).replace(/\t/g, "    ") : C + text, shared[i]).replace(/\x1b\[0m/g, R + ground);
-      const number = `${line.cited ? B + A : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
-      const value = line.cited ? line.value : calls.length ? `uses ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
+      // A line the change removed is numbered in red: its number is from before the change.
+      const number = `${line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
+      const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
       const style = line.cited ? B + A : C;
       const note = value && aside >= 16 ? prose(value, aside - 2, style) : [];
       const beside = note.length === 1;
@@ -256,7 +266,13 @@ function showCase() {
   }
   roots.forEach((i, at) => {
     if (at) say();
-    if (at && !part.hops[i]) say(`  ${C}┄ nothing above calls this or hands it anything: that it runs next is Claude's reading${R}`);
+    // What ties it to the code above when nothing there calls it, so that it runs next is Claude's reading.
+    const hop = part.hops[i];
+    if (at && hop !== true && hop != null) {
+      const tie = hop === "" || hop === false ? "nothing above calls this or hands it anything" : hop === "seam" ? "nothing above calls this; seam links it to the code above"
+        : `nothing above calls this; it shares \`${hop}\` with the code above`;
+      for (const line of prose(`┄ ${tie}, so that it runs next is Claude's reading`, W - 4, C)) say(`  ${line}`);
+    }
     drawStop(i, 0);
   });
   if (!part.stops.length) say(`  ${A}no line Claude cited could be found in the code, so there is no route to show${R}`);
@@ -264,12 +280,13 @@ function showCase() {
 
   // The tests in the change that run it, by file.
   say();
-  if (!part.runs.length) band("tested by", C, "no test in this change runs it", A);
+  if (!part.runs.length) band("tested by", C, "no test in this change runs it", C + I);
   const files = [...new Set(part.runs.map((run) => run.where))];
   for (const [at, path] of files.entries()) {
     band(at ? "" : "tested by", C, path, C);
     for (const run of part.runs.filter((one) => one.where === path)) wrap(run.name, Math.min(W - 20, 90)).forEach((line, i) => say(`  ${" ".repeat(13)}${T}${i ? "  " : "◦ "}${line}${R}`));
   }
+  if (part.data?.length) band("runs on", C, part.data.map((path) => path.split("/").at(-1)).join(", "), C);
   say();
 }
 
