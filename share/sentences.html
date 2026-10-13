@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>By sentence</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* One outline in one column: a sentence opens to its symbols, a symbol to its lines, and open parents pin to the top. */
+:root{
+  color-scheme:dark;
+  --ground:#1d2021; --panel:#282828; --recess:#1d2021; --raise:#32302f; --rule:#3c3836; --rule-strong:#504945;
+  --ink:#fbf1c7; --text:#ebdbb2; --soft:#bdae93; --faint:#a89984; --comment:#928374;
+  --red:#fb4934; --green:#b8bb26; --yellow:#fabd2f; --blue:#83a598; --purple:#d3869b; --aqua:#8ec07c; --orange:#fe8019;
+  --tint:14%;
+  --add-bg:color-mix(in srgb, var(--green) var(--tint), var(--recess));
+  --del-bg:color-mix(in srgb, var(--red) var(--tint), var(--recess));
+  --hover:color-mix(in srgb, var(--raise) 55%, var(--panel));
+  --mono:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --pad:18px;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --ground:#f2e5bc; --panel:#fbf1c7; --recess:#f9f5d7; --raise:#f2e5bc; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+    --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#7c6f64;
+    --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
+    --tint:17%;
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --ground:#f2e5bc; --panel:#fbf1c7; --recess:#f9f5d7; --raise:#f2e5bc; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+  --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#7c6f64;
+  --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
+  --tint:17%;
+}
+
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{background:var(--ground); color:var(--text); font:14px/1.5 var(--sans); -webkit-font-smoothing:antialiased}
+button{font:inherit; color:inherit}
+button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); outline-offset:2px}
+
+.wrap{max-width:1020px; margin-inline:auto; padding-inline:clamp(16px,4vw,36px); padding-block:30px 64px; display:flex; flex-direction:column; gap:22px}
+
+/* page header, outside the mock */
+.top{display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; gap:14px 28px}
+.top h1{margin:0 0 4px; font:600 15px/1.3 var(--mono); color:var(--ink)}
+.top p{margin:0; max-width:64ch; color:var(--soft); font-size:13.5px}
+.top p b{color:var(--yellow); font:500 13px var(--mono)}
+.switch{display:inline-flex; padding:3px; gap:2px; border:1px solid var(--rule-strong); border-radius:9px; background:var(--panel)}
+.switch button{font:500 12.5px var(--mono); color:var(--faint); background:none; border:0; padding:6px 12px; border-radius:6px; cursor:pointer}
+.switch button[aria-pressed="true"]{background:var(--raise); color:var(--ink)}
+
+/* the merge request page around the injected block, drawn faint on purpose */
+.host{display:flex; flex-direction:column; gap:8px; padding:6px 2px 0; color:var(--faint); font-family:var(--sans)}
+.host h2{margin:0; font:600 21px/1.3 var(--sans); color:var(--soft); text-wrap:balance}
+.host .meta{display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; font-size:13px}
+.host .pill{border:1px solid var(--rule-strong); border-radius:999px; padding:1px 9px; font-size:12px}
+.host code{font:12px var(--mono); background:var(--raise); border-radius:4px; padding:1px 5px}
+
+/* the mock */
+#app{--fs:13px; --fs-s:13px; --fs-sent:13px; --fs-code:13px; --ui:var(--mono)}
+#app[data-surface="mr"]{--fs:13.5px; --fs-s:12px; --fs-sent:19px; --fs-code:12.5px; --ui:var(--sans)}
+
+.frame{min-width:0; background:var(--panel); border:1px solid var(--rule-strong); border-radius:10px; font:var(--fs)/1.55 var(--mono); box-shadow:0 24px 48px -36px rgba(0,0,0,.55)}
+.bar{display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px 16px; padding:10px var(--pad); border-bottom:1px solid var(--rule); font-family:var(--ui)}
+.bar-id{color:var(--text)}
+.bar-id .mr{color:var(--yellow); font-family:var(--mono)}
+.bar-id .dim{color:var(--faint)}
+.bar-id .a{color:var(--green)} .bar-id .d{color:var(--red)}
+#app[data-surface="mr"] .bar-id .lead{font-weight:600; color:var(--ink)}
+.zoom{display:inline-flex; align-items:center; gap:2px; margin-left:-8px}
+.zoom button{background:none; border:0; padding:3px 8px; border-radius:5px; color:var(--faint); cursor:pointer}
+.zoom button[aria-pressed="true"]{background:var(--raise); color:var(--ink)}
+.zoom kbd{font:inherit; color:var(--yellow); margin-right:6px}
+.zoom .sep{color:var(--rule-strong); margin:0 3px}
+#app[data-surface="mr"] .zoom kbd{display:none}
+
+.outline{padding:6px 0 14px; outline-offset:-2px}
+#app[data-surface="term"] .outline{min-height:320px}
+
+.row{position:relative; cursor:pointer}
+@media (hover:hover){ .row:hover{background:var(--hover)} }
+.row.cur{background:var(--raise)}
+.row.cur::before{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--yellow)}
+.caret{display:inline-block; width:0; height:0; border-left:5px solid var(--faint); border-top:4px solid transparent; border-bottom:4px solid transparent; transition:transform .1s ease-out; align-self:center}
+.open > .row > .caret{transform:rotate(90deg)}
+.row.cur > .caret{border-left-color:var(--yellow)}
+
+/* level 1: a sentence */
+.sent + .sent{border-top:1px solid var(--rule)}
+.row-sent{display:grid; grid-template-columns:14px minmax(0,1fr); column-gap:10px; align-items:baseline; padding:14px var(--pad) 13px; position:sticky; top:env(safe-area-inset-top, 0px); z-index:3; background:var(--panel); scroll-margin-top:8px; scroll-margin-bottom:56px}
+.sent.open > .row-sent{box-shadow:0 1px 0 var(--rule)}
+.row-sent > .caret{margin-top:.55em; align-self:start}
+.s-text{color:var(--ink); font-family:var(--ui); font-size:var(--fs-sent); font-weight:600; line-height:1.4; text-wrap:balance}
+.s-meta{grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:5px 16px; margin-top:7px; color:var(--faint); font-size:var(--fs-s)}
+.pg{display:inline-flex; align-items:center; gap:8px}
+.pips{display:inline-flex; flex-wrap:wrap; gap:3px}
+.pip{width:8px; height:8px; border-radius:2px; border:1.5px solid currentColor}
+.pip.read{background:currentColor}
+.size{font-variant-numeric:tabular-nums}
+.size .a, .cnt .a{color:var(--green)} .size .d, .cnt .d{color:var(--red)}
+.prog.done{color:var(--green)}
+.m-new{color:var(--green)} .m-changed{color:var(--yellow)} .m-removed{color:var(--red)} .m-moved{color:var(--blue)}
+
+/* level 2: the symbols behind it */
+.kids{margin-left:calc(var(--pad) + 2px); border-left:1px solid var(--rule-strong); padding:4px 0 10px; animation:rise .12s ease-out}
+.div{padding:12px 14px 3px 41px; color:var(--faint); font-size:var(--fs-s)}
+#app[data-surface="mr"] .div{text-transform:uppercase; letter-spacing:.08em; font:500 11px var(--sans)}
+.row-sym{display:grid; grid-template-columns:12px 7.5ch minmax(0,1fr) auto 20px; column-gap:8px; align-items:baseline; padding:6px 14px 6px 21px; position:sticky; top:calc(env(safe-area-inset-top, 0px) + var(--sent-h, 64px)); z-index:2; background:var(--panel); scroll-margin-top:calc(var(--sent-h, 64px) + 8px); scroll-margin-bottom:56px}
+.row-sym > .caret{margin-top:.5em; align-self:start}
+.mark{font-size:var(--fs-s)}
+.who{min-width:0; overflow-wrap:anywhere}
+.nm{color:var(--ink); font-weight:500}
+.nm.prose{font-family:var(--ui); font-weight:400; color:var(--text)}
+#app[data-surface="mr"] .nm.prose{font-size:14px}
+.cases{font-family:var(--mono); color:var(--ink); font-weight:500}
+.kind{color:var(--faint); margin-left:9px; font-size:var(--fs-s)}
+.tag{color:var(--faint); margin-left:9px; font-size:var(--fs-s); border:1px solid var(--rule-strong); border-radius:4px; padding:0 5px}
+.cnt{white-space:nowrap; font-variant-numeric:tabular-nums; font-size:var(--fs-s); color:var(--faint)}
+.doc{grid-column:3 / 5; margin-top:1px; max-width:76ch; color:var(--soft); font-family:var(--ui); font-style:italic; overflow-wrap:anywhere}
+#app[data-surface="mr"] .doc{font-style:normal}
+.sym.open .doc{display:none}
+.rd{justify-self:end; align-self:start; margin-top:.15em; width:20px; height:20px; padding:0; display:grid; place-items:center; background:none; border:0; border-radius:50%; cursor:pointer; color:var(--green)}
+.rd .ring{width:10px; height:10px; border-radius:50%; border:1.5px solid var(--rule-strong)}
+.rd:hover .ring{border-color:var(--faint)}
+.rd svg{display:none; width:13px; height:13px}
+.sym.read .rd .ring{display:none}
+.sym.read .rd svg{display:block}
+.sym.read .nm, .sym.read .doc{color:var(--faint)}
+.sym.is-removed .nm{color:var(--soft); text-decoration:line-through; text-decoration-color:var(--rule-strong)}
+
+/* level 3: a symbol's lines */
+.lines{margin:2px 14px 12px 21px; background:var(--recess); border:1px solid var(--rule); border-radius:6px; overflow-x:auto; font:var(--fs-code)/1.6 var(--mono); animation:rise .12s ease-out}
+.lines-in{display:inline-block; min-width:100%; padding:8px 0 10px; vertical-align:top}
+.where{padding:0 14px 7px 3ch; color:var(--faint)}
+.ln{display:block; white-space:pre; min-height:1.6em; padding-right:16px}
+.sg{display:inline-block; width:3ch; text-align:center; color:var(--faint); user-select:none}
+.ln.add{background:var(--add-bg)} .ln.add .sg{color:var(--green)}
+.ln.del{background:var(--del-bg)} .ln.del .sg{color:var(--red)}
+.ln.fold{padding:2px 14px 2px 3ch; color:var(--faint); font-style:italic}
+.ln.sub{padding:10px 14px 3px 3ch; color:var(--soft); font-weight:500}
+.where + .ln.sub{padding-top:2px}
+.c{color:var(--comment); font-style:italic} .s{color:var(--green)} .n{color:var(--purple)} .k{color:var(--red)} .t{color:var(--yellow)} .f{color:var(--aqua)}
+
+/* what each key does on the row you are on */
+.keys{position:sticky; bottom:0; z-index:4; display:flex; flex-wrap:wrap; gap:3px 20px; padding:9px var(--pad) calc(9px + env(safe-area-inset-bottom, 0px)); border-top:1px solid var(--rule); border-radius:0 0 9px 9px; background:var(--panel); color:var(--faint)}
+.keys b{color:var(--yellow); font-weight:500; margin-right:2px}
+#app[data-surface="mr"] .keys{display:none}
+@media (hover:none){ .keys{display:none} }
+
+.note{margin:0; color:var(--faint); font-size:12.5px; max-width:78ch}
+.note code{font:12px var(--mono); color:var(--soft)}
+
+@keyframes rise{from{opacity:0} to{opacity:1}}
+@media (prefers-reduced-motion: reduce){ .kids, .lines{animation:none} .caret{transition:none} }
+
+@media (max-width:560px){
+  :root{--pad:12px}
+  #app{--fs:12px; --fs-s:12px; --fs-sent:12px; --fs-code:12px}
+  #app[data-surface="mr"]{--fs:13px; --fs-s:12px; --fs-sent:17px; --fs-code:12px}
+  .row-sym{column-gap:6px; padding-right:8px}
+  .lines{margin-left:10px; margin-right:8px}
+  .sent.open .size, .sent.open .sha{display:none}
+  .host h2{font-size:18px}
+}
+/* where a sentence came from, and one with nothing behind it */
+.origin{color:var(--faint)}
+.s-tag{color:var(--orange); border:1px solid color-mix(in srgb, var(--orange) 45%, transparent); border-radius:4px; padding:0 6px}
+.sent.from-model .s-text, .sent.from-rest .s-text{font-weight:500; color:var(--text)}
+.sent.empty > .row-sent{cursor:default}
+.sent.empty .s-text{font-weight:500; color:var(--soft)}
+.sent.empty .caret{visibility:hidden}
+.top h1 .lab{color:var(--yellow); margin-right:10px}
+.switch{margin-left:auto}
+#app[data-surface="mr"] .top > div:first-child{display:none}
+.s-text code{font:inherit; font-family:var(--mono); font-size:.92em; background:var(--raise); border-radius:4px; padding:1px 5px}
+#app[data-surface="term"] .s-text code{background:none; padding:0; font-size:1em; color:var(--aqua)}
+</style></head>
+<body>
+
+<main class="wrap" id="app" data-surface="term">
+  <header class="top">
+    <div>
+      <h1 id="top-title"></h1>
+      <p id="top-sub"></p>
+    </div>
+    <div class="switch" role="group" aria-label="Where it is shown">
+      <button type="button" id="sf-term" aria-pressed="true">Terminal</button>
+      <button type="button" id="sf-mr" aria-pressed="false">Merge request</button>
+    </div>
+  </header>
+
+  <div class="host" id="host" hidden aria-hidden="true">
+    <h2 id="host-title"></h2>
+    <div class="meta" id="host-meta"></div>
+  </div>
+
+  <section class="frame" aria-label="The change, by sentence">
+    <div class="bar">
+      <div class="bar-id" id="bar-id"></div>
+      <div class="zoom" role="group" aria-label="How far to open everything">
+        <button type="button" data-depth="1" aria-pressed="true"><kbd>1</kbd>sentences</button>
+        <span class="sep" aria-hidden="true">&rsaquo;</span>
+        <button type="button" data-depth="2" aria-pressed="false"><kbd>2</kbd>symbols</button>
+        <span class="sep" aria-hidden="true">&rsaquo;</span>
+        <button type="button" data-depth="3" aria-pressed="false"><kbd>3</kbd>lines</button>
+      </div>
+    </div>
+    <div class="outline" id="outline" role="tree" tabindex="0" aria-label="Sentences, then symbols, then lines"></div>
+    <div class="keys" id="keys" aria-hidden="true"></div>
+  </section>
+
+  <p class="note" id="note"></p>
+</main>
+
+<script>
+(() => {
+  const DATA = /*SENTENCES*/null;
+  const SENTENCES = DATA.sentences;
+  document.title = DATA.label + " by sentence";
+
+  const $ = (id) => document.getElementById(id);
+  const app = $("app"), outline = $("outline"), keys = $("keys"), host = $("host");
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  const rowsOf = (s) => [...s.code, ...s.tests];
+  const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const span = (c, s) => '<span class="' + c + '">' + esc(s) + "</span>";
+  const KEYWORD = /^(export|async|function|return|const|let|var|switch|case|if|else|elif|await|readonly|type|interface|import|from|new|throw|default|break|continue|for|while|in|of|do|try|catch|except|finally|raise|with|as|yield|class|extends|implements|def|lambda|fn|func|pub|mut|impl|struct|enum|match|use|mod|trait|where|static|public|private|protected|package|defer|go|end|then|not|and|or|is)$/;
+  const LITERAL = /^(true|false|null|undefined|None|True|False|nil|self|this)$/;
+  const BUILTIN = /^(string|boolean|number|void|unknown|int|float|bool|str|any|never|object)$/;
+  const TOKEN = /(\/\/.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(\d[\d_]*)\b|([A-Za-z_$][\w$]*)/g;
+  const HASHED = /\.(py|rb|sh|bash|zsh|ya?ml|toml|bazel|bzl|tf|pl|r|jl|ex|exs|mk)$|(^|\/)(BUILD|Makefile|Dockerfile)$/i;
+  function paint(code, hashed) {
+    const head = code.trimStart();
+    if (head.startsWith("/*") || head.startsWith("*") || head.startsWith("//") || (hashed && head.startsWith("#"))) return span("c", code);
+    let out = "", last = 0, m;
+    TOKEN.lastIndex = 0;
+    while ((m = TOKEN.exec(code))) {
+      out += esc(code.slice(last, m.index));
+      last = TOKEN.lastIndex;
+      const word = m[4];
+      if (m[1]) out += span("c", m[1]);
+      else if (m[2]) out += span("s", m[2]);
+      else if (m[3]) out += span("n", m[3]);
+      else if (KEYWORD.test(word)) out += span("k", word);
+      else if (LITERAL.test(word) || /^[A-Z][A-Z0-9_]+$/.test(word)) out += span("n", word);
+      else if (BUILTIN.test(word) || /^[A-Z]/.test(word)) out += span("t", word);
+      else if (code[last] === "(") out += span("f", word);
+      else out += esc(word);
+    }
+    return out + esc(code.slice(last));
+  }
+
+  const byId = {}, nodeOf = {}, pipOf = {};
+  const CHECK = '<span class="ring"></span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5l2.6 2.6 4.6-5.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const shown = (sym) => (sym.cases ? sym.name.replace("%s", sym.cases) : sym.name);
+
+  function symbolNode(sym) {
+    const node = el("div", "sym" + (sym.mark === "removed" ? " is-removed" : ""));
+    const row = el("div", "row row-sym");
+    row.id = "r-" + sym.key;
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", "2");
+    row.setAttribute("aria-expanded", "false");
+
+    const who = el("div", "who");
+    const name = el("span", "nm" + (sym.prose ? " prose" : ""));
+    if (sym.cases && sym.name.includes("%s")) {
+      const at = sym.name.indexOf("%s");
+      name.append(sym.name.slice(0, at), el("span", "cases", sym.cases), sym.name.slice(at + 2));
+    } else name.textContent = sym.name;
+    who.append(name, el("span", "kind", sym.kind));
+    if (sym.tag) who.append(el("span", "tag", sym.tag));
+
+    const cnt = el("span", "cnt");
+    if (sym.add) cnt.append(el("span", "a", "+" + sym.add));
+    if (sym.add && sym.del) cnt.append(" ");
+    if (sym.del) cnt.append(el("span", "d", "−" + sym.del));
+
+    const rd = el("button", "rd");
+    rd.type = "button";
+    rd.tabIndex = -1;
+    rd.setAttribute("aria-label", "Mark " + shown(sym) + " read");
+    rd.innerHTML = CHECK;
+
+    row.append(el("span", "caret"), el("span", "mark m-" + sym.mark, sym.mark), who, cnt, rd);
+    if (sym.doc) row.append(el("div", "doc", sym.doc));
+
+    const lines = el("div", "lines");
+    lines.hidden = true;
+    node.append(row, lines);
+    byId[sym.key] = sym;
+    nodeOf[sym.key] = node;
+    node.dataset.id = sym.key;
+    return node;
+  }
+
+  function buildLines(node) {
+    const box = node.lastElementChild;
+    if (box.firstChild) return;
+    const sym = byId[node.dataset.id];
+    const inner = el("div", "lines-in");
+    inner.append(el("div", "where", sym.where));
+    const hashed = HASHED.test(sym.where);
+    for (const raw of sym.lines) {
+      const sign = raw[0] || " ", code = raw.slice(1);
+      if (sign === "~") { inner.append(el("div", "ln fold", "···" + (code ? " " + code : ""))); continue; }
+      if (sign === "#") { inner.append(el("div", "ln sub", code.trim())); continue; }
+      const ln = el("div", "ln" + (sign === "+" ? " add" : sign === "-" ? " del" : ""));
+      const body = el("span", "cd");
+      body.innerHTML = paint(code, hashed);
+      ln.append(el("span", "sg", sign === "-" ? "−" : sign), body);
+      inner.append(ln);
+    }
+    box.append(inner);
+  }
+
+  function pipGroup(label, list) {
+    const group = el("span", "pg");
+    const pips = el("span", "pips");
+    for (const sym of list) {
+      const pip = el("i", "pip m-" + sym.mark);
+      pip.title = shown(sym);
+      pipOf[sym.key] = pip;
+      pips.append(pip);
+    }
+    group.append(el("span", null, label), pips);
+    return group;
+  }
+
+  function sentenceNode(s) {
+    const all = rowsOf(s);
+    all.forEach((sym, at) => { sym.key = s.id + "." + at; });
+    const node = el("div", "sent from-" + s.from + (all.length ? "" : " empty"));
+    node.dataset.id = s.id;
+    const row = el("div", "row row-sent");
+    row.id = "r-" + s.id;
+    row.setAttribute("role", "treeitem");
+    row.setAttribute("aria-level", "1");
+    if (all.length) row.setAttribute("aria-expanded", "false");
+
+    const meta = el("div", "s-meta");
+    if (s.from === "model") meta.append(el("span", "s-tag", "not the author's words"));
+    if (s.code.length) meta.append(pipGroup("code", s.code));
+    if (s.tests.length) meta.append(pipGroup("tests", s.tests));
+    if (all.length) {
+      const size = el("span", "size");
+      if (s.add) size.append(el("span", "a", "+" + s.add), " ");
+      if (s.del) size.append(el("span", "d", "−" + s.del));
+      meta.append(size);
+    } else meta.append(el("span", null, "nothing in the change sits under this"));
+    if (s.origin) meta.append(el("span", "origin sha", s.origin === "description" ? "the description" : s.origin));
+    meta.append(el("span", "prog"));
+    const text = el("span", "s-text");
+    s.text.split("`").forEach((part, at) => text.append(at % 2 ? el("code", null, part) : part));
+    row.append(el("span", "caret"), text, meta);
+
+    const kids = el("div", "kids");
+    kids.hidden = true;
+    kids.setAttribute("role", "group");
+    for (const sym of s.code) kids.append(symbolNode(sym));
+    if (s.tests.length) kids.append(el("div", "div", "tests"));
+    for (const sym of s.tests) kids.append(symbolNode(sym));
+    node.append(row, kids);
+    nodeOf[s.id] = node;
+    return node;
+  }
+
+  for (const s of SENTENCES) outline.append(sentenceNode(s));
+
+  // What has been read is a per-viewer convenience, so it lives in this browser only, by change.
+  const READ_KEY = "otis.sentences.read." + DATA.base + "-" + DATA.head, SURFACE_KEY = "otis.sentences.surface";
+  const store = {
+    get(key) { try { return localStorage.getItem(key); } catch (e) { return null; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* private window */ } },
+  };
+  const idOf = (sym) => sym.id;
+  let read;
+  try { read = new Set(JSON.parse(store.get(READ_KEY) || "[]")); } catch (e) { read = new Set(); }
+
+  function paintRead() {
+    for (const s of SENTENCES) {
+      const all = rowsOf(s);
+      let n = 0;
+      for (const sym of all) {
+        const on = read.has(idOf(sym));
+        if (on) n++;
+        nodeOf[sym.key].classList.toggle("read", on);
+        pipOf[sym.key].classList.toggle("read", on);
+      }
+      const prog = nodeOf[s.id].querySelector(".prog");
+      prog.textContent = n === 0 ? "" : n === all.length ? "all read" : n + " of " + all.length + " read";
+      prog.classList.toggle("done", all.length > 0 && n === all.length);
+    }
+    store.set(READ_KEY, JSON.stringify([...read]));
+  }
+
+  function toggleRead(node) {
+    if (node.classList.contains("sent")) {
+      const ids = rowsOf(SENTENCES.find((x) => x.id === node.dataset.id)).map(idOf);
+      const all = ids.every((id) => read.has(id));
+      for (const id of ids) all ? read.delete(id) : read.add(id);
+    } else {
+      const id = idOf(byId[node.dataset.id]);
+      read.has(id) ? read.delete(id) : read.add(id);
+    }
+    paintRead();
+    paintKeys();
+  }
+
+  let cur = null;
+  const isOpen = (node) => node.classList.contains("open");
+  const isSentence = (node) => node.classList.contains("sent");
+  const isEmpty = (node) => node.classList.contains("empty");
+
+  function setOpen(node, open) {
+    if (isEmpty(node)) return;
+    if (open && !isSentence(node)) buildLines(node);
+    node.classList.toggle("open", open);
+    node.firstElementChild.setAttribute("aria-expanded", String(open));
+    node.lastElementChild.hidden = !open;
+    if (!open && isSentence(node)) {
+      for (const child of node.querySelectorAll(".sym.open")) setOpen(child, false);
+    }
+  }
+
+  function depth() {
+    return outline.querySelector(".sym.open") ? 3 : outline.querySelector(".sent.open") ? 2 : 1;
+  }
+
+  function paintDepth() {
+    const now = depth();
+    for (const b of document.querySelectorAll(".zoom button")) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset.depth) === now));
+    }
+  }
+
+  function setCur(row, scroll) {
+    if (cur) cur.classList.remove("cur");
+    cur = row;
+    row.classList.add("cur");
+    outline.setAttribute("aria-activedescendant", row.id);
+    if (scroll) row.scrollIntoView({ block: "nearest" });
+    paintKeys();
+  }
+
+  function toggle(node) {
+    if (isEmpty(node)) return;
+    const open = !isOpen(node);
+    setOpen(node, open);
+    paintDepth();
+    paintKeys();
+    if (!open) node.firstElementChild.scrollIntoView({ block: "nearest" });
+  }
+
+  function setDepth(d) {
+    for (const node of outline.querySelectorAll(".sent")) setOpen(node, d >= 2);
+    for (const node of outline.querySelectorAll(".sym")) setOpen(node, d >= 3);
+    if (cur.offsetParent === null) setCur(cur.closest(".sent").firstElementChild, false);
+    paintDepth();
+    paintKeys();
+    cur.scrollIntoView({ block: "nearest" });
+  }
+
+  function move(step) {
+    const rows = [...outline.querySelectorAll(".row")].filter((r) => r.offsetParent !== null);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, rows.indexOf(cur) + step))];
+    if (next) setCur(next, true);
+  }
+
+  function stepIn() {
+    const node = cur.parentElement;
+    if (isEmpty(node)) return;
+    if (!isOpen(node)) toggle(node);
+    else if (isSentence(node)) move(1);
+  }
+
+  function stepOut() {
+    const node = cur.parentElement;
+    if (isOpen(node)) toggle(node);
+    else if (!isSentence(node)) setCur(node.closest(".sent").firstElementChild, true);
+  }
+
+  // The footer says what each key does on the row you are on.
+  function paintKeys() {
+    if (!cur) return;
+    const node = cur.parentElement, open = isOpen(node);
+    let list;
+    if (isEmpty(node)) {
+      list = [];
+    } else if (isSentence(node)) {
+      list = open
+        ? [["l", "into its symbols"], ["h", "close it"], ["v", "read, all of it"]]
+        : [["l", "the symbols behind it"], ["v", "read, all of it"]];
+    } else {
+      const done = read.has(idOf(byId[node.dataset.id]));
+      list = open
+        ? [["h", "close its lines"], ["v", done ? "not read after all" : "read it"]]
+        : [["l", "its lines"], ["h", "back to the sentence"], ["v", done ? "not read after all" : "read it"]];
+    }
+    list.push(["j k", "move"], ["1 2 3", "how deep"]);
+    keys.replaceChildren(...list.map(([key, label]) => {
+      const item = el("span");
+      item.append(el("b", null, key), " " + label);
+      return item;
+    }));
+  }
+
+  outline.addEventListener("click", (e) => {
+    const rd = e.target.closest(".rd");
+    if (rd) { toggleRead(rd.closest(".sym")); return; }
+    const row = e.target.closest(".row");
+    if (!row || String(window.getSelection())) return;
+    setCur(row, false);
+    toggle(row.parentElement);
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const onButton = e.target.closest && e.target.closest("button");
+    if (onButton && (e.key === "Enter" || e.key === " ")) return;
+    const acts = {
+      j: () => move(1), ArrowDown: () => move(1),
+      k: () => move(-1), ArrowUp: () => move(-1),
+      l: stepIn, ArrowRight: stepIn, Enter: stepIn,
+      h: stepOut, ArrowLeft: stepOut, Escape: stepOut,
+      v: () => toggleRead(cur.parentElement),
+      1: () => setDepth(1), 2: () => setDepth(2), 3: () => setDepth(3),
+    };
+    if (!Object.hasOwn(acts, e.key)) return;
+    e.preventDefault();
+    acts[e.key]();
+  });
+
+  for (const b of document.querySelectorAll(".zoom button")) {
+    b.addEventListener("click", () => setDepth(Number(b.dataset.depth)));
+  }
+
+  // The same outline in two places: a terminal pane, and a block on the merge request's page.
+  const size = () => [el("span", "a", "+" + DATA.add), " ", el("span", "d", "−" + DATA.del)];
+  const commitCount = plural(DATA.commits.length, "commit");
+  function setSurface(surface) {
+    app.dataset.surface = surface;
+    host.hidden = surface !== "mr";
+    $("sf-term").setAttribute("aria-pressed", String(surface === "term"));
+    $("sf-mr").setAttribute("aria-pressed", String(surface === "mr"));
+    const id = $("bar-id");
+    id.replaceChildren();
+    if (surface === "mr") {
+      id.append(el("span", "lead", "By sentence"), " ", el("span", "dim", "added by otis"));
+    } else {
+      id.append(el("span", "mr", DATA.label), " by sentence ", el("span", "dim", "· " + commitCount + " "), ...size());
+    }
+    store.set(SURFACE_KEY, surface);
+  }
+  $("sf-term").addEventListener("click", () => setSurface("term"));
+  $("sf-mr").addEventListener("click", () => setSurface("mr"));
+
+  $("top-title").append(el("span", "lab", DATA.label), DATA.title);
+  $("top-sub").textContent = plural(SENTENCES.length, "sentence") + " over " + plural(SENTENCES.reduce((n, s) => n + rowsOf(s).length, 0), "row") + ". Open a sentence for the symbols behind it, and a symbol for its lines.";
+  $("host-title").textContent = DATA.title;
+  $("host-meta").append(el("span", "pill", DATA.label), el("span", null, commitCount), el("span", "size", null));
+  $("host-meta").lastElementChild.append(...size());
+  const unsaid = SENTENCES.some((s) => s.from === "model");
+  $("note").textContent = (DATA.filedBy
+    ? "Each sentence is the author's own, from " + (DATA.described ? "the merge request's description or a commit message" : "a commit message") + ". A model put each row under one of them and wrote none of them"
+      + (unsaid ? ", except the ones marked as not the author's, which cover code no sentence of theirs does. " : ". ")
+    : "One sentence per commit, each the commit's subject. ")
+    + "A dotted line inside a symbol stands for lines of it that did not change. Read marks stay in this browser.";
+
+  // An open sentence pins to the top and an open symbol pins under it, so the symbol needs the sentence's height.
+  if ("ResizeObserver" in window) {
+    const watch = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        entry.target.parentElement.style.setProperty("--sent-h", Math.floor(entry.target.getBoundingClientRect().height) + "px");
+      }
+    });
+    for (const row of outline.querySelectorAll(".row-sent")) watch.observe(row);
+  }
+
+  setSurface(location.hash === "#mr" ? "mr" : location.hash === "#terminal" ? "term" : store.get(SURFACE_KEY) === "mr" ? "mr" : "term");
+  paintRead();
+  setCur(outline.querySelector(".row"), false);
+  paintDepth();
+})();
+</script>
+</body>
+</html>

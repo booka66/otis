@@ -1,0 +1,90 @@
+#!/bin/sh
+# git-sentences [--open | --warm | --text] [<rev>]: a change as its cases, each a situation the code meets,
+# how it ended before and how it ends now, and its route through the code as it runs (share/sentences.mjs).
+# The symbol view lists by its cases; G there is --open.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+
+# --pane <outline.json> <n>: the preview of case n: before and after, its route, what tests it (share/story-pane.mjs).
+if [ "$1" = --pane ]; then
+  [ -s "$2" ] || exit 0
+  exec node "$share/story-pane.mjs" "$2" "$3"
+fi
+
+mode=page
+case $1 in --open | --warm | --text | --build) mode=${1#--}; shift ;; esac
+rev=$1
+
+# stop <why>: say it where it will be read. Under a picker that is the terminal, until a key.
+stop() {
+  echo "git-sentences: $1" >&2
+  [ "$mode" = open ] && { printf 'press enter '; read -r _; }
+  exit 1
+}
+trunk() { git rev-parse --verify --quiet origin/main || git rev-parse --verify --quiet origin/master || git rev-parse --verify --quiet main; }
+case $rev in
+  worktree) stop "cases are followed between two commits, and this is not committed yet" ;;
+  '') base=$(git merge-base "$(trunk)" HEAD) head=HEAD ;;
+  *...*) l=${rev%%...*} r=${rev##*...}; base=$(git merge-base "${l:-HEAD}" "${r:-HEAD}") head=${r:-HEAD} ;;
+  *..*) base=${rev%%..*} head=${rev##*..}; head=${head:-HEAD} ;;
+  *) base=$(git merge-base "$(trunk)" "$rev") head=$rev ;;
+esac
+base=$(git rev-parse --verify --quiet "$base^{commit}") && head=$(git rev-parse --verify --quiet "$head^{commit}") ||
+  stop "not a change I can read: ${rev:-this branch}"
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/symbols-sentences"
+key=$base-$head
+page=$dir/$key.html rows=$dir/$key.tsv running=$dir/$key.running
+mkdir -p "$dir" || exit 1
+alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
+# What is kept stands until the change does not: its two commits never move, so only a newer otis writes again.
+fresh() { [ -s "$page" ] && [ -s "$rows" ] && [ ! "$share/sentences.mjs" -nt "$rows" ] && [ ! "$share/sentences.html" -nt "$rows" ] && [ ! "$share/cases.html" -nt "$rows" ]; }
+
+build() {
+  set -- "$base" "$head" --cache "$dir"
+  model=$(git config --get otis.sentencesModel) && set -- "$@" --model "$model"
+  label=$(git name-rev --name-only --refs='refs/heads/*' "$head" 2>/dev/null)
+  case $label in '' | undefined | *[~^]*) label=$(git rev-parse --short "$head") ;; esac
+  # In a review the merge request says more than its commits do, and in the words its reviewers were given.
+  if [ -n "$GMR_IID" ] && mr=$(git-forge api "projects/:fullpath/merge_requests/$GMR_IID" 2>/dev/null); then
+    printf '%s' "$mr" | jq -r '.description // ""' > "$dir/$key.words"
+    title=$(printf '%s' "$mr" | jq -r '.title // ""')
+    label="!$GMR_IID"
+    set -- "$@" --words "$dir/$key.words"
+    [ -n "$title" ] && set -- "$@" --title "$title"
+  fi
+  set -- "$@" --label "$label"
+  if [ "$mode" = text ]; then node "$share/sentences.mjs" "$@"; return; fi
+  node "$share/sentences.mjs" "$@" --html "$page.$$" --outline "$dir/$key.json.$$" >/dev/null || return 1
+  # The symbol view's list of it: each sentence, then where the symbol table has each row under it.
+  jq -r '.sentences | to_entries[] | (.key + 1) as $n | .value as $s
+    | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change] | @tsv),
+      ($s.units[] | ["R", $n] + . | @tsv)' "$dir/$key.json.$$" > "$rows.$$" || return 1
+  mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows"
+}
+
+case $mode in
+  text) build; exit ;;
+  build)
+    echo $$ > "$running"
+    trap 'rm -f "$running" "$page.$$" "$rows.$$" "$dir/$key.json.$$"; [ -s "$dir/$key.err" ] || rm -f "$dir/$key.err"' EXIT
+    build
+    exit ;;
+  warm)
+    fresh || alive || { otis-detach git-sentences --build "$base..$head" </dev/null >/dev/null 2>"$dir/$key.err" & }
+    exit 0 ;;
+esac
+
+if ! fresh; then
+  if alive; then
+    printf 'the change is being followed case by case ...\n' >&2
+    while alive; do sleep 0.2; done
+  else
+    printf 'following the change case by case, a minute or two the first time ...\n' >&2
+    build
+  fi
+  fresh || stop "could not write the page: $(head -c 300 "$dir/$key.err" 2>/dev/null)"
+fi
+[ "$mode" = open ] && exec otis-open "$page"
+printf '%s\n' "$page"

@@ -872,6 +872,25 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # h on the child closes run and, as the picker's transform, puts the
   # cursor on run's row, the first, before the reload.
   expect symbols/close-actions "$(GIT_FZF_STATE=$tmp/symst git-symbols --close 'lib.ts#run>lib.ts#Opts' git-symbols --rows x)" "pos(1)+reload(git-symbols --rows x)"
+  # By sentence (git-sentences): with no model a sentence is a commit's subject, and the change is under it.
+  git config otis.sentencesModel off
+  git-sentences "$base..$head" >/dev/null 2>&1
+  mkdir -p "$tmp/sentst"
+  srows() { GIT_FZF_STATE=$tmp/sentst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
+  expect sentences/first-row "$(srows | awk -F'\t' '$13 == "sent" { print $12 ":" $13 ":" $15 ":" $25 }')" "sentence:1:sent:closed:Head"
+  GIT_FZF_STATE=$tmp/sentst git-symbols --open sentence:1
+  expect sentences/open "$(srows | awk -F'\t' '$12 == "sentence:1>lib.ts#run" { print $13 ":" $14 }')" "sym:1"
+  expect sentences/close-child "$(GIT_FZF_STATE=$tmp/sentst git-symbols --close 'sentence:1>lib.ts#run' x)" "pos(2)+reload(x)"
+  GIT_FZF_STATE=$tmp/sentst git-symbols --viewed "$base..$head" toggle sentence:1
+  expect sentences/viewed-all "$(srows | awk -F'\t' '$12 == "sentence:1" { print $20 }')" "all"
+  GIT_FZF_STATE=$tmp/sentst git-symbols --viewed "$base..$head" toggle sentence:1
+  expect sentences/viewed-none "$(srows | awk -F'\t' '$12 == "sentence:1" { print "[" $20 "]" }')" "[]"
+  expect sentences/pane "$(GIT_FZF_STATE=$tmp/sentst git-symbols --preview "$base..$head" "" "" "" "" sentence:1 | strip | grep -c 'Head')" "1"
+  expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
+  GIT_FZF_STATE=$tmp/sentst git-symbols --sentences
+  expect sentences/by-symbol "$(srows | awk -F'\t' '$13 == "sent"' | wc -l | tr -d ' ')" "0"
+  rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
+  git config --unset otis.sentencesModel
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is
   # the mention a new call.

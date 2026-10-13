@@ -163,10 +163,11 @@ resize() {
 # --rows' parts; head for a heading; plain for a row with no parts); the
 # parts, dep through err; hay what / searches in.
 typeset -a raw rid typ dep fold kids chg add del vwd nop ndr nedge dim lab err cm hay gd gdw
-integer loaded=0 wa=1 wd=1 wt=0 mr=0
+integer loaded=0 wa=1 wd=1 wt=0 mr=0 bysent=0 bycase=0
 load() {
   local line i
   local -a f
+  bysent=0 bycase=0
   raw=() rid=() typ=() dep=() fold=() kids=() chg=() add=() del=() vwd=() nop=() ndr=() nedge=() dim=() lab=() err=() cm=() hay=()
   for line in ${(f)"$(<$1)"}; do
     f=("${(@ps:\t:)line}")
@@ -175,6 +176,8 @@ load() {
     if [[ -n $f[13] ]]; then typ+=("$f[13]")
     elif [[ -z $f[2] && ( -z $f[12] || $f[12] == gk-* ) ]]; then typ+=(head)
     else typ+=(plain); fi
+    [[ $f[13] == sent ]] && bysent=1
+    [[ $f[13] == sent && $f[26] == (case|also) ]] && bycase=1
     dep+=("${f[14]:-0}") fold+=("$f[15]") kids+=("$f[16]") chg+=("$f[17]") add+=("$f[18]") del+=("$f[19]")
     vwd+=("$f[20]") nop+=("$f[21]") ndr+=("$f[22]") nedge+=("$f[23]") dim+=("$f[24]") lab+=("$f[25]") err+=("$f[26]") cm+=("$f[27]")
   done
@@ -197,7 +200,7 @@ guides() {
   local i d k s
   gd=() gdw=()
   for (( i = $#raw; i >= 1; i-- )); do
-    if [[ $typ[i] == (head|plain|file) ]]; then seen=(); gd[i]= gdw[i]=0; continue; fi
+    if [[ $typ[i] == (head|plain|sent|more) || ( $typ[i] == file && $dep[i] == 0 ) ]]; then seen=(); gd[i]= gdw[i]=0; continue; fi
     d=$dep[i] s=
     for (( k = 1; k < d; k++ )); do [[ -n $seen[$k] ]] && s+="│  " || s+="   "; done
     if (( d > 0 )); then
@@ -240,6 +243,18 @@ rowline() {
       ;;
     plain)
       fields $i; cut "$fld[1]" $w; line=$REPLY; vw "$line"; used=$REPLY
+      ;;
+    sent)
+      # A part of the story: its number and its title's first line; the rest and its counts are the lines after (more).
+      [[ $fold[i] == open ]] && put "$A" "▾ " || put "$A" "▸ "
+      put "$A" "$cm[i]  "
+      if [[ -n $dim[i] ]]; then put "$C" "$lab[i]"; else put "$B$T" "$lab[i]"; line+=$UB; fi
+      ;;
+    more)
+      put "" "  "
+      if [[ $err[i] != t ]]; then line+=$lab[i]; vw "$lab[i]"; (( used += REPLY ))
+      elif [[ -n $dim[i] ]]; then put "$C" "$lab[i]"
+      else put "$B$T" "$lab[i]"; line+=$UB; fi
       ;;
     *)
       (( wt )) && { [[ $typ[i] == sym ]] && cells $i || put "" "   "; }
@@ -331,7 +346,7 @@ matches() {
   local w
   [[ -z $query ]] && return 0
   (( hayok )) || buildhay
-  [[ $typ[$1] == head ]] && return 1
+  [[ $typ[$1] == (head|more) ]] && return 1
   for w in ${=${(L)query}}; do [[ $hay[$1] == *"$w"* ]] || return 1; done
   return 0
 }
@@ -347,8 +362,11 @@ headline() {
   # The MR, and how it is read: by symbol, or (a review's f) by file.
   t=$title
   if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
+  (( bysent )) && t="the story"
+  (( bycase )) && t="case by case"
   [[ -e $st/by-file || -e $st/since ]] && t="by file"
   put "$B$T" "${t:-by symbol}"; line+=$UB
+  (( ! bysent )) && [[ -e $st/sentences-wait ]] && put "$A" "  its cases in a minute or two"
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
   L+=("") LI+=(0)
@@ -389,8 +407,10 @@ headline() {
 # columns, its guide, its line), so a reload that changed a few rows (v, l,
 # h, a landing) draws those few, not the thousands around them.
 typeset -A rlc ruc
+# MO, MP: for a line of the list that carries on a sentence (more), its row and the sentence's.
+typeset -A MO MP
 list() {
-  local i first=1 ctx key
+  local i first=1 ctx key sentrow=0
   if (( rlw != lw )); then
     RL=() RU=()
     ctx="$lw $wa $wd $wt $mr"
@@ -402,7 +422,7 @@ list() {
     done
     rlw=$lw
   fi
-  L=() LI=() vis=()
+  L=() LI=() vis=() MO=() MP=()
   headline $lw
   (( loaded )) || return
   if [[ -n $query ]] || (( searching )); then
@@ -414,6 +434,8 @@ list() {
     matches $i || continue
     # The tree's own heading, over its first root: where to start, or,
     # turned over (b), the sinks.
+    if [[ $typ[i] == more ]]; then L+=("  ${RL[i]}") LI+=(0); [[ -n $lab[i] ]] && MO[$#L]=$i MP[$#L]=$sentrow; continue; fi
+    [[ $typ[i] == sent ]] && sentrow=$i first=0
     if (( first )) && [[ $typ[i] != (head|plain|file) ]]; then
       if [[ -e $st/up ]]; then L+=("  ${C}SINKS FIRST$R  ${F}what uses them under each · b turns it back$R")
       else L+=("  ${C}START HERE$R  ${F}in reading order · b for the sinks first$R"); fi
@@ -1375,12 +1397,21 @@ crumb() {
       ;;
     callers) put "$C" "callers elsewhere, which the change did not touch" ;;
     package) put "$C" "package "; put "$EL" "$lab[i]" ;;
+    sent)
+      case $err[i] in
+        story) put "$T" "change ${cm[i]// /}" ;;
+        case) put "$T" "case ${cm[i]// /}" ;;
+        also) put "$T" "case ${cm[i]// /}, which the author never mentions" ;;
+        support) put "$T" "also changed, to support it" ;;
+        *) (( bycase )) && put "$T" "changed lines no case runs" || put "$T" "in the change, in no part" ;;
+      esac ;;
   esac
   # The way down to it: each step's name, a member's with its class.
   steps=("${(@s:>:)rid[i]}")
   if (( $#steps > 1 )); then
     for s in $steps[1,-2]; do
       [[ $s == callers ]] && { names+=("callers"); continue; }
+      [[ $s == sentence:* ]] && { (( bycase )) && names+=("case ${s#sentence:}") || names+=("part ${s#sentence:}"); continue; }
       n=${s#*\#}; n=${n#type }; n=${n//+/.}
       names+=("$n")
     done
@@ -1401,6 +1432,12 @@ symkeys() {
   (( i )) || return
   case $typ[i] in
     head|plain) rkl=(l "" h "" v "" i "" c "" F "" space "" y "") ; return ;;
+    sent)
+      rkl=(i "" c "" F "" space "" y "")
+      if [[ $fold[i] == open ]]; then rkl[l]="" rkl[h]="close it" rkl[enter]="close it"
+      else rkl[h]="" rkl[l]="its symbols: ${kids[i]}" rkl[enter]="its symbols: ${kids[i]}"; fi
+      if [[ $vwd[i] == all ]]; then rkl[v]="mark all under it not viewed"; else rkl[v]="mark all under it viewed"; fi
+      return ;;
   esac
   case $fold[i] in
     closed|quiet) if (( kids[i] > 0 )); then rkl[l]="open it: ${kids[i]} under it"; else rkl[l]="open it"; fi; rkl[h]="" ;;
@@ -1478,6 +1515,7 @@ draw() {
   # The cursor's row in view, the headline kept when it fits.
   (( rows = lh, lrows = lh - chh ))
   for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
+  while (( hi && ${MP[$(( hi + 1 ))]:-0} == cur )); do (( hi++ )); done
   (( hi > top + lrows )) && (( top = hi - lrows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
   (( lo > 0 && hi <= lrows )) && top=0
@@ -1548,6 +1586,7 @@ draw() {
         f=$LI[i]
         if (( ${LITI[(Ie)$i]} )); then litline $f $LITA[${LITI[(Ie)$i]}]; s=$REPLY
         else s="  "$RL[f]; fi
+      elif (( cur && ${MP[$i]:-0} == cur )); then s=$A"▌ "$R$BG${RL[$MO[$i]]//$R/$R$BG}$R
       else s=$L[i]$R; fi
     fi
     # Beside the pane, the list's side cleared first (ECH, which leaves the
@@ -2135,6 +2174,8 @@ handle() {
   # picker says are cheap (--repeat) act on every repeat. A repeat is the
   # same key again with no other between: v, j, v quickly is two files
   # marked, and the second v was dropped as if v were held.
+  # A sentence has no file to open: enter opens it, or closes it.
+  [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == sent ]] && { [[ $fold[cur] == open ]] && n=h || n=l; }
   if [[ -n $bind[$n] ]]; then
     if [[ -z $repeat[$n] && $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
     used $n
@@ -2178,7 +2219,7 @@ watched() {
   local -a watch=($watchfiles)
   if [[ -s $st/cache-root ]]; then
     croot=$(<$st/cache-root)
-    watch+=($croot/{symbols-gloss,symbols-walk,symbols-past,callers,callers-fix}(N/) $st/fixed(N))
+    watch+=($croot/{symbols-gloss,symbols-walk,symbols-past,symbols-sentences,callers,callers-fix}(N/) $st/fixed(N))
   fi
   (( $#watch )) || return 1
   [[ -n $GMR_IID ]] && watch+=($croot/mr-$GMR_IID-{threads,drafts}.json(N))

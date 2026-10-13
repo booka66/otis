@@ -98,7 +98,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--shape|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--sentences|--shape|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -157,6 +157,8 @@ case $mode in
   # they land, and otis-open opens it (below). What seam says when it fails (a seam too old for
   # --at) is the note.
   --page)
+    # Listed by sentence, the page is that list's: the same sentences, symbols and lines (git-sentences).
+    if read -r sentf 2>/dev/null < "$st/sentences" && [ -s "${sentf%.tsv}.html" ]; then exec otis-open --fzf "${sentf%.tsv}.html"; fi
     rev=$1 id=${2%%>callers*}; id=${id##*>}
     # otis.engine dagger: dagger's own page, which a server of its own on
     # localhost answers for as long as it runs, so the one this repo last
@@ -192,6 +194,8 @@ case $mode in
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
+  # W: the list by sentence (git-sentences), or back to the tree by symbol.
+  --sentences) if [ -e "$st/by-symbol" ]; then rm -f "$st/by-symbol"; else : > "$st/by-symbol"; fi; exit 0 ;;
   # Every row with something under it, at every depth: the render says which
   # as it walks, given OPEN_ALL, and writes them down where l would.
   --open-all) OPEN_ALL=1 git-symbols --rows "$1" > /dev/null; exit 0 ;;
@@ -247,6 +251,8 @@ case $mode in
       case $id in *#*+*) case ${id##*#} in *+*) b=${id%+*} ;; esac ;; esac
       [ "$a" = "$id" ] && a=
       if [ ${#a} -gt ${#b} ]; then id=$a; else id=$b; fi
+      # Under a sentence a member's class is no row: up again, to the nearest row that is open.
+      case $id in sentence:*) while ! grep -qxF -- "$id" "$st/open" && [ "${id%>*}" != "$id" ]; do id=${id%>*}; done ;; esac
     fi
     grep -vxF -- "$id" "$st/open" > "$st/open.new"; mv "$st/open.new" "$st/open"
     if [ $# -gt 0 ]; then
@@ -508,6 +514,11 @@ if [ "$mode" = --preview ]; then
     COLUMNS=${FZF_PREVIEW_COLUMNS:-92} SEAM_COLOR=1 seam --split --table "$st/symbols.tsv" "$rev" 2>&1
     exit 0
   fi
+  # A sentence's row: what is under it, each with its comment, from the outline git-sentences kept.
+  case $rid in sentence:*'>'*) ;; sentence:*)
+    read -r sentf 2>/dev/null < "$st/sentences" && git-sentences --pane "${sentf%.tsv}.json" "${rid#sentence:}"
+    exit 0 ;;
+  esac
   [ -n "$path" ] || exit 0
   # A commit or range never changes, so its preview of a row is rendered
   # once per picker and kept, keyed by the row, the width and the gloss and
@@ -1046,6 +1057,14 @@ if [ "$mode" = --viewed ]; then
   # has it open or not: a class's members and the changed symbols it uses,
   # bottom up (b) what uses it, all the way down.
   keys=$st/vkeys.$$ now=$st/vnow.$$
+  # v on a sentence takes every row under it, open or not.
+  sentf=
+  case $rid in sentence:*'>'*) ;; sentence:*) read -r sentf 2>/dev/null < "$st/sentences" ;; esac
+  if [ -n "$sentf" ]; then
+    awk -F'\t' -v n="${rid#sentence:}" 'FILENAME == ARGV[1] { if ($1 == "R" && $2 == n) want[$3 == "file" ? $4 : $4 SUBSEP $5 SUBSEP $6] = 1; next }
+      $2 == "file" { if ($1 in want) print $1; next }
+      (($1 SUBSEP $7 SUBSEP $8) in want) { print $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$sentf" "$table" > "$keys"
+  else
   awk -F'\t' -v k="$key" -v deep="$([ "$verb" = toggle ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" '
     $2 == "file" { fr[$1] = 1; next }
     { id = $1 "#" ($4 != "" ? $4 "+" : "") $3; ok[id] = 1; uses[id] = $18
@@ -1063,6 +1082,7 @@ if [ "$mode" = --viewed ]; then
         n = split(up ? users[id] : uses[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] in top) stack[++sp] = u[i]
       }
     }' "$table" > "$keys"
+  fi
   [ -s "$keys" ] || { rm -f "$keys"; exit 0; }
   awk -F'\t' "$vspec_awk" "$keys" "$table" > "$keys.spec"
   vhashes "$keys.spec"
@@ -1247,6 +1267,26 @@ if [ "$mode" = --rows ]; then
   case $rev in worktree) OTIS_CALLERS_KEY=$(cut -f1-7,13 "$table" | git hash-object --stdin) ;; *) OTIS_CALLERS_KEY=$OTIS_SYMBOLS_KEY ;; esac
   [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_SYMBOLS_KEY" > "$st/key" && printf '%s\n' "$OTIS_CALLERS_KEY" > "$st/callers-key"
   export OTIS_SYMBOLS_KEY OTIS_CALLERS_KEY OTIS_CACHE_ROOT
+  # By sentence unless W turned it off, once git-sentences has put the change under them: asked for here,
+  # once a head, and never where otis.symbolsModel off keeps Claude out of the symbol view.
+  sentf=/dev/null sentwait=
+  [ -n "$GIT_FZF_STATE" ] && rm -f "$st/sentences"
+  if [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
+    sentf=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.tsv
+    if [ -s "$sentf" ] && [ ! "$root/share/sentences.mjs" -nt "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"
+    else
+      sentf=/dev/null
+      asked=$st/sentences-asked.${now#* }
+      if [ ! -e "$asked" ]; then
+        : > "$asked"
+        [ "$(git config --get otis.symbolsModel)" = off ] ||
+          { git-sentences --warm "${now% *}..${now#* }" >/dev/null 2>&1; echo asked > "$asked"; }
+      fi
+      [ -s "$asked" ] && sentwait=1
+    fi
+  fi
+  # The screen says so beside its title, since the list is about to become another.
+  if [ -n "$GIT_FZF_STATE" ]; then if [ -n "$sentwait" ]; then : > "$st/sentences-wait"; else rm -f "$st/sentences-wait"; fi; fi
   # Claude's glosses, once they have landed (git-symbols-gloss), started
   # here; g asks again for the worktree. The cache is looked for here, a
   # file test, and the script is asked only when there is none to start it.
@@ -1339,8 +1379,14 @@ if [ "$mode" = --rows ]; then
         printf "${GK_CONTEXT}threads on its lines${GK_R}\n"
         printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or an agent's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
       fi
+      if [ "$sentf" != /dev/null ]; then
+        printf "${GK_CONTEXT}a case${GK_R}\n"
+        printf "  a situation the code meets, under where it comes in, and how it ended before ${GK_CONTEXT}\342\206\222${GK_R} how it ends now: ${GK_ATTENTION}yellow${GK_R} when it ends differently, ${GK_CONTEXT}\302\267 only a label${GK_R} when only what a log, a metric or a stored field reads changed, ${GK_CONTEXT}= the same${GK_R} when it ends as it did\n"
+        printf "  its pane: the values to compare, the author's own sentence on it, then its route through the code in the order it runs, each stop's deciding lines with what holds there; ${GK_ATTENTION}\342\227\206${GK_R} changed here, \342\227\217 in code the change touched, ${GK_CONTEXT}\342\227\213${GK_R} not in the change\n"
+        printf "  ${GK_CONTEXT}also changed${GK_R} cases the author never mentions   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   l its symbols, v marks all of it viewed, W lists by symbol\n\n"
+      fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
-      printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body   ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
+      printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
       printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: open above already, so L leaves it closed; l opens it here too\n"
       printf "  ${GK_GOOD}\342\234\223${GK_R} viewed, and the row dim: v marks a row and everything under it, and a symbol viewed under one row is viewed under every other; a mark lasts until the symbol's diff changes   ${GK_CONTEXT}3/5${GK_R} closed, three of the five symbols in it viewed\n"
       printf "  ${GK_ATTENTION}\342\207\242${GK_R} a call new to this change: top down the row above newly uses it, bottom up it newly uses the row above\n"
@@ -1413,6 +1459,11 @@ if [ "$mode" = --rows ]; then
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
     FILENAME == ARGV[5] { vd[$1] = 1; next }
     FILENAME == ARGV[6] { cm[$1] = $2; next }
+    FILENAME == ARGV[7] {
+      if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; if ($3 == "case" || $3 == "also") ncase++ }
+      else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
+      next
+    }
     FILENAME == ARGV[4] { x = ++ncall[$1]; cp[$1, x] = $2; cl[$1, x] = $3; cid[$1, x] = $4; chead[$1, x] = $5; cs[$1, x] = $6; ce[$1, x] = $7; cerr[$1, x] = $9 + 0; cpk[$1, x] = $11; next }
     # The open threads and drafts on a symbol: on its lines on its side, and
     # on its base lines for the threads that sit on removed ones.
@@ -1509,6 +1560,7 @@ if [ "$mode" = --rows ]; then
       }
       # The spine, Claude'"'"'s one sentence on the change, wrapped to the
       # list: the picker'"'"'s header, or first rows with no picker to head.
+      if (nsent) { bysentence(); print syms + 0, length(files), nsent > counts; exit }
       if (spine != "") {
         nw = split(spine, words, " "); ln = ""
         for (x = 1; x <= nw; x++) {
@@ -1567,22 +1619,114 @@ if [ "$mode" = --rows ]; then
       if ("-" in ncall) callers("-", 0, "->callers")
       for (i = 1; i <= m; i++) {
         if (row[i, 2] != "file") continue
-        p = row[i, 1]; ch = row[i, 6]; add = row[i, 11]; del = row[i, 12]
         if (!filed++) heading("files, and what no symbol claims", "gk-files-heading")
-        # A file row counts the threads on lines no symbol claims.
-        th = ""
-        if (mr) {
-          split("", hit)
-          for (k = 1; k <= nmarks; k++) if (mp[k] == p && !(k in claimed)) hit[k] = 1
-          th = threads(tally("open"), tally("draft"))
-        }
-        fv = p in vd
-        print (wt ? "   " : "") "  " (fv ? dimmed(gk_stat(add, del, wa, wd)) : gk_stat(add, del, wa, wd)) "      " th (fv ? GK_GOOD "\342\234\223" GK_R "    " : "     ") \
-          gk_path(p, budget - 4, (ch == "removed" || fv) ? GK_CONTEXT : GK_TEXT) \
-          "\t" p "\t1\tnew\t\t\t\t\t\t\t\t" p \
-          (draw ? "\tfile\t0\t\t\t" ch "\t" add "\t" del "\t" (fv ? "all" : "") "\t" (mr ? tally("open") : "") "\t" (mr ? tally("draft") : "") "\t\t" (fv || ch == "removed" ? 1 : "") "\t" p "\t" : "")
+        filerow(i, 0, row[i, 1])
       }
       print syms + 0, length(files), roots + 0 > counts
+    }
+    # filerow: a file, for what no symbol in it claims; its threads are those on such lines.
+    function filerow(i, depth, rid,   p, ch, add, del, th, fv, k, x, indent) {
+      p = row[i, 1]; ch = row[i, 6]; add = row[i, 11]; del = row[i, 12]
+      th = ""
+      if (mr) {
+        split("", hit)
+        for (k = 1; k <= nmarks; k++) if (mp[k] == p && !(k in claimed)) hit[k] = 1
+        th = threads(tally("open"), tally("draft"))
+      }
+      fv = p in vd
+      indent = ""; for (x = 0; x < depth; x++) indent = indent "   "
+      print (wt ? "   " : "") "  " (fv ? dimmed(gk_stat(add, del, wa, wd)) : gk_stat(add, del, wa, wd)) "      " th (fv ? GK_GOOD "\342\234\223" GK_R "    " : "     ") indent \
+        gk_path(p, budget - 4 - 3 * depth, (ch == "removed" || fv) ? GK_CONTEXT : GK_TEXT) \
+        "\t" p "\t1\tnew\t\t\t\t\t\t\t\t" rid \
+        (draw ? "\tfile\t" depth "\t\t\t" ch "\t" add "\t" del "\t" (fv ? "all" : "") "\t" (mr ? tally("open") : "") "\t" (mr ? tally("draft") : "") "\t\t" (fv || ch == "removed" ? 1 : "") "\t" p "\t" : "")
+    }
+    # A line of the list that is no row: a sentence going on, or its counts. Style t is the words of the sentence.
+    function more(text, style, dim) {
+      print "  " text "\t\t\t\t\t\t\t\t\t\t\tgk-more" (draw ? "\tmore\t0\t\t\t\t\t\t\t\t\t\t" dim "\t" text "\t" style "\t" : "")
+    }
+    # Words wrapped to w columns under ind, the first line led by lead (lw wide), in color, tail after the last.
+    function flow(text, ind, w, lead, lw, color, tail,   nw, x, ln, words, first) {
+      nw = split(text, words, " "); ln = ""; first = 1
+      for (x = 1; x <= nw; x++) {
+        if (ln != "" && length(ln " " words[x]) > w - lw) { more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R, "m", ""); ln = ""; first = 0 }
+        ln = (ln == "" ? "" : ln " ") words[x]
+      }
+      more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R tail, "m", "")
+    }
+    # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
+    # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
+    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
+      numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
+      ind = sprintf("%" (numw + 2) "s", "")
+      w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
+      for (i = 1; i <= m; i++) { if (row[i, 2] == "file") fat[row[i, 1]] = i; else sat[row[i, 1], row[i, 7], row[i, 8]] = i }
+      for (n = 1; n <= nsent; n++) {
+        rid = "sentence:" n; cnt = 0; vt = 0; vdn = 0; pips = ""
+        split("", hit)
+        for (x = 1; x <= nunder[n]; x++) {
+          i = (ukind[n, x] == "file") ? fat[upath[n, x]] : sat[upath[n, x], uside[n, x], ustart[n, x]]
+          if (!i || ((n, i) in had)) continue
+          had[n, i] = 1; placed[i] = 1; under[n, ++cnt] = i
+          vt++; if (vkey(i) in vd) vdn++
+          c = (row[i, 6] == "added") ? GK_GOOD : (row[i, 6] == "removed") ? GK_BAD : GK_ATTENTION
+          pips = pips c ((vkey(i) in vd) ? "\342\226\240" : "\342\226\241") GK_R
+          if (mr && row[i, 2] == "file") { for (k = 1; k <= nmarks; k++) if (mp[k] == row[i, 1] && !(k in claimed)) hit[k] = 1 }
+          else if (mr) hits(i)
+        }
+        to = mr ? tally("open") : ""; td = mr ? tally("draft") : ""
+        dim = (vt && vdn == vt) ? 1 : ""
+        vw = dim ? "all" : (vdn ? vdn "/" vt : "")
+        if (all && cnt && !(rid in open)) { open[rid] = 1; print rid >> openfile }
+        nw = split(stext[n], words, " "); nl = 0; ln = ""
+        for (x = 1; x <= nw; x++) {
+          if (ln != "" && length(ln " " words[x]) > w) { lines[++nl] = ln; ln = "" }
+          ln = (ln == "" ? "" : ln " ") words[x]
+        }
+        if (ln != "") lines[++nl] = ln
+        # Cases under where they come in, the ones the author never named after, what no case runs last; told
+        # without cases, the parts of the story under a heading and what serves them under another.
+        if (sfrom[n] == "case" && sgroup[n] != group) { heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
+        else if (sfrom[n] == "case" || sfrom[n] == "also" && also++) seen++
+        else if (sfrom[n] == "also") heading("also changed, nobody named these", "gk-also-heading")
+        else if (sfrom[n] == "story" && !told++) { seen++; heading("what changed", "gk-story-heading") }
+        else if (sfrom[n] == "support" && !sup++) { more("", "m", ""); heading("also changed, to support it", "gk-support-heading") }
+        else if (sfrom[n] == "rest" && !rest++) { if (!ncase) more("", "m", ""); heading(ncase ? "on no route, read as a plain diff" : "in the change, in no part", "gk-rest-heading") }
+        else more("", "m", "")
+        print "  " lines[1] "\t\t\t\t\t\t\t\t\t\t\t" rid \
+          (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
+        for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
+        # A case says how it ended before and how it ends now; a line each when both will not fit on one.
+        if (sending[n] != "") {
+          k = index(sending[n], " \342\206\222 "); was = substr(sending[n], 1, k - 1); now = substr(sending[n], k + 5)
+          how = schange[n] == "only a label" ? GK_CONTEXT "  \302\267 only a label" GK_R : schange[n] == "the same" ? GK_CONTEXT "  = the same" GK_R : ""
+          c = schange[n] == "ends differently" ? GK_ATTENTION : GK_CONTEXT
+          vw = dim ? "  " GK_GOOD "\342\234\223" GK_R : vdn ? "  " GK_CONTEXT vdn "/" vt GK_R : ""
+          if (length(was) + length(now) + 3 + (schange[n] == "ends differently" ? 0 : 14) <= w) more(ind GK_CONTEXT was GK_R " \342\206\222 " c now GK_R how vw, "m", "")
+          else { flow(was, ind, w, "", 0, GK_CONTEXT, ""); flow(now, ind, w, "\342\206\222 ", 2, c, how vw) }
+          if (!(rid in open)) continue
+        } else {
+        meta = ind (stests[n] ? GK_CONTEXT stests[n] (stests[n] == 1 ? " test" : " tests") " \302\267 " GK_R : "") \
+          (sadd[n] ? GK_GOOD "+" sadd[n] GK_R : "") (sadd[n] && sdel[n] ? " " : "") (sdel[n] ? GK_BAD "-" sdel[n] GK_R : "") \
+          (!cnt ? GK_FAINT "nothing in the change is under this" GK_R : dim ? "  " GK_GOOD "\342\234\223 viewed" GK_R : vdn ? "  " GK_CONTEXT vdn " of " vt " viewed" GK_R : "") \
+          (to ? "  " GK_ELSEWHERE "\357\201\265 " to GK_R : "") (td ? "  " GK_YOURS "\342\234\216 " td GK_R : "")
+        more(meta, "m", "")
+        if (!(rid in open)) continue
+        }
+        for (x = 1; x <= cnt; x++) {
+          i = under[n, x]
+          if (row[i, 2] == "file") filerow(i, 1, rid ">" row[i, 1])
+          else if (row[i, 4] != "") show(i, 1, rid ">" row[i, 1] "#" row[i, 4] "+" row[i, 3], "|", 0)
+          else { id = row[i, 1] "#" row[i, 3]; show(i, 1, rid ">" id, "|" id "|", 0) }
+        }
+      }
+      # A row of the table no sentence took: shown, so nothing in the change is out of sight.
+      for (i = 1; i <= m; i++) {
+        if ((i in placed) || (row[i, 2] != "file" && row[i, 4] == "" && members[row[i, 1] "#" row[i, 3]] != "")) continue
+        if (!loose++) { more("", "m", ""); heading("in the change, under no sentence", "gk-loose-heading") }
+        if (row[i, 2] == "file") filerow(i, 0, row[i, 1])
+        else if (row[i, 4] != "") show(i, 0, row[i, 1] "#" row[i, 4] "+" row[i, 3], "|", 0)
+        else { id = row[i, 1] "#" row[i, 3]; show(i, 0, id, "|" id "|", 0) }
+      }
     }
     # show: one row, then, if it is open, its members and what it uses, a
     # level in. The row'"'"'s id is its place in the tree, so the same symbol
@@ -1696,7 +1840,8 @@ if [ "$mode" = --rows ]; then
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
           (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
-    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" | highlight | OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package | tee "$st/rows.last"
+    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" | highlight |
+    if [ "$sentf" != /dev/null ]; then cat; else OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package; fi | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
   rm -f "$counts" "$order" "$vw"
   [ -n "$GIT_FZF_STATE" ] || exit 0
@@ -1704,6 +1849,10 @@ if [ "$mode" = --rows ]; then
     fs=s; [ "$nfiles" -eq 1 ] && fs=
     bu=; [ -e "$st/up" ] && bu=', bottom up'
     note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, %s to start from%s${GK_R}" "$syms" "$nfiles" "$fs" "$roots" "$bu")
+    [ "$sentf" != /dev/null ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, told in %s parts${GK_R}" "$syms" "$nfiles" "$fs" "$roots")
+    ncases=$(awk -F'\t' '$1 == "S" && ($3 == "case" || $3 == "also")' "$sentf" 2>/dev/null | wc -l | tr -d ' ')
+    [ "${ncases:-0}" -gt 0 ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, followed in %s cases${GK_R}" "$syms" "$nfiles" "$fs" "$ncases")
+    [ -n "$sentwait" ] && note="$note · $(printf "${GK_ATTENTION}Claude is following it case by case${GK_R}")"
     if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
     elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
@@ -1770,12 +1919,12 @@ if [ -z "$head" ]; then
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)"
 elif [ -n "$GMR_IID" ]; then
-  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,W=the story / by symbol,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,q=back to files,a=ask Claude about it'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute-silent(git-symbols --viewed $rev add {12})+execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)"
 else
   # A commit or a branch: this is the picker, and f is the file list.
-  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
+  keys='enter=open in editor,v=viewed (and all under it),f=by file,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,s=the shape of it,S=how to split it,W=the story / by symbol,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh,a=ask Claude about it'
   # nvim opens in the diff against the change's base, the hunks lit, as it
   # does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
@@ -1799,6 +1948,7 @@ otis-symbols "${GMR_IID:+!$GMR_IID }by symbol " "$keys" --header-from-state \
   --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
   --bind "S:execute-silent(git-symbols --split)+refresh-preview" \
   --bind "G:transform(git-symbols --page $rev {12})" \
+  --bind "W:execute-silent(git-symbols --sentences)+reload($list)+refresh-preview" \
   --bind "C:execute(git-split --wait $rev)" \
   --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview" \
   --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)" \

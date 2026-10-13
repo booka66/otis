@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cases</title>
+<style>
+/* A change as its cases: each a situation the code meets, how it ends, and its route through the code as it runs.
+   One file, nothing fetched, so a saved copy reads the same anywhere. */
+:root{
+  color-scheme:dark;
+  --ground:#282828; --panel:#32302f; --code:#3c3836; --lift:#504945; --rule:#3c3836; --rule-strong:#504945;
+  --ink:#fbf1c7; --text:#ebdbb2; --soft:#bdae93; --faint:#a89984; --comment:#928374;
+  --red:#fb4934; --green:#b8bb26; --yellow:#fabd2f; --blue:#83a598; --purple:#d3869b; --aqua:#8ec07c; --orange:#fe8019;
+  --plus:#26332a; --minus:#3c2022; --plus-strong:#3f5a45; --minus-strong:#6b2f31;
+  --sans:-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono:ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --rail:20px;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    color-scheme:light;
+    --ground:#fbf1c7; --panel:#f9f5d7; --code:#f2e5bc; --lift:#e5d5ad; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+    --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#928374;
+    --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
+    --plus:#e6e4bd; --minus:#f5d9c4; --plus-strong:#d2d38e; --minus-strong:#efbfa6;
+  }
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --ground:#fbf1c7; --panel:#f9f5d7; --code:#f2e5bc; --lift:#e5d5ad; --rule:#ebdbb2; --rule-strong:#d5c4a1;
+  --ink:#282828; --text:#3c3836; --soft:#665c54; --faint:#7c6f64; --comment:#928374;
+  --red:#9d0006; --green:#79740e; --yellow:#b57614; --blue:#076678; --purple:#8f3f71; --aqua:#427b58; --orange:#af3a03;
+  --plus:#e6e4bd; --minus:#f5d9c4; --plus-strong:#d2d38e; --minus-strong:#efbfa6;
+}
+
+*{box-sizing:border-box}
+html{scroll-padding-top:20px}
+body{margin:0; background:var(--ground); color:var(--text); font:16px/1.6 var(--sans); -webkit-font-smoothing:antialiased}
+button{font:inherit; color:inherit}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--yellow); outline-offset:2px}
+code{font:.88em var(--mono); color:var(--ink); background:var(--code); border-radius:4px; padding:.1em .38em; overflow-wrap:anywhere}
+
+.page{display:grid; grid-template-columns:260px minmax(0,1fr); gap:0 48px; max-width:1500px; margin:0 auto; padding:0 32px}
+
+/* the cases, down the side */
+nav{position:sticky; top:0; align-self:start; max-height:100vh; overflow:auto; padding:40px 0 32px; font-size:14px}
+nav h2{margin:22px 0 6px; font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; color:var(--faint)}
+nav h2:first-child{margin-top:0}
+nav ol{list-style:none; margin:0; padding:0}
+nav a{display:grid; grid-template-columns:2.2ch minmax(0,1fr); gap:8px; padding:5px 10px; border-radius:6px; text-decoration:none; color:var(--soft); line-height:1.35}
+nav a:hover{background:var(--panel); color:var(--ink)}
+nav a.here{background:var(--panel); color:var(--ink); box-shadow:inset 3px 0 0 var(--yellow)}
+nav .no{font:12.5px/1.6 var(--mono); color:var(--faint); text-align:right}
+nav a.label .tt, nav a.same .tt{color:var(--faint)}
+
+main{min-width:0; padding:40px 0 120px}
+
+/* the change */
+.top{display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap}
+.meta{margin:0 0 10px; font:13.5px var(--mono); color:var(--faint); display:flex; flex-wrap:wrap; gap:4px 14px}
+.meta .lab{color:var(--yellow)}
+.meta .a{color:var(--green)} .meta .d{color:var(--red)}
+h1{margin:0 0 14px; font:650 30px/1.2 var(--sans); letter-spacing:-.015em; color:var(--ink); text-wrap:balance; max-width:30em}
+.lede{max-width:46em; color:var(--soft); margin:0 0 18px}
+.tools{display:flex; gap:8px}
+.tools button{background:var(--panel); border:1px solid var(--rule-strong); border-radius:8px; padding:6px 12px; font-size:13px; color:var(--soft); cursor:pointer}
+.tools button:hover{color:var(--ink); border-color:var(--faint)}
+.legend{display:flex; flex-wrap:wrap; gap:6px 22px; padding:12px 16px; border:1px solid var(--rule); border-radius:10px; font-size:13.5px; color:var(--soft); max-width:60em}
+.legend span{display:inline-flex; align-items:center; gap:7px}
+.chip{display:inline-block; width:28px; height:14px; border-radius:3px; vertical-align:-2px}
+
+/* a group: where its cases come in, and where in the system that runs */
+.group{margin:64px 0 0; padding-top:18px; border-top:1px solid var(--rule-strong)}
+.group > h2{margin:0; font:650 12.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.09em; color:var(--yellow)}
+.where{margin:18px 0 0; padding:16px 20px; background:var(--panel); border-radius:10px; max-width:52em}
+.where h3, .ends h3{margin:0 0 6px; font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; color:var(--faint)}
+.where p{margin:0}
+
+/* a case */
+.case{margin:44px 0 0; scroll-margin-top:24px}
+.case > header{display:grid; grid-template-columns:auto minmax(0,1fr); gap:2px 16px; align-items:baseline}
+.case .num{font:600 15px var(--mono); color:var(--faint); grid-row:span 2; min-width:2.2ch; text-align:right}
+.case h2{margin:0; font:650 23px/1.3 var(--sans); color:var(--ink); text-wrap:balance}
+.case h2::first-letter, nav .tt::first-letter{text-transform:uppercase}
+.badges{display:flex; flex-wrap:wrap; gap:6px; font-size:12.5px}
+.badge{border:1px solid var(--rule-strong); border-radius:999px; padding:1px 10px; color:var(--faint)}
+.badge.moves{color:var(--yellow); border-color:color-mix(in srgb, var(--yellow) 45%, transparent)}
+.badge.quiet{color:var(--orange); border-color:color-mix(in srgb, var(--orange) 40%, transparent)}
+.body{margin-left:calc(2.2ch + 16px)}
+.setup{margin:12px 0 0; font-size:17px; color:var(--text); max-width:46em}
+.ends{margin:20px 0 0; padding:14px 18px; border-left:3px solid var(--yellow); background:color-mix(in srgb, var(--yellow) 7%, var(--ground)); border-radius:0 10px 10px 0; max-width:52em}
+.ends p{margin:0; color:var(--ink); font-size:16.5px}
+
+table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; font-size:15px; max-width:60em; width:100%}
+.facts th{font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; text-align:left; padding:0 14px 4px}
+.facts th.was{color:var(--red)} .facts th.now{color:var(--green)}
+.facts th .why{text-transform:none; letter-spacing:0; font-weight:400; color:var(--faint); margin-left:8px}
+.facts td{padding:6px 14px; vertical-align:top}
+.facts td.q{color:var(--soft); padding-left:0; width:30%}
+.facts td.was{background:var(--minus); border-radius:6px 0 0 6px}
+.facts td.now{background:var(--plus); border-radius:0 6px 6px 0; color:var(--ink)}
+.facts td.now:first-of-type, .facts td.solo{border-radius:6px}
+.facts .tested{color:var(--green); margin-left:6px}
+.facts caption{caption-side:bottom; text-align:left; font-size:13px; color:var(--faint); padding-top:6px}
+
+.said{margin:20px 0 0; display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:4px 14px; max-width:60em; font-size:15px}
+.said dt{color:var(--faint)}
+.said dd{margin:0}
+.said blockquote{margin:0; font-style:italic; color:var(--soft)}
+.said .none{color:var(--orange)}
+
+/* the route: who calls whom as the case runs, every function's code in one column, notes in another */
+.route{margin:28px 0 0}
+.route > h3{display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 20px; margin:0 0 10px; font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; color:var(--faint)}
+.route > h3 .key{text-transform:none; letter-spacing:0; font-weight:400; display:flex; gap:14px}
+.m-changed{color:var(--yellow)} .m-touched{color:var(--ink)} .m-outside{color:var(--faint)}
+.r{display:grid; grid-template-columns:var(--w, 0px) minmax(0,1fr) minmax(250px, 34%); column-gap:0; align-items:stretch}
+.r > .rail{background:repeating-linear-gradient(to right, var(--rule-strong) 0 1.5px, transparent 1.5px var(--rail)); background-position:7px 0; background-repeat:repeat-y}
+.r > .wide{grid-column:2 / 4; min-width:0}
+.head{padding:12px 0 2px; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px}
+.head .mk{font-size:13px}
+.head code{font-size:14px; font-weight:650; padding:.12em .45em}
+.head .file{font:13px var(--mono); color:var(--faint)}
+.purpose{padding:0 0 6px; color:var(--soft); font-size:15px}
+.ln{display:grid; grid-template-columns:5ch 2.2ch minmax(0,1fr); align-content:center; background:var(--code); font:12.5px/1.65 var(--mono); color:var(--comment); min-width:0}
+.ln .no{text-align:right; padding-right:.6ch; color:var(--comment); user-select:none}
+.ln .sg{text-align:center; user-select:none}
+.ln .src{white-space:pre-wrap; overflow-wrap:anywhere; padding:0 12px 0 .7ch}
+.ln.add{background:var(--plus)} .ln.add .sg{color:var(--green)}
+.ln.del{background:var(--minus)} .ln.del .sg{color:var(--red)}
+.ln .src span{opacity:.62}
+.ln.lit .src span, .ln.call .src span{opacity:1}
+.ln.lit, .ln.call{color:var(--ink)}
+.ln.lit{background:var(--lift)}
+.ln.lit.add{background:var(--plus-strong)} .ln.lit.del{background:var(--minus-strong)}
+.ln.lit .no{color:var(--yellow); font-weight:700}
+.ln.first{border-top-left-radius:6px; border-top-right-radius:6px; padding-top:4px}
+.ln.last{border-bottom-left-radius:6px; border-bottom-right-radius:6px; padding-bottom:4px}
+.note{padding:0 0 0 14px; font-size:13.5px; line-height:1.45; align-self:center}
+.note.lit{color:var(--yellow); font-weight:650}
+.note.lit::before{content:"◀"; margin-right:7px; font-size:11px; vertical-align:1px}
+.note.call{color:var(--faint)}
+.note code{font-size:.92em}
+.r:hover .ln.lit{box-shadow:inset 3px 0 0 var(--yellow)}
+.gap{font:12.5px/1.9 var(--mono); color:var(--comment); padding-left:3ch}
+.back{font-size:13.5px; color:var(--faint); padding:4px 0 6px}
+.hop{margin:16px 0 4px; font-size:13.5px; color:var(--faint); border-top:1px dashed var(--rule-strong); padding-top:10px}
+.stopped, .tests{margin:20px 0 0; display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:4px 14px; font-size:15px; max-width:60em}
+.stopped dt, .tests dt{color:var(--faint)}
+.stopped dd, .tests dd{margin:0; color:var(--soft)}
+.tests ul{margin:0; padding:0; list-style:none}
+.tests li::before{content:"◦ "; color:var(--faint)}
+.tests .file{font:13px var(--mono); color:var(--faint); margin-top:4px}
+.tests .none{color:var(--orange)}
+
+/* what no case runs, as a plain diff */
+.plain{margin:18px 0 0}
+.plain h4{margin:18px 0 6px; font:600 14px var(--mono); color:var(--ink)}
+.plain h4 span{font:400 13px var(--sans); color:var(--faint); margin-left:10px}
+.plain .ln{grid-template-columns:5ch 2.2ch minmax(0,1fr)}
+.plain .ln .src span{opacity:1}
+.plain .fold{font:12.5px/1.8 var(--mono); color:var(--comment); padding-left:7.2ch; background:var(--code)}
+
+/* code colors, named for gruvbox's own */
+.c-comment{color:var(--comment); font-style:italic} .c-red{color:var(--red)} .c-text{color:var(--text)} .c-soft{color:var(--soft)}
+.c-aqua{color:var(--aqua)} .c-green{color:var(--green)} .c-blue{color:var(--blue)} .c-yellow{color:var(--yellow)}
+.c-purple{color:var(--purple)} .c-orange{color:var(--orange)}
+
+footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font-size:13.5px; color:var(--faint); max-width:52em}
+
+@media (max-width:1100px){
+  .page{grid-template-columns:minmax(0,1fr); padding:0 20px}
+  nav{position:static; max-height:none; padding:28px 0 0; border-bottom:1px solid var(--rule)}
+  nav ol{columns:2 280px; column-gap:24px}
+  nav li{break-inside:avoid}
+  main{padding-top:24px}
+}
+@media (max-width:760px){
+  .page{padding:0 16px}
+  h1{font-size:24px}
+  .body{margin-left:0}
+  .case > header{grid-template-columns:minmax(0,1fr)}
+  .case .num{grid-row:auto; text-align:left}
+  .r{grid-template-columns:var(--w, 0px) minmax(0,1fr)}
+  .r > .wide{grid-column:2}
+  .note{grid-column:2; padding:2px 0 6px 7.2ch}
+  .note.lit::before{content:"↑"}
+  .note:empty{display:none}
+  .said, .stopped, .tests{grid-template-columns:minmax(0,1fr)}
+  table.facts td.q{width:auto}
+  :root{--rail:14px}
+}
+@media print{
+  nav, .tools{display:none}
+  .page{display:block}
+  .case{break-inside:avoid-page}
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <nav id="nav" aria-label="Cases"></nav>
+  <main id="main"></main>
+</div>
+<script>
+(() => {
+  // The page as it was written, before anything below fills it, so Save keeps one file that reads the same.
+  const SOURCE = "<!doctype html>\n" + document.documentElement.outerHTML;
+  const DATA = /*SENTENCES*/null;
+  const PARTS = DATA.sentences;
+  document.title = DATA.label + " case by case";
+
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, ...kids) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    for (const kid of kids) if (kid != null) e.append(kid);
+    return e;
+  };
+  const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+  // Claude's words, with the code names in them drawn as code: a name in backticks, or one no English word looks like.
+  const NAMED = /^([^\w$]*)([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)([^\w$]*)$/;
+  const looks = (name) => /[a-z][A-Z]/.test(name) || /[A-Za-z]_[A-Za-z]/.test(name) || /\(\)$/.test(name);
+  function prose(text) {
+    const out = document.createDocumentFragment();
+    String(text || "").split("`").forEach((piece, at) => {
+      if (at % 2) { out.append(el("code", null, piece)); return; }
+      piece.split(/(\s+)/).forEach((word) => {
+        const m = NAMED.exec(word);
+        if (m && looks(m[2])) out.append(m[1], el("code", null, m[2]), m[3]);
+        else out.append(word);
+      });
+    });
+    return out;
+  }
+  const para = (cls, text) => { const p = el("p", cls); p.append(prose(text)); return p; };
+
+  // A line's code without the indentation every line of its function shares.
+  const indentOf = (t) => (t.replace(/\t/g, "    ").match(/^ */)[0].length);
+  function dedent(html, n) {
+    let out = "", dropped = 0, inTag = false, done = false;
+    for (const ch of html) {
+      if (ch === "<") inTag = true;
+      if (!inTag && !done) {
+        if (ch === " " && dropped < n) { dropped++; continue; }
+        done = true;
+      }
+      if (ch === ">") inTag = false;
+      out += ch;
+    }
+    return out;
+  }
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const cases = PARTS.filter((p) => p.kind === "case" || p.kind === "also");
+  const rest = PARTS.find((p) => p.kind === "rest");
+  const main = $("main"), nav = $("nav");
+
+  // The change.
+  const top = el("div", "top");
+  const head = el("div");
+  const meta = el("p", "meta", el("span", "lab", DATA.label),
+    el("span", null, el("span", "a", "+" + DATA.add), " ", el("span", "d", "−" + DATA.del)),
+    el("span", null, plural(DATA.commits.length, "commit")));
+  head.append(meta, el("h1", null, DATA.title));
+  const tools = el("div", "tools");
+  const save = el("button", null, "Save page");
+  save.type = "button";
+  save.addEventListener("click", () => {
+    const a = el("a");
+    a.href = URL.createObjectURL(new Blob([SOURCE], { type: "text/html" }));
+    a.download = DATA.label.replace(/[^\w.-]+/g, "") + "-cases.html";
+    document.body.append(a);
+    a.click();
+    a.remove();
+  });
+  const theme = el("button", null, "Theme");
+  theme.type = "button";
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private window */ } },
+  };
+  const applyTheme = (t) => { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; theme.textContent = t === "light" ? "Light" : t === "dark" ? "Dark" : "Theme: auto"; };
+  applyTheme(store.get("otis.cases.theme"));
+  theme.addEventListener("click", () => {
+    const now = document.documentElement.dataset.theme, next = !now ? "dark" : now === "dark" ? "light" : "";
+    applyTheme(next);
+    store.set("otis.cases.theme", next);
+  });
+  tools.append(theme, save);
+  top.append(head, tools);
+  main.append(top);
+  const described = cases.filter((c) => c.kind === "case").length;
+  main.append(para("lede", "This change in " + plural(cases.length, "case") + ": each one situation the code meets, followed through the code in the order it runs."
+    + (described < cases.length ? " " + plural(described, "case") + " the author describes; " + (cases.length - described) + " they never mention." : "")
+    + " Claude chose the cases and wrote the words. otis found every line it cites in the code, drew who calls whom from the code itself, and dropped what it could not find."));
+  const legend = el("div", "legend");
+  const chip = (cls) => { const c = el("span", "chip"); c.style.background = "var(--" + cls + ")"; return c; };
+  legend.append(
+    el("span", null, chip("plus-strong"), "a line that decides the case"),
+    el("span", null, el("b", "m-changed", "◀"), " what holds on it, in Claude's words"),
+    el("span", null, el("span", "m-changed", "◆"), " changed here"),
+    el("span", null, el("span", "m-touched", "●"), " in changed code"),
+    el("span", null, el("span", "m-outside", "○"), " not in this change"));
+  main.append(legend);
+
+  // A case's route: rows in one grid, so the notes of every function line up in one column however deep it sits.
+  function route(c) {
+    const box = el("section", "route");
+    const h = el("h3", null, "Who calls whom, as this case runs");
+    box.append(h);
+    const stops = c.stops || [];
+    if (!stops.length) { box.append(el("p", "back", "No line Claude cited could be found in the code, so there is no route to show.")); return box; }
+    const kids = stops.map(() => []), roots = [];
+    stops.forEach((s, i) => (s.parent >= 0 ? kids[s.parent] : roots).push(i));
+    const row = (depth, wide, note) => {
+      const r = el("div", "r");
+      r.style.setProperty("--w", "calc(" + depth + " * var(--rail))");
+      r.append(el("div", "rail"));
+      if (note === undefined) { wide.classList.add("wide"); r.append(wide); }
+      else r.append(wide, note);
+      box.append(r);
+      return r;
+    };
+    const codeOf = (i) => stops[i].code || [
+      ...stops[i].lines.map((l) => ({ ...l, mine: true, cited: true })),
+      ...kids[i].map((k) => ({ ...stops[k].call, mine: true })),
+    ].sort((a, b) => a.n - b.n).filter((l, at, all) => !at || all[at - 1].n !== l.n);
+
+    function draw(i, depth) {
+      const s = stops[i];
+      const mark = s.mark === "◆" ? "m-changed" : s.mark === "●" ? "m-touched" : "m-outside";
+      const hd = el("div", "head", el("span", "mk " + mark, s.mark), el("code", null, s.name), el("span", "file", s.where + (s.inChange ? "" : ", not in this change")));
+      row(depth, hd);
+      if (s.is) row(depth + 1, para("purpose", s.is));
+      const code = codeOf(i);
+      const lines = code.filter((l) => !l.gap && l.t != null);
+      const cut = Math.min(...lines.filter((l) => l.t.trim()).map((l) => indentOf(l.t)));
+      const calledAt = new Map();
+      for (const k of kids[i]) calledAt.set(stops[k].call.n, [...(calledAt.get(stops[k].call.n) || []), k]);
+      const drawn = new Set();
+      let run = [];
+      const close = () => { if (run.length) { run[0].classList.add("first"); run.at(-1).classList.add("last"); } run = []; };
+      code.forEach((l, at) => {
+        if (l.gap) { close(); row(depth + 1, el("div", "gap", "⋯ " + plural(l.gap, "line"))); return; }
+        const calls = l.mine ? calledAt.get(l.n) || [] : [];
+        const ln = el("div", "ln" + (l.sign === "+" ? " add" : l.sign === "-" ? " del" : "") + (l.cited ? " lit" : "") + (calls.length ? " call" : ""));
+        const src = el("span", "src");
+        const text = l.t.replace(/\t/g, "    ");
+        src.innerHTML = dedent(l.html != null ? l.html : esc(text), Number.isFinite(cut) ? cut : 0);
+        ln.append(el("span", "no", String(l.n)), el("span", "sg", l.sign === "-" ? "−" : l.sign === "+" ? "+" : ""), src);
+        const note = el("div", "note" + (l.cited && l.value ? " lit" : calls.length ? " call" : ""));
+        if (l.cited && l.value) note.append(prose(l.value));
+        else if (calls.length) note.append("uses ", ...calls.flatMap((k, n) => [n ? " and " : "", el("code", null, stops[k].name)]), ", below");
+        row(depth + 1, ln, note);
+        run.push(ln);
+        if (calls.length) {
+          close();
+          for (const k of calls) { draw(k, depth + 1); drawn.add(k); }
+          if (at < code.length - 1) { const back = el("div", "back"); back.append("↩ back in ", el("code", null, s.name)); row(depth + 1, back); }
+        }
+      });
+      close();
+      for (const k of kids[i]) if (!drawn.has(k)) draw(k, depth + 1);
+    }
+    roots.forEach((i, at) => {
+      if (at && !c.hops[i]) box.append(el("p", "hop", "Nothing above calls this or hands it anything: that it runs next is Claude's reading."));
+      else if (at) box.append(el("div", "hop"));
+      draw(i, 0);
+    });
+    return box;
+  }
+
+  function facts(c) {
+    if (!c.facts.length) return null;
+    const t = el("table", "facts");
+    const tested = c.facts.some((f) => f.known === "test");
+    const hr = el("tr", null, el("th"));
+    if (c.fresh) {
+      const th = el("th", "now", "now");
+      th.append(el("span", "why", "new code: the route starts in code this change adds, so there is no before"));
+      hr.append(th);
+    } else hr.append(el("th", "was", "before"), el("th", "now", "after"));
+    t.append(el("thead", null, hr));
+    const tb = el("tbody");
+    for (const f of c.facts) {
+      const tr = el("tr");
+      const q = el("td", "q"); q.append(prose(f.what));
+      tr.append(q);
+      if (!c.fresh) { const was = el("td", "was"); was.append(prose(f.before || "·")); tr.append(was); }
+      const now = el("td", "now" + (c.fresh ? " solo" : "")); now.append(prose(f.after || "·"));
+      if (f.known === "test") { const dot = el("span", "tested", "●"); dot.title = "a test in this change checks it"; now.append(dot); }
+      tr.append(now);
+      tb.append(tr);
+    }
+    t.append(tb, el("caption", null, tested ? "● a test in this change checks it; the rest is Claude's reading of the code" : "Claude's reading of the code: no test in this change checks these answers"));
+    return t;
+  }
+
+  function caseNode(c) {
+    const node = el("article", "case");
+    node.id = "case-" + c.num;
+    const hd = el("header");
+    const badges = el("div", "badges");
+    if (c.change === "ends differently") badges.append(el("span", "badge moves", "ends differently"));
+    else if (c.change) badges.append(el("span", "badge", c.change));
+    if (c.kind === "also") badges.append(el("span", "badge quiet", "the author never mentions this"));
+    const h2 = el("h2"); h2.append(prose(c.text));
+    hd.append(el("span", "num", c.num), h2, badges);
+    node.append(hd);
+    const body = el("div", "body");
+    if (c.setup) body.append(para("setup", c.setup));
+    if (c.ends) { const e = el("div", "ends", el("h3", null, "How it ends")); e.append(para(null, c.ends)); body.append(e); }
+    const f = facts(c); if (f) body.append(f);
+    const said = el("dl", "said", el("dt", null, "the author"));
+    const dd = el("dd");
+    if (c.quote) dd.append(el("blockquote", null, "“" + c.quote + "”"));
+    else dd.append(el("span", "none", c.kind === "also" ? "never mentions this" : "said nothing about this"));
+    said.append(dd);
+    body.append(said, route(c));
+    if (c.stopped) { const st = el("dl", "stopped", el("dt", null, "stopped")); const d = el("dd"); d.append(prose(c.stopped)); st.append(d); body.append(st); }
+    const tests = el("dl", "tests", el("dt", null, "tested by"));
+    const td = el("dd");
+    if (!c.runs.length) td.append(el("span", "none", "no test in this change runs it"));
+    for (const file of [...new Set(c.runs.map((r) => r.where))]) {
+      td.append(el("div", "file", file));
+      const ul = el("ul");
+      for (const r of c.runs.filter((x) => x.where === file)) ul.append(el("li", null, r.name));
+      td.append(ul);
+    }
+    tests.append(td);
+    body.append(tests);
+    node.append(body);
+    return node;
+  }
+
+  // The cases under where they come in; one where-this-runs for as long as the cases share it.
+  let group = null, section = null, lastWhere = null;
+  const navList = new Map();
+  const navGroup = (title) => { nav.append(el("h2", null, title)); const ol = el("ol"); nav.append(ol); return ol; };
+  let ol = null;
+  for (const c of cases) {
+    const title = c.kind === "also" ? "Also changed, nobody named these" : c.group || "Cases";
+    if (title !== group) {
+      group = title;
+      section = el("section", "group", el("h2", null, title));
+      main.append(section);
+      ol = navGroup(title);
+      lastWhere = null;
+    }
+    if (c.where && c.where !== lastWhere) {
+      const w = el("div", "where", el("h3", null, "Where this runs"));
+      w.append(para(null, c.where));
+      section.append(w);
+      lastWhere = c.where;
+    }
+    section.append(caseNode(c));
+    const a = el("a", c.change === "only a label" ? "label" : c.change === "the same" ? "same" : null, el("span", "no", c.num));
+    a.href = "#case-" + c.num;
+    const tt = el("span", "tt"); tt.append(c.text);
+    a.append(tt);
+    ol.append(el("li", null, a));
+    navList.set("case-" + c.num, a);
+  }
+
+  // What no case runs.
+  if (rest && rest.code.length + rest.tests.length) {
+    const sec = el("section", "group", el("h2", null, "Changed lines no case runs"));
+    sec.append(para("lede", "Lines this change touches that no case's route passes through, as a plain diff."));
+    const plain = el("div", "plain");
+    for (const r of [...rest.code, ...rest.tests]) {
+      const h4 = el("h4", null, r.cases && r.name.includes("%s") ? r.name.replace("%s", r.cases) : r.name, el("span", null, r.where));
+      plain.append(h4);
+      let run = [];
+      const close = () => { if (run.length) { run[0].classList.add("first"); run.at(-1).classList.add("last"); } run = []; };
+      r.lines.forEach((raw, at) => {
+        const sign = raw[0];
+        if (sign === "~") { close(); plain.append(el("div", "fold ln first last", "⋯" + (raw.length > 1 ? " " + raw.slice(1) : ""))); return; }
+        if (sign === "#") { close(); plain.append(el("h4", null, raw.slice(1).trim())); return; }
+        const ln = el("div", "ln" + (sign === "+" ? " add" : sign === "-" ? " del" : ""));
+        const src = el("span", "src");
+        src.innerHTML = r.html && r.html[at] != null ? r.html[at] : esc(raw.slice(1).replace(/\t/g, "    "));
+        ln.append(el("span", "no", r.nums[at] ? String(r.nums[at]) : ""), el("span", "sg", sign === "-" ? "−" : sign === "+" ? "+" : ""), src);
+        plain.append(ln);
+        run.push(ln);
+      });
+      close();
+    }
+    sec.append(plain);
+    main.append(sec);
+    const a = el("a", null, el("span", "no", "·"), el("span", "tt", "Changed lines no case runs"));
+    a.href = "#rest";
+    sec.id = "rest";
+    navGroup("The rest").append(el("li", null, a));
+  }
+
+  main.append(el("footer", null, "Made by otis from " + DATA.label + " (" + DATA.base.slice(0, 8) + ".." + DATA.head.slice(0, 8) + ")"
+    + (DATA.filedBy ? ", with the cases from " + DATA.filedBy : "") + ". Each line Claude cites was found in the code within a few lines of where it said; who calls whom is otis's own reading of the code."));
+
+  // The case you are reading, lit in the list; j and k step from case to case.
+  const arts = [...document.querySelectorAll(".case")];
+  if ("IntersectionObserver" in window) {
+    const seen = new Map();
+    const watch = new IntersectionObserver((entries) => {
+      for (const e of entries) seen.set(e.target.id, e.isIntersecting ? e.boundingClientRect.top : null);
+      const first = arts.find((a) => seen.get(a.id) != null);
+      for (const [id, a] of navList) a.classList.toggle("here", first && id === first.id);
+    }, { rootMargin: "0px 0px -60% 0px" });
+    arts.forEach((a) => watch.observe(a));
+  }
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey || !arts.length) return;
+    if (e.key !== "j" && e.key !== "k") return;
+    const now = arts.findIndex((a) => a.getBoundingClientRect().top > 30);
+    const at = now < 0 ? arts.length : now;
+    const to = e.key === "j" ? arts[Math.min(arts.length - 1, at)] : arts[Math.max(0, at - 2)];
+    to.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+})();
+</script>
+</body>
+</html>

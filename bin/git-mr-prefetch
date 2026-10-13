@@ -8,6 +8,7 @@
 # those you review are cached too, for the file picker's counts and previews.
 # Only one runs at a time; the list reloads often.
 json=$1 mine=$2
+story=$(dirname "$0")/../share/sentences.mjs
 [ -r "$json" ] || exit 0
 [ -r "$mine" ] || mine=/dev/null
 common=$(git rev-parse --git-common-dir) || exit 0
@@ -71,6 +72,9 @@ command -v "$engine" >/dev/null 2>&1 || exit 0
 case $engine in dagger) tabs=dagger ;; *) tabs='[0-9]' ;; esac
 gloss=; command -v claude >/dev/null 2>&1 && [ "$(git config --get otis.symbolsModel)" != off ] && gloss=1
 cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
+# Following a change case by case is a minute or two of Claude reading the code: two at a time, all told.
+telling=0
+for f in "$cache/symbols-sentences"/*.running; do [ -s "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null && telling=$((telling + 1)); done
 jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
   | select(.author.username != $u.username)
   | [.targetBranch, (.diffRefs.headSha // ""), (.diffRefs.baseSha // ""), (.diffRefs.startSha // ""), .iid] | @tsv' "$json" |
@@ -82,10 +86,30 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
     for f in "$cache/symbols-gloss"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && glossed=1; done
     tabled=
     for f in "$cache/symbols"/*-"$head"-$tabs*.tsv; do [ -s "$f" ] && tabled=1; done
-    [ -n "$glossed" ] && [ -n "$tabled" ] && continue
+    # And told as a story (git-sentences), which is the list a review opens on: again once otis tells it another way.
+    sentenced=$([ -z "$gloss" ] && echo 1)
+    for f in "$cache/symbols-sentences"/*-"$head".tsv; do [ -s "$f" ] && [ ! "$story" -nt "$f" ] && sentenced=1; done
+    [ -n "$glossed" ] && [ -n "$tabled" ] && [ -n "$sentenced" ] && continue
     have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
     b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue
     t=$(git-symbols --table "$b..$head") || continue
     [ -n "$glossed" ] || OTIS_SYMBOLS_KEY=$b-$head git-symbols-gloss "$b..$head" "$t" >/dev/null 2>&1
+    [ -n "$sentenced" ] || [ "$telling" -ge 2 ] || { GMR_IID=$iid git-sentences --warm "$b..$head" >/dev/null 2>&1; telling=$((telling + 1)); }
   done
-
+# Your own too, at the head the MR has, which is where git-mr-mine opens once your branch is pushed.
+# Two a run: the list reloads often, and each is a model call.
+[ -n "$gloss" ] || exit 0
+jq -r '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid and .diffRefs.headSha and .diffRefs.baseSha)
+  | [.iid, .targetBranch, .diffRefs.headSha, .diffRefs.baseSha, (.diffRefs.startSha // "")] | @tsv' "$mine" 2>/dev/null |
+  while IFS="$(printf '\t')" read -r iid target head base start; do
+    have "$head" && have "$base" || continue
+    sentenced=
+    for f in "$cache/symbols-sentences"/*-"$head".tsv; do [ -s "$f" ] && [ ! "$story" -nt "$f" ] && sentenced=1; done
+    for f in "$cache/symbols-sentences"/*-"$head".running; do [ -s "$f" ] && sentenced=1; done
+    [ -n "$sentenced" ] && continue
+    [ "$telling" -lt 2 ] || break
+    have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
+    b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue
+    GMR_IID=$iid git-sentences --warm "$b..$head" >/dev/null 2>&1
+    telling=$((telling + 1))
+  done
