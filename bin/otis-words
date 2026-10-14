@@ -65,13 +65,13 @@ case $1 in
       function it() { return "\"" $2 "\"" ($3 != "" ? " naming " $3 ($4 != "" ? " (" $4 ")" : "") : " wherever it comes up") }
       $1 == "known" { k = k "\n- " it() }
       $1 == "learning" { l = l "\n- " it() }
-      $1 == "noted" { n = n "\n- " it() ": in their words, " $5 }
+      $1 == "noted" { n = n "\n- " it() ": their note, " $5 }
       END {
         if (k l n == "") exit
         print "What the reader knows and does not, thing by thing. The same word often names different things in different code (a cloud queue events wait on, a line of tickets a person works through): a line below holds only where the word names that thing, which you tell by where the case'"'"'s code is. A word naming anything else is yours to say plainly."
         if (k != "") print "Things the reader knows: use their words and never explain them:" k
         if (l != "") print "Things the reader does not know: the first time one comes up, say what it is from the code the case runs through (what it is built on, its name there, what puts things in or reads them), woven into the sentence, never a general definition:" l
-        if (n != "") print "Things the reader has said what they are: take what they say as true, and say it in their terms:" n
+        if (n != "") print "Things the reader left a note on, in their own words: where a note says what the thing is, take it as true and say it in their terms; where it asks (what is it, which one, what does this word mean here), answer that from the code where the thing comes up, plainly and specifically:" n
       }' "$words"
     exit 0 ;;
   --list)
