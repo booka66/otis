@@ -221,7 +221,7 @@ readkey() {
 # keyname <key>: its name as fzf spells it, for bindings.
 keyname() {
   case $1 in
-    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $'\t') REPLY=tab ;; $e) REPLY=esc ;;
+    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $'\t') REPLY=tab ;; $e'[Z') REPLY=btab ;; $e) REPLY=esc ;;
     $e'[A'|$e'OA') REPLY=up ;; $e'[B'|$e'OB') REPLY=down ;;
     $e'[5~') REPLY=page-up ;; $e'[6~') REPLY=page-down ;;
     $'\x7f'|$'\b') REPLY=bspace ;;

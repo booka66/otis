@@ -5,11 +5,10 @@
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 
-# --pane <outline.json> <n> [<answer>]: the preview of case n: before and after, its route, what tests it; on one
-# of its answers, that answer first, with the lines that decide it and the test that asserts it (share/story-pane.mjs).
+# --pane <outline.json> <n>: the preview of case n: before and after, its route, what tests it (share/story-pane.mjs).
 if [ "$1" = --pane ]; then
   [ -s "$2" ] || exit 0
-  exec node "$share/story-pane.mjs" "$2" "$3" ${4:+"$4"}
+  exec node "$share/story-pane.mjs" "$2" "$3"
 fi
 
 mode=page
@@ -58,21 +57,10 @@ build() {
   set -- "$@" --label "$label"
   if [ "$mode" = text ]; then node "$share/sentences.mjs" "$@"; return; fi
   node "$share/sentences.mjs" "$@" --html "$page.$$" --outline "$dir/$key.json.$$" >/dev/null || return 1
-  # The symbol view's list of it: each sentence, then where the symbol table has each row under it, then each
-  # of a case's answers: its question, whether a test line asserts it, whether a line decides it ("" when the
-  # case was followed before otis asked), and where enter opens it: the first line that decides it, on the new
-  # side if one is, else the test line, else the route's first line.
+  # The symbol view's list of it: each sentence, then where the symbol table has each row under it.
   jq -r '.sentences | to_entries[] | (.key + 1) as $n | .value as $s
     | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change] | @tsv),
-      ($s.units[] | ["R", $n] + . | @tsv),
-      ($s.facts | to_entries[] | .key as $k | .value as $f
-        | [$f.lines[]? | split(":") | $s.stops[.[0] | tonumber] as $stop | [$stop.path, $stop.side, (.[1] | tonumber)]] as $at
-        | (($at | map(select(.[1] == "new"))) + $at)[0]
-          // (if $f.pinned then [$f.pinned.path, "new", $f.pinned.n] else null end)
-          // ([$s.stops[] | select(.lines | length > 0) | [.path, .side, .lines[0].n]][0])
-          // ["", "", ""]
-        | ["A", $n, $k + 1, ($f.what | gsub("`"; "")), (if $f.pinned then 1 else 0 end),
-           (if $f.lines == null then "" elif ($f.lines | length) > 0 then 1 else 0 end)] + . | @tsv)' "$dir/$key.json.$$" > "$rows.$$" || return 1
+      ($s.units[] | ["R", $n] + . | @tsv)' "$dir/$key.json.$$" > "$rows.$$" || return 1
   mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows"
 }
 
