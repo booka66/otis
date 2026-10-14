@@ -745,6 +745,46 @@ function passedBy(text, n, range, cited) {
 }
 const blockHas = (text, open, n) => { let depth = 0; for (let k = open; k < n; k++) { depth += net(text[k - 1], "{", "}"); if (k > open && depth <= 0) return false; } return true; };
 
+/** What in the code calls a stop nothing on the route calls (or uses it: hands it on, reads it), so the reader
+ * sees how the case gets there: the first such line in the change's code, else in the stop's own folder, with
+ * the function it is in. Tests are no way in. null when there is none. */
+function caller(stop) {
+  const name = callee(stop);
+  if (!name) return null;
+  const N = escape(name);
+  const calls = new RegExp(`(^|[^\\w$.])(new\\s+)?${N}\\s*(<[^>]*>)?\\s*\\(|\\.${N}\\s*(<[^>]*>)?\\s*\\(`);
+  const uses = new RegExp(`(^|[^\\w$])${N}([^\\w$]|$)`);
+  const defines = definition(name);
+  const verbOf = (path, n, t) => {
+    if (path === stop.path && stop.range && n >= stop.range[0] && n <= stop.range[1]) return "";
+    if (COMMENT.test(t) || /^\s*(import|export\s*(\{|\*))\b/.test(t) || defines.test(t)) return "";
+    return calls.test(t) ? "calls" : uses.test(t) ? "uses" : "";
+  };
+  const code = (path) => /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|sh|zsh)$/.test(path) && !testFiles.has(path) && !TESTISH.test(path);
+  const found = (path, n, verb) => ({ fn: ownOf("new", path, n)?.name ?? "", path, where: where(path), n, verb });
+  let use = null;
+  for (const path of files.keys()) {
+    if (!code(path)) continue;
+    const text = textAt("new", path);
+    if (!text) continue;
+    for (let n = 1; n <= text.length; n++) {
+      const verb = verbOf(path, n, text[n - 1]);
+      if (verb === "calls") return found(path, n, verb);
+      if (verb && !use) use = found(path, n, verb);
+    }
+  }
+  if (use) return use;
+  let out = "";
+  try { out = git("grep", "-n", "-w", "-e", name, head, "--", dirname(stop.path)); } catch { return null; }
+  for (const line of out.split("\n")) {
+    const m = /^[^:]+:(.+?):(\d+):(.*)$/.exec(line);
+    if (!m || !code(m[1])) continue;
+    const verb = verbOf(m[1], Number(m[2]), m[3]);
+    if (verb) return found(m[1], Number(m[2]), verb);
+  }
+  return null;
+}
+
 /** Who calls whom on a route, from the code: each stop under the stop whose function calls it (the innermost
  * one, when a function inside another holds the call; one before it first), with the line that calls it. A stop
  * nothing on the route calls stays at the top. */
@@ -978,6 +1018,8 @@ if (told) {
       same.fresh &&= stop.fresh;
     }
     nest(stops);
+    // A stop after the first that nothing on the route calls: what in the code calls it, to show how the case gets there.
+    stops.forEach((stop, i) => { if (stop.parent < 0 && stops.findIndex((one) => one.parent < 0) !== i) stop.from = caller(stop); });
     stops.forEach((stop, i) => { stop.code = codeOf(stop, stops.filter((kid) => kid.parent === i).map((kid) => kid.call.n)); });
     const runs = testsNamed(one.tests);
     for (const stop of stops) {
@@ -1135,7 +1177,8 @@ if (htmlOut) {
     const depth = (stop) => (stop.parent < 0 ? 0 : 1 + depth(part.stops[stop.parent]));
     if (part.where) console.log(`   where: ${part.where}`);
     part.stops.forEach((stop, i) => {
-      if (!part.hops[i]) console.log("     ┄ not confirmed that the last stop leads here");
+      if (stop.from) console.log(`     ↓ ${stop.from.fn || "code outside any function"} in ${stop.from.where}:${stop.from.n} ${stop.from.verb} it`);
+      else if (stop.from === null) console.log("     ↓ next");
       const pad = "  ".repeat(depth(stop));
       if (stop.call) console.log(`   ${pad}called at ${stop.call.n}: ${stop.call.t.trim()}`);
       console.log(`   ${pad}${stop.mark} ${stop.name}  ${stop.where}${stop.inChange ? "" : ", not in this change"}${stop.is ? `: ${stop.is}` : ""}`);

@@ -288,12 +288,11 @@ function showCase() {
   }
   roots.forEach((i, at) => {
     if (at) say();
-    // What ties it to the code above when nothing there calls it, so that it runs next is Claude's reading.
-    const hop = part.hops[i];
-    if (at && hop !== true && hop != null) {
-      const tie = hop === "" || hop === false ? "nothing above calls this or hands it anything" : hop === "seam" ? "nothing above calls this; seam links it to the code above"
-        : `nothing above calls this; it shares \`${hop}\` with the code above`;
-      for (const line of prose(`┄ ${tie}, so that it runs next is Claude's reading`, W - 4, C)) say(`  ${line}`);
+    // How the case gets to a function nothing above calls: what in the code calls it, as otis found it.
+    const from = part.stops[i].from;
+    if (at) {
+      const how = from ? `↓ ${from.fn ? `\`${from.fn}\`` : "code outside any function"} in ${from.where}:${from.n} ${from.verb} it` : "↓ next";
+      for (const line of prose(how, W - 4, C)) say(`  ${line}`);
     }
     drawStop(i, 0);
   });

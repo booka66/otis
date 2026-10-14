@@ -379,16 +379,14 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       for (const k of kids[i]) if (!drawn.has(k)) draw(k, depth + 1);
     }
     roots.forEach((i, at) => {
-      // What ties it to the code above when nothing there calls it, so that it runs next is Claude's reading.
-      const hop = c.hops[i];
-      if (at && hop !== true && hop != null) {
+      // How the case gets to a function nothing above calls: what in the code calls it, as otis found it.
+      const from = c.stops[i].from;
+      if (at) {
         const p = el("p", "hop");
-        if (hop === "seam") p.append("Nothing above calls this; seam links it to the code above");
-        else if (hop) p.append("Nothing above calls this; it shares ", el("code", null, hop), " with the code above");
-        else p.append("Nothing above calls this or hands it anything");
-        p.append(", so that it runs next is Claude's reading.");
+        if (from) p.append("\u2193 ", from.fn ? el("code", null, from.fn) : "code outside any function", ` in ${from.where}:${from.n} ${from.verb} it`);
+        else p.append("\u2193 next");
         box.append(p);
-      } else if (at) box.append(el("div", "hop"));
+      }
       draw(i, 0);
     });
     return box;
