@@ -348,6 +348,8 @@ whole() {
 # it is up.
 integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
 typeset -a P
+# seltxt: the text of the last selection copied.
+seltxt=
 ends() {
   if (( sa < sb || (sa == sb && ca <= cb) )); then s1=$sa c1=$ca s2=$sb c2=$cb
   else s1=$sb c1=$cb s2=$sa c2=$ca; fi
@@ -397,6 +399,7 @@ copy() {
     else out+=${out:+$'\n'}$t; fi
   done
   [[ -n $out ]] || return 1
+  seltxt=$out
   local -a got=("${(@f)out}")
   if printf '%s' "$out" | otis-copy 2>/dev/null; then flash="copied ${#got} line${${#got:#1}:+s}"
   else flash="no clipboard tool (pbcopy, wl-copy, xclip or xsel)"; fi

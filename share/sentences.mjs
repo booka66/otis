@@ -339,6 +339,10 @@ async function tellCases() {
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
   if (cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
+  // What the reader knows and is learning (otis-words): not in the key, so a word marked changes the cases
+  // told after it, not the ones already told.
+  let reader = "";
+  try { reader = execFileSync("otis-words", ["--reader"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { reader = ""; }
   const shown = (row) => row.lines.slice(0, row.block ? 12 : 60).map((line, at) =>
     (line[0] === "~" ? "        ..." : `${String(row.nums[at] || "").padStart(6)} ${line[0] === " " ? " " : line[0]} ${line.slice(1)}`));
   const prompt = [
@@ -369,6 +373,7 @@ async function tellCases() {
     "",
     "Every changed row below should be on some case's route. For a row none of your cases runs, find what reads what it changes and make that a case.",
     "",
+    ...(reader ? [reader, ""] : []),
     "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
     "",
     "Plain words in every sentence, nothing a teammate would have to ask about, and no markdown, with one exception: in setup, where, is, value, facts, ends and stopped, put each name from the code in backticks, like `needsJudgment` or `orderValue`, so a reader can tell it from an English word. Nowhere else.",

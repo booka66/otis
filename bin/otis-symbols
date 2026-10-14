@@ -1497,7 +1497,7 @@ helplines() {
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
     "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
-    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them" \
+    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them; a word: y you know it, n you don't, and Claude reads up on it" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
@@ -1870,7 +1870,12 @@ mouse() {
     elif (( b == 32 && sel )); then sb=$l cb=$c
     elif (( up && sel == 2 )); then
       sb=$l cb=$c sel=1
-      if (( sa == sb && ca == cb )); then sel=0; else ends; shown; copy $REPLY.cont 0 && selrange; fi
+      if (( sa == sb && ca == cb )); then sel=0
+      else
+        ends; shown; copy $REPLY.cont 0 && selrange
+        # A word or a few on one line: y says you know it, n that you don't (otis-words).
+        [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && flash+="  ·  y you know it, n you don't"
+      fi
     fi
     (( sel )) && ends
     return
@@ -2142,6 +2147,15 @@ handle() {
     [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
     return
   fi
+  # A word selected in the pane: y says you know it, n that you don't, and Claude reads up on it
+  # (otis-words). The pane draws again when the words change (watched).
+  if (( sel == 1 )) && [[ -n $seltxt && $seltxt != *$'\n'* && $n == (y|n) ]] && (( ${#seltxt} <= 80 )); then
+    used $n
+    local w=$seltxt
+    sel=0 selr= seltxt=
+    if [[ $n == y ]]; then flash=$(otis-words know "$w" 2>/dev/null); else flash=$(otis-words learn "$w" 2>/dev/null); fi
+    dirty=1; return
+  fi
   # Lines selected in a diff: a asks Claude about them, c comments on them
   # in a review, esc lets go.
   if (( sel == 1 )) && [[ -n $selr ]]; then
@@ -2234,6 +2248,8 @@ watched() {
   fi
   (( $#watch )) || return 1
   [[ -n $GMR_IID ]] && watch+=($croot/mr-$GMR_IID-{threads,drafts}.json(N))
+  # Your words (otis-words): a meaning landing is drawn in the panes that use it.
+  watch+=(${OTIS_WORDS:-${XDG_CONFIG_HOME:-$HOME/.config}/otis/words.tsv}(N))
   for f in $watch; do
     zstat -A tm +mtime -- $f 2>/dev/null && sig+=$f$tm[1]
   done

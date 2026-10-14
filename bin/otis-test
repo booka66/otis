@@ -892,6 +892,19 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   rm -rf "$tmp/tabst"
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
   git config --unset otis.sentencesModel
+  # Your words (otis-words): one you know is never explained; one you are learning is read up by Claude
+  # (a stand-in here), its meaning kept with it, and both go to the prompt a case is told from.
+  mkdir -p "$tmp/stub"
+  printf '#!/bin/sh\ncat >/dev/null\nprintf %%s %s\n' "'{\"result\":\"The company that sends our texts.\"}'" > "$tmp/stub/words-claude"; chmod +x "$tmp/stub/words-claude"
+  export OTIS_WORDS="$tmp/words.tsv"
+  otis-words know "  Commerce Agent." >/dev/null
+  SEAM_CLAUDE=$tmp/stub/words-claude otis-words learn Telnyx >/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$(otis-words --defs | cut -f2)" ] && break; sleep 0.3; done
+  expect words/learned "$(otis-words --defs)" "Telnyx	The company that sends our texts."
+  expect words/reader "$(otis-words --reader | cut -c1-60 | tr '\n' '|')" "Words the reader already knows: use them as they are and nev|Words the reader is learning: say what each one is, in plain|"
+  otis-words know telnyx >/dev/null
+  expect words/known-now "$(otis-words --defs | wc -l | tr -d ' '):$(grep -c . "$OTIS_WORDS")" "0:2"
+  unset OTIS_WORDS
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is
   # the mention a new call.

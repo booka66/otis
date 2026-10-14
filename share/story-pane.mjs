@@ -3,6 +3,7 @@
 // FZF_PREVIEW_COLUMNS wide: the situation, how it ended before and how it ends now, its route through the
 // code in the order it runs, the tests that run it. A part told without cases is its words and its code.
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
@@ -137,6 +138,16 @@ function showCase() {
   for (const line of prose(part.text, W - 4, B + T)) say(`  ${line}`);
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
+  // The words you are learning (otis-words) that the case uses: what each means, before anything else uses it.
+  const words = learning();
+  if (words.length) {
+    say(`  ${C}WORDS YOU ARE LEARNING${R}`);
+    for (const { word, meaning } of words) {
+      say(`  ${B}${A}${word}${R}`);
+      for (const line of prose(meaning || "Claude is reading up on it", Math.min(W - 6, 100), meaning ? T : C)) say(`    ${line}`);
+    }
+    say();
+  }
   // Where in the system this happens, for a reader who has never seen this code.
   // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
   if (part.where) {
@@ -212,15 +223,15 @@ function showCase() {
   const deepen = (i, depth) => { depthOf[i] = depth; for (const k of kids[i]) deepen(k, depth + 1); };
   roots.forEach((i) => deepen(i, 0));
   // Each stop's code without the indentation its lines share, all of it in one panel whose right edge is one
-  // column for the whole route, the code at least about half the pane. What holds on a line Claude cites is its
-  // reading, in words beside the panel.
+  // column for the whole route. What holds on a line Claude cites is its reading, in words beside the panel,
+  // always on the right: wrapped there when long, the code wrapping at the panel's edge to leave it the room.
   const texts = (i) => part.stops[i].code.filter((line) => line.t?.trim()).map((line) => line.t.replace(/\t/g, "    "));
   const shared = part.stops.map((_, i) => Math.min(...texts(i).map(indent)));
-  // Notes go beside the code when that wraps no line but the very long ones (a prompt, a message), else under.
   const spans = part.stops.flatMap((_, i) => texts(i).map((t) => ({ code: [...t].length - shared[i], at: 2 * (depthOf[i] + 1) + gutter + [...t].length - shared[i] })));
-  const longest = Math.max(0, ...spans.map((one) => one.at)), usual = Math.max(0, ...spans.filter((one) => one.code <= 100).map((one) => one.at));
+  const longest = Math.max(0, ...spans.map((one) => one.at));
   const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)));
-  const edge = Math.min(W - 4, longest + 1, Math.max(W - 4 - Math.min(noted, 60) - 3, usual + 1)), aside = W - 4 - edge - 3;
+  const room = noted ? Math.max(24, Math.min(noted, 48)) + 3 : 0;
+  const edge = Math.min(W - 4 - room, longest + 1), aside = W - 4 - edge - 3;
 
   // Each function a step, numbered in the order the route reaches it.
   let step = 0;
@@ -239,6 +250,10 @@ function showCase() {
     const calledAt = new Map();
     for (const k of kids[i]) calledAt.set(part.stops[k].call.n, [...(calledAt.get(part.stops[k].call.n) ?? []), k]);
     const drawn = new Set();
+    // A note's lines beside the row it is on and the rows after it; on rows of their own when another note, a
+    // stop it calls or the end of the stop comes first.
+    let pending = [];
+    const flush = () => { for (const one of pending) say(`  ${lead}${" ".repeat(gutter + code)}${one}`); pending = []; };
     const draw = (line) => {
       const calls = line.mine ? calledAt.get(line.n) ?? [] : [];
       const ground = line.cited ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
@@ -249,19 +264,19 @@ function showCase() {
       const number = `${line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
       const style = line.cited ? B + A : C;
-      const note = value && aside >= 16 ? prose(value, aside - 2, style) : [];
-      const beside = note.length === 1;
+      if (value) { flush(); pending = prose(value, Math.max(8, aside - 2), style).map((one, k) => `   ${k ? " " : line.cited ? `${A}◀${R}` : " "} ${one}`); }
       cut(body, code).forEach((piece, at) => {
-        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${beside && !at ? `   ${line.cited ? `${A}◀${R}` : " "} ${note[0]}` : ""}`);
+        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`);
       });
-      if (value && !beside && line.cited) prose(value, W - 4 - 2 * (depth + 1) - gutter - 2, style).forEach((one, at) => say(`  ${lead}${" ".repeat(gutter)}${A}${at ? " " : "↑"}${R} ${one}`));
+      if (calls.length) flush();
       for (const k of calls) { drawStop(k, depth + 1); drawn.add(k); }
       return calls.length > 0;
     };
     stop.code.forEach((line, at) => {
-      if (line.gap) say(`  ${lead}${" ".repeat(digits - 1)}${C}⋯ ${line.gap} line${line.gap === 1 ? "" : "s"}${R}`);
+      if (line.gap) { flush(); say(`  ${lead}${" ".repeat(digits - 1)}${C}⋯ ${line.gap} line${line.gap === 1 ? "" : "s"}${R}`); }
       else if (draw(line) && at < stop.code.length - 1) say(`  ${lead}${prose(`↩ back in \`${stop.name}\``, code, C)[0]}`);
     });
+    flush();
     for (const k of kids[i]) if (!drawn.has(k)) drawStop(k, depth + 1);
   }
   roots.forEach((i, at) => {
@@ -288,6 +303,17 @@ function showCase() {
   }
   if (part.data?.length) band("runs on", C, part.data.map((path) => path.split("/").at(-1)).join(", "), C);
   say();
+}
+
+/** The words you are learning (otis-words) that the case uses anywhere in its words, each with what it means. */
+function learning() {
+  let kept;
+  try { kept = readFileSync(process.env.OTIS_WORDS || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/otis/words.tsv`, "utf8"); } catch { return []; }
+  const said = [part.text, part.setup, part.where, part.ends, part.quote, ...part.facts.flatMap((fact) => [fact.what, fact.before, fact.after]),
+    ...part.stops.flatMap((stop) => [stop.is, ...stop.lines.map((line) => line.value)])].join(" ").replace(/`/g, "").toLowerCase();
+  return kept.split("\n").map((line) => line.split("\t"))
+    .filter(([state, word]) => state === "learning" && word && said.includes(word.toLowerCase()))
+    .map(([, word, meaning]) => ({ word, meaning }));
 }
 
 /** A colored line without its first n columns of indentation. */
@@ -337,24 +363,28 @@ for (const row of boxes) {
     const words = wrap(describe(row), room - width(size) - 4);
     words.forEach((line, at) => say(`  ${RAISE} ${pad(C + line + R + RAISE, room - width(size) - 2)}${at === words.length - 1 ? size : " ".repeat(width(size))} ${R}`));
   }
-  const gutter = digits + 3, code = W - 3 - gutter;
+  // A line's note on the right of the code, wrapped there, the code wrapping at its edge to leave it the room;
+  // what is left of a note goes beside the lines after it.
+  const longestNote = Math.max(0, ...(row.notes ?? []).filter(Boolean).map((note) => [...note].length + 2));
+  const aside = longestNote ? Math.max(24, Math.min(longestNote, 48)) : 0;
+  const gutter = digits + 3, code = W - 3 - gutter - (aside ? aside + 3 : 0);
+  let pending = [];
+  const flush = () => { for (const one of pending) say(`  ${" ".repeat(gutter + code)}${one}`); pending = []; };
   row.lines.forEach((raw, at) => {
     const sign = raw[0];
-    if (sign === "#") { say(); say(`  ${T}${raw.slice(1).trim()}${R}`); return; }
-    if (sign === "~") { say(`  ${" ".repeat(gutter)}${C}⋯${raw.length > 1 ? "  " + raw.slice(1) : ""}${R}`); return; }
+    if (sign === "#") { flush(); say(); say(`  ${T}${raw.slice(1).trim()}${R}`); return; }
+    if (sign === "~") { flush(); say(`  ${" ".repeat(gutter)}${C}⋯${raw.length > 1 ? "  " + raw.slice(1) : ""}${R}`); return; }
     const ground = sign === "+" ? PLUS : sign === "-" ? MINUS : "";
     const mark = sign === "+" ? `${G}+` : sign === "-" ? `${X}−` : " ";
     const text = (row.paint?.[at] ?? T + raw.slice(1)).replace(/\t/g, "    ").replace(/\x1b\[0m/g, R + ground);
     const note = row.notes?.[at];
-    const pieces = cut(text, code);
-    const inline = note && pieces.length === 1 && width(pieces[0]) + 4 + [...note].length <= code;
-    pieces.forEach((piece, i) => {
+    if (note) { flush(); pending = wrap(note, aside - 2).map((one, k) => `   ${E}${k ? " " : "◀"} ${one}${R}`); }
+    cut(text, code).forEach((piece, i) => {
       const lead = i ? " ".repeat(gutter) : `${C}${String(row.nums[at] || "").padStart(digits)} ${mark}${R}${ground} `;
-      const tail = inline ? `${R}${ground}  ${E}← ${note}` : "";
-      say(`  ${ground}${lead}${ground}${pad(piece + tail, code)}${R}`);
+      say(`  ${ground}${lead}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`);
     });
-    if (note && !inline) for (const line of wrap(note, code - 2)) say(`  ${" ".repeat(gutter)}${E}↑ ${line}${R}`);
   });
+  flush();
 }
 if (part.links.length) {
   say();
