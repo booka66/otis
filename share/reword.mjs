@@ -38,7 +38,7 @@ const prompt = [
   `  git -C ${root} show ${outline.head}:<path>`,
   "Say what such a thing is right where it first comes up, woven into the sentence: the concrete thing in this case's code, by what it is built on and its name there (a cloud service, a table, a library, a workflow, a task queue), and what puts things into it or reads from it, in plain words. Never a general definition, and never what the word names somewhere else in the codebase. A thing the reader knows: leave it as it is, with no explanation. Every other word, as plain as the case has it now.",
   "",
-  "Return the same fields: text (the situation, at most 10 words), setup, where, ends and stopped (each \"\" when it is \"\" now), facts (as many, in the same order: what, before, after), stops (as many, in the same order: is, and values as many as now, each \"\" when it is \"\" now), and marked (thing and where, both \"\" when no word was marked). Names from the code stay in backticks.",
+  "Return the same fields: text (the situation, at most 10 words), setup, where, ends and stopped (each \"\" when it is \"\" now), facts (as many, in the same order: what, before, after), stops (as many, in the same order: is, what the function is for and never its file, and values as many as now, each \"\" when it is \"\" now), and marked (thing and where, both \"\" when no word was marked). Names from the code stay in backticks.",
   "",
   JSON.stringify(said, null, 1),
 ].join("\n");

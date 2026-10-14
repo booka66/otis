@@ -155,13 +155,11 @@ function showCase() {
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
   if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
-  // Where in the system this happens, for a reader who has never seen this code.
-  // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
+  // Where in the system this happens, for a reader who has never seen this code: in full in every case, so a
+  // case read on its own has the words it uses.
   if (part.where) {
     say(`  ${C}WHERE THIS RUNS${R}`);
-    const first = part.where.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? part.where;
-    if (!part.whereAt || part.whereAt === part.num || first === part.where) for (const line of prose(part.where, Math.min(W - 4, 100))) say(`  ${line}`);
-    else for (const line of prose(`${first} The rest of it is on case ${part.whereAt}.`, Math.min(W - 4, 100))) say(`  ${line}`);
+    for (const line of prose(part.where, Math.min(W - 4, 100))) say(`  ${line}`);
     say();
   }
 
@@ -236,7 +234,9 @@ function showCase() {
   const shared = part.stops.map((_, i) => Math.min(...texts(i).map(indent)));
   const spans = part.stops.flatMap((_, i) => texts(i).map((t) => ({ code: [...t].length - shared[i], at: 2 * (depthOf[i] + 1) + gutter + [...t].length - shared[i] })));
   const longest = Math.max(0, ...spans.map((one) => one.at));
-  const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)));
+  // The room on the right is for the longest note: what holds on a line Claude cites, or a line's call to the stop below.
+  const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)),
+    ...part.stops.filter((stop) => stop.call).map((stop) => [...`${stop.call.verb ?? "uses"} ${stop.name}, below`].length + 2));
   const room = noted ? Math.max(24, Math.min(noted, 48)) + 3 : 0;
   const edge = Math.min(W - 4 - room, longest + 1), aside = W - 4 - edge - 3;
 

@@ -671,22 +671,6 @@ function placeStops(stop) {
   });
 }
 
-/** What ties one stop to the next as far as the code shows, when nothing on the route calls it: a name or field in
- * one's lines (the error it throws, the flag it sets) near the other's, or an edge of seam's between them. */
-function link(a, b) {
-  const names = (stop) => [...(stop.name.match(/[A-Za-z_$][\w$]*/g) ?? []).filter((word) => word.length > 3), ...identifiers(stop.lines)];
-  const near = (stop, words) => {
-    const text = textAt(stop.side, stop.path);
-    const chunk = text.slice(Math.max(0, stop.lines[0].n - 60), stop.lines.at(-1).n + 60).join("\n");
-    return words.find((word) => new RegExp(`(^|[^\\w$])${word.replace(/\$/g, "\\$")}([^\\w$]|$)`).test(chunk));
-  };
-  const word = near(a, names(b)) ?? near(b, names(a));
-  if (word) return word;
-  const ids = (stop) => new Set([...stop.covers].map((row) => row.id));
-  const x = ids(a), y = ids(b);
-  return (graph?.edges ?? []).some((edge) => (x.has(edge.from) && y.has(edge.to)) || (y.has(edge.from) && x.has(edge.to))) ? "seam" : "";
-}
-
 /** The changed definition a stop's lines all sit in, when the change has it: the smallest that holds them all. */
 function enclosing(stop) {
   const first = stop.lines[0].n, last = stop.lines.at(-1).n;
@@ -1026,6 +1010,23 @@ if (told) {
       same.fresh &&= stop.fresh;
     }
     nest(stops);
+    // A route whose first stop the change's own code calls: that function goes above it, whole, with the line that
+    // calls it, so the case shows where it comes from and what happens around it.
+    const first = stops.findIndex((stop) => stop.parent < 0);
+    const up = first < 0 ? null : caller(stops[first]);
+    if (up && up.verb === "calls" && up.fn && files.has(up.path) && !stops.some((stop) => stop.path === up.path && stop.name === up.fn)) {
+      const def = ownOf("new", up.path, up.n);
+      const changed = Array.from({ length: def.end - def.start + 1 }, (_, k) => entryAt(up.path, "new", def.start + k)).some((entry) => entry && entry.line.s !== " ");
+      const entry = entryAt(up.path, "new", up.n);
+      const covers = new Set();
+      const unit = entry?.line.owner ?? smallestUnit(up.path, "new", up.n);
+      if (rowByUnit.has(unit)) covers.add(rowByUnit.get(unit));
+      stops.unshift({ name: def.name, is: "", path: up.path, side: "new", where: where(up.path), inChange: true, range: [def.start, def.end], inside: def.inside,
+        mark: changed ? "◆" : covers.size ? "●" : "○", fresh: Boolean(files.get(up.path)?.added || unit?.mark === "new"), lines: [], covers, parent: -1, call: null });
+      for (const stop of stops.slice(1)) if (stop.parent >= 0) stop.parent++;
+      stops[first + 1].parent = 0;
+      stops[first + 1].call = { n: up.n, t: textAt("new", up.path)[up.n - 1], sign: entry ? entry.line.s : " ", verb: "calls" };
+    }
     // A stop after the first that nothing on the route calls: what in the code calls it, to show how the case gets there.
     stops.forEach((stop, i) => { if (stop.parent < 0 && stops.findIndex((one) => one.parent < 0) !== i) stop.from = caller(stop); });
     stops.forEach((stop, i) => { stop.code = codeOf(stop, stops.filter((kid) => kid.parent === i).map((kid) => kid.call.n)); });
@@ -1117,12 +1118,6 @@ const outline = {
     quote: part.quote, origin: part.origin, from: part.kind === "rest" ? "rest" : "author", links: [],
     facts: part.facts ?? [], fresh: part.fresh ?? false, ends: part.ends ?? "", stopped: part.stopped ?? "", data: part.data ?? [],
     stops: (part.stops ?? []).map(({ covers, ...stop }) => stop),
-    // A stop at the top after the first: what ties the one before it to it, as far as the code shows (a name they
-    // share, or "seam" for an edge of seam's), or "" for nothing.
-    hops: (part.stops ?? []).map((stop, i, all) => {
-      const before = all.slice(0, i).findLast((one) => one.parent < 0);
-      return stop.parent >= 0 || !before ? null : link(before, stop);
-    }),
     runs: (part.runs ?? []).map((row) => ({ name: testName(row), where: row.where })),
     add: sum(part.rows, "add"), del: sum(part.rows, "del"),
     ntests: part.runs ? part.runs.length : part.rows.filter((row) => row.block && row.kind === "test").length,
