@@ -1,58 +1,81 @@
 #!/bin/sh
-# otis-words know <word> [<outline.json> <n>]          a word you know: never explained to you
-# otis-words learn <word> [<outline.json> <n>]         a word you don't: always explained, from the code
-# otis-words note <word> <note> [<outline.json> <n>]   what a word is, in your own words
-# otis-words --reader        the words as a prompt gives them to Claude
+# otis-words know <word> [<outline.json> <n>]          you know what it names there
+# otis-words learn <word> [<outline.json> <n>]         you don't: explain it from the code
+# otis-words note <word> <note> [<outline.json> <n>]   what it is, in your own words
+# otis-words place <state> <word> <thing> <where> [note]   what a word marked in a case names there
+# otis-words --reader        what you know and don't, as a prompt gives it to Claude
+# otis-words --list          the same, for you to read
 #
 # What you know and don't, kept for you alone (OTIS_WORDS, else ~/.config/otis/words.tsv), so what otis
 # writes is written for you: in a case's pane, select a word and press y for one you know, n for one you
-# don't, a to say what it is yourself. Only that is kept, never what a word means: a word means what the
-# code in front of you makes it (one queue is not another), so each case says it from its own code. The case
-# you are on is told again for you (share/reword.mjs), and every case told after is told that way from the
-# start. A line a word: known, learning or noted, the word, and for one you noted, your note.
+# don't, a to say what it is yourself. What you know is a thing, not a word: one "queue" is a cloud queue
+# events wait on, another the line of tickets a person works through, and knowing one says nothing of the
+# other. So the word you mark in a case is placed (share/reword.mjs, place): Claude reads which thing it
+# names in that case's code, and that is what you know, don't, or have noted, with where in the code it
+# lives. Every case is then written with that list: a word that names a thing you know is left alone, one
+# that names a thing you don't is said from the code, and a word that names some other thing is the case's
+# own to explain. The case you are on is told again for you, and every case told after is told that way.
+#
+# A line a thing: known, learning or noted, the word, the thing it names, where it lives, and your note.
+# A word marked outside a case is not placed: it holds wherever the word comes up.
 words=${OTIS_WORDS:-${XDG_CONFIG_HOME:-$HOME/.config}/otis/words.tsv}
 mkdir -p "$(dirname "$words")" && touch "$words" || exit 1
 
-# put <known|learning|noted> <word> [note]: the word's line, in place of any it had (case aside).
+# put <state> <word> <thing> <where> [note]: the thing's line, in place of any it had: the same word and
+# the same place (case aside), or the word marked and not placed yet.
 put() {
-  awk -F'\t' -v w="$2" 'tolower($2) != tolower(w)' "$words" > "$words.$$"
-  printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$words.$$"
+  awk -F'\t' -v w="$2" -v at="$4" 'tolower($2) != tolower(w) || ($4 != at && $4 != "")' "$words" > "$words.$$"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" >> "$words.$$"
   mv -f "$words.$$" "$words"
 }
 # What was selected, as a word: one line, its spaces single, the punctuation around it off.
 # A selection that runs on into the explanation after a word (" (the ...") is the word before it.
 clean() { printf '%s' "$*" | tr '\n\t' '  ' | sed -E 's/  +/ /g; s/ \(.*$//; s/^[[:space:][:punct:]]+//; s/[[:space:].,:;!?)]+$//' | cut -c1-80; }
 
-# reword <outline.json> <n>: that case told again for you, behind the screen.
-reword() {
-  [ -s "$1" ] && [ -n "$2" ] || return 1
-  [ "$(git config --get otis.symbolsModel)" = off ] && return 1
-  node "$(dirname "$0")/../share/reword.mjs" "$1" "$2" </dev/null >/dev/null 2>&1 &
+# mark <state> <word> <note> <outline.json> <n>: the word marked; in a case, placed and the case told again.
+mark() {
+  if [ -s "$4" ] && [ -n "$5" ] && [ "$(git config --get otis.symbolsModel)" != off ]; then
+    node "$(dirname "$0")/../share/reword.mjs" "$4" "$5" "$1" "$2" "$3" </dev/null >/dev/null 2>&1 &
+    return 0
+  fi
+  put "$1" "$2" "" "" "$3"
+  return 1
 }
 
 case $1 in
   know)
     w=$(clean "$2"); [ -n "$w" ] || exit 1
-    put known "$w"
-    if reword "$3" "$4"; then printf 'you know "%s": case %s is being told again without explaining it\n' "$w" "$4"
-    else printf 'you know "%s": otis will not explain it again\n' "$w"; fi ;;
+    if mark known "$w" "" "$3" "$4"; then printf 'you know "%s" here: Claude is reading which thing it names, and telling case %s again\n' "$w" "$4"
+    else printf 'you know "%s", wherever it comes up\n' "$w"; fi ;;
   learn)
     w=$(clean "$2"); [ -n "$w" ] || exit 1
-    put learning "$w"
-    if reword "$3" "$4"; then printf 'case %s is being told again, explaining "%s" from its code\n' "$4" "$w"
+    if mark learning "$w" "" "$3" "$4"; then printf 'you don'"'"'t know "%s" here: Claude is reading which thing it names, and telling case %s again\n' "$w" "$4"
     else printf 'otis will explain "%s" from the code wherever it comes up\n' "$w"; fi ;;
   note)
     w=$(clean "$2"); n=$(printf '%s' "$3" | tr '\n\t' '  '); [ -n "$w" ] && [ -n "$n" ] || exit 1
-    put noted "$w" "$n"
-    if reword "$4" "$5"; then printf 'noted "%s": case %s is being told again with it\n' "$w" "$5"
-    else printf 'noted "%s"\n' "$w"; fi ;;
-  --reader)
-    known=$(awk -F'\t' '$1 == "known" { printf "%s%s", (n++ ? ", " : ""), $2 }' "$words")
-    learning=$(awk -F'\t' '$1 == "learning" { printf "%s%s", (n++ ? ", " : ""), $2 }' "$words")
-    noted=$(awk -F'\t' '$1 == "noted" { printf "%s%s", (n++ ? "; " : ""), $2 " (" $3 ")" }' "$words")
-    [ -n "$known" ] && printf 'Words the reader already knows: use them as they are and never explain them: %s.\n' "$known"
-    [ -n "$learning" ] && printf 'Words the reader does not know: the first time each comes up in a case, say what it is there, from the code the case runs through (what it is built on, its name in that code, what puts things in or reads them), in plain words; never a general definition, and never one from somewhere else in the codebase: the same word can be a different thing in different code: %s.\n' "$learning"
-    [ -n "$noted" ] && printf 'Words the reader has said what they are, in their own words; take what they say as true, and say it in their terms: %s.\n' "$noted"
+    if mark noted "$w" "$n" "$4" "$5"; then printf 'noted "%s" here: Claude is reading which thing it names, and telling case %s again\n' "$w" "$5"
+    else printf 'noted "%s", wherever it comes up\n' "$w"; fi ;;
+  place)
+    [ -n "$3" ] || exit 1
+    put "$2" "$3" "$(printf '%s' "$4" | tr '\n\t' '  ')" "$(printf '%s' "$5" | tr '\n\t' '  ')" "$6"
     exit 0 ;;
-  *) sed -n '2,5s/^# //p' "$0"; exit 2 ;;
+  --reader)
+    # A thing a line: the word, what it names and where; a word not placed holds wherever it comes up.
+    awk -F'\t' '
+      function it() { return "\"" $2 "\"" ($3 != "" ? " naming " $3 ($4 != "" ? " (" $4 ")" : "") : " wherever it comes up") }
+      $1 == "known" { k = k "\n- " it() }
+      $1 == "learning" { l = l "\n- " it() }
+      $1 == "noted" { n = n "\n- " it() ": in their words, " $5 }
+      END {
+        if (k l n == "") exit
+        print "What the reader knows and does not, thing by thing. The same word often names different things in different code (a cloud queue events wait on, a line of tickets a person works through): a line below holds only where the word names that thing, which you tell by where the case'"'"'s code is. A word naming anything else is yours to say plainly."
+        if (k != "") print "Things the reader knows: use their words and never explain them:" k
+        if (l != "") print "Things the reader does not know: the first time one comes up, say what it is from the code the case runs through (what it is built on, its name there, what puts things in or reads them), woven into the sentence, never a general definition:" l
+        if (n != "") print "Things the reader has said what they are: take what they say as true, and say it in their terms:" n
+      }' "$words"
+    exit 0 ;;
+  --list)
+    awk -F'\t' '{ printf "%-9s %s%s%s%s\n", $1, $2, ($3 != "" ? " = " $3 : ""), ($4 != "" ? "  (" $4 ")" : ""), ($5 != "" ? "  your note: " $5 : "") }' "$words"
+    exit 0 ;;
+  *) sed -n '2,7s/^# //p' "$0"; exit 2 ;;
 esac

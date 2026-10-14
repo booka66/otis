@@ -313,7 +313,7 @@ function showCase() {
   say();
 }
 
-/** Your words (otis-words): state, word and your note, a row each. */
+/** Your words (otis-words): state, word, the thing it names, where that lives and your note, a row each. */
 function yourWords() {
   try {
     return readFileSync(process.env.OTIS_WORDS || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/otis/words.tsv`, "utf8")
@@ -327,16 +327,13 @@ const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Whether the case uses a word, as a whole word. */
 function uses(word) { return new RegExp(`\\b${escapeRe(word)}\\b`, "i").test(saidOf()); }
 
-/** Your words (otis-words), marked once, hold in every case: a case that uses a word you are learning, or explains
- * one you know, and was not told with it, is told again for you behind the pane (reword.mjs), two at a time. */
+/** Your words (otis-words), marked once, hold in every case: a case that uses a word you have marked, and was not
+ * told with that mark, is told again for you behind the pane (reword.mjs), two at a time. */
 function retell() {
   if (rewording || !part.stops?.length) return;
-  const said = saidOf();
   const told = `${overlaid ? reworded.reader : ""} ${outline.reader ?? ""}`.toLowerCase();
-  const stale = yourWords().some(([state, word]) => {
-    if (!word || told.includes(word.toLowerCase())) return false;
-    return state === "learning" || state === "noted" ? uses(word) : state === "known" && new RegExp(`\\b${escapeRe(word)}\\s*\\(`, "i").test(said);
-  });
+  // Each thing as the words give it to Claude: the word and what it names, or the word wherever it comes up.
+  const stale = yourWords().some(([, word, thing]) => word && uses(word) && !told.includes(`"${word}" ${thing ? `naming ${thing}` : "wherever"}`.toLowerCase()));
   if (!stale) return;
   const busy = readdirSync(dirname(file)).filter((name) => name.endsWith(".running") && name.includes(".reader.")).length;
   if (busy >= 2) return;

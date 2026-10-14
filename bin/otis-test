@@ -896,16 +896,20 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   rm -rf "$tmp/tabst"
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
   git config --unset otis.sentencesModel
-  # Your words (otis-words): what you know, what you don't and your notes, never what a word means: a case
-  # says that from its own code. A selection that runs on into an explanation is the word before it.
+  # Your words (otis-words): what you know, what you don't and your notes, thing by thing: a word marked in a
+  # case is placed (the thing it names there, where it lives), so one queue is not another. A selection that
+  # runs on into an explanation is the word before it; a word not placed holds wherever it comes up.
   export OTIS_WORDS="$tmp/words.tsv"
   otis-words know "  Commerce Agent (the AI that answers shoppers for a store" >/dev/null
   otis-words learn queue >/dev/null
   otis-words note bucket "the shop's request allowance" >/dev/null
-  expect words/kept "$(cut -f1,2 "$OTIS_WORDS" | tr '\t\n' ':|')" "known:Commerce Agent|learning:queue|noted:bucket|"
-  expect words/reader "$(otis-words --reader | cut -c1-44 | tr '\n' '|')" "Words the reader already knows: use them as |Words the reader does not know: the first ti|Words the reader has said what they are, in |"
-  otis-words know queue >/dev/null
-  expect words/known-now "$(grep -c '^known' "$OTIS_WORDS"):$(grep -c . "$OTIS_WORDS")" "2:3"
+  expect words/kept "$(cut -f1,2,4 "$OTIS_WORDS" | tr '\t\n' ':|')" "known:Commerce Agent:|learning:queue:|noted:bucket:|"
+  otis-words place learning queue "the cloud queue events wait on" infra/events
+  otis-words place known queue "the tickets a person works through" support/queue
+  expect words/placed "$(awk -F'\t' '$2 == "queue" { print $1 ":" $4 }' "$OTIS_WORDS" | tr '\n' '|')" "learning:infra/events|known:support/queue|"
+  expect words/reader "$(otis-words --reader | grep -c '"queue" naming'):$(otis-words --reader | grep -c 'wherever it comes up')" "2:2"
+  otis-words place known queue "the cloud queue events wait on" infra/events
+  expect words/known-now "$(grep -c '^known' "$OTIS_WORDS"):$(grep -c . "$OTIS_WORDS")" "3:4"
   unset OTIS_WORDS
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is
