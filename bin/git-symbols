@@ -1280,7 +1280,9 @@ if [ "$mode" = --rows ]; then
     sentf=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.tsv
     if [ -s "$sentf" ] && [ ! "$root/share/sentences.mjs" -nt "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"
     else
-      sentf=/dev/null
+      # Told by an older otis: shown as it is while it is told again behind it, never a wait in place of the
+      # cases you had. The screen reloads when the new ones land.
+      if [ -s "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"; else sentf=/dev/null; fi
       asked=$st/sentences-asked.${now#* }
       if [ ! -e "$asked" ]; then
         : > "$asked"

@@ -816,19 +816,18 @@ function chainOf(text, i, hi) {
   return out;
 }
 
-/** The code a stop shows, in the order of the diff: its whole function when that is short; else the function's
- * first lines (on one line when they run long), the statement around each line it cites or calls the next stop
- * from, the elses of an if it shows, the exits (a return, a throw, a continue) between the lines it shows and the
- * ifs they sit in, the lines between when only a few, and its closing line. Lines the change removed sit where the
- * diff has them, after the gap before them. A skip is a gap. */
-const WHOLE = 25, FILL = 3;
+/** The code a stop shows, in the order of the diff: its whole function, every line of it, as the symbols tab shows
+ * it. A stop otis finds no function around: the statement around each line it cites or calls the next stop from,
+ * the elses of an if it shows, the exits (a return, a throw, a continue) between the lines it shows and the ifs
+ * they sit in, and every line between them. Lines the change removed sit where the diff has them, after the gap
+ * before them. A skip is a gap. */
 function codeOf(stop, calls) {
   const text = textAt(stop.side, stop.path);
   const keep = [...new Set([...stop.lines.map((line) => line.n), ...calls])].sort((a, b) => a - b);
   const range = stop.range;
   const shown = new Set();
   let head = null;
-  if (range && range[1] - range[0] < WHOLE) for (let n = range[0]; n <= range[1]; n++) shown.add(n);
+  if (range) for (let n = range[0]; n <= range[1]; n++) shown.add(n);
   else {
     const [lo, hi] = range ?? [1, text.length];
     if (range) {
@@ -855,7 +854,7 @@ function codeOf(stop, calls) {
       for (let u = k - 1; u >= Math.max(lo, k - 6); u--) if (BRANCH.test(text[u - 1])) { shown.add(u); for (const c of chainOf(text, u, hi)) shown.add(c); break; }
     }
     const sorted = [...shown].sort((a, b) => a - b);
-    for (let i = 1; i < sorted.length; i++) if (sorted[i] - sorted[i - 1] - 1 <= FILL) for (let k = sorted[i - 1] + 1; k < sorted[i]; k++) shown.add(k);
+    for (let i = 1; i < sorted.length; i++) for (let k = sorted[i - 1] + 1; k < sorted[i]; k++) shown.add(k);
     // A head of three lines or more goes on one line when it is short enough to read as one, else only its
     // first line shows (the name), and what the case needs of the rest is in the lines it cites.
     if (head && head[1] - head[0] >= 2) {

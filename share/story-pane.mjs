@@ -233,8 +233,8 @@ function showCase() {
     if (width(head) + width(place) + 2 <= room) say(`  ${rail(depth)}${head}  ${place}`);
     else { say(`  ${rail(depth)}${head}`); say(`  ${rail(depth + 1)}${place}`); }
     if (stop.is) for (const line of prose(stop.is, room - 2)) say(`  ${rail(depth + 1)}${line}`);
-    // Its code: the lines Claude cites bright on a stronger ground, with what holds there beside them in yellow;
-    // the lines around them dim. A stop it calls is drawn under the line that calls it.
+    // Its code, every line in its file's colors on the diff's ground: the lines Claude cites on a stronger ground,
+    // with what holds there beside them in yellow. A stop it calls is drawn under the line that calls it.
     const lead = rail(depth + 1), code = edge - 2 * (depth + 1) - gutter;
     const calledAt = new Map();
     for (const k of kids[i]) calledAt.set(part.stops[k].call.n, [...(calledAt.get(part.stops[k].call.n) ?? []), k]);
@@ -244,7 +244,7 @@ function showCase() {
       const ground = line.cited ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
       const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
       const text = line.t.replace(/\t/g, "    ");
-      const body = dent(line.cited || calls.length ? (line.paint ?? T + text).replace(/\t/g, "    ") : C + text, shared[i]).replace(/\x1b\[0m/g, R + ground);
+      const body = dent((line.paint ?? T + text).replace(/\t/g, "    "), shared[i]).replace(/\x1b\[0m/g, R + ground);
       // A line the change removed is numbered in red: its number is from before the change.
       const number = `${line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";

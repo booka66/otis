@@ -869,6 +869,12 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   mkdir -p "$tmp/sentst"
   srows() { GIT_FZF_STATE=$tmp/sentst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
   expect sentences/first-row "$(srows | awk -F'\t' '$13 == "sent" { print $12 ":" $13 ":" $15 ":" $25 }')" "sentence:1:sent:closed:Head"
+  # Told by an older otis, the cases still show while they are told again (otis.symbolsModel off here, so
+  # nothing is told again behind the tests that follow).
+  for f in "$(git rev-parse --path-format=absolute --git-common-dir)"/git-alias-cache/symbols-sentences/*.tsv; do touch -t 200001010000 "$f"; done
+  expect sentences/stale-shown "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off srows | awk -F'\t' '$13 == "sent" { print $12 }')" "sentence:1"
+  rm -f "$tmp/sentst/sentences-asked."*
+  git-sentences "$base..$head" >/dev/null 2>&1
   GIT_FZF_STATE=$tmp/sentst git-symbols --open sentence:1
   expect sentences/open "$(srows | awk -F'\t' '$12 == "sentence:1>lib.ts#run" { print $13 ":" $14 }')" "sym:1"
   expect sentences/close-child "$(GIT_FZF_STATE=$tmp/sentst git-symbols --close 'sentence:1>lib.ts#run' x)" "pos(2)+reload(x)"
