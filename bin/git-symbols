@@ -98,12 +98,23 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
 case $mode in
   --close-all) rm -f "$st/open"; exit 0 ;;
+  # tab: a change's cases, then its symbols, then its files, then its cases again. A flag each for the two
+  # after the cases (by-symbol, by-file), which the lists and previews read. With a command, the files are a
+  # picker of their own (a branch's, git-commit-open): it runs there, and the cases are next when it is left.
+  --tab)
+    if [ -e "$st/by-symbol" ]; then
+      rm -f "$st/by-symbol"
+      if [ $# -gt 0 ]; then printf '%s\n' "$*"; exit 0; fi
+      : > "$st/by-file"
+    elif [ -e "$st/by-file" ]; then rm -f "$st/by-file"
+    else : > "$st/by-symbol"; fi
+    exit 0 ;;
   # S: how seam would split the change, in the preview, where ? puts the
   # help. A flag rather than a pager, so it sits beside the rows it is about
   # and the next keypress takes it away again.
@@ -1264,11 +1275,11 @@ if [ "$mode" = --rows ]; then
   [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_SYMBOLS_KEY" > "$st/key" && printf '%s\n' "$OTIS_CALLERS_KEY" > "$st/callers-key"
   export OTIS_SYMBOLS_KEY OTIS_CALLERS_KEY OTIS_CACHE_ROOT
   # By case, once git-sentences has put the change under them: asked for here, once a head, and never where
-  # otis.symbolsModel off keeps Claude out of it. A screen with tabs (OTIS_TABS: cases, then files) lists only
-  # cases, and says so while they are on their way, or why none will come.
+  # otis.symbolsModel off keeps Claude out of it; the symbols tab (by-symbol) is the tree. A screen with tabs
+  # (OTIS_TABS) lists only cases on its cases tab, and says so while they are on their way, or why none will come.
   sentf=/dev/null sentwait= casesoff= failed=
   [ -n "$GIT_FZF_STATE" ] && rm -f "$st/sentences"
-  if [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ]; then
+  if [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
     sentf=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.tsv
     if [ -s "$sentf" ] && [ ! "$root/share/sentences.mjs" -nt "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"
     else
@@ -1456,7 +1467,7 @@ if [ "$mode" = --rows ]; then
   # 27 in a review what Claude's review did with it (read, grep).
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
-  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$OTIS_TABS" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
+  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$OTIS_TABS" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
     -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$st/layout" -v progress="$st/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
@@ -1566,7 +1577,7 @@ if [ "$mode" = --rows ]; then
       # The spine, Claude'"'"'s one sentence on the change, wrapped to the
       # list: the picker'"'"'s header, or first rows with no picker to head.
       if (nsent) { bysentence(); print syms + 0, length(files), nsent > counts; exit }
-      # A screen with tabs lists cases or files, never the tree: until the cases come, it says why there are none.
+      # The cases tab of a screen with tabs: until the cases come, it says why there are none.
       if (tabs) {
         heading("cases", "gk-cases-heading")
         if (failed != "") { more(GK_BAD "Claude could not follow it case by case: " failed GK_R, "m", ""); more(GK_CONTEXT "tab shows its files" GK_R, "m", "") }
@@ -1967,17 +1978,21 @@ if [ -z "$head" ]; then
     --bind "C:execute(git-split --wait $rev)" \
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 else
-  # A commit or a branch: its cases, and tab its files (git-commit-open). nvim opens in the diff against the
+  # A commit or a branch: its cases, its symbols, and tab on from there its files (git-commit-open). nvim opens in the diff against the
   # change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   export OTIS_TABS=1
-  keys='tab=files,enter=open in editor,v=viewed (all of a case),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,G=the cases as a page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='tab=cases / symbols / files,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
-    --bind "tab:$files" \
+    --bind "tab:transform(git-symbols --tab '$files')+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
-    --bind "G:transform(git-symbols --page $rev {12})"
+    --bind "G:transform(git-symbols --page $rev {12})" \
+    --bind "b:execute-silent(git-symbols --flip)+reload($fold)" \
+    --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
+    --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \
+    --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 fi
 # Drawn by hand (otis-symbols), from the same keys and bindings fzf took.
 otis-symbols "" "$keys" --header-from-state \

@@ -380,10 +380,14 @@ headline() {
   (( bycase )) && t="case by case"
   [[ -e $st/by-file || -e $st/since ]] && t="by file"
   if [[ -n $OTIS_TABS ]]; then
-    # Two tabs, the change's cases and its files: the one shown lit, tab for the other.
-    if [[ -e $st/by-file ]]; then put "$C" "cases  "; put "$B$T" "files"; line+=$UB
-    else put "$B$T" "cases"; line+=$UB; put "$C" "  files"; fi
-    put "$F" "   tab swaps"
+    # Three tabs, the change's cases, its symbols and its files: the one shown lit, tab for the next.
+    local tb on=cases
+    [[ -e $st/by-symbol ]] && on=symbols; [[ -e $st/by-file ]] && on=files
+    for tb in cases symbols files; do
+      [[ $tb == $on ]] && { put "$B$T" "$tb"; line+=$UB; } || put "$C" "$tb"
+      [[ $tb != files ]] && put "" "  "
+    done
+    put "$F" "   tab for the next"
   else
     put "$B$T" "${t:-by symbol}"; line+=$UB
     (( ! bysent )) && [[ -e $st/sentences-wait ]] && put "$A" "  its cases in a minute or two"

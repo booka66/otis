@@ -3,8 +3,8 @@
 # The picker over an MR's diff, run from the worktree nvim should open files
 # in: gmr's review worktree for an MR you review (git-mr-review), your
 # branch's own checkout for one of yours (git-mr-mine). It lists the change
-# by case (git-symbols, from git-sentences), and tab lists it by file
-# instead, each file with the open threads and drafts on its lines. Either
+# by case (git-symbols, from git-sentences), tab by symbol and by file,
+# each with the open threads and drafts on its lines. Either
 # way the preview and nvim show the MR's
 # comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
 # and nvim starts in a diff against the range's base, with ]r and [r for the
@@ -17,8 +17,8 @@
 # the path second and the row's identity last, so every key here works on
 # either: a file row has its state third, which enter takes for no line.
 #
-# --list <iid> <range>: the rows, by case or by file (the by-file flag in the
-# picker's state). --toggle: tab. --preview: the preview
+# --list <iid> <range>: the rows, by case, by symbol or by file (the by-symbol
+# and by-file flags in the picker's state). --toggle: tab, the next of the three. --preview: the preview
 # for either kind of row.
 #
 # c comments without nvim: the file (or the symbol's file) as a list of its
@@ -34,7 +34,7 @@
 #
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 if [ "$1" = --toggle ]; then
-  if [ -e "$st/by-file" ]; then rm -f "$st/by-file"; else : > "$st/by-file"; fi
+  exec git-symbols --tab
   exit 0
 fi
 if [ "$1" = --list ]; then
@@ -121,8 +121,8 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
-first="tab=files / cases,enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='l=open it,h=close it,L=open all,H=close all,o=threads on no line,y=copy its name,G=the cases as a page in the browser,t=tests/config/generated,m=commits view,w=web,u=refresh'
+first="tab=cases / symbols / files,enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
+rest='l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,t=tests/config/generated,m=commits view,w=web,u=refresh'
 set --
 if [ "$kind" = review ]; then
   first="$first,A=approve"
@@ -145,6 +145,10 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "h:transform(git-symbols --close {12} $light)" \
   --bind "L:execute-silent(git-symbols --open-all $range)+reload($light)" \
   --bind "H:execute-silent(git-symbols --close-all)+reload($light)" \
+  --bind "b:execute-silent(git-symbols --flip)+reload($light)" \
+  --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
+  --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
+  --bind "p:execute-silent(git-symbols --peeks $range {2} {4} {5} {6} {12})+refresh-preview" \
   --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
   --bind "G:transform(git-symbols --page $range {12})" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \

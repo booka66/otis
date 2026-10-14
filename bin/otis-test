@@ -1291,10 +1291,9 @@ EOF
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'
   expect symbols/unpeek-keeps-the-top "$(cat "$tmp/symst/off.lib.ts#run")" "$((n + 1))"
   rm -f "$tmp/symst/off.lib.ts#run" "$tmp/symst/peeks"
-  # A review reads a change by case as a branch does, so every key that opens
-  # or closes the cases there has to be there too. The keys of the symbol tree
-  # (b, i, p) are ga's alone.
-  for k in l h L H; do
+  # A review reads a change as a branch does, by case and by symbol, so every
+  # key that changes what the list or the preview shows has to be there too.
+  for k in l h L H b i p; do
     for f in git-symbols git-mr-files; do
       grep -q "bind \"$k:.*git-symbols" "$root/bin/$f" || expect "symbols/$f-binds-$k" "unbound" "bound"
       grep -qE "(keys|first|rest)=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
