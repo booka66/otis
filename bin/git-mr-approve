@@ -1,14 +1,24 @@
 #!/bin/sh
 # git-mr-approve <iid> <head> <base>: approve an MR after a y/N, at <head>, the
 # commit you read: GitLab refuses the approval if the author has pushed since.
-# The review is recorded for git-mr-since. Success goes straight back to the
-# picker; only a failure waits, so its error can be read.
+# a instead of y approves with a comment of your own, posted once the approval
+# lands: a plain comment on the MR, not a thread, so it has nothing to resolve
+# and holds up no merge. The review is recorded for git-mr-since. Success goes
+# straight back to the picker; only a failure waits, so its error can be read.
 iid=$1 head=$2 base=$3
 [ -n "$iid" ] || exit 0
-git-confirm "approve !$iid at $(printf '%.8s' "$head")?" || exit 0
-if out=$(git-forge approve "$iid" "$head" 2>&1); then
-  git-mr-since record "$iid" "$head" "$base"
-  [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "approved !$iid" > "$GIT_FZF_STATE/note"
+note=$(git-confirm --note "approve !$iid at $(printf '%.8s' "$head")?") || exit 0
+if ! out=$(git-forge approve "$iid" "$head" 2>&1); then
+  otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"
   exit 0
 fi
-otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"
+git-mr-since record "$iid" "$head" "$base"
+said="approved !$iid"
+if [ -n "$note" ]; then
+  # What you typed goes in the error, so a comment that did not post is not lost.
+  out=$(git-forge api -X POST "projects/:fullpath/merge_requests/$iid/notes" -f body="$note" 2>&1) ||
+    { otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approved !%s, but your comment did not post: %s' "$iid" "$note")"; exit 0; }
+  said="approved !$iid, with your comment"
+fi
+[ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$said" > "$GIT_FZF_STATE/note"
+exit 0
