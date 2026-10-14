@@ -155,18 +155,6 @@ function showCase() {
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
   if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
-  // The words you are learning or have noted (otis-words) that the case uses, each with what it is here, so
-  // the meaning is in front of you however the case tells it.
-  const meant = yourWords().filter(([state, word, meaning]) => (state === "learning" || state === "noted") && meaning && uses(word));
-  if (meant.length) {
-    say(`  ${C}WORDS${R}`);
-    const label = Math.min(24, Math.max(...meant.map(([, word]) => [...word].length)));
-    for (const [state, word, meaning] of meant) {
-      prose(meaning, Math.min(W - 6 - label, 96), T).forEach((line, at) => say(`  ${at ? " ".repeat(label) : `${B}${A}${word}${R}${" ".repeat(Math.max(0, label - [...word].length))}`}  ${line}`));
-      if (state === "noted") say(`  ${" ".repeat(label)}  ${C}your words${R}`);
-    }
-    say();
-  }
   // Where in the system this happens, for a reader who has never seen this code.
   // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
   if (part.where) {
@@ -325,7 +313,7 @@ function showCase() {
   say();
 }
 
-/** Your words (otis-words): state, word and meaning, a row each. */
+/** Your words (otis-words): state, word and your note, a row each. */
 function yourWords() {
   try {
     return readFileSync(process.env.OTIS_WORDS || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/otis/words.tsv`, "utf8")

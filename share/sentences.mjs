@@ -335,7 +335,7 @@ async function tellCases() {
   ];
   if (model === "off" || !rows.length) return null;
   const said = sources.map((source) => source.text).join("\n\n");
-  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 14])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 15])).digest("hex").slice(0, 16);
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
   if (cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
@@ -369,6 +369,8 @@ async function tellCases() {
     "- tests: the names of tests in this change that run this case, copied exactly from the rows below.",
     "- data: the paths of changed files that hold data this case runs on: a test case or fixture it reads, a migration that adds what its code reads; or none.",
     "",
+    "summary: the whole change in one or two sentences, read before any case: what it does and why, in plain words for a teammate who has never seen this code, the way you would say it aloud. Not a list of what changed: what is different now, and for whom.",
+    "",
     "groups: for each group your cases use (its words exactly as the cases give them), where: two to four sentences for a teammate who has never seen this part of the code: what this part of the system is for and why it exists; what it does; each word it gives its own meaning, defined in plain words (an eval's case, label and passing; a billing window; a gateway); and the main steps a case passes through, naming their functions in the order they run.",
     "",
     "Every changed row below should be on some case's route. For a row none of your cases runs, find what reads what it changes and make that a case.",
@@ -401,6 +403,7 @@ async function tellCases() {
       ends: text, stopped: text, tests: list(text), data: list(text),
     })),
     groups: list(object({ group: text, where: text })),
+    summary: text,
   });
   const empty = mkdtempSync(join(tmpdir(), "otis-sentences-"));
   const budget = String(Number(git("config", "--default", "3", "--get", "otis.sentencesBudget").trim()) || 3);
@@ -421,7 +424,7 @@ async function tellCases() {
   }
   const spent = JSON.parse(answer);
   // The reader's words it was told with, so the pane knows which words a case already tells your way.
-  const result = { model, cases: told.cases, groups: told.groups ?? [], turns: spent.num_turns, cost: spent.total_cost_usd, reader };
+  const result = { model, cases: told.cases, groups: told.groups ?? [], summary: coded(told.summary), turns: spent.num_turns, cost: spent.total_cost_usd, reader };
   if (cached) { mkdirSync(cacheDir, { recursive: true }); writeFileSync(cached + ".new", JSON.stringify(result)); renameSync(cached + ".new", cached); }
   return { ...result, sources };
 }
@@ -1102,6 +1105,8 @@ const outline = {
   title: titleArg ?? commits.at(-1)?.subject ?? "", label: labelArg ?? `${short(base)}..${short(head)}`, base, head,
   add: total.add, del: total.del, commits: commits.map((commit) => ({ sha: short(commit.sha), subject: commit.subject })),
   filedBy: told ? told.model : null, described: Boolean(description), reader: told?.reader ?? "",
+  // The whole change in a sentence or two, read before its cases.
+  summary: told?.summary ?? "",
   cases: sentences.filter((part) => part.kind === "case" || part.kind === "also").length, stories: numbered,
   sentences: sentences.map((part, at) => ({
     id: `s${at + 1}`, kind: part.kind, num: part.num, text: part.title, group: part.group ?? "",
@@ -1171,6 +1176,7 @@ if (htmlOut) {
 } else if (asJson) {
   process.stdout.write(JSON.stringify(outline) + "\n");
 } else {
+  if (outline.summary) console.log(outline.summary);
   let group = null;
   for (const part of outline.sentences) {
     const heading = part.kind === "case" || part.kind === "also" ? part.group : part.kind === "rest" ? "on no route" : null;

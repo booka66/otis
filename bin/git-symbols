@@ -1473,6 +1473,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[6] { cm[$1] = $2; next }
     FILENAME == ARGV[7] {
       if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; if ($3 == "case" || $3 == "also") ncase++ }
+      else if ($1 == "M") msummary = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
       next
     }
@@ -1572,7 +1573,8 @@ if [ "$mode" = --rows ]; then
       }
       # The spine, Claude'"'"'s one sentence on the change, wrapped to the
       # list: the picker'"'"'s header, or first rows with no picker to head.
-      if (nsent) { bysentence(); print syms + 0, length(files), nsent > counts; exit }
+      # Listed by case: the whole change in a sentence or two is the header, read before the cases.
+      if (nsent) { if (header != "" && msummary != "") { print msummary > header; close(header) } bysentence(); print syms + 0, length(files), nsent > counts; exit }
       # The cases tab of a screen with tabs: until the cases come, it says why there are none.
       if (tabs) {
         heading("cases", "gk-cases-heading")

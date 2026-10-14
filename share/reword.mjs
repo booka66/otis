@@ -2,7 +2,7 @@
 // reword.mjs <outline.json> <n>: case n of a change (sentences.mjs) told again for you: the same case, every claim
 // in it kept, in words that leave alone the ones you know and explain the ones you are learning (otis-words).
 // Written beside the outline as <outline>.reader.<n>.json, which the pane (story-pane.mjs) reads over the case;
-// <outline>.reader.<n>.running while Claude writes it. What a word you are learning means goes into your words.
+// <outline>.reader.<n>.running while Claude writes it. What a word means is said from the case's own code.
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,12 +28,12 @@ const prompt = [
   "",
   reader,
   "",
-  "For each word the reader is learning that comes up in the case, find the thing itself in the code (one command per call, no pipes):",
+  "For each word the reader does not know that comes up in the case, find the thing itself in the code this case runs through (one command per call, no pipes):",
   `  git -C ${root} grep -n -e <pattern> ${outline.head} -- <paths>`,
   `  git -C ${root} show ${outline.head}:<path>`,
-  "and say what it is in this codebase the first time it comes up: the concrete thing, by what it is built on and its name here (a cloud service, a table, a library, a workflow), where it is set up, and what puts things into it or reads from it, in plain words. Never a general definition: not \"a queue is a line of jobs waiting their turn\" but \"the SQS queue the webhook handler puts each event on, which a worker writes into the history\". A word the reader has said what it is: use what they say. Leave the words the reader knows as they are, with no explanation. Every other word, as plain as the case has it now.",
+  "and say what it is right where it first comes up, woven into the sentence: the concrete thing in this case's code, by what it is built on and its name there (a cloud service, a table, a library, a workflow, a task queue), and what puts things into it or reads from it, in plain words. Never a general definition (not \"a queue is a line of jobs waiting their turn\"), and never what the word is somewhere else in the codebase: the same word is often a different thing in different code. A word the reader has said what it is: use what they say. Leave the words the reader knows as they are, with no explanation. Every other word, as plain as the case has it now.",
   "",
-  "Return the same fields: text (the situation, at most 10 words), setup, where, ends and stopped (each \"\" when it is \"\" now), facts (as many, in the same order: what, before, after), stops (as many, in the same order: is, and values as many as now, each \"\" when it is \"\" now). Names from the code stay in backticks. meanings: for each word the reader is learning that the case uses, what it is in this codebase, as above, in one or two plain sentences.",
+  "Return the same fields: text (the situation, at most 10 words), setup, where, ends and stopped (each \"\" when it is \"\" now), facts (as many, in the same order: what, before, after), stops (as many, in the same order: is, and values as many as now, each \"\" when it is \"\" now). Names from the code stay in backticks.",
   "",
   JSON.stringify(said, null, 1),
 ].join("\n");
@@ -44,7 +44,6 @@ const schema = object({
   text, setup: text, where: text, ends: text, stopped: text,
   facts: list(object({ what: text, before: text, after: text })),
   stops: list(object({ is: text, values: list(text) })),
-  meanings: list(object({ word: text, meaning: text })),
 });
 
 writeFileSync(running, String(process.pid));
@@ -68,6 +67,5 @@ if (fits) {
   // What the case was told from, so the pane lays it over this case and no other.
   writeFileSync(out + ".new", JSON.stringify({ of: part.text, reader, ...told }));
   renameSync(out + ".new", out);
-  for (const { word, meaning } of told.meanings ?? []) if (word && meaning) words(["mean", word, meaning]);
 }
 rmSync(running, { force: true });

@@ -58,9 +58,11 @@ build() {
   if [ "$mode" = text ]; then node "$share/sentences.mjs" "$@"; return; fi
   node "$share/sentences.mjs" "$@" --html "$page.$$" --outline "$dir/$key.json.$$" >/dev/null || return 1
   # The symbol view's list of it: each sentence, then where the symbol table has each row under it.
-  jq -r '.sentences | to_entries[] | (.key + 1) as $n | .value as $s
+  # First, the whole change in a sentence or two, for the top of the list.
+  jq -r '(select(.summary // "" | length > 0) | ["M", .summary] | @tsv),
+    (.sentences | to_entries[] | (.key + 1) as $n | .value as $s
     | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change] | @tsv),
-      ($s.units[] | ["R", $n] + . | @tsv)' "$dir/$key.json.$$" > "$rows.$$" || return 1
+      ($s.units[] | ["R", $n] + . | @tsv))' "$dir/$key.json.$$" > "$rows.$$" || return 1
   mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows"
 }
 

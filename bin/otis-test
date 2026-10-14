@@ -875,6 +875,10 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect sentences/stale-shown "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off srows | awk -F'\t' '$13 == "sent" { print $12 }')" "sentence:1"
   rm -f "$tmp/sentst/sentences-asked."*
   git-sentences "$base..$head" >/dev/null 2>&1
+  # The whole change in a sentence or two, when the cases came with one, heads the list.
+  for f in "$(git rev-parse --path-format=absolute --git-common-dir)"/git-alias-cache/symbols-sentences/*.tsv; do { printf 'M\tThe whole change, said once.\n'; cat "$f"; } > "$f.new" && mv -f "$f.new" "$f"; done
+  srows >/dev/null
+  expect sentences/summary "$(cat "$tmp/sentst/header")" "The whole change, said once."
   GIT_FZF_STATE=$tmp/sentst git-symbols --open sentence:1
   expect sentences/open "$(srows | awk -F'\t' '$12 == "sentence:1>lib.ts#run" { print $13 ":" $14 }')" "sym:1"
   expect sentences/close-child "$(GIT_FZF_STATE=$tmp/sentst git-symbols --close 'sentence:1>lib.ts#run' x)" "pos(2)+reload(x)"
@@ -892,30 +896,16 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   rm -rf "$tmp/tabst"
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
   git config --unset otis.sentencesModel
-  # Your words (otis-words): one you know is never explained; one you are learning is read up by Claude
-  # (a stand-in here), its meaning kept with it, and both go to the prompt a case is told from.
-  mkdir -p "$tmp/stub"
-  printf '#!/bin/sh\ncat >/dev/null\nprintf %%s %s\n' "'{\"result\":\"The company that sends our texts.\"}'" > "$tmp/stub/words-claude"; chmod +x "$tmp/stub/words-claude"
+  # Your words (otis-words): what you know, what you don't and your notes, never what a word means: a case
+  # says that from its own code. A selection that runs on into an explanation is the word before it.
   export OTIS_WORDS="$tmp/words.tsv"
-  otis-words know "  Commerce Agent." >/dev/null
-  SEAM_CLAUDE=$tmp/stub/words-claude otis-words learn Telnyx >/dev/null
-  for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$(otis-words --defs | cut -f2)" ] && break; sleep 0.3; done
-  expect words/learned "$(otis-words --defs)" "Telnyx	The company that sends our texts."
-  expect words/reader "$(otis-words --reader | cut -c1-60 | tr '\n' '|')" "Words the reader already knows: use them as they are and nev|Words the reader is learning: say what each one is in this c|"
-  # A case told again for you brings back what a word you are learning means, whole however long.
-  otis-words learn provider >/dev/null; otis-words mean provider "The outside service that delivers a message, such as Telnyx for texts or a gateway for iMessage, and that may or may not give back a message id."
-  expect words/meant "$(otis-words --defs | awk -F'\t' '$1 == "provider" { print length($2) }')" "144"
-  otis-words know provider >/dev/null
-  # A selection that runs on into an explanation is the word before it; a note of yours is the meaning kept.
-  otis-words know "Commerce Agent (the AI that answers shoppers for a store" >/dev/null
-  expect words/known-trimmed "$(awk -F'\t' '$1 == "known" { print $2 }' "$OTIS_WORDS" | tr '\n' '|')" "provider|Commerce Agent|"
-  otis-words note queue "the SQS queue customer events go through" >/dev/null
-  expect words/noted "$(otis-words --defs | grep '^queue')" "queue	the SQS queue customer events go through"
-  otis-words mean queue "a line of jobs" >/dev/null
-  expect words/noted-kept "$(otis-words --defs | grep -c 'line of jobs')" "0"
+  otis-words know "  Commerce Agent (the AI that answers shoppers for a store" >/dev/null
+  otis-words learn queue >/dev/null
+  otis-words note bucket "the shop's request allowance" >/dev/null
+  expect words/kept "$(cut -f1,2 "$OTIS_WORDS" | tr '\t\n' ':|')" "known:Commerce Agent|learning:queue|noted:bucket|"
+  expect words/reader "$(otis-words --reader | cut -c1-44 | tr '\n' '|')" "Words the reader already knows: use them as |Words the reader does not know: the first ti|Words the reader has said what they are, in |"
   otis-words know queue >/dev/null
-  otis-words know telnyx >/dev/null
-  expect words/known-now "$(otis-words --defs | wc -l | tr -d ' '):$(grep -c . "$OTIS_WORDS")" "0:4"
+  expect words/known-now "$(grep -c '^known' "$OTIS_WORDS"):$(grep -c . "$OTIS_WORDS")" "2:3"
   unset OTIS_WORDS
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is
