@@ -327,7 +327,7 @@ for (const unit of units) {
 /** The change as its cases: situations the code meets, each followed through the code as it runs, before
  * and after. Claude reads the repository at both commits (git grep and git show, nothing else) to follow a
  * case past the changed lines to where its ending is decided; otis checks every line it cites. */
-async function tellCases() {
+async function tellCases(only = null, told = null) {
   const model = modelArg ?? "claude-sonnet-5-5";
   const sources = [
     ...(description ? [{ from: "description", text: (titleArg ? titleArg + "\n\n" : "") + description }] : []),
@@ -335,15 +335,16 @@ async function tellCases() {
   ];
   if (model === "off" || !rows.length) return null;
   const said = sources.map((source) => source.text).join("\n\n");
-  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 15])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 16])).digest("hex").slice(0, 16);
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
-  if (cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
+  if (!only && cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
   // What the reader knows and is learning (otis-words): not in the key, so a word marked changes the cases
   // told after it, not the ones already told.
   let reader = "";
   try { reader = execFileSync("otis-words", ["--reader"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { reader = ""; }
-  const shown = (row) => row.lines.slice(0, row.block ? 12 : 60).map((line, at) =>
+  // Code whole, as the reader will see it; a test, its first lines, for its name and what it sets up.
+  const shown = (row) => row.lines.slice(0, row.block ? 12 : 400).map((line, at) =>
     (line[0] === "~" ? "        ..." : `${String(row.nums[at] || "").padStart(6)} ${line[0] === " " ? " " : line[0]} ${line.slice(1)}`));
   const prompt = [
     "A reviewer wants to understand this code change by its cases: the concrete situations the code meets (an input, an answer from another system, a timing), each followed through the code in the order it runs, so they can see how that situation ended before the change, how it ends now, and which lines decide it.",
@@ -352,9 +353,9 @@ async function tellCases() {
     `  git -C ${root} grep -n -e <pattern> ${head} -- <paths>      search the code after the change (${base} for before)`,
     `  git -C ${root} grep -n -e '' ${head} -- <path>              a whole file, every line numbered`,
     `  git -C ${root} show ${head}:<path>`,
-    "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending, and say where you stopped. Use up to about 60 commands.",
+    "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending, and say where you stopped. Use up to about 150 commands: a large change needs them, since its cases have to run through all of its code.",
     "",
-    "cases: the situations whose ending this change moves, usually 6 to 16, in the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix.",
+    "cases: the situations whose ending this change moves, as many as it takes for every changed row of code to be on some case's route: usually 6 to 16, more for a large change. In the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix.",
     "- group: where the case comes in, 2 to 6 everyday words, like \"we send Apple a message\". Cases that come in the same way use the same words.",
     "- name: the situation, at most 10 everyday words a newcomer understands without reading anything else, like \"Apple never answers a message we send\".",
     "- setup: one or two sentences that make it concrete for someone who has never seen this code. The first time a thing comes up in a case, say what it is in everyday words: never a bare word from the code's own world like \"a provider\", but \"the AI service the judge sends the question to, like OpenAI\". Name who does what as the code has it: before you say a person sets or triggers something, check who the code lets do it (a permission check, an admin gate).",
@@ -373,18 +374,25 @@ async function tellCases() {
     "",
     "groups: for each group your cases use (its words exactly as the cases give them), where: two to four sentences for a teammate who has never seen this part of the code: what this part of the system is for and why it exists; what it does; each word it gives its own meaning, defined in plain words (an eval's case, label and passing; a billing window; a gateway); and the main steps a case passes through, naming their functions in the order they run.",
     "",
-    "Every changed row below should be on some case's route. For a row none of your cases runs, find what reads what it changes and make that a case.",
+    "Every changed row of code below must be on some case's route: some case's stops cite lines inside it. Before you answer, go through the rows one by one; for a row none of your cases runs yet, find what calls it or reads what it changes, and make that a case, or put it on the route of the case it belongs to. A test is on a case when that case names it in tests.",
     "",
     ...(reader ? [reader, ""] : []),
     "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
     "",
     "Plain words in every sentence, nothing a teammate would have to ask about, and no markdown, with one exception: in setup, where, is, value, facts, ends and stopped, put each name from the code in backticks, like `needsJudgment` or `orderValue`, so a reader can tell it from an English word. Nowhere else.",
     "",
+    ...(only ? [
+      "# Cases already told",
+      ...told.cases.map((one) => `- ${one.group}: ${one.name}`),
+      "",
+      "The changed rows of code below are on none of those cases' routes. Write the cases they need, to read after those already told: every one of these rows on some new case's route. A case that comes in the way one above does uses its group's words; give where only for a new group. summary is \"\".",
+      "",
+    ] : []),
     "# The author's words",
     ...(sources.length ? sources.flatMap((source) => ["", `## ${source.from === "description" ? "merge request description" : `commit ${source.from}`}`, source.text]) : ["", "(none)"]),
     "",
     "# The changed rows: each line's number on its side, + added, - removed",
-    ...rows.flatMap((row) => [
+    ...(only ?? rows).flatMap((row) => [
       "",
       `## ${row.name}${row.cases ? ` [${row.cases}]` : ""}`,
       `${row.test ? "test code" : "code"}, ${row.kind}, ${row.mark}${row.tag ? `, ${row.tag}` : ""}, +${row.add} -${row.del}, ${row.path}`,
@@ -406,27 +414,28 @@ async function tellCases() {
     summary: text,
   });
   const empty = mkdtempSync(join(tmpdir(), "otis-sentences-"));
-  const budget = String(Number(git("config", "--default", "3", "--get", "otis.sentencesBudget").trim()) || 3);
+  const budget = String(Number(git("config", "--default", "10", "--get", "otis.sentencesBudget").trim()) || 10);
   const answer = await new Promise((done) => {
     execFile(process.env.SEAM_CLAUDE || "claude", [
       "-p", "--model", model, "--restricted", "--tools", "Bash", "--add-dir", root,
       "--allowedTools", `Bash(git -C ${root} grep:*)`, `Bash(git -C ${root} show:*)`,
       "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--permission-prompts", "none",
       "--max-budget-usd", budget, "--output-format", "json", "--json-schema", JSON.stringify(schema),
-    ], { cwd: empty, encoding: "utf8", maxBuffer: MAX, timeout: 600000 }, (error, out) => done(out || null)).stdin.end(prompt);
+    ], { cwd: empty, encoding: "utf8", maxBuffer: MAX, timeout: 1800000 }, (error, out) => done(out || null)).stdin.end(prompt);
   });
   rmSync(empty, { recursive: true, force: true });
-  let told;
-  try { told = JSON.parse(answer).structured_output; } catch { told = null; }
-  if (!told?.cases?.length) {
-    console.error(`sentences: ${model} found no cases, so it is one part a commit: ${String(answer).slice(0, 300)}`);
+  let answered;
+  try { answered = JSON.parse(answer).structured_output; } catch { answered = null; }
+  if (!answered?.cases?.length) {
+    if (!only) console.error(`sentences: ${model} found no cases, so it is one part a commit: ${String(answer).slice(0, 300)}`);
     return null;
   }
   const spent = JSON.parse(answer);
   // The reader's words it was told with, so the pane knows which words a case already tells your way.
-  const result = { model, cases: told.cases, groups: told.groups ?? [], summary: coded(told.summary), turns: spent.num_turns, cost: spent.total_cost_usd, reader };
+  const result = { model, cases: answered.cases, groups: answered.groups ?? [], summary: coded(answered.summary), turns: spent.num_turns, cost: spent.total_cost_usd, reader };
+  if (only) return result;
   if (cached) { mkdirSync(cacheDir, { recursive: true }); writeFileSync(cached + ".new", JSON.stringify(result)); renameSync(cached + ".new", cached); }
-  return { ...result, sources };
+  return { ...result, sources, kept: cached };
 }
 
 /** A file's lines on one side: from the diff when the change has the file, else from git. */
@@ -978,6 +987,27 @@ const trimPainted = (painted) => {
     return rest;
   }).join("");
 };
+
+// What the cases leave out: every changed row of code no case's route runs through, asked for again in the same
+// build, so the cases come all at once and cover the change. Kept with the first answer.
+if (told && !told.cached) {
+  const covered = new Set();
+  for (const one of told.cases) {
+    for (const stop of (one.stops ?? []).flatMap(placeStops)) for (const row of stop.covers) covered.add(row);
+    for (const row of testsNamed(one.tests)) covered.add(row);
+  }
+  const left = rows.filter((row) => !row.test && !row.imports && !covered.has(row));
+  if (left.reduce((n, row) => n + row.add + row.del, 0) >= 20) {
+    const more = await tellCases(left, told);
+    if (more) {
+      told.cases.push(...more.cases);
+      for (const group of more.groups) if (!told.groups.some((one) => bare(one.group).toLowerCase() === bare(group.group).toLowerCase())) told.groups.push(group);
+      told.cost += more.cost;
+      told.turns += more.turns;
+      if (told.kept) { const { sources, kept, ...result } = told; writeFileSync(told.kept + ".new", JSON.stringify(result)); renameSync(told.kept + ".new", told.kept); }
+    }
+  }
+}
 
 const parts = [];
 if (told) {
