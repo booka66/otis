@@ -126,7 +126,7 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
 first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=the shape of it,W=by sentence / by symbol,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
+rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=its symbols / its answers,W=by sentence / by symbol,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
 claude="git-mr-claude $iid $range" who=$(otis-agent-run --name)
 set --
 if [ "$kind" = review ]; then
@@ -158,7 +158,7 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
   --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
   --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
-  --bind "s:execute-silent(git-symbols --shape)+refresh-preview" \
+  --bind "s:transform(git-symbols --symbols {12} $light)" \
   --bind "G:transform(git-symbols --page $range {12})" \
   --bind "W:execute-silent(git-symbols --sentences)+reload($list)+refresh-preview" \
   --bind "p:execute-silent(git-symbols --peeks $range {2} {4} {5} {6} {12})+refresh-preview" \
