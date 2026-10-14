@@ -15,7 +15,10 @@ const W = Math.max(40, Number(process.env.FZF_PREVIEW_COLUMNS) || 96);
 // The case told again for you (reword.mjs, from your words), laid over the case it was told from.
 const reworded = (() => { try { return JSON.parse(readFileSync(file.replace(/\.json$/, `.reader.${which}.json`), "utf8")); } catch { return null; } })();
 const rewording = existsSync(file.replace(/\.json$/, `.reader.${which}.running`));
-const overlaid = reworded?.of === part.text;
+// Only over the case it was told from, as it still is: the same situation, as many answers and stops, each stop
+// with as many lines; a case otis has since drawn otherwise is told again (retell).
+const overlaid = reworded?.of === part.text && reworded.facts?.length === part.facts.length && reworded.stops?.length === (part.stops ?? []).length
+  && reworded.stops.every((stop, i) => stop.values?.length === part.stops[i].lines.length);
 if (overlaid) {
   for (const key of ["text", "setup", "where", "ends", "stopped"]) if (part[key] || reworded[key]) part[key] = reworded[key];
   reworded.facts.forEach((fact, k) => Object.assign(part.facts[k], fact));
