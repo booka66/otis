@@ -725,15 +725,6 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/template "$(awk -F'\t' '$3 == "tpl" { print $18 }' "$table")" "pair.ts#usePair"
   expect symbols/class-head "$(printf '%s\n' "$rows" | strip | grep 'class Svc' | cut -f1 | sed 's/^ *+ *1  *//')" "export class Svc extends Base<Svc>()(…)"
   expect symbols/run-head "$(awk -F'\t' '$3 == "run" { print $13 }' "$table")" "function run(o: Opts, twice: boolean): number"
-  # S puts the shape of the change in the preview, where ? puts the help: a
-  # flag the preview reads, so the next keypress takes it away again.
-  GIT_FZF_STATE=$tmp/symst git-symbols --shape
-  expect symbols/shape-on "$(GIT_FZF_STATE=$tmp/symst FZF_PREVIEW_COLUMNS=90 SEAM_COLOR=0 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c 'stories')" "1"
-  GIT_FZF_STATE=$tmp/symst git-symbols --shape
-  expect symbols/shape-off "$(GIT_FZF_STATE=$tmp/symst FZF_PREVIEW_COLUMNS=90 SEAM_COLOR=0 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | grep -c 'stories')" "0"
-  # Only s puts it there: a list, Claude or tsgo still working or not, never does.
-  GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" > /dev/null
-  expect symbols/shape-kept-off "$(test -e "$tmp/symst/shape" && echo on || echo off)" "off"
   expect symbols/fresh-head "$(awk -F'\t' '$3 == "fresh" { print $13 }' "$table")" "const fresh = (o: Opts)"
   # otis.engine dagger: the same table from dagger, over tsgo's language
   # server, which for lib.ts is seam's row for row; cached apart from seam's.
@@ -887,8 +878,12 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect sentences/viewed-none "$(srows | awk -F'\t' '$12 == "sentence:1" { print "[" $20 "]" }')" "[]"
   expect sentences/pane "$(GIT_FZF_STATE=$tmp/sentst git-symbols --preview "$base..$head" "" "" "" "" sentence:1 | strip | grep -c 'Head')" "1"
   expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
-  GIT_FZF_STATE=$tmp/sentst git-symbols --sentences
-  expect sentences/by-symbol "$(srows | awk -F'\t' '$13 == "sent"' | wc -l | tr -d ' ')" "0"
+  # A screen with tabs lists cases, never the tree: before they come, it says why there are none.
+  rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"
+  mkdir -p "$tmp/tabst"
+  # (otis.symbolsModel off, so no build starts behind the tests that follow.)
+  expect sentences/tabs-none "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GIT_FZF_STATE=$tmp/tabst OTIS_TABS=1 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head" | strip | awk -F'\t' '$13 == "sym" { n++ } /cases need Claude/ { w++ } END { print n + 0 ":" w + 0 }')" "0:1"
+  rm -rf "$tmp/tabst"
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
   git config --unset otis.sentencesModel
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
@@ -1296,11 +1291,10 @@ EOF
   GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'
   expect symbols/unpeek-keeps-the-top "$(cat "$tmp/symst/off.lib.ts#run")" "$((n + 1))"
   rm -f "$tmp/symst/off.lib.ts#run" "$tmp/symst/peeks"
-  # The review reads a change by symbol through the same preview, so every key
-  # that changes what that preview shows has to be there too. p was missing:
-  # peeks could be turned off everywhere but in a review, which is where you
-  # read a change by symbol most.
-  for k in l h L H b i s p; do
+  # A review reads a change by case as a branch does, so every key that opens
+  # or closes the cases there has to be there too. The keys of the symbol tree
+  # (b, i, p) are ga's alone.
+  for k in l h L H; do
     for f in git-symbols git-mr-files; do
       grep -q "bind \"$k:.*git-symbols" "$root/bin/$f" || expect "symbols/$f-binds-$k" "unbound" "bound"
       grep -qE "(keys|first|rest)=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"

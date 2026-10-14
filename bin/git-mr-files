@@ -3,36 +3,32 @@
 # The picker over an MR's diff, run from the worktree nvim should open files
 # in: gmr's review worktree for an MR you review (git-mr-review), your
 # branch's own checkout for one of yours (git-mr-mine). It lists the change
-# by symbol (git-symbols), each with the open threads and drafts on its
-# lines, and f lists it by file instead, as gmr always did; n (since your last
-# review) is by file too. Either way the preview and nvim show the MR's
+# by case (git-symbols, from git-sentences), and tab lists it by file
+# instead, each file with the open threads and drafts on its lines. Either
+# way the preview and nvim show the MR's
 # comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
 # and nvim starts in a diff against the range's base, with ]r and [r for the
 # next and previous file. Opening a file marks it viewed, v flips that and
-# moves on (git-mr-viewed); by symbol, both mark the symbol, v with all under
-# it, and a file is viewed once all its symbols are (git-symbols --viewed). o lists the threads on no line: the MR's overview,
+# moves on (git-mr-viewed); on a case, v marks all of its symbols, and a file
+# is viewed once all its symbols are (git-symbols --viewed). o lists the threads on no line: the MR's overview,
 # whole files, outdated ones (git-mr-threads).
 #
-# Both lists have the row shape the symbol view defines, twelve fields with
+# Both lists have the row shape git-symbols defines, twelve fields with
 # the path second and the row's identity last, so every key here works on
 # either: a file row has its state third, which enter takes for no line.
 #
-# --list <iid> <range>: the rows, by symbol or by file (the by-file flag, or
-# n's since flag, in the picker's state). --toggle: f. --preview: the preview
+# --list <iid> <range>: the rows, by case or by file (the by-file flag in the
+# picker's state). --toggle: tab. --preview: the preview
 # for either kind of row.
 #
 # c comments without nvim: the file (or the symbol's file) as a list of its
 # diff's lines with the threads under them, to comment on, reply and resolve
 # (git-mr-lines). Reviewing, new comments are drafts until S submits them all
 # at once (git-mr-submit); on your own MR they post at once. nvim's <leader>mt
-# switches either way. C has Claude review the MR in the background and draft comments
-# for you to read, showing its progress (git-mr-claude); on your own MR, C
-# has Claude propose fixes for its threads instead, for you to accept, fold
-# into your commits and push (git-mr-fix). a talks it over with Claude,
+# switches either way. a talks it over with Claude,
 # about the row you are on, in a conversation the MR keeps (git-symbols-ask).
 # Reviewing also adds
-# approve (at the head the picker shows), n for what changed since your last
-# review (git-mr-since), and u catching up
+# approve (at the head the picker shows), and u catching up
 # with a push: when the MR's head has moved, the picker closes and the review
 # reopens there.
 #
@@ -118,26 +114,21 @@ if [ "$1" = --moved ]; then
   exit 0
 fi
 iid=$1 range=$2 url=$3 kind=$4
-export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind
+export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind OTIS_TABS=1
 list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
 refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
 
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
-first="enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='f=by file / by symbol,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,o=threads on no line,y=copy its name,s=its symbols / its answers,W=by sentence / by symbol,G=seam'"'"'s page in the browser,p=peeks on/off,t=tests/config/generated,m=commits view,w=web,u=refresh'
-claude="git-mr-claude $iid $range" who=$(otis-agent-run --name)
+first="tab=files / cases,enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
+rest='l=open it,h=close it,L=open all,H=close all,o=threads on no line,y=copy its name,G=the cases as a page in the browser,t=tests/config/generated,m=commits view,w=web,u=refresh'
 set --
 if [ "$kind" = review ]; then
-  first="$first,A=approve,C=$who drafts comments"
-  rest="$rest,n=since your last review"
+  first="$first,A=approve"
   set -- --bind "A:execute(git-mr-approve $iid ${range#*..} ${range%%..*})" \
-    --bind "n:transform(git-mr-since toggle $iid $range)" \
     --bind "u:transform(git-mr-files --moved $iid $range)"
 else
-  first="$first,C=$who proposes fixes"
-  claude="git-mr-fix $iid $range"
   set -- --bind "u:$refresh+refresh-preview"
 fi
 keys="$first,|,$rest"
@@ -149,21 +140,14 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "y:transform(git-symbols --copy {12})" \
   --bind "enter:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-commit-open $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($light note)" \
-  --bind "f:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
+  --bind "tab:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
   --bind "l:execute-silent(git-symbols --open {12})+reload($light)" \
   --bind "h:transform(git-symbols --close {12} $light)" \
   --bind "L:execute-silent(git-symbols --open-all $range)+reload($light)" \
   --bind "H:execute-silent(git-symbols --close-all)+reload($light)" \
-  --bind "b:execute-silent(git-symbols --flip)+reload($light)" \
-  --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
-  --bind "F:transform:git-callers-fix --apply {12} '$refresh+refresh-preview'" \
   --bind "o:execute(git-mr-threads $iid $range)+$refresh+refresh-preview" \
-  --bind "s:transform(git-symbols --symbols {12} $light)" \
   --bind "G:transform(git-symbols --page $range {12})" \
-  --bind "W:execute-silent(git-symbols --sentences)+reload($list)+refresh-preview" \
-  --bind "p:execute-silent(git-symbols --peeks $range {2} {4} {5} {6} {12})+refresh-preview" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
-  --bind "C:execute($claude)+$refresh+refresh-preview" \
   --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
   --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "m:execute(gl $range)" \

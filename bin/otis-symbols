@@ -379,8 +379,15 @@ headline() {
   (( bysent )) && t="the story"
   (( bycase )) && t="case by case"
   [[ -e $st/by-file || -e $st/since ]] && t="by file"
-  put "$B$T" "${t:-by symbol}"; line+=$UB
-  (( ! bysent )) && [[ -e $st/sentences-wait ]] && put "$A" "  its cases in a minute or two"
+  if [[ -n $OTIS_TABS ]]; then
+    # Two tabs, the change's cases and its files: the one shown lit, tab for the other.
+    if [[ -e $st/by-file ]]; then put "$C" "cases  "; put "$B$T" "files"; line+=$UB
+    else put "$B$T" "cases"; line+=$UB; put "$C" "  files"; fi
+    put "$F" "   tab swaps"
+  else
+    put "$B$T" "${t:-by symbol}"; line+=$UB
+    (( ! bysent )) && [[ -e $st/sentences-wait ]] && put "$A" "  its cases in a minute or two"
+  fi
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
   L+=("") LI+=(0)
@@ -1462,11 +1469,9 @@ symkeys() {
       if [[ $fold[i] == open ]]; then rkl[l]="" rkl[h]="close it" rkl[enter]="close it"
       else rkl[h]="" rkl[l]="its $under: ${kids[i]}" rkl[enter]="its $under: ${kids[i]}"; fi
       if [[ $vwd[i] == all ]]; then rkl[v]="mark all under it not viewed"; else rkl[v]="mark all under it viewed"; fi
-      # s: a case with answers shows its symbols instead, or its answers again.
-      case $chg[i] in answers) rkl[s]="its symbols" ;; symbols) rkl[s]="its answers" ;; *) rkl[s]="" ;; esac
       return ;;
     answer)
-      rkl=(l "" i "" c "" F "" space "" y "" v "" h "close its case" s "its case's symbols")
+      rkl=(l "" i "" c "" F "" space "" y "" v "" h "close its case")
       fields $i
       if [[ -z $fld[2] ]]; then rkl[enter]=""
       elif [[ $cm[i] == 1 ]]; then rkl[enter]="open the line that decides it"
@@ -1491,9 +1496,6 @@ symkeys() {
   if [[ $typ[i] == caller && $err[i] == x ]]; then rkl[F]="make the proposed fix"; rkl[enter]="open the broken call"
   else rkl[F]=""; fi
   [[ $typ[i] == (callers|package) ]] && rkl[y]=""
-  # s under a case s turned to its symbols turns it back to its answers; elsewhere it does nothing.
-  local cs=${rid[i]%%>*}
-  if [[ $cs == sentence:* && $cs != $rid[i] && $chg[${rid[(ie)$cs]}] == symbols ]]; then rkl[s]="its case's answers"; else rkl[s]=""; fi
   # The worktree's: staged, not staged, or some of each.
   if [[ -n ${bind[space]} ]]; then
     fields $i
