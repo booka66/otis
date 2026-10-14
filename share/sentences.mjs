@@ -335,7 +335,7 @@ async function tellCases() {
   ];
   if (model === "off" || !rows.length) return null;
   const said = sources.map((source) => source.text).join("\n\n");
-  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 12])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 14])).digest("hex").slice(0, 16);
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
   if (cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
@@ -350,10 +350,10 @@ async function tellCases() {
     `  git -C ${root} show ${head}:<path>`,
     "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending, and say where you stopped. Use up to about 60 commands.",
     "",
-    "cases: the situations whose ending this change moves, the main ones first, grouped by where they come in; usually 6 to 16. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix.",
+    "cases: the situations whose ending this change moves, usually 6 to 16, in the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix.",
     "- group: where the case comes in, 2 to 6 everyday words, like \"we send Apple a message\". Cases that come in the same way use the same words.",
-    "- name: the situation, at most 7 everyday words, like \"Apple never answers a send\".",
-    "- setup: one sentence that makes it concrete. Name who does what as the code has it: before you say a person sets or triggers something, check who the code lets do it (a permission check, an admin gate).",
+    "- name: the situation, at most 10 everyday words a newcomer understands without reading anything else, like \"Apple never answers a message we send\".",
+    "- setup: one or two sentences that make it concrete for someone who has never seen this code. The first time a thing comes up in a case, say what it is in everyday words: never a bare word from the code's own world like \"a provider\", but \"the AI service the judge sends the question to, like OpenAI\". Name who does what as the code has it: before you say a person sets or triggers something, check who the code lets do it (a permission check, an admin gate).",
     "- was, now: how it ended before and how it ends now, at most 8 words each, each a plain clause with its subject, the same words where they agree, like \"it is tried again\" and \"it fails, and may have been sent\".",
     "- change: \"ends differently\", \"only a label\" or \"the same\". Before you say a case ends differently because a value changed (a flag like retryable, an error's type), find what reads that value: when nothing acts on it, only logs, metrics or a stored field read it, the case is \"only a label\", and its was and now say what a person or system actually sees.",
     "- described: true when the author's words below describe this case, false when they never mention it.",
@@ -951,12 +951,12 @@ if (told) {
     const source = quote && told.sources.find((s) => plain(s.text).includes(plain(quote)));
     return source ? { quote, from: source.from } : null;
   };
+  // In the order Claude gave them, which is the order to read them in; a group's cases together, the first
+  // spelling of a group naming it.
   const groups = [];
-  for (const one of told.cases) { const group = bare(one.group); if (saidOf(one) && !groups.some((g) => g.toLowerCase() === group.toLowerCase())) groups.push(group); }
+  for (const one of told.cases) { const group = bare(one.group); if (!groups.some((g) => g.toLowerCase() === group.toLowerCase())) groups.push(group); }
   const groupAt = (one) => groups.findIndex((g) => g.toLowerCase() === bare(one.group).toLowerCase());
-  const order = told.cases.map((one, at) => ({ one, at, said: saidOf(one) })).sort((a, b) =>
-    (a.said ? 0 : 1) - (b.said ? 0 : 1) || (a.said ? groupAt(a.one) - groupAt(b.one) : 0)
-    || (RANK[a.one.change] ?? 0) - (RANK[b.one.change] ?? 0) || a.at - b.at);
+  const order = told.cases.map((one, at) => ({ one, at, said: saidOf(one) })).sort((a, b) => groupAt(a.one) - groupAt(b.one) || a.at - b.at);
   const whereOf = new Map((told.groups ?? []).map((one) => [bare(one.group).toLowerCase(), coded(one.where)]));
   const keys = [];
   for (const { one, said } of order) {
@@ -983,7 +983,7 @@ if (told) {
     const data = [...new Set((one.data ?? []).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && !runs.some((run) => run.path === path)))];
     const change = RANK[one.change] == null ? "ends differently" : one.change;
     parts.push({
-      kind: said ? "case" : "also", title: bare(one.name), group: said ? groups[groupAt(one)] : "",
+      kind: said ? "case" : "also", title: bare(one.name), group: groups[groupAt(one)],
       setup: coded(one.setup), where: whereOf.get(bare(one.group).toLowerCase()) ?? "", was: bare(one.was), now: bare(one.now), change,
       quote: said?.quote ?? "", origin: said?.from ?? null,
       facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
@@ -1121,7 +1121,7 @@ if (htmlOut) {
 } else {
   let group = null;
   for (const part of outline.sentences) {
-    const heading = part.kind === "case" ? part.group : part.kind === "also" ? "also changed, nobody named these" : part.kind === "rest" ? "on no route" : null;
+    const heading = part.kind === "case" || part.kind === "also" ? part.group : part.kind === "rest" ? "on no route" : null;
     if (heading && heading !== group) { console.log(`\n${heading.toUpperCase()}`); group = heading; }
     console.log(`\n${part.num}  ${part.text}${part.ending ? `   ${part.ending}` : ""}${part.change && part.change !== "ends differently" ? `  (${part.change})` : ""}`);
     if (part.setup) console.log(`   ${part.setup}`);

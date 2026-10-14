@@ -1393,7 +1393,7 @@ if [ "$mode" = --rows ]; then
         printf "${GK_CONTEXT}a case${GK_R}\n"
         printf "  a situation the code meets, under where it comes in, and how it ended before ${GK_CONTEXT}\342\206\222${GK_R} how it ends now: ${GK_ATTENTION}yellow${GK_R} when it ends differently, ${GK_CONTEXT}\302\267 only a label${GK_R} when only what a log, a metric or a stored field reads changed, ${GK_CONTEXT}= the same${GK_R} when it ends as it did\n"
         printf "  its pane: the values to compare, the author's own sentence on it, then its route through the code in the order it runs, each stop's deciding lines with what holds there; ${GK_ATTENTION}\342\227\206${GK_R} changed here, \342\227\217 in code the change touched, ${GK_CONTEXT}\342\227\213${GK_R} not in the change\n"
-        printf "  ${GK_CONTEXT}also changed${GK_R} cases the author never mentions   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   l its symbols, v marks all of it viewed, tab the next tab, shift-tab the one before\n\n"
+        printf "  read them top to bottom: the first is the main path, each after it builds on those before   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   l its symbols, v marks all of it viewed, tab the next tab, shift-tab the one before\n\n"
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
       printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
@@ -1703,9 +1703,8 @@ if [ "$mode" = --rows ]; then
         if (ln != "") lines[++nl] = ln
         # Cases under where they come in, the ones the author never named after, what no case runs last; told
         # without cases, the parts of the story under a heading and what serves them under another.
-        if (sfrom[n] == "case" && sgroup[n] != group) { heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
-        else if (sfrom[n] == "case" || sfrom[n] == "also" && also++) seen++
-        else if (sfrom[n] == "also") heading("also changed, nobody named these", "gk-also-heading")
+        if ((sfrom[n] == "case" || sfrom[n] == "also") && sgroup[n] != group) { heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
+        else if (sfrom[n] == "case" || sfrom[n] == "also") seen++
         else if (sfrom[n] == "story" && !told++) { seen++; heading("what changed", "gk-story-heading") }
         else if (sfrom[n] == "support" && !sup++) { more("", "m", ""); heading("also changed, to support it", "gk-support-heading") }
         else if (sfrom[n] == "rest" && !rest++) { if (!ncase) more("", "m", ""); heading(ncase ? "on no route, read as a plain diff" : "in the change, in no part", "gk-rest-heading") }

@@ -473,7 +473,7 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
   const navGroup = (title) => { nav.append(el("h2", null, title)); const ol = el("ol"); nav.append(ol); return ol; };
   let ol = null;
   for (const c of cases) {
-    const title = c.kind === "also" ? "Also changed, nobody named these" : c.group || "Cases";
+    const title = c.group || "Cases";
     if (title !== group) {
       group = title;
       section = el("section", "group", el("h2", null, title));
