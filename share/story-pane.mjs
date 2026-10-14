@@ -2,14 +2,30 @@
 // story-pane.mjs <outline.json> <n>: case n of a change (sentences.mjs) as the symbol view's pane,
 // FZF_PREVIEW_COLUMNS wide: the situation, how it ended before and how it ends now, its route through the
 // code in the order it runs, the tests that run it. A part told without cases is its words and its code.
-import { readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 const part = outline.sentences[Number(which) - 1];
 if (!part) process.exit(0);
 const W = Math.max(40, Number(process.env.FZF_PREVIEW_COLUMNS) || 96);
+// The case told again for you (reword.mjs, from your words), laid over the case it was told from.
+const reworded = (() => { try { return JSON.parse(readFileSync(file.replace(/\.json$/, `.reader.${which}.json`), "utf8")); } catch { return null; } })();
+const rewording = existsSync(file.replace(/\.json$/, `.reader.${which}.running`));
+const overlaid = reworded?.of === part.text;
+if (overlaid) {
+  for (const key of ["text", "setup", "where", "ends", "stopped"]) if (part[key] || reworded[key]) part[key] = reworded[key];
+  reworded.facts.forEach((fact, k) => Object.assign(part.facts[k], fact));
+  reworded.stops.forEach((stop, i) => {
+    const one = part.stops[i];
+    if (stop.is || one.is) one.is = stop.is;
+    const value = new Map(one.lines.map((line, j) => [line.n, stop.values[j]]));
+    for (const line of [...one.lines, ...(one.code ?? [])]) if (value.has(line.n) && (line.cited || one.lines.includes(line))) line.value = value.get(line.n);
+  });
+}
 
 const env = process.env;
 const fg = (name, fallback) => `\x1b[${env[name] || fallback}m`;
@@ -138,16 +154,7 @@ function showCase() {
   for (const line of prose(part.text, W - 4, B + T)) say(`  ${line}`);
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
-  // The words you are learning (otis-words) that the case uses: what each means, before anything else uses it.
-  const words = learning();
-  if (words.length) {
-    say(`  ${C}WORDS YOU ARE LEARNING${R}`);
-    for (const { word, meaning } of words) {
-      say(`  ${B}${A}${word}${R}`);
-      for (const line of prose(meaning || "Claude is reading up on it", Math.min(W - 6, 100), meaning ? T : C)) say(`    ${line}`);
-    }
-    say();
-  }
+  if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
   // Where in the system this happens, for a reader who has never seen this code.
   // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
   if (part.where) {
@@ -305,15 +312,25 @@ function showCase() {
   say();
 }
 
-/** The words you are learning (otis-words) that the case uses anywhere in its words, each with what it means. */
-function learning() {
+/** Your words (otis-words), marked once, hold in every case: a case that uses a word you are learning, or explains
+ * one you know, and was not told with it, is told again for you behind the pane (reword.mjs), two at a time. */
+function retell() {
+  if (rewording || !part.stops?.length) return;
   let kept;
-  try { kept = readFileSync(process.env.OTIS_WORDS || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/otis/words.tsv`, "utf8"); } catch { return []; }
-  const said = [part.text, part.setup, part.where, part.ends, part.quote, ...part.facts.flatMap((fact) => [fact.what, fact.before, fact.after]),
-    ...part.stops.flatMap((stop) => [stop.is, ...stop.lines.map((line) => line.value)])].join(" ").replace(/`/g, "").toLowerCase();
-  return kept.split("\n").map((line) => line.split("\t"))
-    .filter(([state, word]) => state === "learning" && word && said.includes(word.toLowerCase()))
-    .map(([, word, meaning]) => ({ word, meaning }));
+  try { kept = readFileSync(process.env.OTIS_WORDS || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/otis/words.tsv`, "utf8"); } catch { return; }
+  const said = [part.text, part.setup, part.where, part.ends, part.stopped, ...part.facts.flatMap((fact) => [fact.what, fact.before, fact.after]),
+    ...part.stops.flatMap((stop) => [stop.is, ...stop.lines.map((line) => line.value)])].join(" ").replace(/`/g, "");
+  const told = `${overlaid ? reworded.reader : ""} ${outline.reader ?? ""}`.toLowerCase();
+  const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stale = kept.split("\n").map((line) => line.split("\t")).some(([state, word]) => {
+    if (!word || told.includes(word.toLowerCase())) return false;
+    const uses = new RegExp(`\\b${escape(word)}\\b`, "i");
+    return state === "learning" ? uses.test(said) : state === "known" && new RegExp(`\\b${escape(word)}\\s*\\(`, "i").test(said);
+  });
+  if (!stale) return;
+  const busy = readdirSync(dirname(file)).filter((name) => name.endsWith(".running") && name.includes(".reader.")).length;
+  if (busy >= 2) return;
+  spawn("node", [join(dirname(new URL(import.meta.url).pathname), "reword.mjs"), file, which], { detached: true, stdio: "ignore" }).unref();
 }
 
 /** A colored line without its first n columns of indentation. */
@@ -414,5 +431,5 @@ if (tests.length || (part.kind === "story" && outline.filedBy && boxes.length)) 
 say();
 }
 
-if (part.kind === "case" || part.kind === "also") showCase(); else showPart();
+if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
 process.stdout.write(out.join("\n") + "\n");

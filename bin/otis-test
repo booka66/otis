@@ -902,8 +902,12 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   for _ in 1 2 3 4 5 6 7 8 9 10; do [ -n "$(otis-words --defs | cut -f2)" ] && break; sleep 0.3; done
   expect words/learned "$(otis-words --defs)" "Telnyx	The company that sends our texts."
   expect words/reader "$(otis-words --reader | cut -c1-60 | tr '\n' '|')" "Words the reader already knows: use them as they are and nev|Words the reader is learning: say what each one is, in plain|"
+  # A case told again for you brings back what a word you are learning means, whole however long.
+  otis-words learn provider >/dev/null; otis-words mean provider "The outside service that delivers a message, such as Telnyx for texts or a gateway for iMessage, and that may or may not give back a message id."
+  expect words/meant "$(otis-words --defs | awk -F'\t' '$1 == "provider" { print length($2) }')" "144"
+  otis-words know provider >/dev/null
   otis-words know telnyx >/dev/null
-  expect words/known-now "$(otis-words --defs | wc -l | tr -d ' '):$(grep -c . "$OTIS_WORDS")" "0:2"
+  expect words/known-now "$(otis-words --defs | wc -l | tr -d ' '):$(grep -c . "$OTIS_WORDS")" "0:3"
   unset OTIS_WORDS
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is

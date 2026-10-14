@@ -420,7 +420,8 @@ async function tellCases() {
     return null;
   }
   const spent = JSON.parse(answer);
-  const result = { model, cases: told.cases, groups: told.groups ?? [], turns: spent.num_turns, cost: spent.total_cost_usd };
+  // The reader's words it was told with, so the pane knows which words a case already tells your way.
+  const result = { model, cases: told.cases, groups: told.groups ?? [], turns: spent.num_turns, cost: spent.total_cost_usd, reader };
   if (cached) { mkdirSync(cacheDir, { recursive: true }); writeFileSync(cached + ".new", JSON.stringify(result)); renameSync(cached + ".new", cached); }
   return { ...result, sources };
 }
@@ -1053,7 +1054,7 @@ const testName = (row) => (row.cases && row.name.includes("%s") ? row.name.split
 const outline = {
   title: titleArg ?? commits.at(-1)?.subject ?? "", label: labelArg ?? `${short(base)}..${short(head)}`, base, head,
   add: total.add, del: total.del, commits: commits.map((commit) => ({ sha: short(commit.sha), subject: commit.subject })),
-  filedBy: told ? told.model : null, described: Boolean(description),
+  filedBy: told ? told.model : null, described: Boolean(description), reader: told?.reader ?? "",
   cases: sentences.filter((part) => part.kind === "case" || part.kind === "also").length, stories: numbered,
   sentences: sentences.map((part, at) => ({
     id: `s${at + 1}`, kind: part.kind, num: part.num, text: part.title, group: part.group ?? "",

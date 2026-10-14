@@ -2153,7 +2153,11 @@ handle() {
     used $n
     local w=$seltxt
     sel=0 selr= seltxt=
-    if [[ $n == y ]]; then flash=$(otis-words know "$w" 2>/dev/null); else flash=$(otis-words learn "$w" 2>/dev/null); fi
+    # On a case, or under one: that case is told again for you.
+    local cs=${rid[cur]%%>*} json=
+    [[ $cs == sentence:* && -s $st/sentences ]] && json=${$(<$st/sentences)%.tsv}.json
+    if [[ $n == y ]]; then flash=$(otis-words know "$w" ${json:+"$json" "${cs#sentence:}"} 2>/dev/null)
+    else flash=$(otis-words learn "$w" ${json:+"$json" "${cs#sentence:}"} 2>/dev/null); fi
     dirty=1; return
   fi
   # Lines selected in a diff: a asks Claude about them, c comments on them
