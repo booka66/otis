@@ -762,6 +762,8 @@ function caller(stop) {
   };
   const code = (path) => /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|sh|zsh)$/.test(path) && !testFiles.has(path) && !TESTISH.test(path);
   const found = (path, n, verb) => ({ fn: ownOf("new", path, n)?.name ?? "", path, where: where(path), n, verb });
+  // A function of the same name (a wrapper, a re-export) is no way in: it says the name again and nothing more.
+  const fresh = (hit) => hit.fn !== name;
   let use = null;
   for (const path of files.keys()) {
     if (!code(path)) continue;
@@ -769,8 +771,10 @@ function caller(stop) {
     if (!text) continue;
     for (let n = 1; n <= text.length; n++) {
       const verb = verbOf(path, n, text[n - 1]);
-      if (verb === "calls") return found(path, n, verb);
-      if (verb && !use) use = found(path, n, verb);
+      const hit = verb && found(path, n, verb);
+      if (!hit || !fresh(hit)) continue;
+      if (verb === "calls") return hit;
+      use ??= hit;
     }
   }
   if (use) return use;
@@ -780,7 +784,8 @@ function caller(stop) {
     const m = /^[^:]+:(.+?):(\d+):(.*)$/.exec(line);
     if (!m || !code(m[1])) continue;
     const verb = verbOf(m[1], Number(m[2]), m[3]);
-    if (verb) return found(m[1], Number(m[2]), verb);
+    const hit = verb && found(m[1], Number(m[2]), verb);
+    if (hit && fresh(hit)) return hit;
   }
   return null;
 }

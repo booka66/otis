@@ -250,7 +250,9 @@ function showCase() {
     const room = W - 4 - 2 * depth;
     if (width(head) + width(place) + 2 <= room) say(`  ${rail(depth)}${head}  ${place}`);
     else { say(`  ${rail(depth)}${head}`); say(`  ${rail(depth + 1)}${place}`); }
-    if (stop.is) for (const line of prose(stop.is, room - 2)) say(`  ${rail(depth + 1)}${line}`);
+    // What it is for, without the name it opens with when Claude starts there: the line above says it.
+    const is = (stop.is ?? "").replace(new RegExp(`^\`?${stop.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`?\\s+`), "");
+    if (is) for (const line of prose(is, room - 2)) say(`  ${rail(depth + 1)}${line}`);
     // Its code, every line in its file's colors on the diff's ground: the lines Claude cites on a stronger ground,
     // with what holds there beside them in yellow. A stop it calls is drawn under the line that calls it.
     const lead = rail(depth + 1), code = edge - 2 * (depth + 1) - gutter;
@@ -324,7 +326,7 @@ function retell() {
   const stale = kept.split("\n").map((line) => line.split("\t")).some(([state, word]) => {
     if (!word || told.includes(word.toLowerCase())) return false;
     const uses = new RegExp(`\\b${escape(word)}\\b`, "i");
-    return state === "learning" ? uses.test(said) : state === "known" && new RegExp(`\\b${escape(word)}\\s*\\(`, "i").test(said);
+    return state === "learning" || state === "noted" ? uses.test(said) : state === "known" && new RegExp(`\\b${escape(word)}\\s*\\(`, "i").test(said);
   });
   if (!stale) return;
   const busy = readdirSync(dirname(file)).filter((name) => name.endsWith(".running") && name.includes(".reader.")).length;

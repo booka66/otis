@@ -88,6 +88,8 @@ for pair in ${(s:,:)spec}; do
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
 preview= startacts= hdr=$drawing searching=0 watchfiles=() stepscmd= panescmd=
+# Your note on a selected word (a in a case's pane): typed in the footer, then saved with it (otis-words).
+noting=0 nword= ntext= njson= ncase=
 # --repeat j,k: keys cheap enough to act on every repeat of a key held down
 # (a debugger's step), which the rest do not (below).
 typeset -A repeat
@@ -1497,7 +1499,7 @@ helplines() {
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
     "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
-    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them; a word: y you know it, n you don't, and Claude reads up on it" \
+    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
@@ -1634,6 +1636,7 @@ draw() {
     elif [[ ${sw% *} == ${sw#* } ]]; then sw="line ${sw% *}"; else sw="lines ${sw/ /–}"; fi
     [[ $sd == old ]] && sw+=" (removed)"
     foot+=$B$A"c"$R$B$T" comment on $sw"$UB$R$C"   ·   esc lets go"$R
+  elif (( noting )); then foot+=$A"what is "$R$B$T"$nword"$UB$R$A"? "$R$T"$ntext"$R$A"▏"$R$C"   ⏎ saves it  ·  esc drops it"$R
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   elif (( cfocus )); then
     chat_busy && foot+=$B$A"ctrl-c"$R$B$T" stops it"$UB$R$C"   ·   "$R
@@ -1874,7 +1877,7 @@ mouse() {
       else
         ends; shown; copy $REPLY.cont 0 && selrange
         # A word or a few on one line: y says you know it, n that you don't (otis-words).
-        [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && flash+="  ·  y you know it, n you don't"
+        [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && flash+="  ·  y you know it, n you don't, a say what it is"
       fi
     fi
     (( sel )) && ends
@@ -2135,6 +2138,16 @@ handle() {
   local k=$1
   keyname "$k"; local n=$REPLY was=$lastn
   lastn=$n
+  if (( noting )); then
+    case $n in
+      enter) noting=0 dirty=1; [[ -n ${ntext// /} ]] && flash=$(otis-words note "$nword" "$ntext" ${njson:+"$njson" "$ncase"} 2>/dev/null); return ;;
+      esc) noting=0 dirty=1; return ;;
+      bspace) ntext=${ntext[1,-2]} dirty=1; return ;;
+      ctrl-u) ntext= dirty=1; return ;;
+    esac
+    [[ $k == [[:print:]]* && $k != $e* ]] && { ntext+=$k dirty=1; }
+    return
+  fi
   if (( searching )); then
     case $n in
       enter) searching=0 dirty=1; [[ -n $bind[enter] ]] && act enter; return ;;
@@ -2147,15 +2160,17 @@ handle() {
     [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
     return
   fi
-  # A word selected in the pane: y says you know it, n that you don't, and Claude reads up on it
-  # (otis-words). The pane draws again when the words change (watched).
-  if (( sel == 1 )) && [[ -n $seltxt && $seltxt != *$'\n'* && $n == (y|n) ]] && (( ${#seltxt} <= 80 )); then
+  # A word selected in the pane: y says you know it, n that you don't, and Claude reads up on it; in a
+  # case's pane, a says what it is in your own words (otis-words). The pane draws again when the words
+  # change (watched).
+  local cs=${rid[cur]%%>*} json=
+  if (( sel == 1 )) && [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && [[ $n == (y|n) || ( $n == a && $cs == sentence:* ) ]]; then
     used $n
     local w=$seltxt
     sel=0 selr= seltxt=
     # On a case, or under one: that case is told again for you.
-    local cs=${rid[cur]%%>*} json=
     [[ $cs == sentence:* && -s $st/sentences ]] && json=${$(<$st/sentences)%.tsv}.json
+    if [[ $n == a ]]; then noting=1 nword=$w ntext= njson=$json ncase=${cs#sentence:} flash=; dirty=1; return; fi
     if [[ $n == y ]]; then flash=$(otis-words know "$w" ${json:+"$json" "${cs#sentence:}"} 2>/dev/null)
     else flash=$(otis-words learn "$w" ${json:+"$json" "${cs#sentence:}"} 2>/dev/null); fi
     dirty=1; return

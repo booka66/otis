@@ -1,16 +1,18 @@
 #!/bin/sh
 # otis-words know <word> [<outline.json> <n>]    a word otis need not explain to you again
 # otis-words learn <word> [<outline.json> <n>]   a word you do not know
+# otis-words note <word> <note> [<outline.json> <n>]   what a word is, in your own words
 # otis-words mean <word> <meaning>                what a word you are learning means
 # otis-words --defs          each word you are learning and what it means, tab between, a line each
 # otis-words --reader        the words as a prompt gives them to Claude: those you know, those you are learning
 #
 # Your words, kept for you alone (OTIS_WORDS, else ~/.config/otis/words.tsv), so what otis writes for you is
 # told the way you need it: in a case's pane, select a word and press y for one you know, n for one you
-# don't. That case is told again for you (share/reword.mjs): the words you know left alone, the ones you
-# don't explained where they come up, from the code; and the cases told after it are told that way from
-# the start. Given no case, Claude reads the repository for what a word you don't know means here. A line a
-# word: known or learning, the word, and for one you are learning what it means.
+# don't, a to say what it is yourself. That case is told again for you (share/reword.mjs): the words you
+# know left alone, the ones you don't explained where they come up as the thing they are in this code, and
+# yours as you put them; and the cases told after it are told that way from the start. Given no case, Claude
+# reads the repository for what a word you don't know is here. A line a word: known, learning or noted (your
+# own), the word, and what it means: Claude's for one you are learning, yours for one you noted.
 words=${OTIS_WORDS:-${XDG_CONFIG_HOME:-$HOME/.config}/otis/words.tsv}
 mkdir -p "$(dirname "$words")" && touch "$words" || exit 1
 
@@ -21,7 +23,8 @@ put() {
   mv -f "$words.$$" "$words"
 }
 # What was selected, as a word: one line, its spaces single, the punctuation around it off.
-clean() { printf '%s' "$*" | tr '\n\t' '  ' | sed -E 's/  +/ /g; s/^[[:space:][:punct:]]+//; s/[[:space:].,:;!?)]+$//' | cut -c1-80; }
+# A selection that runs on into the explanation after a word (" (the ...") is the word before it.
+clean() { printf '%s' "$*" | tr '\n\t' '  ' | sed -E 's/  +/ /g; s/ \(.*$//; s/^[[:space:][:punct:]]+//; s/[[:space:].,:;!?)]+$//' | cut -c1-80; }
 
 # reword <outline.json> <n>: that case told again for you, behind the screen.
 reword() {
@@ -36,6 +39,11 @@ case $1 in
     put known "$w"
     if reword "$3" "$4"; then printf 'you know "%s": case %s is being told again without explaining it\n' "$w" "$4"
     else printf 'you know "%s": otis will not explain it again\n' "$w"; fi ;;
+  note)
+    w=$(clean "$2"); n=$(printf '%s' "$3" | tr '\n\t' '  '); [ -n "$w" ] && [ -n "$n" ] || exit 1
+    put noted "$w" "$n"
+    if reword "$4" "$5"; then printf 'noted "%s": case %s is being told again with it\n' "$w" "$5"
+    else printf 'noted "%s"\n' "$w"; fi ;;
   mean)
     awk -F'\t' -v w="$2" 'tolower($2) == tolower(w) && $1 == "learning" { found = 1 } END { exit !found }' "$words" && put learning "$2" "$(printf '%s' "$3" | tr '\n\t' '  ')"
     exit 0 ;;
@@ -50,7 +58,7 @@ case $1 in
     (
       empty=$(mktemp -d) || exit 1
       cd "$empty" || exit 1
-      prompt="A teammate reviewing code in the repository at $root does not know what \"$w\" means. Find out from the code (git grep and git show, a few commands at most) what it is here and what it is for, and say so in one or two plain sentences someone new to this code understands. Plain words, no markdown, no line numbers or file paths."
+      prompt="A teammate reviewing code in the repository at $root does not know what \"$w\" is. Find the thing itself in the code (git grep and git show, a few commands at most) and say what it is in this codebase, in one or two plain sentences: the concrete thing, by what it is built on and its name here (a cloud service, a table, a library, a workflow), where it is set up, and what puts things into it or reads from it. Never a general definition: not \"a queue is a line of jobs waiting their turn\" but \"the SQS queue the webhook handler puts each event on, which a worker writes into the history\". Plain words, no markdown, no line numbers."
       out=$(printf '%s' "$prompt" | "${SEAM_CLAUDE:-claude}" -p --model "$model" --restricted --tools Bash --add-dir "$root" \
         --allowedTools "Bash(git -C $root grep:*)" "Bash(git -C $root show:*)" \
         --strict-mcp-config --disable-slash-commands --no-session-persistence --permission-prompts none \
@@ -60,12 +68,14 @@ case $1 in
       [ -n "$out" ] && awk -F'\t' -v w="$w" 'tolower($2) == tolower(w) && $1 == "learning" { found = 1 } END { exit !found }' "$words" && put learning "$w" "$out"
     ) </dev/null >/dev/null 2>&1 &
     ;;
-  --defs) awk -F'\t' '$1 == "learning" { print $2 "\t" $3 }' "$words" ;;
+  --defs) awk -F'\t' '$1 == "learning" || $1 == "noted" { print $2 "\t" $3 }' "$words" ;;
   --reader)
     known=$(awk -F'\t' '$1 == "known" { printf "%s%s", (n++ ? ", " : ""), $2 }' "$words")
     learning=$(awk -F'\t' '$1 == "learning" { printf "%s%s", (n++ ? "; " : ""), $2 ($3 != "" ? " (" $3 ")" : "") }' "$words")
     [ -n "$known" ] && printf 'Words the reader already knows: use them as they are and never explain them: %s.\n' "$known"
-    [ -n "$learning" ] && printf 'Words the reader is learning: say what each one is, in plain words, the first time it comes up in a case: %s.\n' "$learning"
+    noted=$(awk -F'\t' '$1 == "noted" { printf "%s%s", (n++ ? "; " : ""), $2 " (" $3 ")" }' "$words")
+    [ -n "$learning" ] && printf 'Words the reader is learning: say what each one is in this codebase, in plain words, the first time it comes up in a case: %s.\n' "$learning"
+    [ -n "$noted" ] && printf 'Words the reader has said what they are, in their own words, which are true: use what they say the first time each comes up: %s.\n' "$noted"
     exit 0 ;;
   *) sed -n '2,5s/^# //p' "$0"; exit 2 ;;
 esac
