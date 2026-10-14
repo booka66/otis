@@ -335,7 +335,7 @@ async function tellCases() {
   ];
   if (model === "off" || !rows.length) return null;
   const said = sources.map((source) => source.text).join("\n\n");
-  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 12])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 13])).digest("hex").slice(0, 16);
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
   if (cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
@@ -359,7 +359,8 @@ async function tellCases() {
     "- described: true when the author's words below describe this case, false when they never mention it.",
     "- said: the author's own sentence about this case, copied exactly from their words below, or \"\".",
     "- facts: at most 5 things a reviewer would compare, each about one thing (when a count and a list move differently, they are two facts): what (a question a newcomer would ask about this case, at most 6 words, like \"Is the model called?\" or \"What does the shopper see?\"), before and after (its answer before and after the change, at most 8 words each, plain enough to read alone, never a label only this code uses), and test (the one line of a test in this change that asserts this answer: path, its line number after the change, its code copied exactly; or path \"\", line 0 and code \"\" when no test asserts it). In everyday words a teammate from outside this code would use; a code value only when it is what a person or another system sees, like a 400 status or a reason \"delivery_unknown\". before is what the code before the change does with this same situation: when the situation needs something this change adds (a setting, a field), say what the old code does without it, never what it would have done with it. When nothing ran for this case before the change, before is \"\".",
-    "- stops: the route, in the order it runs. Each is a place in the code: name (the function's or symbol's own name, nothing else), is (what that function or place is for, at most 12 everyday words, like \"reads one page of the window's orders from the database\"), path (from the repository's root), side (\"new\" for the code after the change, \"old\" only for code the change removed), lines (the 1 to 5 lines there that decide this case, each with its line number on that side, its code copied exactly, and value: what holds on that line for this case, a short phrase that says what it is about, like \"the window has a rate, so go on\" or \"paid through Gale, so 2%\", never a bare true or false; or \"\"; check each value against its line: a comparison's edge as the code has it (>= is \"at least\", > is \"over\"), and arithmetic done with the case's own numbers). Take unchanged code in when it decides the ending, and take in the function that calls the others when that is what holds the route together.",
+    "- stops: the route, in the order it runs. Each is a place in the code: name (the function's or symbol's own name, nothing else), is (what that function or place is for, at most 12 everyday words, like \"reads one page of the window's orders from the database\"), path (from the repository's root), side (\"new\" for the code after the change, \"old\" only for code the change removed), lines (the 1 to 5 lines there that decide this case, each with its line number on that side, its code copied exactly, value: what holds on that line for this case, a short phrase that says what it is about, like \"the window has a rate, so go on\" or \"paid through Gale, so 2%\", never a bare true or false; or \"\"; check each value against its line: a comparison's edge as the code has it (>= is \"at least\", > is \"over\"), and arithmetic done with the case's own numbers; and decides: the numbers of this case's facts whose after answer this line decides, 1 for its first fact, or [] for a line that decides none). Take unchanged code in when it decides the ending, and take in the function that calls the others when that is what holds the route together.",
+    "  Each fact's after answer should be decided by a line you cite: a reviewer checks the answer against that line. When a fact's answer is decided somewhere you did not follow, follow it there and cite the line; a fact no line decides is one the reviewer has only your word for.",
     "- ends: one or two sentences on how it ends, before and after, that a teammate who has never seen this code can read on their own.",
     "- stopped: where you stopped following and what you left unfollowed, or \"\".",
     "- tests: the names of tests in this change that run this case, copied exactly from the rows below.",
@@ -392,7 +393,7 @@ async function tellCases() {
       group: text, name: text, setup: text, was: text, now: text,
       change: { enum: ["ends differently", "only a label", "the same"] }, described: { type: "boolean" }, said: text,
       facts: list(object({ what: text, before: text, after: text, test: object({ path: text, line: { type: "integer" }, code: text }) })),
-      stops: list(object({ name: text, is: text, path: text, side: { enum: ["new", "old"] }, lines: list(object({ line: { type: "integer" }, code: text, value: text })) })),
+      stops: list(object({ name: text, is: text, path: text, side: { enum: ["new", "old"] }, lines: list(object({ line: { type: "integer" }, code: text, value: text, decides: list({ type: "integer" }) })) })),
       ends: text, stopped: text, tests: list(text), data: list(text),
     })),
     groups: list(object({ group: text, where: text })),
@@ -619,7 +620,12 @@ function placeStops(stop) {
   const lines = [];
   for (const cited of stop.lines ?? []) {
     const n = findLine(text, cited.line, cited.code);
-    if (n && !lines.some((one) => one.n === n)) lines.push({ n, t: text[n - 1], value: coded(cited.value).replace(/\.$/, "") });
+    if (!n) continue;
+    // The case's facts whose answer this line decides; null in an answer from before otis asked which.
+    const decides = Array.isArray(cited.decides) ? cited.decides : null;
+    const same = lines.find((one) => one.n === n);
+    if (same) { if (decides) same.decides = [...new Set([...(same.decides ?? []), ...decides])]; continue; }
+    lines.push({ n, t: text[n - 1], value: coded(cited.value).replace(/\.$/, ""), decides });
   }
   if (!lines.length) return [];
   lines.sort((a, b) => a.n - b.n);
@@ -907,6 +913,7 @@ function codeOf(stop, calls) {
 
 /** The tests in the change a case names, matched to their rows; a name that matches none is dropped. */
 const testRows = rows.filter((row) => row.block && row.kind === "test");
+const testName = (row) => (row.cases && row.name.includes("%s") ? row.name.split("%s").join(row.cases) : row.name);
 function testsNamed(names) {
   const found = [];
   for (const name of names ?? []) {
@@ -965,7 +972,11 @@ if (told) {
     for (const stop of (one.stops ?? []).flatMap(placeStops)) {
       const same = stops.find((x) => x.path === stop.path && x.side === stop.side && x.name === stop.name);
       if (!same) { stops.push(stop); continue; }
-      for (const line of stop.lines) if (!same.lines.some((x) => x.n === line.n)) same.lines.push(line);
+      for (const line of stop.lines) {
+        const had = same.lines.find((x) => x.n === line.n);
+        if (!had) same.lines.push(line);
+        else if (line.decides) had.decides = [...new Set([...(had.decides ?? []), ...line.decides])];
+      }
       same.lines.sort((a, b) => a.n - b.n);
       for (const row of stop.covers) same.covers.add(row);
       same.mark = same.lines.some((line) => line.sign !== " ") ? "◆" : same.covers.size ? "●" : "○";
@@ -974,6 +985,10 @@ if (told) {
     }
     nest(stops);
     stops.forEach((stop, i) => { stop.code = codeOf(stop, stops.filter((kid) => kid.parent === i).map((kid) => kid.call.n)); });
+    // Each fact's lines: the cited lines whose answer to it Claude says they decide, as stop:line; null for an
+    // answer from before otis asked which.
+    const asked = (one.stops ?? []).some((stop) => (stop.lines ?? []).some((line) => Array.isArray(line.decides)));
+    const decidedBy = (k) => (asked ? stops.flatMap((stop, i) => stop.lines.filter((line) => line.decides?.includes(k + 1)).map((line) => `${i}:${line.n}`)) : null);
     const runs = testsNamed(one.tests);
     for (const stop of stops) {
       keys.push(`${stop.side}\t${stop.path}`);
@@ -986,7 +1001,7 @@ if (told) {
       kind: said ? "case" : "also", title: bare(one.name), group: said ? groups[groupAt(one)] : "",
       setup: coded(one.setup), where: whereOf.get(bare(one.group).toLowerCase()) ?? "", was: bare(one.was), now: bare(one.now), change,
       quote: said?.quote ?? "", origin: said?.from ?? null,
-      facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
+      facts: (one.facts ?? []).slice(0, 5).map((fact, k) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test), lines: decidedBy(k) })),
       // New code: the route starts in code the change adds, so the case has no before; one that ends the same had one.
       stops, fresh: change !== "the same" && stops.length > 0 && stops.filter((stop) => stop.parent < 0).every((stop) => stop.fresh),
       ends: coded(one.ends), stopped: coded(one.stopped), runs, data,
@@ -996,7 +1011,17 @@ if (told) {
         ...rows.filter((row) => data.includes(row.path))])],
     });
   }
+  for (const part of parts) for (const fact of part.facts) if (fact.pinned) keys.push(`new\t${fact.pinned.path}`);
   await paint(keys);
+  // The test line that asserts an answer, with the whole statement it is in and the name of the test it is in.
+  for (const part of parts) for (const fact of part.facts) {
+    if (!fact.pinned) continue;
+    const { path, n } = fact.pinned, text = textAt("new", path);
+    const [from, to] = statement(text, n, 1, text.length);
+    fact.pinned.lines = Array.from({ length: to - from + 1 }, (_, k) => ({ n: from + k, t: text[from + k - 1], paint: colored("new", path, from + k) }));
+    const test = testRows.find((row) => row.path === path && row.unit.now && row.unit.now[0] <= n && n <= row.unit.now[1]);
+    fact.pinned.test = test ? testName(test) : "";
+  }
   for (const part of parts) for (const stop of part.stops) {
     for (const line of stop.lines) {
       line.paint = colored(stop.side, stop.path, line.n);
@@ -1045,7 +1070,6 @@ function gather(list, test) {
 const total = { add: 0, del: 0 };
 for (const file of files.values()) for (const line of file.lines) { if (line.s === "+") total.add++; else if (line.s === "-") total.del++; }
 const sum = (list, key) => list.reduce((n, row) => n + row[key], 0);
-const testName = (row) => (row.cases && row.name.includes("%s") ? row.name.split("%s").join(row.cases) : row.name);
 const outline = {
   title: titleArg ?? commits.at(-1)?.subject ?? "", label: labelArg ?? `${short(base)}..${short(head)}`, base, head,
   add: total.add, del: total.del, commits: commits.map((commit) => ({ sha: short(commit.sha), subject: commit.subject })),
@@ -1125,7 +1149,10 @@ if (htmlOut) {
     if (heading && heading !== group) { console.log(`\n${heading.toUpperCase()}`); group = heading; }
     console.log(`\n${part.num}  ${part.text}${part.ending ? `   ${part.ending}` : ""}${part.change && part.change !== "ends differently" ? `  (${part.change})` : ""}`);
     if (part.setup) console.log(`   ${part.setup}`);
-    for (const fact of part.facts) console.log(`   ${fact.what}: ${fact.before} → ${fact.after}${fact.pinned ? `  (asserted at ${fact.pinned.where})` : ""}`);
+    for (const fact of part.facts) {
+      const at = (fact.lines ?? []).map((id) => { const [i, n] = id.split(":").map(Number); return `${part.stops[i].name}:${n}`; });
+      console.log(`   ${fact.what}: ${fact.before} → ${fact.after}${at.length ? `  (decided at ${at.join(", ")})` : fact.lines ? "  (no line decides it)" : ""}${fact.pinned ? `  (asserted at ${fact.pinned.where})` : ""}`);
+    }
     if (part.quote) console.log(`   said  ${part.quote}`);
     const depth = (stop) => (stop.parent < 0 ? 0 : 1 + depth(part.stops[stop.parent]));
     if (part.where) console.log(`   where: ${part.where}`);

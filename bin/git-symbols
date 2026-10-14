@@ -223,7 +223,7 @@ case $mode in
     # path; a heading, the callers row and a package have nothing to name.
     rid=$1 last=${1##*>}
     case $rid in
-      ''|gk-*|*'>callers') exec git-fzf-note "nothing to copy on this row" ;;
+      ''|gk-*|*'>callers'|*'>answer:'*) exec git-fzf-note "nothing to copy on this row" ;;
       *'#'*) name=${last#*#} name=${name#type } name=$(printf '%s' "$name" | tr + .); text="$name in ${last%%#*}" ;;
       *'>callers>'*) exec git-fzf-note "nothing to copy on this row" ;;
       *) text=$rid ;;
@@ -514,10 +514,17 @@ if [ "$mode" = --preview ]; then
     COLUMNS=${FZF_PREVIEW_COLUMNS:-92} SEAM_COLOR=1 seam --split --table "$st/symbols.tsv" "$rev" 2>&1
     exit 0
   fi
-  # A sentence's row: what is under it, each with its comment, from the outline git-sentences kept.
-  case $rid in sentence:*'>'*) ;; sentence:*)
-    read -r sentf 2>/dev/null < "$st/sentences" && git-sentences --pane "${sentf%.tsv}.json" "${rid#sentence:}"
-    exit 0 ;;
+  # A sentence's row: what is under it, each with its comment, from the outline git-sentences kept. An answer
+  # under a case: the case, opened on that answer.
+  case $rid in
+    sentence:*'>answer:'*)
+      n=${rid#sentence:}
+      read -r sentf 2>/dev/null < "$st/sentences" && git-sentences --pane "${sentf%.tsv}.json" "${n%%>*}" "${rid##*>answer:}"
+      exit 0 ;;
+    sentence:*'>'*) ;;
+    sentence:*)
+      read -r sentf 2>/dev/null < "$st/sentences" && git-sentences --pane "${sentf%.tsv}.json" "${rid#sentence:}"
+      exit 0 ;;
   esac
   [ -n "$path" ] || exit 0
   # A commit or range never changes, so its preview of a row is rendered
@@ -1383,7 +1390,9 @@ if [ "$mode" = --rows ]; then
         printf "${GK_CONTEXT}a case${GK_R}\n"
         printf "  a situation the code meets, under where it comes in, and how it ended before ${GK_CONTEXT}\342\206\222${GK_R} how it ends now: ${GK_ATTENTION}yellow${GK_R} when it ends differently, ${GK_CONTEXT}\302\267 only a label${GK_R} when only what a log, a metric or a stored field reads changed, ${GK_CONTEXT}= the same${GK_R} when it ends as it did\n"
         printf "  its pane: the values to compare, the author's own sentence on it, then its route through the code in the order it runs, each stop's deciding lines with what holds there; ${GK_ATTENTION}\342\227\206${GK_R} changed here, \342\227\217 in code the change touched, ${GK_CONTEXT}\342\227\213${GK_R} not in the change\n"
-        printf "  ${GK_CONTEXT}also changed${GK_R} cases the author never mentions   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   l its symbols, v marks all of it viewed, W lists by symbol\n\n"
+        printf "  l opens it to its answers, a row each: ${GK_GOOD}\342\234\223 test${GK_R} a test line asserts it, ${GK_CONTEXT}no test${GK_R} none does, ${GK_ATTENTION}no code line${GK_R} no line in the case decides it, so it is Claude's word alone\n"
+        printf "  an answer's pane: the lines that decide it and the test line that asserts it, then the whole case with only those lines lit; enter opens the first of them\n"
+        printf "  ${GK_CONTEXT}also changed${GK_R} cases the author never mentions   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   v marks all of a case viewed, W lists by symbol\n\n"
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
       printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
@@ -1462,6 +1471,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[7] {
       if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
+      else if ($1 == "A") { x = ++nans[$2 + 0]; awhat[$2 + 0, x] = $4; apin[$2 + 0, x] = $5 + 0; adec[$2 + 0, x] = $6; apath[$2 + 0, x] = $7; aside[$2 + 0, x] = $8; aline[$2 + 0, x] = $9 }
       next
     }
     FILENAME == ARGV[4] { x = ++ncall[$1]; cp[$1, x] = $2; cl[$1, x] = $3; cid[$1, x] = $4; chead[$1, x] = $5; cs[$1, x] = $6; ce[$1, x] = $7; cerr[$1, x] = $9 + 0; cpk[$1, x] = $11; next }
@@ -1641,8 +1651,9 @@ if [ "$mode" = --rows ]; then
         (draw ? "\tfile\t" depth "\t\t\t" ch "\t" add "\t" del "\t" (fv ? "all" : "") "\t" (mr ? tally("open") : "") "\t" (mr ? tally("draft") : "") "\t\t" (fv || ch == "removed" ? 1 : "") "\t" p "\t" : "")
     }
     # A line of the list that is no row: a sentence going on, or its counts. Style t is the words of the sentence.
-    function more(text, style, dim) {
-      print "  " text "\t\t\t\t\t\t\t\t\t\t\tgk-more" (draw ? "\tmore\t0\t\t\t\t\t\t\t\t\t\t" dim "\t" text "\t" style "\t" : "")
+    # At a depth, it goes on a row in a tree, whose lines run past it.
+    function more(text, style, dim, depth) {
+      print "  " text "\t\t\t\t\t\t\t\t\t\t\tgk-more" (draw ? "\tmore\t" (depth + 0) "\t\t\t\t\t\t\t\t\t\t" dim "\t" text "\t" style "\t" : "")
     }
     # Words wrapped to w columns under ind, the first line led by lead (lw wide), in color, tail after the last.
     function flow(text, ind, w, lead, lw, color, tail,   nw, x, ln, words, first) {
@@ -1655,7 +1666,29 @@ if [ "$mode" = --rows ]; then
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
-    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
+    # answers: under an open case, each of its answers a row, its pane the answer first: the question, and on the
+    # right whether a line in the case decides it and whether a test line asserts it. A question too long for the
+    # room beside those goes on under itself, whole, the line of the tree running past it.
+    function answers(n, rid, dim,   x, last, fl, room, nw, words, ln, nl, lines, k, flags, guide) {
+      for (x = 1; x <= nans[n]; x++) {
+        last = x == nans[n]
+        flags = (adec[n, x] == "0" ? GK_ATTENTION "no code line" GK_R GK_CONTEXT " \302\267 " GK_R : "") (apin[n, x] ? GK_GOOD "\342\234\223 test" GK_R : GK_CONTEXT "no test" GK_R)
+        fl = (adec[n, x] == "0" ? 15 : 0) + (apin[n, x] ? 6 : 7)
+        room = (draw ? draw : gk_list_width(cols)) - 9 - fl; if (room < 16) room = 16
+        nw = split(awhat[n, x], words, " "); nl = 0; ln = ""
+        for (k = 1; k <= nw; k++) {
+          if (ln != "" && length(ln " " words[k]) > room) { lines[++nl] = ln; ln = "" }
+          ln = (ln == "" ? "" : ln " ") words[k]
+        }
+        if (ln != "" || !nl) lines[++nl] = ln
+        guide = last ? "\342\224\224\342\224\200 " : "\342\224\234\342\224\200 "
+        print "  " guide lines[1] "  " flags \
+          "\t" apath[n, x] "\t" aline[n, x] "\t" aside[n, x] "\t\t\t\t\t\t\tanswer\t" rid ">answer:" x \
+          (draw ? "\tanswer\t1\t\t\t\t\t\t\t\t\t\t" dim "\t" lines[1] "\t" (apin[n, x] ? "test" : "") "\t" adec[n, x] : "")
+        for (k = 2; k <= nl; k++) more((last ? "   " : GK_FAINT "\342\224\202" GK_R "  ") (dim ? GK_CONTEXT : GK_TEXT) lines[k] GK_R, "m", "", 1)
+      }
+    }
+    function bysentence(   n, x, i, k, rid, cnt, kids, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
       numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
       ind = sprintf("%" (numw + 2) "s", "")
       w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
@@ -1676,7 +1709,9 @@ if [ "$mode" = --rows ]; then
         to = mr ? tally("open") : ""; td = mr ? tally("draft") : ""
         dim = (vt && vdn == vt) ? 1 : ""
         vw = dim ? "all" : (vdn ? vdn "/" vt : "")
-        if (all && cnt && !(rid in open)) { open[rid] = 1; print rid >> openfile }
+        # A case opens to its answers, a part told without cases to its symbols.
+        kids = nans[n] ? nans[n] : cnt
+        if (all && kids && !(rid in open)) { open[rid] = 1; print rid >> openfile }
         nw = split(stext[n], words, " "); nl = 0; ln = ""
         for (x = 1; x <= nw; x++) {
           if (ln != "" && length(ln " " words[x]) > w) { lines[++nl] = ln; ln = "" }
@@ -1693,7 +1728,7 @@ if [ "$mode" = --rows ]; then
         else if (sfrom[n] == "rest" && !rest++) { if (!ncase) more("", "m", ""); heading(ncase ? "on no route, read as a plain diff" : "in the change, in no part", "gk-rest-heading") }
         else more("", "m", "")
         print "  " lines[1] "\t\t\t\t\t\t\t\t\t\t\t" rid \
-          (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
+          (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" kids "\t" (nans[n] ? "answers" : "") "\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
         for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
         # A case says how it ended before and how it ends now; a line each when both will not fit on one.
         if (sending[n] != "") {
@@ -1712,6 +1747,7 @@ if [ "$mode" = --rows ]; then
         more(meta, "m", "")
         if (!(rid in open)) continue
         }
+        if (nans[n]) { answers(n, rid, dim); continue }
         for (x = 1; x <= cnt; x++) {
           i = under[n, x]
           if (row[i, 2] == "file") filerow(i, 1, rid ">" row[i, 1])

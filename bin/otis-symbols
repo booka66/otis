@@ -200,6 +200,8 @@ guides() {
   local i d k s
   gd=() gdw=()
   for (( i = $#raw; i >= 1; i-- )); do
+    # A row going on, a line in a tree (an answer too long for one): the tree's lines run past it.
+    if [[ $typ[i] == more ]] && (( dep[i] > 0 )); then gd[i]= gdw[i]=0; continue; fi
     if [[ $typ[i] == (head|plain|sent|more) || ( $typ[i] == file && $dep[i] == 0 ) ]]; then seen=(); gd[i]= gdw[i]=0; continue; fi
     d=$dep[i] s=
     for (( k = 1; k < d; k++ )); do [[ -n $seen[$k] ]] && s+="│  " || s+="   "; done
@@ -249,6 +251,18 @@ rowline() {
       [[ $fold[i] == open ]] && put "$A" "▾ " || put "$A" "▸ "
       put "$A" "$cm[i]  "
       if [[ -n $dim[i] ]]; then put "$C" "$lab[i]"; else put "$B$T" "$lab[i]"; line+=$UB; fi
+      ;;
+    answer)
+      # One of a case's answers: its question, and on the right whether a line in the case decides it and
+      # whether a test line asserts it. git-symbols wrapped the question to fit beside them.
+      put "" "  "; line+=$F$gd[i]; (( used += gdw[i] ))
+      if [[ -n $dim[i] ]]; then put "$C" "$lab[i]"; else put "$T" "$lab[i]"; fi
+      local fl="no test"
+      [[ $err[i] == test ]] && fl="✓ test"
+      [[ $cm[i] == 0 ]] && fl="no code line · $fl"
+      pad $(( w - ${(m)#fl} ))
+      [[ $cm[i] == 0 ]] && { put "$A" "no code line"; put "$C" " · "; }
+      if [[ $err[i] == test ]]; then put "$G" "✓ test"; else put "$C" "no test"; fi
       ;;
     more)
       put "" "  "
@@ -1405,6 +1419,14 @@ crumb() {
         support) put "$T" "also changed, to support it" ;;
         *) (( bycase )) && put "$T" "changed lines no case runs" || put "$T" "in the change, in no part" ;;
       esac ;;
+    answer)
+      # Where enter opens it: the first line that decides it, else the test line that asserts it.
+      put "$T" "answer ${rid[i]##*:}"
+      if [[ -n $fld[2] ]]; then
+        put "$C" "  ·  "
+        if [[ $cm[i] == 1 ]]; then put "$C" "decided at "; elif [[ $err[i] == test ]]; then put "$C" "asserted at "; else put "$C" "its route starts at "; fi
+        put "$T" "${fld[2]:t}"; put "$C" ":$fld[3]"
+      fi ;;
   esac
   # The way down to it: each step's name, a member's with its class.
   steps=("${(@s:>:)rid[i]}")
@@ -1434,9 +1456,20 @@ symkeys() {
     head|plain) rkl=(l "" h "" v "" i "" c "" F "" space "" y "") ; return ;;
     sent)
       rkl=(i "" c "" F "" space "" y "")
+      # A case opens to its answers, a part told without cases to its symbols.
+      local under=symbols
+      [[ $chg[i] == answers ]] && under=answers
       if [[ $fold[i] == open ]]; then rkl[l]="" rkl[h]="close it" rkl[enter]="close it"
-      else rkl[h]="" rkl[l]="its symbols: ${kids[i]}" rkl[enter]="its symbols: ${kids[i]}"; fi
+      else rkl[h]="" rkl[l]="its $under: ${kids[i]}" rkl[enter]="its $under: ${kids[i]}"; fi
       if [[ $vwd[i] == all ]]; then rkl[v]="mark all under it not viewed"; else rkl[v]="mark all under it viewed"; fi
+      return ;;
+    answer)
+      rkl=(l "" i "" c "" F "" space "" y "" v "" h "close its case")
+      fields $i
+      if [[ -z $fld[2] ]]; then rkl[enter]=""
+      elif [[ $cm[i] == 1 ]]; then rkl[enter]="open the line that decides it"
+      elif [[ $err[i] == test ]]; then rkl[enter]="open the test line that asserts it"
+      else rkl[enter]="open where its route starts"; fi
       return ;;
   esac
   case $fold[i] in
@@ -2176,6 +2209,8 @@ handle() {
   # marked, and the second v was dropped as if v were held.
   # A sentence has no file to open: enter opens it, or closes it.
   [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == sent ]] && { [[ $fold[cur] == open ]] && n=h || n=l; }
+  # An answer whose case cites no line it could find has nothing to open.
+  [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == answer ]] && { fields $cur; [[ -n $fld[2] ]] || { flash="nothing in this answer's case to open"; return; }; }
   if [[ -n $bind[$n] ]]; then
     if [[ -z $repeat[$n] && $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
     used $n

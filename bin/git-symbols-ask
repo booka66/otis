@@ -137,6 +137,15 @@ case $rid in
   ''|gk-*|*'>callers') path= ;;
   *'#'*) name=${rid##*>} ;;
 esac
+# An answer under a case (git-sentences): its question and how it ends, as the case says them.
+answer=
+case $rid in sentence:*'>answer:'*)
+  an=${rid#sentence:}
+  read -r sentf 2>/dev/null < "${GIT_FZF_STATE:-/nonexistent}/sentences" &&
+    answer=$(jq -r --argjson n "${an%%>*}" --argjson k "${rid##*>answer:}" '.sentences[$n - 1] as $s
+      | ($s.facts[$k - 1] | map_values(if type == "string" then gsub("`"; "") else . end)) as $f
+      | "the answer in case \($s.num) (\($s.text)) to \"\($f.what)\": \(if $s.fresh or $f.before == "" then "" else "before, \($f.before); " end)now, \($f.after)"' "${sentf%.tsv}.json" 2>/dev/null) ;;
+esac
 if [ -n "$name" ]; then
   name=${name#*#} name=${name#type } name=$(printf '%s' "$name" | tr + .)
   [ -n "$caller" ] || what=$(awk -F'\t' -v p="$path" -v s="$start" -v sd="$side" \
@@ -167,6 +176,9 @@ if [ "$mode" = starters ]; then
     q "What do these lines do, and why did the change make them this way?"
     q "What could go wrong in these lines?$([ "$kind" = review ] && printf ' Draft a comment if something does.')"
     q "How are these lines tested, and what case is missing?"
+  elif [ -n "$answer" ]; then
+    q "Is this answer right? Show me the line that decides it."
+    q "Which test asserts this answer, and what would that test miss?"
   elif [ -n "$caller" ]; then
     q "Does $name still do the right thing with this change, even though it type checks?"
   elif [ -n "$name" ]; then
@@ -258,6 +270,7 @@ within=
 [ -n "$name" ] && within=", in $name"
 where=
 if [ -n "$lines" ]; then where="$lines$within"
+elif [ -n "$answer" ]; then where=$answer
 elif [ -n "$name" ]; then where="$name, $at"
 elif [ -n "$path" ]; then where=$path; fi
 question=$OTIS_ASK_QUESTION
@@ -293,6 +306,7 @@ files=$(have about.md "$about"
   have review.md "Your own earlier review of it, in the background: each comment you proposed, with why")
 if [ "$mode" = send ]; then cursor="Each question says where in the change they were when they asked it. When they say \"this\" or \"these lines\", they mean that."
 elif [ -n "$lines" ]; then cursor="They selected lines $lines$within. When they say \"this\" or \"these lines\", they mean those."
+elif [ -n "$answer" ]; then cursor="They are on $answer. When they say \"this\", they mean that answer."
 elif [ -n "$name" ]; then cursor="They are on $name$([ -n "$what" ] && printf ' (%s)' "$what"), at $at$([ "$side" = old ] && printf ', lines the change removes'). When they say \"this\", they mean it."
 elif [ -n "$path" ]; then cursor="They are on the file $path. When they say \"this\", they mean it."
 else cursor="They are not on any one symbol or file just now."; fi

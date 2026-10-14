@@ -1,13 +1,19 @@
 #!/usr/bin/env node
-// story-pane.mjs <outline.json> <n>: case n of a change (sentences.mjs) as the symbol view's pane,
+// story-pane.mjs <outline.json> <n> [<answer>]: case n of a change (sentences.mjs) as the symbol view's pane,
 // FZF_PREVIEW_COLUMNS wide: the situation, how it ended before and how it ends now, its route through the
 // code in the order it runs, the tests that run it. A part told without cases is its words and its code.
+// On one of a case's answers, that answer comes first: the lines that decide it and the test line that asserts
+// it; then the whole case, with only those lines lit.
 import { readFileSync } from "node:fs";
 
-const [file, which] = process.argv.slice(2);
+const [file, which, answer] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 const part = outline.sentences[Number(which) - 1];
 if (!part) process.exit(0);
+const focus = answer ? part.facts?.[Number(answer) - 1] ?? null : null;
+// The lines lit in the route: on an answer, the ones that decide it; a case followed before otis asked which
+// (no lines) lights every line Claude cites, as the case does.
+const lit = focus?.lines ? new Set(focus.lines) : null;
 const W = Math.max(40, Number(process.env.FZF_PREVIEW_COLUMNS) || 96);
 
 const env = process.env;
@@ -137,6 +143,7 @@ function showCase() {
   for (const line of prose(part.text, W - 4, B + T)) say(`  ${line}`);
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
+  if (focus) showAnswer();
   // Where in the system this happens, for a reader who has never seen this code.
   // Said in full by the first case it holds for; the rest give its first sentence and say where the rest is.
   if (part.where) {
@@ -161,7 +168,7 @@ function showCase() {
     const pins = facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where.length);
     const pinW = !pins.length ? 0 : W - 4 - whatW - 2 - 3 - Math.max(...pins) - 3 >= 40 ? Math.max(...pins) + 3 : 2;
     const row = (fact, cells) => {
-      const what = prose(fact.what, whatW, C);
+      const what = prose(fact.what, whatW, fact === focus ? B + A : C);
       const tall = Math.max(what.length, ...cells.map((cell) => cell.lines.length));
       for (let i = 0; i < tall; i++) {
         const pin = i === 0 && fact.pinned ? `${G}✓${R}${pinW > 2 ? ` ${C}${fact.pinned.where}${R}` : ""}` : "";
@@ -241,20 +248,22 @@ function showCase() {
     const drawn = new Set();
     const draw = (line) => {
       const calls = line.mine ? calledAt.get(line.n) ?? [] : [];
-      const ground = line.cited ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
+      // On an answer only the lines that decide it are lit; the case's other readings stay, quiet.
+      const bright = line.cited && (!lit || lit.has(`${i}:${line.n}`));
+      const ground = bright ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
       const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
       const text = line.t.replace(/\t/g, "    ");
       const body = dent(line.cited || calls.length ? (line.paint ?? T + text).replace(/\t/g, "    ") : C + text, shared[i]).replace(/\x1b\[0m/g, R + ground);
       // A line the change removed is numbered in red: its number is from before the change.
-      const number = `${line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
+      const number = `${bright ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
-      const style = line.cited ? B + A : C;
+      const style = bright ? B + A : C;
       const note = value && aside >= 16 ? prose(value, aside - 2, style) : [];
       const beside = note.length === 1;
       cut(body, code).forEach((piece, at) => {
-        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${beside && !at ? `   ${line.cited ? `${A}◀${R}` : " "} ${note[0]}` : ""}`);
+        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${beside && !at ? `   ${bright ? `${A}◀${R}` : " "} ${note[0]}` : ""}`);
       });
-      if (value && !beside && line.cited) prose(value, W - 4 - 2 * (depth + 1) - gutter - 2, style).forEach((one, at) => say(`  ${lead}${" ".repeat(gutter)}${A}${at ? " " : "↑"}${R} ${one}`));
+      if (value && !beside && line.cited) prose(value, W - 4 - 2 * (depth + 1) - gutter - 2, style).forEach((one, at) => say(`  ${lead}${" ".repeat(gutter)}${bright ? A : C}${at ? " " : "↑"}${R} ${one}`));
       for (const k of calls) { drawStop(k, depth + 1); drawn.add(k); }
       return calls.length > 0;
     };
@@ -287,6 +296,94 @@ function showCase() {
     for (const run of part.runs.filter((one) => one.where === path)) wrap(run.name, Math.min(W - 20, 90)).forEach((line, i) => say(`  ${" ".repeat(13)}${T}${i ? "  " : "◦ "}${line}${R}`));
   }
   if (part.data?.length) band("runs on", C, part.data.map((path) => path.split("/").at(-1)).join(", "), C);
+  say();
+}
+
+/** One of a case's answers, first: its question and how it ends, the lines in the case that decide it in the order
+ * the case runs them, and the test line that asserts it in its whole statement; then a rule, and the case. */
+function showAnswer() {
+  const fact = focus;
+  for (const line of prose(fact.what, W - 4, B + A)) say(`  ${line}`);
+  if (!part.fresh && fact.before) band("before", X, fact.before, T, MINUS);
+  band(part.fresh ? "now" : "after", G, fact.after || "·", T, PLUS);
+
+  // The lines that decide it, each under its function, in the order the route reaches them.
+  say();
+  say(`  ${C}DECIDED BY${R}`);
+  const tab = (text) => text.replace(/\t/g, "    ");
+  if (!fact.lines) {
+    for (const line of prose("this case was followed before otis asked which lines decide each answer, so every line it cites is lit below", W - 4, C)) say(`  ${line}`);
+  } else {
+    const kids = part.stops.map(() => []), roots = [];
+    part.stops.forEach((stop, i) => (stop.parent >= 0 ? kids[stop.parent] : roots).push(i));
+    const order = [];
+    const walk = (i) => { order.push(i); kids[i].forEach(walk); };
+    roots.forEach(walk);
+    const rootOf = (i) => (part.stops[i].parent >= 0 ? rootOf(part.stops[i].parent) : i);
+    const lines = (i) => part.stops[i].code.filter((line) => line.cited && lit.has(`${i}:${line.n}`));
+    const want = order.filter((i) => lines(i).length);
+    if (!want.length) for (const line of prose("no line in this case shows this happen, so the answer is Claude's reading alone", W - 4, A)) say(`  ${line}`);
+    const all = want.flatMap((i) => lines(i).map((line) => ({ i, line })));
+    const dentOf = new Map(want.map((i) => [i, Math.min(...lines(i).map((line) => indent(tab(line.t))))]));
+    const digits = Math.max(3, ...all.map(({ line }) => String(line.n).length)), gutter = digits + 3;
+    const codeW = Math.max(0, ...all.map(({ i, line }) => [...tab(line.t)].length - dentOf.get(i)));
+    const noteW = Math.max(0, ...all.map(({ line }) => [...(line.value ?? "")].length));
+    // What holds on each line goes beside it when every line and its note fit the pane, else under it.
+    const beside = 2 + gutter + codeW + 1 + 4 + noteW <= W - 2;
+    const code = Math.min(codeW + 1, W - 4 - gutter);
+    let lastRoot = roots[0];
+    for (const i of want) {
+      const stop = part.stops[i], root = rootOf(i);
+      // A function nothing in the case calls: that it runs here is Claude's reading, and this answer leans on it.
+      if (root !== roots[0] && (i === want[0] || root !== lastRoot)) {
+        const hop = part.hops[root];
+        if (hop !== true && hop != null) {
+          const tie = hop === "" || hop === false ? " and hands it nothing" : hop === "seam" ? "; seam links it to the code before it"
+            : hop === part.stops[root].name ? "" : `; it shares \`${hop}\` with the code before it`;
+          for (const line of prose(`┄ nothing in the case calls \`${part.stops[root].name}\`${tie}, so that it runs here is Claude's reading`, W - 4, C)) say(`  ${line}`);
+        }
+      }
+      lastRoot = root;
+      const markColor = stop.mark === "◆" ? A : stop.mark === "●" ? T : C;
+      const head = `${markColor}${stop.mark}${R} ${RAISE}${B}${T}${stop.name}${R}`, place = `${C}in ${stop.where}${R}`;
+      if (width(head) + width(place) + 2 <= W - 4) say(`  ${head}  ${place}`); else { say(`  ${head}`); say(`    ${place}`); }
+      let prev = null;
+      for (const line of lines(i)) {
+        if (prev != null && line.n - prev > 1) say(`  ${" ".repeat(digits - 1)}${C}⋯${R}`);
+        prev = line.n;
+        const ground = line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT;
+        const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
+        const body = dent(tab(line.paint ?? T + line.t), dentOf.get(i)).replace(/\x1b\[0m/g, R + ground);
+        const number = `${B}${A}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
+        cut(body, code).forEach((piece, at) => say(`  ${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${beside && !at && line.value ? `  ${A}◀${R} ${prose(line.value, noteW + 2, B + A)[0]}` : ""}`));
+        if (!beside && line.value) prose(line.value, W - 4 - gutter - 2, B + A).forEach((one, at) => say(`  ${" ".repeat(gutter)}${A}${at ? " " : "↑"}${R} ${one}`));
+      }
+    }
+  }
+
+  // The test line that asserts it, in the whole statement it is in, under the test's name.
+  say();
+  say(`  ${C}ASSERTED BY${R}`);
+  const pin = fact.pinned;
+  if (!pin) {
+    const runs = part.runs.length;
+    for (const line of prose(`no test line asserts this answer${runs ? `; ${runs === 1 ? "the test that runs" : `the ${runs} tests that run`} this case ${runs === 1 ? "is" : "are"} at the bottom` : ", and no test in this change runs this case"}`, W - 4, C)) say(`  ${line}`);
+  } else {
+    say(`  ${G}✓${R} ${C}${pin.path ?? pin.where}${R}`);
+    if (pin.test && !pin.test.includes("$")) wrap(pin.test, W - 8).forEach((line, k) => say(`    ${T}${k ? "  " : "◦ "}${line}${R}`));
+    const shown = pin.lines ?? [{ n: pin.n, t: pin.t }];
+    const digits = Math.max(3, ...shown.map((line) => String(line.n).length)), gutter = digits + 3;
+    const shared = Math.min(...shown.filter((line) => line.t.trim()).map((line) => indent(tab(line.t))));
+    const code = Math.min(W - 4 - gutter, Math.max(...shown.map((line) => [...tab(line.t)].length - shared)) + 1);
+    for (const line of shown) {
+      const hit = line.n === pin.n, ground = hit ? LIFT : RAISE;
+      const body = dent(tab(line.paint ?? T + line.t), shared).replace(/\x1b\[0m/g, R + ground);
+      cut(body, code).forEach((piece, at) => say(`  ${ground}${at ? " ".repeat(gutter) : `${hit ? B + A : C}${String(line.n).padStart(digits)}${R}${ground}   `}${ground}${pad(piece, code)}${R}`));
+    }
+  }
+  say();
+  const label = " the whole case ";
+  say(`  ${C}──${label}${"─".repeat(Math.max(2, W - 4 - 2 - label.length))}${R}`);
   say();
 }
 
