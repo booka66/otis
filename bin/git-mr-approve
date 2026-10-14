@@ -8,17 +8,20 @@
 iid=$1 head=$2 base=$3
 [ -n "$iid" ] || exit 0
 note=$(git-confirm --note "approve !$iid at $(printf '%.8s' "$head")?") || exit 0
+said="approved !$iid"
 if ! out=$(git-forge approve "$iid" "$head" 2>&1); then
-  otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"
-  exit 0
+  # GitLab answers an approval you already gave with 401 Unauthorized. That
+  # one stands, so it is done, and a comment with it still posts.
+  git-forge api "projects/:fullpath/merge_requests/$iid/approvals" 2>/dev/null | jq -e .user_has_approved >/dev/null 2>&1 ||
+    { otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approve failed')"; exit 0; }
+  said="you had approved !$iid already"
 fi
 git-mr-since record "$iid" "$head" "$base"
-said="approved !$iid"
 if [ -n "$note" ]; then
   # What you typed goes in the error, so a comment that did not post is not lost.
   out=$(git-forge api -X POST "projects/:fullpath/merge_requests/$iid/notes" -f body="$note" 2>&1) ||
-    { otis-popup say "$(printf '%s\n' "$out" | tail -3; printf 'approved !%s, but your comment did not post: %s' "$iid" "$note")"; exit 0; }
-  said="approved !$iid, with your comment"
+    { otis-popup say "$(printf '%s\n' "$out" | tail -3; printf '%s, but your comment did not post: %s' "$said" "$note")"; exit 0; }
+  said="$said, and posted your comment"
 fi
 [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$said" > "$GIT_FZF_STATE/note"
 exit 0
