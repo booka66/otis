@@ -273,7 +273,8 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # with its reviewers and wants nothing of you is sent: it stays a row with
   # the rest of yours, saying how its review stands. With nothing lit, one
   # you were asked to review folds under waiting, and one of yours nobody
-  # has been asked about under unsent.
+  # has been asked about under unsent. A draft touched in the last three
+  # days is not unsent but being written, and stays among your drafts.
   # A verification still running is its run'"'"'s row to say, among what is
   # moving: it keeps the change on the board, and is never the change'"'"'s
   # move, so the change'"'"'s row is there to open beside its run'"'"'s.
@@ -288,7 +289,8 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     (((.reviewers.nodes // []) | length) > 0 or .approved or .autoMergeEnabled) as $sent |
     (if $mrkind == "review" then (if $cells[3].st == "you" then "review" else null end)
      elif any($cells[]; .st == "you") then (if .draft then "draft" else "move" end)
-     elif .draft and (any($cells[]; .st == "moving") or ($verifying and ($sent | not))) then "draft"
+     elif .draft and (any($cells[]; .st == "moving") or ($verifying and ($sent | not))
+                      or (.updatedAt | at) > ($NOW - 3 * 86400)) then "draft"
      elif (.draft | not) and any($cells[]; .st == "moving") then "moving"
      elif $sent or $verifying then "sent"
      else null end) as $lane |
@@ -453,8 +455,10 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     + ($notices | map(select(.lane == $l)));
   (lane("prod") + lane("review") + lane("move")) as $need |
   # The counts are of what each is by itself: one brought into a lane by its
-  # stack and wanting nothing is in none of them.
-  ([$need[], lane("draft")[], lane("moving")[]] | map(.own // .lane)) as $owns |
+  # stack and wanting nothing is in none of them. Nor is a draft with no
+  # light that wants you: one being written, or only moving, is no move.
+  ([$need[], lane("draft")[], lane("moving")[]]
+    | map((.own // .lane) as $o | if $o == "draft" and (any(.cells[]; .st == "you") | not) then "quiet" else $o end)) as $owns |
 
   # --- the groups -----------------------------------------------------------
   def blank: {who: "", when: "", mark: false, defc: 1, iid: "", target: "", url: "", source: "", head: "",

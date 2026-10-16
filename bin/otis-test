@@ -459,6 +459,15 @@ printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"n
   "$(stack_mr 8 Bottom feat2 main false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" \
   "$(stack_mr 9 Top feat3 feat2 false '{"username": "ann", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}')" > "$tmp/board/ci.json"
 expect otis-board/stack-in-review "$(board_stack)" "sent c-9 ┌ sent|sent c-8 └ sent|"
+# A draft of yours that nothing wants you for, touched in the last three
+# days, is being written: a row among your drafts, not unsent, and no move
+# in the count. Left longer, it is unsent.
+draft_mr() { stack_mr "$1" "$2" "$3" main false '' | sed "s/\"draft\": false/\"draft\": true/; s/2026-01-01T00:00:00Z/$4/"; }
+printf '{"data": {"currentUser": {"username": "me", "authoredMergeRequests": {"nodes": [%s, %s]}}}}\n' \
+  "$(draft_mr 11 Writing wip "$(date -u +%Y-%m-%dT%H:%M:%SZ)")" "$(draft_mr 12 Left left 2026-01-01T00:00:00Z)" > "$tmp/board/ci.json"
+board=$(GIT_FZF_STATE=$tmp/board otis-board | strip)
+expect otis-board/draft-recent "$(printf '%s\n' "$board" | awk -F'\t' '$2 ~ /^c-/ { printf "%s %s %s|", $1, $2, $70 }')" "draft c-11 draft|unsent c-12 draft|"
+expect otis-board/draft-recent-counts "$(printf '%s\n' "$board" | head -1 | tr '\t' ' ')" "# 0 0 0"
 # A verification kept under a branch's name outlives the branch. With no MR
 # open it is a change of its own that needs you, until the branch is
 # finished: its MR merged after the run ended, or the branch is gone from
