@@ -1747,6 +1747,10 @@ expect forge/why-login "$(git-forge why "$dl/cache/old.json.err" 2>/dev/null; pr
 rc=3"
 expect forge/why-whole "$(printf '\n   ERROR  \n          \n  Get "https://x/api": dial tcp:            \n  no such host.          \n' > "$dl/e"; git-forge why "$dl/e"; echo "rc=$?")" 'Get "https://x/api": dial tcp: no such host.
 rc=0'
+# glab's failure, not jq's choking on the error page it piped on; jq's is
+# said when it is all there is.
+expect forge/why-not-jq "$(printf 'glab: HTTP 503\njq: parse error: Invalid numeric literal at line 2, column 10\n' > "$dl/e"; git-forge why "$dl/e"; printf 'jq: error (at <stdin>:0): Cannot iterate over null\n' > "$dl/e"; git-forge why "$dl/e")" 'glab: HTTP 503
+jq: error (at <stdin>:0): Cannot iterate over null'
 # With no picker to reload, a cache whose last fetch failed is still fetched
 # again when asked for, so it mends by itself once what broke it is fixed;
 # one that works is left to u, as before.

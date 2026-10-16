@@ -40,7 +40,11 @@ if [ "$1" = why ]; then
     printf 'your %s login expired: %s logs in again\n' "$name" "$login"
     exit 3
   fi
-  sed -E "s/$(printf '\033')\[[0-9;]*m//g" "$2" | tr -s ' \t\n' '   ' | sed -E 's/^ //; s/^(ERROR|Error:?|error:) //; s/ $//'
+  # A fetch that pipes glab into jq fails twice when the forge does: glab
+  # says why, and then jq cannot read the error page it was handed. jq's
+  # word is said only when it is the only one.
+  if grep -v '^jq: ' "$2" | grep -q '[[:alnum:]]'; then grep -v '^jq: ' "$2"; else cat "$2"; fi |
+    sed -E "s/$(printf '\033')\[[0-9;]*m//g" | tr -s ' \t\n' '   ' | sed -E 's/^ //; s/^(ERROR|Error:?|error:) //; s/ $//'
   echo
   exit 0
 fi
