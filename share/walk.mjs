@@ -1867,7 +1867,7 @@ function pageCss(font) {
   const rgb = (v) => { const m = /^[34]8;2;(\d+);(\d+);(\d+)$/.exec(v); return m ? `rgb(${m[1]} ${m[2]} ${m[3]})` : v; };
   const at = rgb(e("ATTENTION")), good = rgb(e("GOOD")), bad = rgb(e("BAD")), yours = rgb(e("YOURS")), els = rgb(e("ELSEWHERE")), file = e("FILE"), ctx = rgb(e("CONTEXT"));
   const v = { ground: e("GROUND"), ink: rgb(e("TEXT")), soft: ctx, faint: rgb(e("FAINT")), rule: e("RULE"), sel: rgb(e("CODEBG")),
-    pass: good, fail: bad, open: at, link: file, else: els, yours, add: e("PLUS"), del: e("MINUS"),
+    pass: good, fail: bad, open: at, link: file, else: els, yours, add: e("PLUS"), del: e("MINUS"), "word-add": e("PLUS_WORD"), "word-del": e("MINUS_WORD"),
     here: "color-mix(in srgb, var(--open) 28%, var(--ground))", k1: bad, k2: good, k3: at, k4: file, k5: yours, k6: els, k7: ctx };
   if (font) v.mono = `${JSON.stringify(font)}, "SF Mono", ui-monospace, Menlo, monospace`;
   return (font ? fontFaces(font) + "\n" : "") + `:root { color-scheme: ${e("LIGHT") ? "light" : "dark"}; ${Object.entries(v).map(([k, x]) => `--${k}: ${x};`).join(" ")} }`;
@@ -2907,7 +2907,7 @@ body { font: var(--font, 13px)/var(--row, 20px) var(--mono); font-variant-ligatu
 #foot a { text-decoration: none; } #foot a:hover { text-decoration: underline; }
 .b { font-weight: 700; } .dim { opacity: 0.55; } .it { font-style: italic; } .u { text-decoration: underline; text-underline-offset: 0.2em; }
 .bg-add { background: var(--add); } .bg-del { background: var(--del); } .bg-here { background: var(--here); }
-.bg-add.emph { background: color-mix(in srgb, var(--pass) 28%, var(--add)); } .bg-del.emph { background: color-mix(in srgb, var(--fail) 28%, var(--del)); }
+.bg-add.emph { background: var(--word-add, var(--pass)); color: var(--ground); } .bg-del.emph { background: var(--word-del, var(--fail)); color: var(--ground); }
 .m-at { color: var(--open); } .m-good { color: var(--pass); } .m-bad { color: var(--fail); } .m-yours { color: var(--yours); }
 .m-text { color: var(--ink); } .m-ctx { color: var(--soft); } .m-faint { color: var(--faint); } .m-else { color: var(--else); }
 .c31, .c91 { color: var(--k1); } .c32, .c92 { color: var(--k2); } .c33, .c93 { color: var(--k3); } .c34, .c94 { color: var(--k4); }

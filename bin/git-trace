@@ -1399,7 +1399,7 @@ EOF
       *) mr=$(git-forge api "projects/:fullpath/merge_requests/$key" 2>/dev/null) && title=$(printf '%s' "$mr" | jq -r .title) url=$(printf '%s' "$mr" | jq -r .web_url) ;;
     esac
     OTIS_T_ATTENTION="38;5;201" OTIS_T_GOOD="38;5;202" OTIS_T_BAD="38;5;203" OTIS_T_YOURS="38;5;204" OTIS_T_TEXT="38;5;205" \
-      OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_PLUS_EMPH="#070809" OTIS_T_MINUS_EMPH="#0a0b0c" OTIS_T_BAT=$bat \
+      OTIS_T_CONTEXT="38;5;206" OTIS_T_FAINT="38;5;207" OTIS_T_ELSEWHERE="38;5;208" OTIS_T_PLUS="#010203" OTIS_T_MINUS="#040506" OTIS_T_PLUS_EMPH="#070809" OTIS_T_MINUS_EMPH="#0a0b0c" OTIS_T_PLUS_WORD="#070809" OTIS_T_MINUS_WORD="#0a0b0c" OTIS_T_BAT=$bat \
       $walk tour-html "$d" "$title" "$url" "$css" > "$d/tour.html.$$" 2>>"$d/log" && mv "$d/tour.html.$$" "$d/tour.html"
     s=$?; rm -f "$d/tour.html.$$"; exit $s ;;
   --download|--browse)
