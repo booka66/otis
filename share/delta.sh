@@ -39,11 +39,9 @@ gk_delta() {
   # No grounds of the theme's: delta's own, which leave removed lines uncolored.
   [ -n "$OTIS_T_MINUS" ] || { delta "$@"; return; }
   # What a changed line changed (delta pairs it with the line it took the
-  # place of) is lit, the theme's ground on its plus_word or minus_word, and
-  # the same in both passes below, since no syntax colors it. A shell that
-  # loaded its theme before themes had those loads it again.
+  # place of) is on the theme's plus_word or minus_word. A shell that loaded
+  # its theme before themes had those loads it again.
   [ -n "$OTIS_T_PLUS_WORD" ] || eval "$(otis-theme --env)"
-  set -- --minus-emph-style "$OTIS_T_GROUND $OTIS_T_MINUS_WORD" --plus-emph-style "$OTIS_T_GROUND $OTIS_T_PLUS_WORD" "$@"
   # delta colors a hunk's code as one text, a block's removed lines and then
   # its added ones, as if both were there: "export function old({" removed
   # and "export function new({" added leave it two deep in a function's
@@ -57,9 +55,11 @@ gk_delta() {
   gk_in=$(cat)
   [ -n "$gk_in" ] || return 0
   [ -n "$sides" ] && set -- --line-numbers-right-format "$(printf '\037'){np:^4}│" "$@"
-  printf '%s\n' "$gk_in" | delta --minus-style "normal $OTIS_T_MINUS" --plus-style "syntax $OTIS_T_PLUS" "$@" | {
+  printf '%s\n' "$gk_in" | delta --minus-style "normal $OTIS_T_MINUS" --minus-emph-style "normal $OTIS_T_MINUS_WORD" \
+    --plus-style "syntax $OTIS_T_PLUS" --plus-emph-style "syntax $OTIS_T_PLUS_WORD" "$@" | {
     exec 3<&0
-    printf '%s\n' "$gk_in" | delta --minus-style "syntax $OTIS_T_MINUS" --plus-style "normal $OTIS_T_PLUS" "$@" 3<&- |
+    printf '%s\n' "$gk_in" | delta --minus-style "syntax $OTIS_T_MINUS" --minus-emph-style "syntax $OTIS_T_MINUS_WORD" \
+      --plus-style "normal $OTIS_T_PLUS" --plus-emph-style "normal $OTIS_T_PLUS_WORD" "$@" 3<&- |
       awk -v sides="$sides" '{
         old = $0
         if ((getline new < "/dev/fd/3") <= 0) new = old

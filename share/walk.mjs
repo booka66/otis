@@ -2907,7 +2907,7 @@ body { font: var(--font, 13px)/var(--row, 20px) var(--mono); font-variant-ligatu
 #foot a { text-decoration: none; } #foot a:hover { text-decoration: underline; }
 .b { font-weight: 700; } .dim { opacity: 0.55; } .it { font-style: italic; } .u { text-decoration: underline; text-underline-offset: 0.2em; }
 .bg-add { background: var(--add); } .bg-del { background: var(--del); } .bg-here { background: var(--here); }
-.bg-add.emph { background: var(--word-add, var(--pass)); color: var(--ground); } .bg-del.emph { background: var(--word-del, var(--fail)); color: var(--ground); }
+.bg-add.emph { background: var(--word-add, color-mix(in srgb, var(--pass) 50%, var(--add))); } .bg-del.emph { background: var(--word-del, color-mix(in srgb, var(--fail) 50%, var(--del))); }
 .m-at { color: var(--open); } .m-good { color: var(--pass); } .m-bad { color: var(--fail); } .m-yours { color: var(--yours); }
 .m-text { color: var(--ink); } .m-ctx { color: var(--soft); } .m-faint { color: var(--faint); } .m-else { color: var(--else); }
 .c31, .c91 { color: var(--k1); } .c32, .c92 { color: var(--k2); } .c33, .c93 { color: var(--k3); } .c34, .c94 { color: var(--k4); }

@@ -13,9 +13,9 @@
 # their job (share/palette.sh says which is which), as SGR parameters, and
 # what delta, bat and glow need to match, and its ground for a page drawn
 # in it (git-trace --page; the terminal themes have none). What a changed
-# line changed is lit in plus_word and minus_word, else in the theme's good
-# and bad, so a sentence rewritten in a long line stands out from the rest
-# of it. The theme is
+# line changed is on plus_word and minus_word, else on halfway from the
+# theme's good and bad to its diff grounds, so a sentence rewritten in a long
+# line stands out from the rest of it. The theme is
 # otis.theme, else terminal, which takes the terminal's own 16 colors and so
 # matches whatever theme the terminal has. $OTIS_THEME overrides otis.theme for one run.
 #
@@ -55,12 +55,13 @@ case $1 in
         if (fish) printf "set -gx OTIS_T_%s \047%s\047\n", toupper(k), v
         else printf "export OTIS_T_%s=\047%s\047\n", toupper(k), v
       }
-      function hex(sgr, c) { return split(sgr, c, ";") == 5 ? sprintf("#%02x%02x%02x", c[3], c[4], c[5]) : "" }
+      function byte(h, at) { return 16 * (index("0123456789abcdef", tolower(substr(h, at, 1))) - 1) + index("0123456789abcdef", tolower(substr(h, at + 1, 1))) - 1 }
+      function half(sgr, ground, c) { return split(sgr, c, ";") == 5 ? sprintf("#%02x%02x%02x", (c[3] + byte(ground, 2) + 1) / 2, (c[4] + byte(ground, 4) + 1) / 2, (c[5] + byte(ground, 6) + 1) / 2) : "" }
       { i = index($0, "="); if (i > 1) { k = substr($0, 1, i - 1); if (!(k in v)) v[k] = substr($0, i + 1) } }
       END {
         if (syntax != "") v["delta_syntax"] = syntax
-        if (v["minus"] != "" && v["plus_word"] == "") v["plus_word"] = hex(v["good"])
-        if (v["minus"] != "" && v["minus_word"] == "") v["minus_word"] = hex(v["bad"])
+        if (v["minus"] != "" && v["plus_word"] == "") v["plus_word"] = half(v["good"], v["plus"])
+        if (v["minus"] != "" && v["minus_word"] == "") v["minus_word"] = half(v["bad"], v["minus"])
         n = split(keys, K, " ")
         for (j = 1; j <= n; j++) set(K[j], v[K[j]])
         set("name", name)
