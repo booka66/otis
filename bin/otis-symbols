@@ -134,7 +134,7 @@ typeset -a PH HB
 integer hoff=0 hroom=0
 layout() {
   if (( W >= 120 )); then
-    side=1; (( lw = W * 42 / 100, lw < 48 ? (lw = 48) : 0 ))
+    side=1; (( lw = W * 30 / 100, lw < 44 ? (lw = 44) : 0 ))
     (( lh = H - 2, px = lw + 6, py = 1, pw = W - px, ph = H - 2 ))
   else
     side=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
@@ -221,8 +221,56 @@ guides() {
 # --- a row ---------------------------------------------------------------------
 # RL: each row's line as drawn without the cursor, RU its width, both for
 # the list's width; built once a load (or a resize), since a frame is then
-# the lines in view and the cursor's lit.
-typeset -a RL RU
+# the lines in view and the cursor's lit. RX: the lines a row too long for
+# the list goes on to under itself, a line each, never cut.
+typeset -a RL RU RX
+# wrapc <text> <room> <more room>: colored text in lines, the first room
+# columns wide and each after it more room, broken after the last space, /
+# or comma that fits, so a word goes down whole; a word longer than the room
+# after its last _ or - that fits, else where the room ends. Each line opens
+# with the colors in force where it starts. In reply.
+wrapc() {
+  local s=$1 tok st= bst= bst2=
+  integer lim=$2 more=$3 w=0 cw bk=0 bkw=0 bk2=0 bkw2=0
+  local -a lt rest
+  reply=()
+  while [[ -n $s ]]; do
+    if [[ $s == $e\[* && $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then tok=$match[1]
+    else tok=${s[1]}; fi
+    s=${s[$#tok+1,-1]}
+    if [[ $tok == $e* ]]; then
+      lt+=("$tok")
+      if [[ $tok == $e\[(0|)m ]]; then st=; else st+=$tok; fi
+      continue
+    fi
+    cw=${(m)#tok}
+    if (( w + cw > lim )); then
+      (( ! bk && bk2 )) && bk=$bk2 bkw=$bkw2 bst=$bst2
+      if (( bk )); then
+        reply+=("${(j::)lt[1,bk]}$R")
+        rest=("${(@)lt[bk+1,-1]}"); lt=("$bst" "${(@)rest}"); (( w -= bkw ))
+      else
+        reply+=("${(j::)lt}$R"); lt=("$st"); w=0
+        [[ $tok == ' ' ]] && continue
+      fi
+      lim=$more bk=0 bk2=0
+    fi
+    lt+=("$tok"); (( w += cw ))
+    [[ $tok == [\ /,] ]] && bk=$#lt bkw=$w bst=$st
+    [[ $tok == [_-] ]] && bk2=$#lt bkw2=$w bst2=$st
+  done
+  reply+=("${(j::)lt}")
+}
+# wrapon <indent> <room> <lines...>: RX for the row being drawn (rowline's
+# i), each line under the indent, padded to the room so the cursor's light
+# is as wide as the row's.
+wrapon() {
+  local x
+  integer ind=$1 room=$2
+  shift 2
+  RX[i]=
+  for x in "$@"; do vw "$x"; RX[i]+=${RX[i]:+$'\n'}${(l:ind:: :)}$x${(l:room - ind - REPLY:: :)}; done
+}
 cells() {
   local x=M
   [[ $chg[$1] == added ]] && x=A; [[ $chg[$1] == removed ]] && x=D
@@ -232,9 +280,9 @@ cells() {
   put "" " "
 }
 rowline() {
-  local i=$1 t lc
-  integer w=$(( lw - 2 )) rz
-  line= used=0
+  local i=$1 t lc lcs cont
+  integer w=$(( lw - 2 )) rz room ind
+  line= used=0 RX[i]=
   case $typ[i] in
     head)
       # A heading of the list's own, or git-test-files': its words, the rule
@@ -244,7 +292,18 @@ rowline() {
       else put "$C" "${(U)t}"; fi
       ;;
     plain)
-      fields $i; cut "$fld[1]" $w; line=$REPLY; vw "$line"; used=$REPLY
+      # Too long for the list, it goes on under itself where its last column
+      # starts (a file's path, after its counts).
+      fields $i; vw "$fld[1]"
+      if (( REPLY <= w )); then line=$fld[1] used=$REPLY
+      else
+        plain "$fld[1]"; t=${REPLY[1,w]} ind=2
+        [[ $t == (#b)(*\ \ ##)[^\ ]* ]] && ind=$#match[1]
+        (( ind > w - 20 )) && ind=2
+        wrapc "$fld[1]" $w $(( w - ind ))
+        line=$reply[1]; vw "$line"; used=$REPLY
+        wrapon $ind $w "${(@)reply[2,-1]}"
+      fi
       ;;
     sent)
       # A part of the story: its number and its title's first line; the rest and its counts are the lines after (more).
@@ -275,25 +334,33 @@ rowline() {
       [[ $typ[i] == (callers|package|caller) ]] && rz=0
       lc=$lab[i]
       case $typ[i] in
-        sym) if [[ -n $dim[i] || $chg[i] == removed ]]; then put "$C" "$lc"; else line+=$lc; vw "$lc"; (( used += REPLY )); fi ;;
+        sym) if [[ -n $dim[i] || $chg[i] == removed ]]; then lcs=$C$lc; else lcs=$lc; fi ;;
         file)
-          # Too long for the room left: its folder gives way from the left,
-          # never its name, which a cut at the end would take.
+          # Its folder dim, its name lit; a long path breaks after a /.
           local nm=${lc:t} dir=${lc:h}/
           [[ $lc == */* ]] || dir=
-          integer room=$(( w - rz - used )) k
-          if (( ${(m)#dir} + ${(m)#nm} > room )); then
-            if (( ${(m)#nm} + 2 > room )); then dir=; fit "$nm" $room; nm=$REPLY
-            else
-              (( k = room - ${(m)#nm} - 1 )); dir="…"${dir[-k,-1]}
-              while (( ${(m)#dir} + ${(m)#nm} > room )); do dir="…"${dir[3,-1]}; done
-            fi
-          fi
-          put "$C" "$dir"; put "${${dim[i]:+$C}:-$T}" "$nm" ;;
-        callers) line+=$lc; vw "$lc"; (( used += REPLY )) ;;
-        package) put "$EL" "$lc" ;;
-        caller) put "$C" "$lc" ;;
+          lcs=$C$dir$R${${dim[i]:+$C}:-$T}$nm ;;
+        callers) lcs=$lc ;;
+        package) lcs=$EL$lc ;;
+        caller) lcs=$C$lc ;;
       esac
+      # Whole, on as many lines as it takes, each under where it starts, the
+      # tree's lines carried down beside it; the right's cells are on the
+      # first, so the lines after it have the list's whole width.
+      (( room = w - rz - used ))
+      [[ $fold[i] == (closed|quiet) && -n $kids[i] && $typ[i] == sym ]] && (( room -= 1 + ${#kids[i]} ))
+      (( room < 12 )) && room=12
+      vw "$lcs"
+      if (( REPLY <= room )); then line+=$lcs$R; (( used += REPLY ))
+      else
+        wrapc "$lcs" $room $(( w - used ))
+        line+=$reply[1]$R; vw "$reply[1]"; (( used += REPLY ))
+        plain "$gd[i]"; t=${${${${REPLY//├/│}//└/ }//─/ }//⇢/ }
+        # Under an open row its own line goes on down to what it opens to.
+        if [[ $fold[i] == open ]]; then t+="│ "; else t+="  "; fi
+        cont=${${wt:#0}:+   }$F$t$R"  "
+        wrapon 0 $w "${(@)reply[2,-1]/#/$cont}"
+      fi
       # How much is under a closed row, after its name.
       [[ $fold[i] == (closed|quiet) && -n $kids[i] && $typ[i] == sym ]] && put "$F" " ${kids[i]}"
       # The width so far is added up piece by piece (put, and the label and
@@ -356,7 +423,7 @@ matches() {
 # it is viewed, and what the rows' list said (the counts, what is still
 # coming in).
 headline() {
-  local w=$1 t s
+  local w=$1 t s hint=
   local -a words segs
   integer d=0 n=0 k bw
   L+=("") LI+=(0)
@@ -375,13 +442,16 @@ headline() {
       [[ $tb == $on ]] && { put "$B$T" "$tb"; line+=$UB; } || put "$C" "$tb"
       [[ $tb != files ]] && put "" "  "
     done
-    put "$F" "   tab next · shift-tab back"
+    # What tab does, beside them where it fits, else on the line under them.
+    hint="tab next · shift-tab back"
+    if (( used + 3 + ${(m)#hint} <= w - 3 )); then put "$F" "   $hint"; hint=; fi
   else
     put "$B$T" "${t:-by symbol}"; line+=$UB
     (( ! bysent )) && [[ -e $st/sentences-wait ]] && put "$A" "  its cases in a minute or two"
   fi
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
+  [[ -n $hint ]] && L+=("  $F$hint$R") LI+=(0)
   L+=("") LI+=(0)
   if (( ! loaded )); then spin_frame; L+=("  $A$REPLY$R ${C}reading the change…$R") LI+=(0); return; fi
   # Claude's sentence, the list's header, wrapped to the list.
@@ -402,15 +472,20 @@ headline() {
     if (( d == n )); then line+=$G"all $n viewed"$R; else line+=$T"$d"$C" of $n viewed"$R; fi
     L+=("$line") LI+=(0)
   fi
-  # What the list said, a piece a line as they fit.
+  # What the list said, a piece a line as they fit, a piece too long for a
+  # line wrapped under itself.
   if [[ -s $st/footer ]]; then
     segs=("${(@s: · :)${(j: · :)${(f)$(<$st/footer)}}}") s=
+    segs+=("")
     for t in $segs; do
       vw "$s · $t"
-      if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); s=; fi
+      if [[ -n $s ]] && { [[ -z $t ]] || (( REPLY > w - 4 )) }; then
+        wrapc "$s" $(( w - 4 )) $(( w - 4 ))
+        for s in "$reply[@]"; do L+=("  $s$R") LI+=(0); done
+        s=
+      fi
       s+=${s:+$C · $R}$t
     done
-    [[ -n $s ]] && { cut "$s" $(( w - 4 )); L+=("  $REPLY$R") LI+=(0); }
   fi
   local stale=($st/stale.*(N))
   (( $#stale )) && L+=("  ${X}could not refresh from GitLab: this is what it said last$R") LI+=(0)
@@ -419,23 +494,23 @@ headline() {
 # A row drawn once is kept by all it is drawn from (the list's width and
 # columns, its guide, its line), so a reload that changed a few rows (v, l,
 # h, a landing) draws those few, not the thousands around them.
-typeset -A rlc ruc
+typeset -A rlc ruc rxc
 # MO, MP: for a line of the list that carries on a sentence (more), its row and the sentence's.
-typeset -A MO MP
+typeset -A MO MP LT
 list() {
-  local i first=1 ctx key sentrow=0
+  local i first=1 ctx key sentrow=0 x
   if (( rlw != lw )); then
-    RL=() RU=()
+    RL=() RU=() RX=()
     ctx="$lw $wa $wd $wt $mr"
-    (( $#rlc > 3 * $#raw + 200 )) && rlc=() ruc=()
+    (( $#rlc > 3 * $#raw + 200 )) && rlc=() ruc=() rxc=()
     for (( i = 1; i <= $#raw; i++ )); do
       key=$ctx$'\1'$gd[i]$'\1'$raw[i]
-      if (( ${+rlc[$key]} )); then RL[i]=$rlc[$key] RU[i]=$ruc[$key]
-      else rowline $i; rlc[$key]=$RL[i] ruc[$key]=$RU[i]; fi
+      if (( ${+rlc[$key]} )); then RL[i]=$rlc[$key] RU[i]=$ruc[$key] RX[i]=$rxc[$key]
+      else rowline $i; rlc[$key]=$RL[i] ruc[$key]=$RU[i] rxc[$key]=$RX[i]; fi
     done
     rlw=$lw
   fi
-  L=() LI=() vis=() MO=() MP=()
+  L=() LI=() vis=() MO=() MP=() LT=()
   headline $lw
   (( loaded )) || return
   if [[ -n $query ]] || (( searching )); then
@@ -461,6 +536,10 @@ list() {
     fi
     L+=("$i") LI+=($i)
     vis+=($i)
+    # The lines it goes on to, lit with it.
+    if [[ -n $RX[i] ]]; then
+      for x in "${(@f)RX[i]}"; do L+=("  $x") LI+=(0); MP[$#L]=$i LT[$#L]=$x; done
+    fi
   done
   (( $#raw )) || L+=("  ${C}nothing in it to read by symbol$R") LI+=(0)
   dirty=0
@@ -1620,7 +1699,9 @@ draw() {
         f=$LI[i]
         if (( ${LITI[(Ie)$i]} )); then litline $f $LITA[${LITI[(Ie)$i]}]; s=$REPLY
         else s="  "$RL[f]; fi
-      elif (( cur && ${MP[$i]:-0} == cur )); then s=$A"▌ "$R$BG${RL[$MO[$i]]//$R/$R$BG}$R
+      elif (( cur && ${MP[$i]:-0} == cur )); then
+        if (( ${+LT[$i]} )); then s=$LT[$i]; else s=$RL[$MO[$i]]; fi
+        s=$A"▌ "$R$BG${s//$R/$R$BG}$R
       else s=$L[i]$R; fi
     fi
     # Beside the pane, the list's side cleared first (ECH, which leaves the
@@ -1745,7 +1826,7 @@ reload() {
   local cmd=$1
   lastlist=$cmd
   (( rgen++ ))
-  { zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
+  { OTIS_LIST_WRAPS=1 zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
   rpid+=($!)
 }
 landed() {
@@ -1827,7 +1908,7 @@ run() {
         spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       reload) pcur=$cur; reload "$arg" ;;
       # Landed before the next action runs, for one that moves on the rows.
-      reload-sync) pcur=$cur; lastlist=$arg; spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
+      reload-sync) pcur=$cur; lastlist=$arg; spawn $name "export OTIS_LIST_WRAPS=1; $arg" $row "$s" "${then_[@]}"; return ;;
       refresh-preview) (( gen++ )) ;;
       # A walk put somewhere (git-trace --walk-at) says so in $st/cur too.
       pos) (( arg > 0 && arg <= $#raw )) && go $arg; [[ -n $stepscmd && -n $sbase ]] && steps_cur ;;
@@ -2005,7 +2086,9 @@ mouse() {
   fi
   if (( b == 0 && ! up && y <= lh )) && (( side ? x < lw : 1 )); then
     local at=$(( y + top ))
+    # A row's own line, or one it goes on to.
     (( at <= $#LI && LI[at] > 0 )) && go $LI[at]
+    (( at <= $#LI && LI[at] == 0 && ${MP[$at]:-0} > 0 )) && go $MP[$at]
   fi
 }
 # ]/[: the next or the last change in the preview, a run of lines on a diff's

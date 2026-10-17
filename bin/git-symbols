@@ -1696,13 +1696,20 @@ if [ "$mode" = --rows ]; then
       print "  " text "\t\t\t\t\t\t\t\t\t\t\tgk-more" (draw ? "\tmore\t0\t\t\t\t\t\t\t\t\t\t" dim "\t" text "\t" style "\t" : "")
     }
     # Words wrapped to w columns under ind, the first line led by lead (lw wide), in color, tail after the last.
-    function flow(text, ind, w, lead, lw, color, tail,   nw, x, ln, words, first) {
+    function flow(text, ind, w, lead, lw, color, tail,   nw, x, ln, words, first, bare) {
       nw = split(text, words, " "); ln = ""; first = 1
       for (x = 1; x <= nw; x++) {
         if (ln != "" && length(ln " " words[x]) > w - lw) { more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R, "m", ""); ln = ""; first = 0 }
         ln = (ln == "" ? "" : ln " ") words[x]
       }
-      more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R tail, "m", "")
+      # What follows the words (how it ends, its flags) goes on after them, or on a line of its own when it
+      # would run past the list.
+      bare = tail; gsub(/\033\[[0-9;]*m/, "", bare)
+      if (bare != "" && length(ln bare) > w - lw) {
+        more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R, "m", "")
+        match(tail, /^(\033\[[0-9;]*m)*/); bare = substr(tail, RLENGTH + 1); sub(/^ +/, "", bare)
+        more(ind gk_rep(" ", lw) substr(tail, 1, RLENGTH) bare, "m", "")
+      } else more(ind (first ? lead : gk_rep(" ", lw)) color ln GK_R tail, "m", "")
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
@@ -1826,7 +1833,8 @@ if [ "$mode" = --rows ]; then
       if (kind == "class") head = gk_elide_rest(head)
       lab = ""
       # A closed row has how much is under it after its label.
-      if (draw) { lab = gk_sig((ex ? "export " : "") head, droom - 3 * depth - (kids && !(rid in open) ? 1 + length(kids) : 0)); lab = (ch == "removed" || dim) ? lab : "\036" lab "\036" }
+      # Whole for otis-symbols, which wraps what is too long for its list.
+      if (draw) { lab = (ex ? "export " : "") head; lab = (ch == "removed" || dim) ? lab : "\036" lab "\036" }
       head = gk_sig((ex ? "export " : "") head, room)
       # The signature, marked for highlight; a removed or viewed one plain and dim.
       head = (ch == "removed" || dim) ? GK_CONTEXT head GK_R : "\036" head "\036"
@@ -1886,7 +1894,7 @@ if [ "$mode" = --rows ]; then
         }
         head = chead[id, x]
         if (head ~ /^(export )?(abstract )?class /) head = gk_elide_rest(head)
-        lab = draw ? gk_sig(head, droom - 3 * (depth + 2)) : ""
+        lab = draw ? head : ""
         head = gk_sig(head, budget - 3 * (depth + 2) - 4)
         print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " (cerr[id, x] ? ((cp[id, x] in fixedp) ? " " GK_GOOD "\342\234\223" GK_R " " : " " GK_BAD "\342\234\227" GK_R " ") : "   ") GK_CONTEXT head GK_R \
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \

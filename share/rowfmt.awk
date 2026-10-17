@@ -73,7 +73,8 @@ function gk_dir(p,   i) {
 # A fitted path with its directory dimmed, so the eye lands on the name rather
 # than on the twelve rows that all start "packages/billing/src/".
 function gk_path(p, budget, namecol,   s, d) {
-  s = gk_fit(p, budget)
+  # A list that wraps (otis-symbols, OTIS_LIST_WRAPS) has it whole.
+  s = ENVIRON["OTIS_LIST_WRAPS"] != "" ? p : gk_fit(p, budget)
   d = gk_dir(s)
   return GK_CONTEXT d GK_R namecol substr(s, length(d) + 1) GK_R
 }

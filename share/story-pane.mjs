@@ -323,7 +323,8 @@ function showCase() {
   // The room on the right is for the longest note: what holds on a line Claude cites, or a line's call to the stop below.
   const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)),
     ...part.stops.filter((stop) => stop.call).map((stop) => [...`${stop.call.verb ?? "uses"} ${stop.name}, below`].length + 2));
-  const room = noted ? Math.max(24, Math.min(noted, 48)) + 3 : 0;
+  // The code first: the notes wrap, in at most a third of the pane, so the code has the rest to breathe in.
+  const room = noted ? Math.max(24, Math.min(noted, 48, Math.floor(W * 0.3))) + 3 : 0;
   const edge = Math.min(W - 4 - room, longest + 1), aside = W - 4 - edge - 3;
 
   // Each function a step, numbered in the order the route reaches it.
