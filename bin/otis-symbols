@@ -2354,7 +2354,7 @@ chat_frame() {
 # kept: c on the same lines brings it back. It opens and closes as a push,
 # the code under it moving down and back a row at a time. bstate is empty
 # while you type, then sending, sent, and closing as it goes.
-integer box=0 bfocus=0 bline=0 bat=0 bshown=0 btarget=0 bindent=2
+integer box=0 bfocus=0 bline=0 bat=0 bshown=0 btarget=0 bindent=2 bkeep=0
 float bshow=0 bclock=0 bsent=0
 btext= bargs= bpre= bwhere= btitle= bstate= bpf= brid= bspun= berr=
 typeset -a BX BXS
@@ -2378,10 +2378,11 @@ box_open() {
     plain "$P[bline]"; t=$REPLY; gut "$t"
     if (( REPLY > 0 )); then bindent=$REPLY; else t=${t%%[^ ]*}; bindent=$#t; fi
   fi
-  box=1 bfocus=1 bstate= berr= bshow=0 bshown=0 bsent=0 bclock=$EPOCHREALTIME brid=$rid[cur]
+  box=1 bfocus=1 bkeep=1 bstate= berr= bshow=0 bshown=0 bsent=0 bclock=$EPOCHREALTIME brid=$rid[cur]
 }
 # box_key <key>: one key while you type in it.
 box_key() {
+  bkeep=1
   keyname "$1"
   case $REPLY in
     enter) box_send ;;
@@ -2416,7 +2417,8 @@ box_editor() {
 }
 # box_frame: the box's rows at the pane's width (BX), what of them the push
 # shows now (BXS, bshown), and where the push is going (btarget). The pane
-# scrolls to keep it in sight while you type.
+# follows it while it opens or grows and when you type in it (bkeep), and is
+# yours to scroll it out of sight otherwise.
 box_frame() {
   local t=$btext rest chunk line ttl keys pad_ ch nlc=$'\n'
   integer w s=1 nl sp k n col c=$(( bat + 1 )) ind=$bindent bw
@@ -2468,7 +2470,11 @@ box_frame() {
   elif (( bshown == 1 )); then BXS=("$BX[1]")
   else BXS=(); fi
   [[ $rid[cur] == $brid ]] || { bshown=0 BXS=() }
-  (( bfocus && bline + bshown > poff + ph - phd )) && (( poff = bline + bshown - (ph - phd) ))
+  if (( bfocus && bkeep )); then
+    (( bline + bshown > poff + ph - phd )) && (( poff = bline + bshown - (ph - phd) ))
+    (( bline <= poff )) && (( poff = bline > 2 ? bline - 2 : 0 ))
+    (( bshown == btarget )) && bkeep=0
+  fi
 }
 # box_tick: the saved answer taken up, and the push a step on, on the
 # loop's clock; true when either changed the screen.
