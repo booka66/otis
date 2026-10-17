@@ -14,9 +14,8 @@
 # HEAD first (three-way, in a throwaway index), shows where each goes, and
 # asks. Then it lints, before a single commit is made: with otis.lintCommand
 # set, the accepted patches go into your working tree and that command runs
-# over them, here or, with otis.remote set, in the workspace that has a warm
-# build cache (git-remote-run), with GIT_BASE_REF as the MR's base and
-# OTIS_CHANGED_FILES a list of the files the fixes touch. Lint that fails
+# over them, here, with GIT_BASE_REF as the MR's base and OTIS_CHANGED_FILES
+# a list of the files the fixes touch. Lint that fails
 # leaves your branch as it was, and its output goes to Claude when you run it
 # again (r), so it fixes what lint found; anything lint fixed itself rides
 # along as a "chore: apply lint fixes" commit. Then it applies the fixes in
@@ -303,15 +302,8 @@ fold)
     done
     git diff --cached --name-only HEAD > "$d/changed-files"
     printf "${GK_ATTENTION}linting the fixes ...${GK_R}\n"
-    # Somewhere else when you have one (git-remote-run): this repo's lint is
-    # a cold Bazel analysis on a laptop and seconds where the cache is warm.
     # Live output and the status: a pipeline would report tee's.
-    if [ -n "$(git config --get otis.remote)" ]; then
-      run='git-remote-run "$lint"'
-    else
-      run='sh -c "$lint"'
-    fi
-    { GIT_BASE_REF=$base OTIS_CHANGED_FILES=$d/changed-files eval "$run"; echo $? > "$d/lint.rc"; } 2>&1 |
+    { GIT_BASE_REF=$base OTIS_CHANGED_FILES=$d/changed-files sh -c "$lint"; echo $? > "$d/lint.rc"; } 2>&1 |
       tee "$d/lint.log"
     if [ "$(cat "$d/lint.rc")" != 0 ]; then
       git reset -q --hard HEAD
