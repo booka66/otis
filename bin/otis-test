@@ -896,6 +896,10 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   GIT_FZF_STATE=$tmp/sentst git-symbols --viewed "$base..$head" toggle sentence:1
   expect sentences/viewed-none "$(srows | awk -F'\t' '$12 == "sentence:1" { print "[" $20 "]" }')" "[]"
   expect sentences/pane "$(GIT_FZF_STATE=$tmp/sentst git-symbols --preview "$base..$head" "" "" "" "" sentence:1 | strip | grep -c 'Head')" "1"
+  # A case's title and how it ends are pinned to the top of its pane, so they stay while the rest scrolls, and said once.
+  printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"stops":[],"code":[],"tests":[],"links":[],"runs":[]}]}' > "$tmp/case.json"
+  pane=$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | strip)
+  expect sentences/case-pinned "$(printf '%s\n' "$pane" | head -3 | tr '\036\n' '^|'):$(printf '%s\n' "$pane" | grep -c 'A retry runs out')" "^pin 3|  A retry runs out|  it hangs → it gives up|:1"
   expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
   # A screen with tabs lists cases, never the tree: before they come, it says why there are none.
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"

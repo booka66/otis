@@ -9,6 +9,7 @@
 // saying what a line of it is, by its number: a line of code (line, its file, side, first and last number, 1 if
 // the file is in the change, the columns its code is in, and the place it is part of: a stop, or a thread's line)
 // or a thread's (thread, its id, resolvable, resolved and draft), for otis-symbols to comment from what you select.
+// It also pins a case's title and how it ends ("\036pin N" and N lines), held at the pane's top while the rest scrolls.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -53,7 +54,7 @@ const LIFT = ((rgb) => (rgb ? `\x1b[48;2;${rgb.slice(1).map((c) => Math.max(0, M
 
 const YOURS = fg("OTIS_T_YOURS", "35");
 
-const out = [], map = [];
+const out = [], map = [], pinned = [];
 /** A line of the pane, and, for a line you can comment from, what it is (the map). */
 const say = (line = "", what = "") => { out.push(line); if (what) map.push(`${out.length}\t${what}`); };
 
@@ -235,11 +236,23 @@ function showFlags() {
   });
 }
 
+/** How the case ended before → how it ends now, as the list says it: yellow when it ends differently. */
+function ending() {
+  if (!part.was && !part.now) return [];
+  const was = part.fresh ? "new" : part.was || "?", now = part.now || "?", tone = part.change === "ends differently" ? A : C;
+  const how = { "only a label": "  · only a label", "the same": "  = the same" }[part.change] ?? "";
+  if (width(was) + width(now) + width(how) + 3 <= W - 4) return [`${C}${was}${R} → ${tone}${now}${R}${C}${how}${R}`];
+  return [...wrap(was, W - 4).map((line) => C + line + R), ...wrap(now, W - 6).map((line, at) => `${at ? "  " : "→ "}${tone}${line}${R}`),
+    ...(how ? [`  ${C}${how.trim()}${R}`] : [])];
+}
+
 /** A case: the situation, how it ended before and how it ends now, then its route through the code in the
  * order it runs, each stop's deciding lines with what holds there, and the tests that run it. */
 function showCase() {
+  const head = [...prose(part.text, W - 4, B + T), ...ending()].map((line) => `  ${line}`);
+  if (env.OTIS_PANE_MAP) pinned.push(...head, `  ${C}${"─".repeat(W - 4)}${R}`);
   say();
-  for (const line of prose(part.text, W - 4, B + T)) say(`  ${line}`);
+  if (!env.OTIS_PANE_MAP) for (const line of head) say(line);
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
   if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
@@ -575,5 +588,6 @@ say();
 }
 
 if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
+if (pinned.length) out.unshift(`\x1epin ${pinned.length}`, ...pinned);
 if (env.OTIS_PANE_MAP && map.length) out.unshift(`\x1emap ${map.length}`, ...map);
 process.stdout.write(out.join("\n") + "\n");
