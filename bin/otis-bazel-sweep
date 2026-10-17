@@ -1,0 +1,46 @@
+#!/bin/sh
+# otis-bazel-sweep: delete Bazel's builds of checkouts that are gone, and say
+# in a line what that freed. _git_sweep in git.zsh runs it once an hour, in the
+# background, after git-worktree-sweep, and shows the line as an alert.
+#
+# Bazel keeps a build (an output base, gigabytes) for each directory it runs
+# in and never deletes one, so every worktree Claude or otis makes and throws
+# away leaves its build behind. Each build names its directory in
+# DO_NOT_BUILD_HERE. A build Bazel placed itself, under the md5 of that
+# directory, is that directory's alone and goes once the directory does. One a
+# wrapper placed with --output_base can be shared: a worktree inside a checkout
+# may build in the checkout's and leave its own path there, so that one goes
+# only once no checkout is left around the path either. A build whose server
+# still runs stays until the server idles out. Bazel's download cache and its
+# install have no DO_NOT_BUILD_HERE, so they are never touched; the copy of it
+# in a build's execroot is passed over, or the execroot would go on its own.
+if command -v md5sum >/dev/null 2>&1; then sum=md5sum; else sum=md5; fi
+n=0 kb=0 last=
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  b=${f%/*}
+  ws=$(cat "$f" 2>/dev/null)
+  [ -n "$ws" ] && [ ! -e "$ws" ] || continue
+  if [ "${b##*/}" != "$(printf '%s' "$ws" | $sum | cut -c1-32)" ]; then
+    up=${ws%/*}
+    while [ -n "$up" ] && [ ! -d "$up" ]; do up=${up%/*}; done
+    git -C "${up:-/}" rev-parse --is-inside-work-tree >/dev/null 2>&1 && continue
+  fi
+  pid=$(cat "$b/server/server.pid.txt" 2>/dev/null)
+  case $( [ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null) in *--output_base=*"${b##*/}"*) continue ;; esac
+  size=$(du -sk "$b" 2>/dev/null | cut -f1)
+  # Bazel makes much of a build read-only, which rm alone cannot get through.
+  chmod -R u+w "$b" 2>/dev/null
+  rm -rf "$b" 2>/dev/null
+  [ -e "$b" ] && continue
+  n=$((n + 1)) kb=$((kb + ${size:-0})) last=${ws##*/}
+done <<EOF
+$(find "$HOME/Library/Caches/bazel" "${XDG_CACHE_HOME:-$HOME/.cache}/bazel" "/private/var/tmp/_bazel_$USER" -maxdepth 3 -name DO_NOT_BUILD_HERE -not -path '*/execroot/*' 2>/dev/null)
+EOF
+[ "$n" -gt 0 ] || exit 0
+size=$(awk -v kb="$kb" 'BEGIN { printf "%.1fG", kb / 1048576 }')
+if [ "$n" -eq 1 ]; then
+  printf "%s: Bazel's build for %s, which is gone\n" "$size" "$last"
+else
+  printf "%s: Bazel's builds for %d checkouts that are gone\n" "$size" "$n"
+fi

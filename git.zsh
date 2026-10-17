@@ -143,7 +143,8 @@ _git_alerts() {
 # repo, in the background (git-worktree-sweep, gw's own rule), and each one
 # that went is an alert with the line that brings its branch back
 # (otis-notify). So a branch worked on in its
-# worktree and merged from gmr does not wait for gw.
+# worktree and merged from gmr does not wait for gw. Then Bazel's builds of
+# checkouts that are gone, which Bazel never deletes (otis-bazel-sweep).
 _git_sweep() {
   local common
   common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return
@@ -155,6 +156,9 @@ _git_sweep() {
   {
     git-worktree-sweep 2>/dev/null </dev/null | while IFS= read -r line; do
       otis-notify --tty $tty "worktree swept" "$line"
+    done
+    otis-bazel-sweep 2>/dev/null </dev/null | while IFS= read -r line; do
+      otis-notify --tty $tty "disk freed" "$line"
     done
   } &!
 }
