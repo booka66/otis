@@ -1318,16 +1318,25 @@ subst() {
 render() {
   local w=$1 file=$2 i=$3
   subst "$preview" $i
-  FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null > $file.raw
+  OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null > $file.raw
   wrapin $w $file.raw $file $file.tmp
   rm -f $file.raw
 }
 # wrapin <width> <raw> <file> <tmp>: a preview as it came, wrapped to the
 # pane, written through <tmp> into <file>, and where each line wrapped into
-# <file>.cont (for a selection's copy).
+# <file>.cont (for a selection's copy). A preview that says what its lines
+# are ("\036map N" and N lines: a case's, share/story-pane.mjs) has that
+# beside it as <file>.map, each numbered as the line of the pane it is.
 wrapin() {
   local w=$1 raw=$2 file=$3 tmp=$4 first
   IFS= read -r first < $raw
+  rm -f $tmp.map
+  if [[ $first == $'\036'map\ <-> ]]; then
+    integer n=${first#*map }
+    sed -n "2,$(( n + 1 ))p" $raw > $tmp.map
+    sed "1,$(( n + 1 ))d" $raw > $raw.body && mv -f $raw.body $raw
+    IFS= read -r first < $raw
+  fi
   if [[ $first == $'\036'pin\ <->* ]]; then
     # Pinned lines ("\036pin N" and N lines, draw): wrapped apart from the
     # rest, and the marker written after, with how many lines they wrapped
@@ -1345,6 +1354,15 @@ wrapin() {
   else
     LC_ALL=C awk -v w=$w -v cont=$tmp.cont "$wrap_awk" < $raw > $tmp
   fi
+  # The map's lines are the preview's as it came: each onto every line of
+  # the pane its line wrapped to (the wrap's pieces, in .cont).
+  if [[ -s $tmp.map ]]; then
+    LC_ALL=C awk -F'\t' 'BEGIN { OFS = "\t"; at = 1 }
+      FILENAME == ARGV[1] { split($0, c, " "); piece[c[1]] = 1; next }
+      { while (r < $1) { r++; s = at; at++; while (at in piece) at++ }
+        for (o = s; o < at; o++) { $1 = o; print } }' $tmp.cont $tmp.map > $file.map
+  else rm -f $file.map; fi
+  rm -f $tmp.map
   mv -f $tmp.cont $file.cont 2>/dev/null
   mv -f $tmp $file
 }
@@ -1499,7 +1517,9 @@ helplines() {
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
     "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
-    drag "in the preview: lines of the diff, copied without the gutter; a asks Claude about them; in a review, c comments on them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
+    drag "in the preview: text, copied, a diff's lines without the gutter; a asks Claude about them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
+    numbers "in a review, drag down a diff's line numbers, or tap one: those lines, and c comments on them" \
+    comment "in a case's pane, click one: c replies, e edits yours, d deletes yours, r resolves it or opens it again" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
@@ -1628,14 +1648,24 @@ draw() {
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
   elif [[ -n $flash ]]; then
     foot+=$A$flash$R; flash=
-    (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]] && foot+=$C"   ·   "$R$A"c"$R$C" comments on them"$R
   elif spinning; then spin_foot
-  elif (( sel == 1 )) && [[ -n $selr && -n $GMR_IID ]]; then
+  elif (( sel == 1 && selgut )) && [[ -n $selr && -n $GMR_IID ]]; then
     local sd=${selr%% *} sw=${selr#* }
     if [[ $sd == *,* ]]; then sw="lines ${${sd%,*}/old/-}${${sd%,*}/new/+}${sw% *}–${${sd#*,}/old/-}${${sd#*,}/new/+}${sw#* }"
     elif [[ ${sw% *} == ${sw#* } ]]; then sw="line ${sw% *}"; else sw="lines ${sw/ /–}"; fi
     [[ $sd == old ]] && sw+=" (removed)"
+    [[ -n $selpath ]] && sw="${selpath:t} $sw"
     foot+=$B$A"c"$R$B$T" comment on $sw"$UB$R$C"   ·   esc lets go"$R
+  elif (( sel == 1 )) && [[ -n $selthread && -n $GMR_IID ]]; then
+    # A thread taken in a case's pane: what can be done to it. A draft is
+    # yours, and has no thread to reply to or resolve yet.
+    local -a tf=(${=selthread})
+    if [[ $tf[4] == true ]]; then foot+=$B$A"e"$R$B$T" edit"$UB$R"  "$A"d"$R$T" delete"$R$C" this draft"$R
+    else
+      foot+=$B$A"c"$R$B$T" reply"$UB$R"  "$A"e"$R$T" edit"$R"  "$A"d"$R$T" delete"$R$C" your comment in it"$R
+      [[ $tf[2] == true ]] && { foot+="  "$A"r"$R$T; [[ $tf[3] == true ]] && foot+=" reopen it"$R || foot+=" resolve it"$R; }
+    fi
+    foot+=$C"   ·   esc lets go"$R
   elif (( noting )); then foot+=$A"what is "$R$B$T"$nword"$UB$R$A"? "$R$T"$ntext"$R$A"▏"$R$C"   ⏎ saves it  ·  esc drops it"$R
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   elif (( cfocus )); then
@@ -1828,11 +1858,36 @@ act() {
 # new number, one it removed by its old, and "old,new" when the two ends
 # differ, as GitLab numbers a range that starts on a removed line. Nothing
 # in i's view, whose diffs are other symbols', some in other files.
-selr=
+# A case's pane says what its lines are (its map, pmap): there the ends are
+# the lines of code of the one place the first is in (a function of the
+# route, or a line a thread is on), selpath their file, and code in a file
+# the change does not touch is none. A selection on one thread's lines and
+# no code is that thread, in selthread: its id, resolvable, resolved, draft.
+selr= selpath= selthread=
 selrange() {
-  local n t g o nw one fs ls fl ll
-  selr=
+  local n t g o nw one fs ls fl ll at= th=
+  local -a f
+  selr= selpath= selthread=
   [[ -r $st/uses-for && $(<$st/uses-for) == $rid[cur] ]] && return
+  pmap
+  if (( $#PMAP )); then
+    for (( n = s1; n <= s2; n++ )); do
+      f=("${(@ps:\t:)PMAP[$n]}")
+      case $f[1] in
+        line)
+          if [[ -z $at ]]; then
+            [[ $f[6] == 1 ]] || { (( selgut )) && flash="that code is not in this change, so GitLab takes no comment on it"; return; }
+            at=$f[9] selpath=$f[2] fs=$f[3] fl=$f[4]
+          fi
+          [[ $f[9] == $at ]] && ls=$f[3] ll=$f[5] ;;
+        thread) one="$f[2] $f[3] $f[4] $f[5]"; [[ -z $th ]] && th=$one; [[ $th == $one ]] || th=- ;;
+      esac
+    done
+    if [[ -n $fs ]]; then
+      if [[ $fs == $ls ]]; then selr="$fs $fl $ll"; else selr="$fs,$ls $fl $ll"; fi
+    elif [[ -n $th && $th != - ]]; then selthread=$th; fi
+    return
+  fi
   for (( n = s1; n <= s2; n++ )); do
     plain "$P[n]"; t=$REPLY; g=${t%%│*}
     [[ $t == *│* && $g == *⋮* ]] || continue
@@ -1845,6 +1900,38 @@ selrange() {
   done
   [[ -n $fs ]] || return
   if [[ $fs == $ls ]]; then selr="$fs $fl $ll"; else selr="$fs,$ls $fl $ll"; fi
+}
+# ongutter <line> <column>: whether that is on a diff's line numbers, before
+# its code: the columns a case's pane puts before it (PCOL), or delta's
+# "old ⋮ new │".
+ongutter() {
+  local -a pc
+  pmap
+  if [[ -n $PCOL[$1] ]]; then pc=(${=PCOL[$1]}); (( $2 < pc[1] )); return; fi
+  (( $#PMAP )) && return 1
+  plain "$P[$1]"; gut "$REPLY"
+  (( REPLY > 0 && $2 < REPLY ))
+}
+# pmap: what the pane's lines are, when its preview says (wrapin's .map), as
+# PMAP, a line of P to what it is, and PCOL, a line of code to the columns
+# its code is in, with + after for a piece of the line above it (a copy
+# takes the code alone, and the pieces as one line).
+typeset -A PMAP
+pmapof=
+pmap() {
+  [[ $pmapof == $pfile ]] && return
+  local l n what
+  local -a f
+  pmapof=$pfile PMAP=() PCOL=()
+  [[ -n $pfile && -s $pfile.map ]] || return
+  for l in ${(f)"$(<$pfile.map)"}; do
+    n=${l%%$'\t'*} what=${l#*$'\t'}
+    PMAP[$n]=$what
+    [[ $what == line$'\t'* ]] || continue
+    f=("${(@ps:\t:)what}")
+    PCOL[$n]="$f[7] $f[8]"
+    [[ $PMAP[$(( n - 1 ))] == $what ]] && PCOL[$n]+=" +"
+  done
 }
 inpane() { (( y >= py + phd && y < py + ph && (side ? x >= px : 1) )); }
 mouse() {
@@ -1869,13 +1956,32 @@ mouse() {
     return
   fi
   if inpane || (( sel == 2 )); then
-    if (( b == 0 && ! up )); then sel=2 sa=$l ca=$c sb=$l cb=$c
+    if (( b == 0 && ! up )); then
+      sel=2 sa=$l ca=$c sb=$l cb=$c seltxt= selgut=0
+      ongutter $l $c && selgut=1
     elif (( b == 32 && sel )); then sb=$l cb=$c
     elif (( up && sel == 2 )); then
       sb=$l cb=$c sel=1
-      if (( sa == sb && ca == cb )); then sel=0
+      pmap
+      # Pressed on the line numbers: a tap is that line, a drag down them
+      # those lines, to comment on (c) or ask about (a); nothing is copied.
+      if (( selgut )); then
+        ends; selrange
+        [[ -n $selr ]] || sel=0 selgut=0
+      elif (( sa == sb && ca == cb )); then
+        sel=0 selr= selpath= selthread=
+        # A click on a thread in a case's pane takes the whole thread: c, e,
+        # d and r act on it (handle).
+        if [[ $PMAP[$l] == thread$'\t'* ]]; then
+          integer t0=$l t1=$l
+          while [[ $PMAP[$(( t0 - 1 ))] == $PMAP[$l] ]]; do (( t0-- )); done
+          while [[ $PMAP[$(( t1 + 1 ))] == $PMAP[$l] ]]; do (( t1++ )); done
+          sel=1 sa=$t0 ca=1 sb=$t1 cb=$pw
+          ends; selrange
+        fi
       else
-        ends; shown; copy $REPLY.cont 0 && selrange
+        # Anywhere else it is text: copied, the lines it covers kept for a.
+        ends; shown; copy $REPLY.cont 0; selrange; selthread=
         # A word or a few on one line: y says you know it, n that you don't (otis-words).
         [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && flash+="  ·  y you know it, n you don't, a say what it is"
       fi
@@ -2175,28 +2281,55 @@ handle() {
     else flash=$(otis-words learn "$w" ${json:+"$json" "${cs#sentence:}"} 2>/dev/null); fi
     dirty=1; return
   fi
-  # Lines selected in a diff: a asks Claude about them, c comments on them
-  # in a review, esc lets go.
+  # A thread taken in a case's pane (a click on it): c replies, e and d edit
+  # and delete your comment in it (git-mr-say: the latest of yours, or the
+  # draft), r resolves it or opens it again (git-mr-threads), as in the
+  # threads picker; esc lets go. git-mr-say reads the threads where the
+  # pickers keep them, so they are written there first.
+  if (( sel == 1 )) && [[ -n $selthread && -n $GMR_IID ]]; then
+    local tid tres tdone tdraft
+    read -r tid tres tdone tdraft <<< $selthread
+    local keep="git-mr-threads --json $GMR_IID $GMR_RANGE '' > \"\$GIT_FZF_STATE/threads.json\" 2>/dev/null"
+    case $n in
+      c) [[ $tdraft == true ]] && { flash="a draft has no thread to reply to yet: e edits it"; dirty=1; return; } ;|
+      c|e|d)
+        used $n
+        local how=reply; [[ $n == e ]] && how=edit; [[ $n == d ]] && how=delete
+        sel=0 selthread=
+        run "execute($keep; git-mr-say --$how $GMR_IID $GMR_RANGE $tid)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+        dirty=1; return ;;
+      r)
+        used r
+        sel=0 selthread=
+        run "execute-silent(git-mr-threads --resolve $GMR_IID $GMR_RANGE $tid $tres $tdone)+reload($fulllist)+refresh-preview" $cur
+        dirty=1; return ;;
+      esc) sel=0 selthread=; return ;;
+    esac
+  fi
+  # Lines selected in a diff: a asks Claude about them, and, taken on the
+  # line numbers in a review, c comments on them; esc lets go. In a case's
+  # pane the lines' file is the route's (selpath), not the row's.
   if (( sel == 1 )) && [[ -n $selr ]]; then
     case $n in
-      a) if [[ -n $ctpl ]]; then
+      a) if [[ -n $ctpl && -z $selpath ]]; then
            used a
            local l=$selr
-           sel=0 selr=
+           sel=0 selr= selgut=0
            chat_open "$l"
            return
          fi ;;
-      c) if [[ -n $GMR_IID ]]; then
+      c) if [[ -n $GMR_IID ]] && (( selgut )); then
            used c
-           local side first last; read -r side first last <<< $selr
-           sel=0 selr=
-           run "execute(git-mr-say --new $GMR_IID $GMR_RANGE {2} $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+           local side first last p='{2}'; read -r side first last <<< $selr
+           [[ -n $selpath ]] && p=${(qq)selpath}
+           sel=0 selr= selpath= selgut=0
+           run "execute(git-mr-say --new $GMR_IID $GMR_RANGE $p $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
            dirty=1; return
          fi ;;
-      esc) sel=0 selr=; return ;;
+      esc) sel=0 selr= selpath= selgut=0; return ;;
     esac
   fi
-  sel=0 selr=
+  sel=0 selr= selpath= selthread= selgut=0
   [[ $n == a && -n $ctpl ]] && { used a; chat_open ""; return; }
   # ctrl-a shows or hides it, the conversation kept either way.
   [[ $k == $'\x01' && -n $ctpl ]] && { used ctrl-a; if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }

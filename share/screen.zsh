@@ -348,6 +348,12 @@ whole() {
 # it is up.
 integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
 typeset -a P
+# PCOL: a line of P whose code a preview placed, to the columns it is in
+# ("from to", and + for a piece of the line above), which a copy takes.
+typeset -A PCOL
+# selgut: the selection was made on a diff's line numbers, so it is whole
+# lines (to comment on), lit whole and not copied.
+integer selgut=0
 # seltxt: the text of the last selection copied.
 seltxt=
 ends() {
@@ -368,10 +374,18 @@ gut() {
 # dropped for the moment it is; a diff's line whole, gutter and all.
 selected() {
   local from=1 to t
+  local -a pc
   plain "$P[$1]"; t=$REPLY
   to=$#t
   gut "$t"
-  if (( ! REPLY )); then
+  # A line whose code the preview placed (PCOL): the code selected of it, as
+  # text is, unless whole lines were taken on the numbers.
+  if (( selgut )); then :
+  elif [[ -n $PCOL[$1] ]]; then
+    pc=(${=PCOL[$1]}) from=$pc[1] to=$pc[2]
+    (( $1 == s1 && c1 > from )) && from=$c1
+    (( $1 == s2 && c2 < to )) && to=$c2
+  elif (( ! REPLY )); then
     (( $1 == s1 )) && from=$c1
     (( $1 == s2 )) && to=$c2
   fi
@@ -384,9 +398,21 @@ selected() {
 copy() {
   local -A piece
   local l n out= t
+  local -a pc
   [[ -s $1 ]] && for l in ${(f)"$(<$1)"}; do piece[${l% *}]=${l#* }; done
   for (( n = s1; n <= s2; n++ )); do
     plain "$P[n]"; t=$REPLY
+    # A line whose code the preview placed (PCOL, a case's pane): the code
+    # selected of it, as text is, without the numbers before it or the notes
+    # beside it.
+    if [[ -n $PCOL[$n] ]]; then
+      pc=(${=PCOL[$n]})
+      (( n == s1 && c1 > pc[1] )) && pc[1]=$c1
+      (( n == s2 && c2 < pc[2] )) && pc[2]=$c2
+      t=${${t[pc[1],pc[2]]}%%[[:space:]]#}
+      if (( n > s1 )) && [[ $pc[3] == + ]]; then out+=$t; else out+=${out:+$'\n'}$t; fi
+      continue
+    fi
     gut "$t"
     (( REPLY < 0 )) && continue
     if (( REPLY )); then t=${t[REPLY,-1]}
@@ -419,6 +445,7 @@ memo_keep() {
     print -rn -- "$(<$f)" > $memo.pv.new/$n
     [[ -e $f.cont ]] && print -rn -- "$(<$f.cont)" > $memo.pv.new/$n.cont
     [[ -e $f.gfx ]] && print -rn -- "$(<$f.gfx)" > $memo.pv.new/$n.gfx
+    [[ -e $f.map ]] && print -rn -- "$(<$f.map)" > $memo.pv.new/$n.map
   done
   rm -rf -- $memo.pv; mv -f -- $memo.pv.new $memo.pv
   # Every MR reviewed leaves one; a month unopened is gone.

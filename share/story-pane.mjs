@@ -2,10 +2,17 @@
 // story-pane.mjs <outline.json> <n>: case n of a change (sentences.mjs) as the symbol view's pane,
 // FZF_PREVIEW_COLUMNS wide: the situation, how it ended before and how it ends now, its route through the
 // code in the order it runs, the tests that run it. A part told without cases is its words and its code.
-import { spawn } from "node:child_process";
+//
+// In a review, OTIS_CASE_THREADS is the MR's threads as git-mr-threads --json places them: each is drawn under the
+// line of the route it sits on, and those on the rest of the case's code (OTIS_CASE_ON, their ids, one a line)
+// after the route, each under its own line. With OTIS_PANE_MAP set, the pane opens with "\036map N" and N lines
+// saying what a line of it is, by its number: a line of code (line, its file, side, first and last number, 1 if
+// the file is in the change, the columns its code is in, and the place it is part of: a stop, or a thread's line)
+// or a thread's (thread, its id, resolvable, resolved and draft), for otis-symbols to comment from what you select.
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
@@ -42,8 +49,55 @@ const RAISE = env.OTIS_T_CODEBG ? `\x1b[${env.OTIS_T_CODEBG}m` : "\x1b[48;5;237m
 const PLUS_EMPH = bgOf(env.OTIS_T_PLUS_EMPH, "\x1b[48;5;28m"), MINUS_EMPH = bgOf(env.OTIS_T_MINUS_EMPH, "\x1b[48;5;88m");
 const LIFT = ((rgb) => (rgb ? `\x1b[48;2;${rgb.slice(1).map((c) => Math.max(0, Math.min(255, Number(c) + (env.OTIS_T_LIGHT ? -24 : 24)))).join(";")}m` : "\x1b[48;5;239m"))(/48;2;(\d+);(\d+);(\d+)/.exec(RAISE));
 
-const out = [];
-const say = (line = "") => out.push(line);
+const YOURS = fg("OTIS_T_YOURS", "35");
+
+const out = [], map = [];
+/** A line of the pane, and, for a line you can comment from, what it is (the map). */
+const say = (line = "", what = "") => { out.push(line); if (what) map.push(`${out.length}\t${what}`); };
+
+// The review's threads on lines, by where they sit; each drawn once, under the first line of the pane it is on.
+const threads = (() => { try { return JSON.parse(readFileSync(env.OTIS_CASE_THREADS, "utf8")).filter((one) => one.where?.state === "line" && one.notes?.length); } catch { return []; } })();
+const threadsAt = new Map();
+for (const one of threads) {
+  const at = `${one.where.path}\t${one.where.side}\t${one.where.line}`;
+  threadsAt.set(at, [...(threadsAt.get(at) ?? []), one]);
+}
+const onCase = (() => { try { return new Set(readFileSync(env.OTIS_CASE_ON, "utf8").split("\n").filter(Boolean)); } catch { return new Set(); } })();
+const drawnThreads = new Set();
+const otherSide = (side) => (side === "old" ? "new" : "old");
+
+/** A thread as a diff's preview draws one (git-mr-file-preview): a bar in its state's color, what it is, then each
+ * comment, its author and its words, whole; lead is what goes before the bar, room the width after it. */
+function drawThread(one, lead, room) {
+  drawnThreads.add(one.id);
+  const state = one.draft ? "draft" : one.resolved ? "resolved" : one.resolvable ? "open" : "comment";
+  const color = state === "resolved" ? C : state === "draft" ? YOURS : E;
+  const what = `thread\t${one.id}\t${Boolean(one.resolvable)}\t${Boolean(one.resolved)}\t${Boolean(one.draft)}`;
+  const bar = `${lead}${color}▍${R} `;
+  const author = one.notes[0].author?.username ?? "";
+  const label = state === "resolved" ? "✓ resolved" : state === "draft" ? (author === "you" ? "✎ your draft" : `✎ ${author}'s draft`) : ` ${state}`;
+  say(`${lead}${color}▍ ${label}${one.where.from < one.where.line ? ` · lines ${one.where.from}-${one.where.line}` : ""}${R}`, what);
+  // Each comment's words, and for a draft of Claude's why it wrote it, as markdown.
+  const told = markdown(one.notes.flatMap((note) => [[note.body, room], ...(note.why ? [[note.why, room - 2]] : [])]));
+  one.notes.forEach((note, k) => {
+    if (note.draft && state !== "draft") say(`${bar}${YOURS}↳ ✎ your draft reply${R}`, what);
+    else if (state !== "draft") say(`${bar}${k ? `${C}↳ ` : ""}${A}${note.author?.username ?? ""}${R}`, what);
+    for (const line of told.shift()) say(`${bar}${line}`, what);
+    if (note.why) {
+      say(`${bar}${C}┆ why · for you only, never posted${R}`, what);
+      for (const line of told.shift()) say(`${bar}${C}┆ ${R}${line}`, what);
+    }
+  });
+}
+/** Comments' markdown drawn as the diff's preview draws them (share/markdown.awk), in one awk for all of them:
+ * each [text, width] its lines. What someone typed has no controls of its own. */
+function markdown(items) {
+  const program = readFileSync(join(dirname(new URL(import.meta.url).pathname), "markdown.awk"), "utf8");
+  const input = items.map(([text, room]) => `${Math.max(12, room)}\t${(text ?? "").replace(/\r/g, "").replace(/[\x00-\x08\x0b-\x1e\x7f]/g, "").replace(/\t/g, " ").replace(/\n/g, "\x1f")}\n`).join("");
+  const drawn = execFileSync("awk", ["-F", "\t", `${program}\n{ print "\\001"; md(substr($0, index($0, "\\t") + 1), $1 + 0, "") }`],
+    { input, encoding: "utf8", maxBuffer: 1 << 26, env: { ...env, LC_ALL: "C" }, stdio: ["pipe", "pipe", "ignore"] });
+  return drawn.split("\x01\n").slice(1).map((one) => one.replace(/\n$/, "").split("\n"));
+}
 const ANSI = /\x1b\[[0-9;]*m/g;
 const width = (text) => [...text.replace(ANSI, "")].length;
 const pad = (text, to) => text + " ".repeat(Math.max(0, to - width(text)));
@@ -277,9 +331,15 @@ function showCase() {
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
       const style = line.cited ? B + A : C;
       if (value) { flush(); pending = prose(value, Math.max(8, aside - 2), style).map((one, k) => `   ${k ? " " : line.cited ? `${A}◀${R}` : " "} ${one}`); }
+      // Where the line is, for a comment on it: a line the change removed is on the side the stop is not.
+      const side = line.mine === false ? otherSide(stop.side) : stop.side, from = 3 + 2 * (depth + 1) + gutter;
+      const what = `line\t${stop.path}\t${side}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
       cut(body, code).forEach((piece, at) => {
-        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`);
+        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
       });
+      // The review's threads on it, under it.
+      const here = (line.joined ?? [line.n]).flatMap((n) => threadsAt.get(`${stop.path}\t${side}\t${n}`) ?? []).filter((one) => !drawnThreads.has(one.id));
+      if (here.length) { flush(); for (const one of here) drawThread(one, `  ${lead}${" ".repeat(gutter)}`, W - from - 3); }
       if (calls.length) flush();
       for (const k of calls) { drawStop(k, depth + 1); drawn.add(k); }
       return calls.length > 0;
@@ -303,6 +363,7 @@ function showCase() {
   });
   if (!part.stops.length) say(`  ${A}no line Claude cited could be found in the code, so there is no route to show${R}`);
   if (part.stopped) { say(); band("stopped", C, part.stopped, C); }
+  elsewhere();
 
   // The tests in the change that run it, by file.
   say();
@@ -314,6 +375,39 @@ function showCase() {
   }
   if (part.data?.length) band("runs on", C, part.data.map((path) => path.split("/").at(-1)).join(", "), C);
   say();
+}
+
+/** The review's threads on the part's code that no line above shows: each under its own line, by file. */
+function elsewhere() {
+  const rest = threads.filter((one) => onCase.has(one.id) && !drawnThreads.has(one.id))
+    .sort((a, b) => a.where.path.localeCompare(b.where.path) || a.where.line - b.where.line);
+  if (!rest.length) return;
+  // The outline is named for the change's two commits: an old side's line is read at the first, a new one's at the second.
+  const [base, head] = basename(file, ".json").split("-");
+  const texts = new Map();
+  const textOf = (side, path) => {
+    const at = `${side === "old" ? base : head}:${path}`;
+    if (!texts.has(at)) {
+      try { texts.set(at, execFileSync("git", ["show", at], { encoding: "utf8", maxBuffer: 1 << 26, stdio: ["ignore", "pipe", "ignore"] }).split("\n")); }
+      catch { texts.set(at, []); }
+    }
+    return texts.get(at);
+  };
+  const digits = Math.max(3, ...rest.map((one) => String(one.where.line).length));
+  const gutter = digits + 3, from = 3 + gutter, code = W - 4 - gutter;
+  say();
+  say(`  ${C}THREADS ON LINES THE ROUTE DOES NOT SHOW${R}`);
+  let was = "";
+  for (const one of rest) {
+    const { path, side, line } = one.where;
+    if (path !== was) { say(); say(`  ${E}${path}${R}`); was = path; }
+    const ground = side === "old" ? MINUS : RAISE;
+    const number = `${side === "old" ? X : C}${String(line).padStart(digits)}${R}${ground} ${side === "old" ? `${X}−` : " "}${R}${ground} `;
+    const text = (textOf(side, path)[line - 1] ?? "").replace(/\t/g, "    ").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+    cut(`${T}${text}`, code).forEach((piece, at) => say(`  ${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}`,
+      `line\t${path}\t${side}\t${line}\t${line}\t1\t${from}\t${from + code - 1}\tt${one.id}`));
+    drawThread(one, `  ${" ".repeat(gutter)}`, W - from - 3);
+  }
 }
 
 /** Your words (otis-words): state, word, the thing it names, where that lives and your note, a row each. */
@@ -438,8 +532,10 @@ if (tests.length || (part.kind === "story" && outline.filedBy && boxes.length)) 
     say(`  ${" ".repeat(13)}${C}and ${extra.length === 1 && setup.length ? "the setup they share" : "their setup and imports"}, ${lines} line${lines === 1 ? "" : "s"}${R}`);
   }
 }
+elsewhere();
 say();
 }
 
 if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
+if (env.OTIS_PANE_MAP && map.length) out.unshift(`\x1emap ${map.length}`, ...map);
 process.stdout.write(out.join("\n") + "\n");
