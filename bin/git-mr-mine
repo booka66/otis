@@ -16,17 +16,21 @@ claude=
 iid=$1 target=${2:-$(otis-config main)} url=$3 b=$4 head=$5 base=$6 start=$7
 [ -n "$iid" ] && [ -n "$b" ] || exit 0
 pause() { otis-popup say "$1"; }
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/origin-copy.sh"
 
-# Nothing to fetch when the MR's head (as gmr's list reports it) and its base
-# are here: your branch at it, the usual case, or git-mr-prefetch fetched it
-# ahead. Then this opens at once. A branch of yours somewhere else than the
-# head has its base found again below, as after a fetch, from the target
-# branch as it is here.
+# Nothing to fetch when GitLab's branch as last fetched or pushed here is the
+# MR's head (as gmr's list reports it), and its base is here: your branch at
+# it, the usual case, or git-mr-prefetch fetched it ahead. Then this opens at
+# once. GitLab's list can trail a push by many minutes, so a head it reports
+# that the branch here disagrees with is fetched, never taken over it. A branch
+# of yours somewhere else than the head has its base found again below, as
+# after a fetch, from the target branch as it is here.
 have() { [ -n "$1" ] && git cat-file -e "$1^{commit}" 2>/dev/null; }
 mine=$(git rev-parse -q --verify "refs/heads/$b")
 if [ -n "$head" ] && have "$head" && have "$base" && { [ -z "$start" ] || have "$start"; } &&
+  [ "$(git rev-parse -q --verify "refs/remotes/origin/$b")" = "$(git rev-parse "$head")" ] &&
   { [ "$mine" = "$head" ] || git rev-parse -q --verify "refs/remotes/origin/$target" >/dev/null; }; then
-  git update-ref "refs/remotes/origin/$b" "$head"
   [ "$mine" = "$head" ] || base=
 else
   printf 'fetching !%s ...\n' "$iid"
@@ -60,11 +64,13 @@ if [ -z "$dir" ]; then
 fi
 
 cd "$dir" || exit 1
-# Behind the MR, the threads' lines are off. Two ways that has one right
-# answer, so it is taken: nothing here the MR lacks (a fast-forward), or the
-# MR rebased on GitLab with every commit here already in it, patch for patch
-# (git cherry), so moving to it loses nothing. Otherwise commits of yours are
-# not on the MR, and rebasing them onto it is asked, since it can conflict.
+# Behind the MR, the threads' lines are off. When that has one right answer
+# it is taken: nothing here the MR lacks (a fast-forward), yours an old copy
+# GitLab's was rewritten from (behind), or the MR rebased on GitLab with every
+# commit here already in it, patch for patch (git cherry), so moving to it
+# loses nothing; or yours rewritten here since GitLab's, so yours is the newer
+# and is left for you to push. Otherwise each side has commits the other
+# lacks, and rebasing yours onto the MR is asked, since it can conflict.
 # --keep, like the fast-forward, refuses rather than touch uncommitted work.
 counts=$(git rev-list --left-right --count "HEAD...origin/$b")
 ahead=${counts%%	*} behind=${counts##*	}
@@ -73,10 +79,12 @@ if [ "$behind" -gt 0 ]; then
   if [ "$ahead" -eq 0 ]; then
     git merge --quiet --ff-only "origin/$b" && printf '%s: brought up to !%s, %s commit(s) on\n' "$b" "$iid" "$behind" ||
       pause "$b is $behind commit(s) behind !$iid and could not fast-forward (uncommitted changes in the way?), so thread lines may be off"
-  elif ! git cherry "origin/$b" HEAD | grep -q '^+'; then
+  elif behind "$b" "$(git rev-parse HEAD)" "$(git rev-parse "origin/$b")" || ! git cherry "origin/$b" HEAD | grep -q '^+'; then
     git reset --quiet --keep "origin/$b" &&
-      printf '%s: !%s was rebased on GitLab with your %s commit(s) in it; moved to it (was %s: git reset --keep %s undoes)\n' "$b" "$iid" "$ahead" "$old" "$old" ||
-      pause "!$iid was rebased on GitLab, but uncommitted changes here are in the way of moving $b to it, so thread lines may be off"
+      printf '%s: !%s was rewritten on GitLab with nothing of yours left out; moved to it (was %s: git reset --keep %s undoes)\n' "$b" "$iid" "$old" "$old" ||
+      pause "!$iid was rewritten on GitLab, but uncommitted changes here are in the way of moving $b to it, so thread lines may be off"
+  elif was_at "refs/heads/$b" "$(git rev-parse "origin/$b")"; then
+    pause "your $b was rewritten here after !$iid was last pushed, and is not pushed yet, so thread lines may be off; git push --force-with-lease pushes it"
   else
     n=$(git cherry "origin/$b" HEAD | grep -c '^+')
     printf '%s has %s commit(s) not on !%s, which is %s ahead of it (rebased on GitLab, or pushed from elsewhere)\n' "$b" "$n" "$iid" "$behind"

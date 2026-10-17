@@ -2391,6 +2391,44 @@ expect mr-rebase/old-copy-follows "$(git rev-parse feat; grep -c 'left alone' "$
 1"
 cd "$here"
 
+# --- git-mr-mine: o on one of yours opens it where your branch is checked
+# out, which follows GitLab's when that loses nothing. GitLab's list can trail
+# a push by minutes, so the head it says is fetched, never taken over the
+# branch. A rebase is asked only when each side has commits of its own; the
+# stub answers no.
+here=$PWD mm=$tmp/mm
+mkdir -p "$mm/stub" && git init -q --bare "$mm/origin.git"
+git init -q "$mm/work" && cd "$mm/work" && git config user.email t@t && git config user.name t
+printf 'a\n' > f && git add f && git commit -qm base && git branch -qM main
+git checkout -qb feat && printf 'b\n' > g && git add g && git commit -qm change
+git remote add origin "$mm/origin.git" && git push -q origin main feat
+git clone -q "$mm/origin.git" "$mm/gitlab" 2>/dev/null && git -C "$mm/gitlab" config user.email g@g && git -C "$mm/gitlab" config user.name g
+printf '#!/bin/sh\necho "$1" >> "$MM/asked"; exit 1\n' > "$mm/stub/git-confirm"
+printf '#!/bin/sh\necho "$2" >> "$MM/said"\n' > "$mm/stub/otis-popup"
+printf '#!/bin/sh\n' > "$mm/stub/git-mr-files"
+chmod +x "$mm/stub/"*
+# mm_open <the head GitLab's list says>: o on !5, then where feat is, and how many questions and popups.
+mm_open() {
+  : > "$mm/asked"; : > "$mm/said"
+  PATH=$mm/stub:$PATH MM=$mm git-mr-mine 5 main url feat "$1" "$(git rev-parse main)" >/dev/null 2>&1
+  printf '%s %s %s\n' "$(git rev-parse feat)" "$(grep -c . "$mm/asked")" "$(grep -c . "$mm/said")"
+}
+# mm_gitlab: feat rewritten on GitLab from another checkout.
+mm_gitlab() { (cd "$mm/gitlab" && git fetch -q origin && git checkout -q -B feat origin/feat && echo "$1" >> g && git commit -qa --amend -m "$1" && git push -q --force origin feat) >/dev/null 2>&1; }
+mm_was=$(git rev-parse feat)
+echo again >> g && git commit -qa --amend -m again && git push -q --force origin feat
+mm_now=$(git rev-parse feat)
+expect mr-mine/list-trailing-a-push-is-not-taken "$(mm_open "$mm_was"; git rev-parse origin/feat)" "$mm_now 0 0
+$mm_now"
+mm_gitlab elsewhere
+expect mr-mine/old-copy-follows "$(mm_open "$(git --git-dir="$mm/origin.git" rev-parse feat)")" "$(git --git-dir="$mm/origin.git" rev-parse feat) 0 0"
+echo mine >> g && git commit -qa --amend -m mine && mm_now=$(git rev-parse feat)
+expect mr-mine/rewritten-here-is-kept "$(mm_open "$(git rev-parse origin/feat)"; grep -c 'not pushed yet' "$mm/said")" "$mm_now 0 1
+1"
+mm_gitlab again
+expect mr-mine/both-moved-asks "$(mm_open "$(git --git-dir="$mm/origin.git" rev-parse feat)")" "$mm_now 1 1"
+cd "$here"
+
 # --- git-mr-rebase on a stack: b on any layer rebases all of it here, the
 # bottom onto origin/main and each layer onto the one below as rebased, pushes
 # it all at once, and the local branches follow. GitLab is a stub answering

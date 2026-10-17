@@ -52,6 +52,8 @@
 # skips the pre-push hook (--no-verify), as GitLab's own rebase does: a hook
 # may take only one checked-out branch a push (git-stack), and CI lints all
 # of it.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/origin-copy.sh"
 mr() { git-forge api "projects/:fullpath/merge_requests/$iid$1"; }
 pause() { otis-popup say "$1"; }
 main=$(otis-config main)
@@ -201,19 +203,6 @@ lint_settled() {
   git -C "$1" add -u || return 1
   if [ -n "$l_ok" ]; then echo "lint passed"
   else echo "lint failed: $(grep -m1 -i error "$d/lint.log" || tail -1 "$d/lint.log") (all of it in $(printf '%s' "$d/lint.log" | sed "s|^$HOME/|~/|"))"; fi
-}
-# was_at <ref> <commit>: that ref has been at that commit, by its reflog here.
-was_at() { git log -g --format=%H "$1" 2>/dev/null | grep -qx "$2"; }
-# behind <branch> <yours> <GitLab's>: your branch has nothing of its own, so
-# it follows GitLab's with nothing lost. Its commit is in GitLab's, or is one
-# GitLab's branch was at before it was rewritten there (a push from another
-# checkout, or from an agent, leaves yours on the old copy). Not when yours
-# has commits past GitLab's, or has been at GitLab's commit and moved off it:
-# then the difference is yours.
-behind() {
-  git merge-base --is-ancestor "$2" "$3" 2>/dev/null && return
-  git merge-base --is-ancestor "$3" "$2" 2>/dev/null && return 1
-  was_at "refs/remotes/origin/$1" "$2" && ! was_at "refs/heads/$1" "$3"
 }
 # follow <branch> <from> <to>: the local branch moved from the commit it was
 # at to the new one, checked out or not, or why not on stdout.
