@@ -7,7 +7,8 @@
 // One Claude raises at most five flags it can pin to lines; otis checks each line is there; a second Claude
 // tries to throw each one out (the base had it, the neighbours do it so, the smaller design is not smaller).
 // Only what that leaves standing is shown, each with the comment a reviewer would leave on its line, which the
-// case's pane types in for you when you comment there. Without --now, at most two run at once. otis.flagsModel picks the
+// case's pane types in for you when you comment there, and a note at each of its two lines, which the pane
+// writes beside them in red where the case's route runs through them. Without --now, at most two run at once. otis.flagsModel picks the
 // model, off for none.
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -78,7 +79,7 @@ const caseText = (part, i) => [
 const object = (properties) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
 const list = (items) => ({ type: "array", items });
 const text = { type: "string" };
-const lineRef = object({ path: text, side: { enum: ["new", "old"] }, line: { type: "integer" }, code: text });
+const lineRef = object({ path: text, side: { enum: ["new", "old"] }, line: { type: "integer" }, code: text, note: text });
 const KINDS = {
   shallow: "a function, class, module or layer the change adds whose interface is about as much to learn as what it does: a pass-through that hands its arguments on, a wrapper that only renames, a class of small methods each a line long",
   leak: "one piece of knowledge (a format, a rule, a magic value, which order things must happen in, how a key is built) written in two or more places, so the next change to it must find and change every one",
@@ -123,12 +124,12 @@ const raised = await ask([
   "- flag: which red flag",
   "- claim: one or two plain sentences: what is wrong, concretely, in this code",
   "- cost: what the next person to change this code has to do because of it, concretely (\"adding a new channel means editing these three switches\")",
-  "- line: the line in code this change adds where it is (path, side \"new\", line number, code copied exactly)",
-  "- caller: the other line it involves: the second copy of the knowledge, the caller that must know, the function a wrapper hands on to (path, side, line number, code copied exactly)",
+  "- line: the line in code this change adds where it is (path, side \"new\", line number, code copied exactly), and its note: what is wrong right here and why, in plain words under 15, for a note beside the line (\"matches the channel by name again, a third copy of the rule\")",
+  "- caller: the other line it involves: the second copy of the knowledge, the caller that must know, the function a wrapper hands on to (path, side, line number, code copied exactly), and its note: how this line is caught up in it, in plain words under 15",
   "- smaller: the smaller design, concretely: which function goes, what moves where, what the interface becomes",
   "- comment: what a reviewer would leave on that line for the author, as a teammate texts: one short question that suggests the smaller design, under 20 words, plain words, no red flag's name (\"Could `sendReminder` take the channel, rather than each caller switching on it?\")",
   "",
-  "In claim, cost, smaller and comment, put each name from the code in backticks, like `needsJudgment`, and nothing else in markdown.",
+  "In claim, cost, smaller, comment and the notes, put each name from the code in backticks, like `needsJudgment`, and nothing else in markdown.",
   "",
   authorWords,
   "",

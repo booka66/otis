@@ -18,6 +18,8 @@ const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 const part = outline.sentences[Number(which) - 1];
 if (!part) process.exit(0);
+// The case as it was told, which its flags are filed under, whether or not it is told again for you below.
+const told = part.text;
 const W = Math.max(40, Number(process.env.FZF_PREVIEW_COLUMNS) || 96);
 // The case told again for you (reword.mjs, from your words), laid over the case it was told from.
 const reworded = (() => { try { return JSON.parse(readFileSync(file.replace(/\.json$/, `.reader.${which}.json`), "utf8")); } catch { return null; } })();
@@ -210,12 +212,13 @@ function band(label, labelColor, text, textStyle, ground = "") {
  * threads on it are drawn under it. */
 const NAMED = { shallow: "shallow module", leak: "information leakage", "special case": "special-general mixture", "two jobs": "two jobs complected",
   exposure: "overexposure", defensive: "defensive code", "wrong layer": "fix in the wrong layer", bespoke: "bespoke abstraction", "unlike its neighbours": "unlike its neighbours" };
+const flags = (() => { try { return JSON.parse(readFileSync(file.replace(/\.json$/, ".flags.json"), "utf8")).flags.filter((one) => one.case === told); } catch { return []; } })();
+// Each flag's two places by where they are, with what it found there: a red note beside the line in the route.
+const flaggedAt = new Map(flags.flatMap((flag) => [flag.line, flag.caller].filter((ref) => ref.note).map((ref) => [`${ref.path}\t${ref.side}\t${ref.line}`, ref.note])));
 function showFlags() {
-  let found;
-  try { found = JSON.parse(readFileSync(file.replace(/\.json$/, ".flags.json"), "utf8")); } catch { return; }
   const changed = new Set(outline.sentences.flatMap((one) => (one.stops ?? []).filter((stop) => stop.inChange).map((stop) => stop.path)));
   const room = Math.min(W - 18, 92), from = 16;
-  (found.flags ?? []).filter((one) => one.case === part.text).forEach((flag, k) => {
+  flags.forEach((flag, k) => {
     say(`  ${X}${B}⚑ ${(NAMED[flag.flag] ?? flag.flag).toUpperCase()}${R}`);
     for (const line of prose(flag.claim, Math.min(W - 4, 100))) say(`  ${line}`);
     band("next change", X, flag.cost, T);
@@ -322,6 +325,7 @@ function showCase() {
   const longest = Math.max(0, ...spans.map((one) => one.at));
   // The room on the right is for the longest note: what holds on a line Claude cites, or a line's call to the stop below.
   const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)),
+    ...part.stops.flatMap((stop) => stop.code.map((line) => flaggedAt.get(`${stop.path}\t${line.mine === false ? otherSide(stop.side) : stop.side}\t${line.n}`)).filter(Boolean).map((note) => [...note].length + 2)),
     ...part.stops.filter((stop) => stop.call).map((stop) => [...`${stop.call.verb ?? "uses"} ${stop.name}, below`].length + 2));
   // The code first: the notes wrap, in at most a third of the pane, so the code has the rest to breathe in.
   const room = noted ? Math.max(24, Math.min(noted, 48, Math.floor(W * 0.3))) + 3 : 0;
@@ -352,17 +356,21 @@ function showCase() {
     const flush = () => { for (const one of pending) say(`  ${lead}${" ".repeat(gutter + code)}${one}`); pending = []; };
     const draw = (line) => {
       const calls = line.mine ? calledAt.get(line.n) ?? [] : [];
-      const ground = line.cited ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
+      // Where the line is, for a comment on it: a line the change removed is on the side the stop is not.
+      const side = line.mine === false ? otherSide(stop.side) : stop.side, from = 3 + 2 * (depth + 1) + gutter;
+      // What a design red flag on this case found here: lit as a cited line is, its number and its note red.
+      const wrong = (line.joined ?? [line.n]).map((n) => flaggedAt.get(`${stop.path}\t${side}\t${n}`)).find(Boolean);
+      const lit = line.cited || wrong;
+      const ground = lit ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
       const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
       const text = line.t.replace(/\t/g, "    ");
       const body = dent((line.paint ?? T + text).replace(/\t/g, "    "), shared[i]).replace(/\x1b\[0m/g, R + ground);
       // A line the change removed is numbered in red: its number is from before the change.
-      const number = `${line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
+      const number = `${wrong ? B + X : line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
       const style = line.cited ? B + A : C;
       if (value) { flush(); pending = prose(value, Math.max(8, aside - 2), style).map((one, k) => `   ${k ? " " : line.cited ? `${A}◀${R}` : " "} ${one}`); }
-      // Where the line is, for a comment on it: a line the change removed is on the side the stop is not.
-      const side = line.mine === false ? otherSide(stop.side) : stop.side, from = 3 + 2 * (depth + 1) + gutter;
+      if (wrong) { if (!value) flush(); pending.push(...prose(wrong, Math.max(8, aside - 2), B + X).map((one, k) => `   ${k ? " " : `${X}⚑${R}`} ${one}`)); }
       const what = `line\t${stop.path}\t${side}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
       cut(body, code).forEach((piece, at) => {
         say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
