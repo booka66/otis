@@ -63,7 +63,9 @@ build() {
     (.sentences | to_entries[] | (.key + 1) as $n | .value as $s
     | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change] | @tsv),
       ($s.units[] | ["R", $n] + . | @tsv))' "$dir/$key.json.$$" > "$rows.$$" || return 1
-  mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows"
+  mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows" || return 1
+  # Then its design red flags, behind it (share/flags.mjs).
+  otis-detach node "$share/flags.mjs" "$dir/$key.json" </dev/null >/dev/null 2>&1 &
 }
 
 case $mode in

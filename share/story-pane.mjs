@@ -204,6 +204,26 @@ function band(label, labelColor, text, textStyle, ground = "") {
   });
 }
 
+/** The design red flags on this case (flags.mjs), in red above the rest of it: what is wrong, what it costs the
+ * next change, the smaller design, and the two places it is. */
+const NAMED = { shallow: "shallow module", leak: "information leakage", "special case": "special-general mixture", "two jobs": "two jobs complected",
+  exposure: "overexposure", defensive: "defensive code", "wrong layer": "fix in the wrong layer", bespoke: "bespoke abstraction", "unlike its neighbours": "unlike its neighbours" };
+function showFlags() {
+  let found;
+  try { found = JSON.parse(readFileSync(file.replace(/\.json$/, ".flags.json"), "utf8")); } catch { return; }
+  for (const flag of (found.flags ?? []).filter((one) => one.case === part.text)) {
+    say(`  ${X}${B}⚑ ${(NAMED[flag.flag] ?? flag.flag).toUpperCase()}${R}`);
+    for (const line of prose(flag.claim, Math.min(W - 4, 100))) say(`  ${line}`);
+    band("next change", X, flag.cost, T);
+    band("smaller", G, flag.smaller, T);
+    for (const [label, ref] of [["here", flag.line], ["and", flag.caller]]) {
+      say(`  ${pad(` ${C}${label}${R}`, 13)}${C}${ref.path}:${ref.line}${R}`);
+      for (const line of wrap(ref.code.trim(), Math.min(W - 18, 92))) say(`  ${" ".repeat(13)}${RAISE}${T}${line}${R}`);
+    }
+    say();
+  }
+}
+
 /** A case: the situation, how it ended before and how it ends now, then its route through the code in the
  * order it runs, each stop's deciding lines with what holds there, and the tests that run it. */
 function showCase() {
@@ -212,6 +232,7 @@ function showCase() {
   if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
   say();
   if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
+  showFlags();
   // Where in the system this happens, for a reader who has never seen this code: in full in every case, so a
   // case read on its own has the words it uses.
   if (part.where) {

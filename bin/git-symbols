@@ -1319,6 +1319,13 @@ if [ "$mode" = --rows ]; then
   fi
   # The screen says so beside its title, since the list is about to become another.
   if [ -n "$GIT_FZF_STATE" ]; then if [ -n "$sentwait" ]; then : > "$st/sentences-wait"; else rm -f "$st/sentences-wait"; fi; fi
+  # Its design red flags (share/flags.mjs), found behind the screen once its cases are told, a case's on its row
+  # and in its pane when they land; flags.mjs leaves at once when they are found already. flagf is the list's.
+  flagf=/dev/null
+  if [ "$sentf" != /dev/null ]; then
+    [ -s "${sentf%.tsv}.flags.tsv" ] && flagf=${sentf%.tsv}.flags.tsv
+    [ -s "${sentf%.tsv}.json" ] && { otis-detach node "$root/share/flags.mjs" "${sentf%.tsv}.json" --now </dev/null >/dev/null 2>&1 & }
+  fi
   # Claude's glosses, once they have landed (git-symbols-gloss), started
   # here; g asks again for the worktree. The cache is looked for here, a
   # file test, and the script is asked only when there is none to start it.
@@ -1497,6 +1504,8 @@ if [ "$mode" = --rows ]; then
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
       next
     }
+    # design red flags (share/flags.mjs): the words of a case, its flag
+    FILENAME == ARGV[8] { flagged[$1] = (($1 in flagged) ? flagged[$1] ", " : "") $2; next }
     FILENAME == ARGV[4] { x = ++ncall[$1]; cp[$1, x] = $2; cl[$1, x] = $3; cid[$1, x] = $4; chead[$1, x] = $5; cs[$1, x] = $6; ce[$1, x] = $7; cerr[$1, x] = $9 + 0; cpk[$1, x] = $11; next }
     # The open threads and drafts on a symbol: on its lines on its side, and
     # on its base lines for the threads that sit on removed ones.
@@ -1740,9 +1749,11 @@ if [ "$mode" = --rows ]; then
         if (sending[n] != "") {
           k = index(sending[n], " \342\206\222 "); was = substr(sending[n], 1, k - 1); now = substr(sending[n], k + 5)
           how = schange[n] == "only a label" ? GK_CONTEXT "  \302\267 only a label" GK_R : schange[n] == "the same" ? GK_CONTEXT "  = the same" GK_R : ""
+          # A design red flag on it, in red after how it ends.
+          if (stext[n] in flagged) { how = how "  " GK_BAD "\342\232\221 " flagged[stext[n]] GK_R; flen = length(flagged[stext[n]]) + 4 } else flen = 0
           c = schange[n] == "ends differently" ? GK_ATTENTION : GK_CONTEXT
           vw = dim ? "  " GK_GOOD "\342\234\223" GK_R : vdn ? "  " GK_CONTEXT vdn "/" vt GK_R : ""
-          if (length(was) + length(now) + 3 + (schange[n] == "ends differently" ? 0 : 14) <= w) more(ind GK_CONTEXT was GK_R " \342\206\222 " c now GK_R how vw, "m", "")
+          if (length(was) + length(now) + 3 + flen + (schange[n] == "ends differently" ? 0 : 14) <= w) more(ind GK_CONTEXT was GK_R " \342\206\222 " c now GK_R how vw, "m", "")
           else { flow(was, ind, w, "", 0, GK_CONTEXT, ""); flow(now, ind, w, "\342\206\222 ", 2, c, how vw) }
           if (!(rid in open)) continue
         } else {
@@ -1881,7 +1892,7 @@ if [ "$mode" = --rows ]; then
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
           (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
-    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" | highlight |
+    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" "$flagf" | highlight |
     if [ "$sentf" != /dev/null ]; then cat; else OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package; fi | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
   rm -f "$counts" "$order" "$vw"
