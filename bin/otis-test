@@ -1222,7 +1222,7 @@ esac
 EOF
   printf '#!/bin/sh\n' > "$tmp/tourstub/otis-notify"; chmod +x "$tmp/tourstub/"*
   PATH=$tmp/tourstub:$PATH TOUR_SEEN=$tmp/tour.asked git-trace --phase "$hd" tour >/dev/null 2>&1
-  expect trace/tour-writer-reads-the-head "$(tr '\n' '|' < "$tmp/tour.asked")$(grep -c 'You can read the code' "$hd/tour.c0.prompt")|$(jq -r '.chapters[0].stops[0].title' "$hd/tour.json")|$(ls "$(git rev-parse --git-common-dir)/otis-claude-slots")" \
+  expect trace/tour-writer-reads-the-head "$(tr '\n' '|' < "$tmp/tour.asked")$(grep -c 'You can read the code' "$hd/tour.c0.prompt")|$(jq -r '.chapters[0].stops[0].title' "$hd/tour.json")|$(find "$(git rev-parse --git-common-dir)/otis-claude-slots" -mindepth 1 -type d)" \
     "writer [Read,Grep,Glob] $(basename "$(git-worktree-path named claude-review)") $head|reader [] $(basename "$hd")|1|runs it|"
   # With no worktree to be had, from the diff alone, as before.
   printf '#!/bin/sh\nexit 1\n' > "$tmp/tourstub/git-claude-worktree"; chmod +x "$tmp/tourstub/git-claude-worktree"; rm -f "$tmp/tour.asked"
@@ -2007,6 +2007,16 @@ git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/four" HEAD >/dev/null
 git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/five" HEAD >/dev/null
 expect slots/full "$(git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/six" HEAD 2>&1 >/dev/null)" \
   "four fix runs are going already; wait for one to finish"
+# trim: a free slot no run took for a week goes, a held one stays however old,
+# and one from before takes left a stamp starts its week now.
+sl=$tmp/repo/.git/otis-claude-slots
+git-claude-worktree release "$pool/claude-fix-3" && git-claude-worktree release "$pool/claude-fix-4"
+touch -t 202001010000 "$sl/claude-fix-2.used" "$sl/claude-fix-3.used" && rm "$sl/claude-fix-4.used"
+expect trim/says "$(git-claude-worktree trim)" "claude-fix-3, Claude's, which no run took for a week"
+expect trim/left "$(command ls "$pool" | tr '\n' ' ')" "claude-fix claude-fix-2 claude-fix-4 "
+expect trim/unregistered "$(git worktree list --porcelain | grep -c -e claude-fix-3 -e .gone-)" "0"
+expect trim/stamped "$([ -e "$sl/claude-fix-4.used" ] && echo yes)" "yes"
+expect trim/taken-again "$(git-claude-worktree take fix "$tmp/repo/.git/gmr-fix/six" HEAD)" "$pool/claude-fix-3"
 rm -rf "$tmp/repo/.git/otis-claude-slots" "$pool"
 git worktree prune
 

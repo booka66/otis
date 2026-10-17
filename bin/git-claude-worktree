@@ -1,6 +1,7 @@
 #!/bin/sh
 # git-claude-worktree take <fix | review> <run dir> <commit>   a worktree for the run, at <commit>
 # git-claude-worktree release <path>                          give it back
+# git-claude-worktree trim                                    delete the slots no run took for a week
 #
 # Each of Claude's runs gets a worktree of its own for as long as it runs,
 # from a pool under the main checkout: claude-fix, claude-fix-2, ... for fix
@@ -16,9 +17,28 @@
 #
 # take prints the worktree's path, clean and detached at <commit>, or says
 # why not on stderr and exits 1. release frees the slot; the worktree stays.
+# trim deletes the worktree of each slot no run has taken for a week, and
+# says which went, so the pool shrinks back to what runs use rather than
+# staying the size of its busiest hour (git-worktree-sweep runs it hourly).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
 slots=$(git rev-parse --path-format=absolute --git-common-dir)/otis-claude-slots
+
+# claim <name> <run>: the slot's lock, for <run>, when it is free, when it is
+# <run>'s own already, or when the run that left it is over or gone. A lock
+# naming no run yet is a take this very moment, unless it is old.
+claim() {
+  mkdir "$slots/$1" 2>/dev/null && return 0
+  other=$(cat "$slots/$1/run" 2>/dev/null)
+  # Its own it simply takes: only one process is ever alive for a run (r
+  # and c in git-claude-view both refuse while it is going, and resume
+  # starts only an orphan), so there is no one to take it from.
+  [ "$other" = "$2" ] && return 0
+  [ -n "$other" ] && running "$other" && return 1
+  [ -z "$other" ] && [ -z "$(find "$slots/$1" -maxdepth 0 -mmin +1 2>/dev/null)" ] && return 1
+  rm -rf "$slots/$1"
+  mkdir "$slots/$1" 2>/dev/null
+}
 
 case $1 in
   take)
@@ -37,21 +57,11 @@ case $1 in
       if [ "$(cat "$slots/$name/run" 2>/dev/null)" = "$run" ]; then names="$name $names"; else names="$names $name"; fi
     done
     for name in $names; do
+      claim "$name" "$run" || continue
       lock=$slots/$name
-      if ! mkdir "$lock" 2>/dev/null; then
-        other=$(cat "$lock/run" 2>/dev/null)
-        # Its own it simply takes: only one process is ever alive for a run (r
-        # and c in git-claude-view both refuse while it is going, and resume
-        # starts only an orphan), so there is no one to take it from.
-        if [ "$other" != "$run" ]; then
-          [ -n "$other" ] && running "$other" && continue
-          # No run named yet: a take this very moment, unless the lock is old.
-          [ -z "$other" ] && [ -z "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && continue
-          rm -rf "$lock"
-          mkdir "$lock" 2>/dev/null || continue
-        fi
-      fi
       printf '%s\n' "$run" > "$lock/run"
+      # When a run last took it, which trim goes by.
+      touch "$slots/$name.used"
       wt=$(git-worktree-path named "$name")
       if [ ! -e "$wt" ]; then
         out=$(git-worktree-add "$name" --quiet --detach "$commit" 2>&1) ||
@@ -70,6 +80,37 @@ case $1 in
     exit 1 ;;
   release)
     rm -rf "$slots/${2##*/}" ;;
+  trim)
+    mkdir -p "$slots"
+    # The worktree is moved aside under the slot's lock, which takes a moment,
+    # and deleted once the lock is let go, which takes a while: a take waits
+    # out a lock naming no run for a minute only. One a trim was stopped in
+    # the middle of is deleted by the next.
+    for gone in "$slots"/.gone-*; do
+      [ -e "$gone" ] && git worktree remove --force "$gone" 2>/dev/null
+    done
+    for kind in fix review; do
+      n=0
+      while [ "$n" -lt 4 ]; do
+        n=$((n + 1))
+        name=claude-$kind
+        [ "$n" -gt 1 ] && name=$name-$n
+        wt=$(git-worktree-path named "$name")
+        [ -d "$wt" ] || continue
+        # A slot from before takes left this has its week from now.
+        [ -e "$slots/$name.used" ] || { touch "$slots/$name.used"; continue; }
+        [ -n "$(find "$slots/$name.used" -mmin +10080)" ] || continue
+        claim "$name" trim || continue
+        if git worktree move "$wt" "$slots/.gone-$name" 2>/dev/null; then
+          rm -f "$slots/$name.used"
+          rm -rf "$slots/$name"
+          git worktree remove --force "$slots/.gone-$name" 2>/dev/null
+          printf "%s, Claude's, which no run took for a week\n" "$name"
+        else
+          rm -rf "$slots/$name"
+        fi
+      done
+    done ;;
   *)
-    echo 'usage: git-claude-worktree take <fix | review> <run dir> <commit> | release <path>' >&2; exit 2 ;;
+    echo 'usage: git-claude-worktree take <fix | review> <run dir> <commit> | release <path> | trim' >&2; exit 2 ;;
 esac

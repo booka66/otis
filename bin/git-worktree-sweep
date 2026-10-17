@@ -6,7 +6,8 @@
 # Safe is gw's rule (git-worktree-list): the branch's MR merged or closed, or
 # someone else's with nothing local (git-branch-facts, refreshed first), and
 # never the main checkout or otis's own (gmr's review and mine; Claude's pool
-# is detached, so it never has a branch to judge by). Two more things keep a
+# has no branch to judge by, and goes by its own rule, a week no run took it:
+# git-claude-worktree trim, last). Two more things keep a
 # worktree: a shell sitting in it, which _git_autofetch's stamp shows, touched
 # from every prompt there and at most five minutes old, so one under half an
 # hour means someone is there; and anything uncommitted or untracked, which
@@ -38,3 +39,4 @@ while IFS="$(printf '\t')" read -r p b kind; do
     printf '%s (%s)\n' "${p##*/}" "$kind"
   fi
 done
+git-claude-worktree trim 2>/dev/null
