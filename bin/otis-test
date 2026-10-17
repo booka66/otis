@@ -2431,8 +2431,17 @@ expect mr-rebase/stack-conflict-refused "$(tail -1 "$rs/said" | grep -c "commit 
 # The same, Claude settling it: the confirm says so, and in it goes.
 (RS_NO=1 RS_CLAUDE=settle rs --here 1 >/dev/null)
 expect mr-rebase/stack-claude-settled-asks "$(grep -c "^  Claude settled [0-9a-f]* in h: kept both sides.$" "$rs/asked")" "1"
+# With otis.lintCommand set, what Claude settled is linted before the confirm,
+# which says how that went, and what lint fixed goes in with it.
+git config otis.lintCommand 'echo "error: h is wrong" >&2; exit 1'
+(RS_NO=1 RS_CLAUDE=settle rs --here 1 >/dev/null)
+expect mr-rebase/stack-claude-settled-lint-failed "$(grep -c '^  lint failed: error: h is wrong (all of it in .*/lint.log)$' "$rs/asked")" "1"
+git config otis.lintCommand 'git cat-file -e "$GIT_BASE_REF^{commit}" && cat "$OTIS_CHANGED_FILES" > "$RS/linted" && { echo linted; cat h; } > h.n && mv h.n h'
+(RS_NO=1 RS_CLAUDE=settle rs --here 1 >/dev/null)
+expect mr-rebase/stack-claude-settled-lint-passed "$(grep -A1 '^  Claude settled' "$rs/asked" | tail -1)" "  lint passed"
 (RS_CLAUDE=settle rs --here 1 >/dev/null)
-expect mr-rebase/stack-claude-settled "$(git --git-dir="$rs/origin.git" log --format=%s high | paste -sd' ' -)|$(git --git-dir="$rs/origin.git" show high:h | paste -sd' ' -)|$(git rev-parse high | grep -cxF "$(git --git-dir="$rs/origin.git" rev-parse high)")" "h2 h1 l3 l2 l1 clash clash-l later2 later base|theirs h1 h2|1"
+git config --unset otis.lintCommand
+expect mr-rebase/stack-claude-settled "$(git --git-dir="$rs/origin.git" log --format=%s high | paste -sd' ' -)|$(git --git-dir="$rs/origin.git" show high:h | paste -sd' ' -)|$(cat "$rs/linted")|$(git rev-parse high | grep -cxF "$(git --git-dir="$rs/origin.git" rev-parse high)")" "h2 h1 l3 l2 l1 clash clash-l later2 later base|linted theirs h1 h2|h|1"
 # A commit that comes out empty, its change there already, is dropped, and
 # the confirm says so.
 (cd "$rs/gitlab" && git pull -q && printf 'x\n' > same && git add same && git commit -qm same-x && printf 'y\n' >> same && git commit -qam same-y && git push -q origin main) >/dev/null 2>&1

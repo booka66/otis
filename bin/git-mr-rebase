@@ -38,9 +38,11 @@
 # goes the same way, as a stack of one.
 #
 # A commit that conflicts is Claude's to settle (resolve), in a worktree of
-# its own, and the confirm says what it did before anything is pushed. One it
-# cannot settle, or with no Claude here, stops it all with nothing changed,
-# and says where to settle it by hand.
+# its own, and the confirm says what it did before anything is pushed. With
+# otis.lintCommand set, what it settled is linted there first (lint_settled)
+# and the confirm says how that went. One it cannot settle, or with no Claude
+# here, stops it all with nothing changed, and says where to settle it by
+# hand.
 #
 # Local and GitLab end up the same. A layer starts from your local branch
 # where that is GitLab's plus commits of yours (they go up with it), and from
@@ -130,7 +132,8 @@ names() { sed 's|.*/||' "$1" | paste -sd, - | sed 's/,/, /g'; }
 # (zdiff3, so it sees what both sides started from), and of what it leaves
 # only the conflicted files are taken, and only with no marker left in them
 # and Claude saying they are settled. A line on each it settled is in
-# $tmp/settled. Its run stays in otis-rebase/<iid>-<sha>, to see how it went.
+# $tmp/settled, with how its lint went under it. Its run stays in
+# otis-rebase/<iid>-<sha>, to see how it went.
 resolve() {
   r_onto=$1 r_c=$2 r_short=$(git rev-parse --short "$2")
   : > "$tmp/why"
@@ -163,9 +166,10 @@ EOF
   r_said=$(jq -c 'select(.type == "result")' "$d/events.jsonl" 2>/dev/null | tail -1)
   r_sum=$(printf '%s' "$r_said" | jq -r '.structured_output.summary // .result // empty' 2>/dev/null)
   r_left=$(cd "$r_wt" && tr '\n' '\0' < "$d/files" | xargs -0 grep -lE '^(<<<<<<<|>>>>>>>|\|\|\|\|\|\|\|)( |$)|^=======$' 2>/dev/null)
-  r_new=
+  r_new= r_lint=
   if printf '%s' "$r_said" | jq -e '(.is_error | not) and .structured_output.resolved == true' >/dev/null 2>&1 && [ -z "$r_left" ]; then
-    (cd "$r_wt" && tr '\n' '\0' < "$d/files" | xargs -0 git add --) && r_tree=$(git -C "$r_wt" write-tree) &&
+    (cd "$r_wt" && tr '\n' '\0' < "$d/files" | xargs -0 git add --) && r_lint=$(lint_settled "$r_wt" "$r_onto") &&
+      r_tree=$(git -C "$r_wt" write-tree) &&
       if [ "$r_tree" = "$(git rev-parse "$r_onto^{tree}")" ]; then r_new=$r_onto; echo "$r_c" >> "$tmp/dropped"
       else r_new=$(commit_as "$r_c" "$r_tree" "$r_onto"); fi
   fi
@@ -177,7 +181,26 @@ EOF
     return 1
   fi
   printf '  Claude settled %s in %s: %s\n' "$r_short" "$(names "$d/files")" "$r_sum" >> "$tmp/settled"
+  [ -z "$r_lint" ] || printf '  %s\n' "$r_lint" >> "$tmp/settled"
   echo "$r_new"
+}
+# lint_settled <worktree> <onto>: otis.lintCommand run over what Claude
+# settled there, staged, with GIT_BASE_REF as <onto> and OTIS_CHANGED_FILES
+# the files the commit changes, as a fold runs it (git-mr-fold), with main's
+# node_modules mirrored into the worktree (otis-node-modules) for the tools
+# it runs. Claude's edits outside the
+# conflicted files go first, as they would have anyway, so what lint fixes is
+# all that is staged after it. A line on how it went, its output in
+# $d/lint.log; nothing with no lintCommand.
+lint_settled() {
+  l_cmd=$(git config --get otis.lintCommand) && [ -n "$l_cmd" ] || return 0
+  step "linting what Claude settled"
+  git -C "$1" checkout -q -- . && git -C "$1" diff --cached --name-only "$2" > "$d/changed-files" || return 1
+  otis-node-modules "$1" >/dev/null 2>&1
+  if (cd "$1" && export GIT_BASE_REF="$2" OTIS_CHANGED_FILES="$d/changed-files" && sh -c "$l_cmd") > "$d/lint.log" 2>&1; then l_ok=1; else l_ok=; fi
+  git -C "$1" add -u || return 1
+  if [ -n "$l_ok" ]; then echo "lint passed"
+  else echo "lint failed: $(grep -m1 -i error "$d/lint.log" || tail -1 "$d/lint.log") (all of it in $(printf '%s' "$d/lint.log" | sed "s|^$HOME/|~/|"))"; fi
 }
 # was_at <ref> <commit>: that ref has been at that commit, by its reflog here.
 was_at() { git log -g --format=%H "$1" 2>/dev/null | grep -qx "$2"; }
