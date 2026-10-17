@@ -2,7 +2,8 @@
 # git-mr-say --new <iid> <range> <path> <side> <first> <last> [<text>]   a new thread on lines first..last
 #                                    (side new, old, or the ends' apart, old,new: git-mr-position)
 # git-mr-say --reply <iid> <range> <thread id> [<text>]                   a reply in a thread
-# git-mr-say --edit <iid> <range> <thread id>                    your latest comment in a thread, rewritten
+# git-mr-say --edit <iid> <range> <thread id> [<text>]                    your latest comment in a thread, rewritten
+# git-mr-say --was <iid> <range> <thread id>                     that comment as it says now, for an editor of your own
 # git-mr-say --delete <iid> <range> <thread id>                  your latest comment in a thread, gone (asks)
 #
 # Comment on an MR from a picker, without an editor: one line typed at a
@@ -82,10 +83,15 @@ case $mode in
       | attention + .author.username + r + "  "
         + (if ($b | length) > $room then $b[0:$room - 1] + "…" else $b end)' "$GIT_FZF_STATE/threads.json" 2>/dev/null)
     ;;
-  --edit|--delete)
+  --edit|--delete|--was)
     id=$1
-    # The thread's latest note of yours: a draft is, and so is one by you.
-    me=$(git-forge api user 2>/dev/null | jq -r '.username // empty')
+    [ "$mode" = --was ] && given=1
+    [ "$mode" = --edit ] && [ $# -ge 2 ] && given=1 text=$2
+    # The thread's latest note of yours: a draft is, and so is one by you. Who you are is asked of GitLab
+    # only for a thread with no draft of yours in it, the draft being your latest.
+    me=
+    jq -e --arg id "$id" '.[] | select(.id == $id) | any(.notes[]; .draft)' "$GIT_FZF_STATE/threads.json" >/dev/null 2>&1 ||
+      me=$(git-forge api user 2>/dev/null | jq -r '.username // empty')
     note=$(jq -c --arg id "$id" --arg me "$me" '.[] | select(.id == $id) | [.notes[] | select(.draft or .author.username == $me)] | last // empty' \
       "$GIT_FZF_STATE/threads.json" 2>/dev/null)
     [ -n "$note" ] || fail "none of the comments in that thread are yours"
@@ -93,6 +99,7 @@ case $mode in
     was=$(printf '%s' "$note" | jq -r .body)
     if [ "$(printf '%s' "$note" | jq -r '.draft // false')" = true ]; then url=$api/draft_notes/$nid field=note
     else url=$api/discussions/$id/notes/$nid field=body; fi
+    [ "$mode" = --was ] && { printf '%s\n' "$was"; exit 0; }
     context=$(printf "${GK_CONTEXT}your comment${GK_R}\n"; printf '%s\n' "$was" | head -6 | clip | sed "s/^/$(printf "${GK_CONTEXT}│${GK_R}") /")
     if [ "$mode" = --delete ]; then
       git-confirm "$context

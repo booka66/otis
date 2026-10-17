@@ -2177,6 +2177,11 @@ expect mr-say/given-reply "$(sed 1d "$tmp/glab.posted" | jq -c '[.note, .in_repl
 expect mr-say/given-fails "$(GMR_KIND=review git-mr-say --new 7 "$b..$b" f.ts new 2 2 'stale' </dev/null; echo "exit $?")" \
   "the MR has moved on since this review opened, so these line numbers are not its own; u catches up
 exit 1"
+# e in the box: your comment as it says now (--was), then saved as given.
+expect mr-say/was "$(GIT_FZF_STATE=$lst git-mr-say --was 7 "$b..$h" abc </dev/null)" "why capital?"
+rm -f "$tmp/glab.posted"
+GIT_FZF_STATE=$lst GMR_KIND=review git-mr-say --edit 7 "$b..$h" abc 'why capital, really?' </dev/null >/dev/null
+expect mr-say/given-edit "$(head -1 "$tmp/glab.posted" | grep -c 'X PUT projects/:fullpath/merge_requests/7/discussions/abc/notes/1')|$(sed 1d "$tmp/glab.posted" | jq -r .body)" "1|why capital, really?"
 # e, without nvim: your comment in the thread, at the prompt with what it
 # says, and saved in place.
 rm -f "$tmp/glab.posted"

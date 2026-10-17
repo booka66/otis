@@ -1598,7 +1598,7 @@ helplines() {
     "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: text, copied, a diff's lines without the gutter; a asks Claude about them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
     numbers "in a review, drag down a diff's line numbers, or tap one: those lines; c opens a box under them to write in, a flag's line with its comment typed in" \
-    comment "in a case's pane, click one: c replies, e edits yours, d deletes yours, r resolves it or opens it again" \
+    comment "in a case's pane, click one: c replies and e edits yours in a box under it, d deletes yours, r resolves it or opens it again" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
@@ -2368,6 +2368,7 @@ box_open() {
   bline=$1 bwhere=$2 bargs=$3 bpre=$5
   btext=${bkept[$bargs]-$4}; bat=$#btext
   case $GMR_KIND:$bargs in
+    *:--edit*) btitle=editing ;;
     mine:--reply*) btitle=reply ;; mine:*) btitle=comment ;;
     *:--reply*) btitle="draft reply" ;; *) btitle=draft ;;
   esac
@@ -2384,6 +2385,8 @@ box_open() {
 box_key() {
   bkeep=1
   keyname "$1"
+  # While what it says is read, only esc.
+  [[ $bstate == reading ]] && { [[ $REPLY == (esc|ctrl-c) ]] && box_close; return }
   case $REPLY in
     enter) box_send ;;
     esc|ctrl-c) box_close ;;
@@ -2440,6 +2443,7 @@ box_frame() {
   for (( k = $#starts; k > 1 && starts[k] > c; k-- )); do :; done
   (( col = c - starts[k] ))
   case $bstate in
+    reading) spin_frame; bspun=$REPLY ttl="$REPLY reading your comment" ;;
     sending) spin_frame; bspun=$REPLY ttl="$REPLY saving" ;;
     sent) ttl="✓ saved" ;;
     closing) (( bsent )) && ttl="✓ saved" || ttl=$btitle ;;
@@ -2449,7 +2453,7 @@ box_frame() {
   BX=("$pad_$Y┌ $B$ttl$UB ${(l:bw - 4 - ${(m)#ttl}::─:)}┐$R")
   for (( n = 1; n <= $#lines; n++ )); do
     line=$lines[n]
-    if (( bfocus && n == k )); then
+    if (( bfocus && n == k )) && [[ -z $bstate ]]; then
       ch=${line[col+1]:- }
       line="$T${line[1,col]}"$e"[7m$ch"$e"[27m${line[col+2,-1]}"
       [[ -z $t ]] && { [[ $bargs == --reply* ]] && line+=$F"write a reply" || line+=$F"write a comment" }
@@ -2481,6 +2485,11 @@ box_frame() {
 box_tick() {
   local rc
   integer was=$bshown
+  # Your comment, read to be edited (e): in the box, or, none of the thread's being yours, the box gone.
+  if [[ $bstate == reading ]]; then
+    if [[ -e $st/box.was ]]; then btext=$(<$st/box.was) bat=$#btext bstate= bkeep=1; rm -f $st/box.was; return 0; fi
+    if [[ -e $st/box.wasnt ]]; then flash=$(head -1 $st/box.wasnt); rm -f $st/box.wasnt; bstate=closing bfocus=0; return 0; fi
+  fi
   if [[ $bstate == sending && -e $st/box.rc ]]; then
     rc=$(<$st/box.rc); rm -f $st/box.rc
     if [[ $rc == 0 ]]; then
@@ -2502,12 +2511,16 @@ box_tick() {
   (( abs(btarget - bshow) < 0.3 )) && bshow=$btarget
   # Said in the footer once the box is gone, where nothing redraws it away.
   if [[ $bstate == closing ]] && (( bshow == 0 )); then
-    (( bsent )) && { [[ $GMR_KIND == mine ]] && flash="sent" || flash="saved as a draft: S submits them all" }
+    if (( bsent )); then
+      if [[ $bargs == --edit* ]]; then flash="saved"
+      elif [[ $GMR_KIND == mine ]]; then flash="sent"
+      else flash="saved as a draft: S submits them all"; fi
+    fi
     box=0 bshown=0 BXS=() bsent=0
     return 0
   fi
   (( int(bshow + 0.5) != was )) && return 0
-  [[ $bstate == sending ]] && { spin_frame; [[ $REPLY != $bspun ]] } && return 0
+  [[ $bstate == (sending|reading) ]] && { spin_frame; [[ $REPLY != $bspun ]] } && return 0
   return 1
 }
 
@@ -2577,11 +2590,23 @@ handle() {
         used c
         box_open $s2 "in the thread above" "--reply $GMR_IID $GMR_RANGE $tid" "" "$keep"
         dirty=1; return ;;
-      e|d)
-        used $n
-        local how=edit; [[ $n == d ]] && how=delete
+      e)
+        # The box under the thread at once, your comment read into it behind the screen (box_tick).
+        used e
+        local args="--edit $GMR_IID $GMR_RANGE $tid" whose="your comment above"
+        [[ $tdraft == true ]] && whose="your draft above"
+        box_open $s2 "$whose" "$args" "" "$keep"
+        if (( ! ${+bkept[$args]} )); then
+          rm -f $st/box.was $st/box.wasnt
+          bstate=reading
+          local bykey=
+          spawn execute-silent "$keep; if git-mr-say --was $GMR_IID $GMR_RANGE $tid > $st/box.was.tmp 2>/dev/null; then mv -f $st/box.was.tmp $st/box.was; else mv -f $st/box.was.tmp $st/box.wasnt; fi" $cur
+        fi
+        dirty=1; return ;;
+      d)
+        used d
         sel=0 selthread=
-        run "execute($keep; git-mr-say --$how $GMR_IID $GMR_RANGE $tid)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+        run "execute($keep; git-mr-say --delete $GMR_IID $GMR_RANGE $tid)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
         dirty=1; return ;;
       r)
         used r
