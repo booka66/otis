@@ -6,7 +6,8 @@
 //   <key>.flags.tsv    a case's words, then its flag, a line each, for the list
 // One Claude raises at most five flags it can pin to lines; otis checks each line is there; a second Claude
 // tries to throw each one out (the base had it, the neighbours do it so, the smaller design is not smaller).
-// Only what that leaves standing is shown. Without --now, at most two run at once. otis.flagsModel picks the
+// Only what that leaves standing is shown, each with the comment a reviewer would leave on its line, which the
+// case's pane types in for you when you comment there. Without --now, at most two run at once. otis.flagsModel picks the
 // model, off for none.
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
@@ -125,8 +126,9 @@ const raised = await ask([
   "- line: the line in code this change adds where it is (path, side \"new\", line number, code copied exactly)",
   "- caller: the other line it involves: the second copy of the knowledge, the caller that must know, the function a wrapper hands on to (path, side, line number, code copied exactly)",
   "- smaller: the smaller design, concretely: which function goes, what moves where, what the interface becomes",
+  "- comment: what a reviewer would leave on that line for the author, as a teammate texts: one short question that suggests the smaller design, under 20 words, plain words, no red flag's name (\"Could `sendReminder` take the channel, rather than each caller switching on it?\")",
   "",
-  "In claim, cost and smaller, put each name from the code in backticks, like `needsJudgment`, and nothing else in markdown.",
+  "In claim, cost, smaller and comment, put each name from the code in backticks, like `needsJudgment`, and nothing else in markdown.",
   "",
   authorWords,
   "",
@@ -137,7 +139,7 @@ const raised = await ask([
   "",
   diff,
 ].join("\n"), object({
-  flags: list(object({ case: { type: "integer" }, flag: { enum: Object.keys(KINDS) }, claim: text, cost: text, line: lineRef, caller: lineRef, smaller: text })),
+  flags: list(object({ case: { type: "integer" }, flag: { enum: Object.keys(KINDS) }, claim: text, cost: text, line: lineRef, caller: lineRef, smaller: text, comment: text })),
 }));
 
 // otis's check: the cited code is there, at its line or near it (a number counted off a diff's hunk drifts).

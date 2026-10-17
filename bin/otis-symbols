@@ -1518,7 +1518,7 @@ helplines() {
     ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
     "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: text, copied, a diff's lines without the gutter; a asks Claude about them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
-    numbers "in a review, drag down a diff's line numbers, or tap one: those lines, and c comments on them" \
+    numbers "in a review, drag down a diff's line numbers, or tap one: those lines; c opens a box under them to write in, a flag's line with its comment typed in" \
     comment "in a case's pane, click one: c replies, e edits yours, d deletes yours, r resolves it or opens it again" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
     "?" "this, and back" "q/esc" "back"; do
@@ -1607,7 +1607,8 @@ draw() {
     head=$crumbline
   else P=() pfile= PH=() HB=() phd=2
   fi
-  plen=$#P
+  (( box )) && box_frame
+  (( plen = $#P + bshown ))
   local -a fr pr
   litrow
   for (( y = 1; y <= rows; y++ )); do
@@ -1635,6 +1636,10 @@ draw() {
     elif (( y < phd + 1 )); then pr+=("${PH[y-2]}")
     else
       f=$(( y - phd + poff )) s=
+      if (( bshown && f > bline )); then
+        (( f <= bline + bshown )) && { pr+=("$BXS[f - bline]"); continue }
+        (( f -= bshown ))
+      fi
       if (( f <= $#P )); then
         if (( sel && f >= s1 && f <= s2 )); then selected $f; s=$REPLY; else s=$P[f]; fi
       fi
@@ -1648,6 +1653,11 @@ draw() {
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
   elif [[ -n $flash ]]; then
     foot+=$A$flash$R; flash=
+  elif (( bfocus )); then
+    foot+=$Y"$btitle"$R$C" $bwhere"$R
+    [[ $GMR_KIND == mine ]] || foot+=$C"   ·   S submits your drafts"$R
+    foot+=$C"   ·   "$A"ctrl-u"$R$C" clears it  "$A"esc"$R$C" puts it away, c on the lines brings it back"$R
+    cut "$foot" $(( W - 1 )); foot=$REPLY
   elif spinning; then spin_foot
   elif (( sel == 1 && selgut )) && [[ -n $selr && -n $GMR_IID ]]; then
     local sd=${selr%% *} sw=${selr#* }
@@ -1863,11 +1873,11 @@ act() {
 # route, or a line a thread is on), selpath their file, and code in a file
 # the change does not touch is none. A selection on one thread's lines and
 # no code is that thread, in selthread: its id, resolvable, resolved, draft.
-selr= selpath= selthread=
+selr= selpath= selthread= selsay=
 selrange() {
   local n t g o nw one fs ls fl ll at= th=
   local -a f
-  selr= selpath= selthread=
+  selr= selpath= selthread= selsay=
   [[ -r $st/uses-for && $(<$st/uses-for) == $rid[cur] ]] && return
   pmap
   if (( $#PMAP )); then
@@ -1877,7 +1887,7 @@ selrange() {
         line)
           if [[ -z $at ]]; then
             [[ $f[6] == 1 ]] || { (( selgut )) && flash="that code is not in this change, so GitLab takes no comment on it"; return; }
-            at=$f[9] selpath=$f[2] fs=$f[3] fl=$f[4]
+            at=$f[9] selpath=$f[2] fs=$f[3] fl=$f[4] selsay=$f[10]
           fi
           [[ $f[9] == $at ]] && ls=$f[3] ll=$f[5] ;;
         thread) one="$f[2] $f[3] $f[4] $f[5]"; [[ -z $th ]] && th=$one; [[ $th == $one ]] || th=- ;;
@@ -1941,6 +1951,10 @@ mouse() {
   r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
   (( y > H - 2 )) && return
   (( l = y - py - phd + 1 + poff, c = x - (side ? px : 2) + 1, c < 1 ? (c = 1) : 0 ))
+  # While you type in the box a click is not taken, though the wheel
+  # scrolls; its rows sit in the pane between the pane's own lines.
+  (( bfocus && b != 64 && b != 65 )) && return
+  (( bshown && l > bline )) && (( l = l > bline + bshown ? l - bshown : bline ))
   # The panel's: the wheel scrolls what Claude said, a click types in it.
   if (( chat && y > lh - chh && y <= lh && (side ? x < lw : 1) )); then
     if (( b == 64 )); then (( coff += 3 ))
@@ -2096,12 +2110,10 @@ chat_full() {
   csig=
 }
 chat_key() {
-  local k=$1 n h
+  local k=$1 n
   keyname "$k"; n=$REPLY
   case $k in
-    $'\t') n=tab ;; $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
-    $e'[H'|$e'[1~') n=home ;; $e'[F'|$e'[4~') n=end ;;
-    $'\x17') n=ctrl-w ;; $'\x06') n=ctrl-f ;; $'\x01') n=ctrl-a ;;
+    $'\t') n=tab ;; $'\x06') n=ctrl-f ;; $'\x01') n=ctrl-a ;;
   esac
   case $n in
     enter) chat_send ;;
@@ -2116,17 +2128,34 @@ chat_key() {
     down) (( coff -= 3, coff < 0 ? (coff = 0) : 0 )) ;;
     page-up) (( coff += chh / 2 )) ;;
     page-down) (( coff -= chh / 2, coff < 0 ? (coff = 0) : 0 )) ;;
-    left) (( cat_ > 0 )) && (( cat_-- )) ;;
-    right) (( cat_ < $#ctext )) && (( cat_++ )) ;;
-    home) cat_=0 ;;
-    end|ctrl-e) cat_=$#ctext ;;
-    bspace) (( cat_ > 0 )) && { ctext=${ctext[1,cat_-1]}${ctext[cat_+1,-1]}; (( cat_-- )); } ;;
-    ctrl-u) ctext=${ctext[cat_+1,-1]} cat_=0 ;;
-    ctrl-w)
-      h=${ctext[1,cat_]}; h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}
-      ctext=$h${ctext[cat_+1,-1]} cat_=$#h ;;
-    *) [[ $k == [[:print:]]* && $k != $e* ]] && { ctext=${ctext[1,cat_]}$k${ctext[cat_+1,-1]}; (( cat_ += $#k )); } ;;
+    *) lineedit ctext cat_ "$k" ;;
   esac
+}
+# lineedit <text> <cursor> <key>: a key typed into words being written (the
+# panel's question, a comment's box), on the text and the cursor in the
+# variables named: the arrows, home and end move, backspace deletes, ctrl-u
+# and ctrl-w as in a shell, anything printable goes in. False for any other.
+lineedit() {
+  local k=$3 t=${(P)1} h n
+  integer a=${(P)2}
+  keyname "$k"; n=$REPLY
+  case $k in
+    $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
+    $e'[H'|$e'[1~') n=home ;; $e'[F'|$e'[4~') n=end ;;
+    $'\x17') n=ctrl-w ;;
+  esac
+  case $n in
+    left) (( a > 0 )) && (( a-- )) ;;
+    right) (( a < $#t )) && (( a++ )) ;;
+    home) a=0 ;;
+    end|ctrl-e) a=$#t ;;
+    bspace) (( a > 0 )) && { t=${t[1,a-1]}${t[a+1,-1]}; (( a-- )); } ;;
+    ctrl-u) t=${t[a+1,-1]} a=0 ;;
+    ctrl-w) h=${t[1,a]}; h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}; t=$h${t[a+1,-1]} a=$#h ;;
+    *) [[ $k == [[:print:]]* && $k != $e* ]] || return 1
+       t=${t[1,a]}$k${t[a+1,-1]}; (( a += $#k )) ;;
+  esac
+  : "${(P)1::=$t}" "${(P)2::=$a}"
 }
 # inline <line>: a line of Claude's markdown as the panel shows it, **bold**
 # and `code` lit; a pair the wrap broke in two loses its marks.
@@ -2231,6 +2260,168 @@ chat_frame() {
   CF+=("$s")
 }
 
+# --- a comment, typed under its lines -------------------------------------------------
+# c on lines taken in the pane, or on a thread to reply in it, opens a box
+# right under them, the code and whatever is above it still in sight. What
+# you type wraps in it; enter saves it behind the screen (git-mr-say, the
+# text given), a draft until S submits them all, or on your own MR sent at
+# once, and the box stays, saying so, until the pane comes back with the
+# comment drawn where it was. A flag's lines come with what to say to the
+# author typed in (story-pane.mjs, the map's tenth field). esc puts it away,
+# kept: c on the same lines brings it back. It opens and closes as a push,
+# the code under it moving down and back a row at a time. bstate is empty
+# while you type, then sending, sent, and closing as it goes.
+integer box=0 bfocus=0 bline=0 bat=0 bshown=0 btarget=0 bindent=2
+float bshow=0 bclock=0 bsent=0
+btext= bargs= bpre= bwhere= btitle= bstate= bpf= brid= bspun= berr=
+typeset -a BX BXS
+typeset -A bkept
+# box_open <under line> <where it goes> <git-mr-say's args> <text> [<before>]:
+# the box under that line of the pane, for those args, with the text kept
+# for them (esc) or else the one given, and a command to run before it is sent.
+box_open() {
+  local t
+  local -a pc
+  bline=$1 bwhere=$2 bargs=$3 bpre=$5
+  btext=${bkept[$bargs]-$4}; bat=$#btext
+  case $GMR_KIND:$bargs in
+    mine:--reply*) btitle=reply ;; mine:*) btitle=comment ;;
+    *:--reply*) btitle="draft reply" ;; *) btitle=draft ;;
+  esac
+  # Its left edge where the code starts, else the diff's gutter, else the line's own indent.
+  pmap
+  if [[ -n $PCOL[$bline] ]]; then pc=(${=PCOL[$bline]}); bindent=$(( pc[1] - 1 ))
+  else
+    plain "$P[bline]"; t=$REPLY; gut "$t"
+    if (( REPLY > 0 )); then bindent=$REPLY; else t=${t%%[^ ]*}; bindent=$#t; fi
+  fi
+  box=1 bfocus=1 bstate= berr= bshow=0 bshown=0 bsent=0 bclock=$EPOCHREALTIME brid=$rid[cur]
+}
+# box_key <key>: one key while you type in it.
+box_key() {
+  keyname "$1"
+  case $REPLY in
+    enter) box_send ;;
+    esc|ctrl-c) box_close ;;
+    ctrl-e) box_editor ;;
+    *) lineedit btext bat "$1" && berr= ;;
+  esac
+}
+box_close() {
+  if [[ -n ${btext//[[:space:]]/} ]]; then bkept[$bargs]=$btext; else unset "bkept[$bargs]"; fi
+  bstate=closing bfocus=0
+  sel=0 selr= selpath= selthread= selgut=0
+}
+# box_send: what is written, saved behind the screen; nothing written is
+# nothing sent. Its answer is box_tick's to take up, and the pane's refresh
+# comes after it, as c's prompt had it.
+box_send() {
+  [[ -n ${btext//[[:space:]]/} ]] || { box_close; return }
+  rm -f $st/box.rc $st/box.out
+  bstate=sending bfocus=0 bpf=$pfile berr=
+  sel=0 selr= selpath= selthread= selgut=0
+  local bykey=
+  spawn execute-silent "${bpre:+$bpre; }git-mr-say $bargs ${(qq)btext} > $st/box.out 2>&1; print -r -- \$? > $st/box.rc.tmp; mv -f $st/box.rc.tmp $st/box.rc" $cur \
+    "execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview"
+}
+# box_editor: what is written so far, in your git editor, for more than a line.
+box_editor() {
+  print -r -- $btext > $st/box.txt
+  flash="your editor…"; draw
+  offout; run_tty "eval \"\$(git var GIT_EDITOR)\" ${(qq)st}/box.txt"; offin; resize
+  btext=$(<$st/box.txt) bat=$#btext
+}
+# box_frame: the box's rows at the pane's width (BX), what of them the push
+# shows now (BXS, bshown), and where the push is going (btarget). The pane
+# scrolls to keep it in sight while you type.
+box_frame() {
+  local t=$btext rest chunk line ttl keys pad_ ch nlc=$'\n'
+  integer w s=1 nl sp k n col c=$(( bat + 1 )) ind=$bindent bw
+  local -a lines starts
+  (( bw = pw - ind - 1, bw > 96 ? (bw = 96) : 0 ))
+  (( bw < 24 )) && (( ind = 2, bw = pw - 3 ))
+  (( w = bw - 4 ))
+  # Broken at a space where a word fits, else where the room ends, and at each line you started.
+  while :; do
+    starts+=($s) rest=${t[s,-1]}
+    nl=${rest[(i)$nlc]}
+    if (( $#rest && nl <= $#rest && nl <= w + 1 )); then lines+=("${rest[1,nl-1]}"); (( s += nl )); continue; fi
+    (( $#rest <= w )) && { lines+=("$rest"); break }
+    chunk=${rest[1,w]} sp=${chunk[(I)[[:blank:]]]}
+    if (( sp > 1 )); then lines+=("${chunk[1,sp]}"); (( s += sp )); else lines+=("$chunk"); (( s += w )); fi
+  done
+  # The cursor at the end of a full line is at the start of the next.
+  (( c > $#t && $#lines[-1] >= w )) && { lines+=(""); starts+=($(( $#t + 1 ))); }
+  for (( k = $#starts; k > 1 && starts[k] > c; k-- )); do :; done
+  (( col = c - starts[k] ))
+  case $bstate in
+    sending) spin_frame; bspun=$REPLY ttl="$REPLY saving" ;;
+    sent) ttl="✓ saved" ;;
+    closing) (( bsent )) && ttl="✓ saved" || ttl=$btitle ;;
+    *) ttl=$btitle ;;
+  esac
+  pad_=${(l:ind:: :)}
+  BX=("$pad_$Y┌ $B$ttl$UB ${(l:bw - 4 - ${(m)#ttl}::─:)}┐$R")
+  for (( n = 1; n <= $#lines; n++ )); do
+    line=$lines[n]
+    if (( bfocus && n == k )); then
+      ch=${line[col+1]:- }
+      line="$T${line[1,col]}"$e"[7m$ch"$e"[27m${line[col+2,-1]}"
+      [[ -z $t ]] && { [[ $bargs == --reply* ]] && line+=$F"write a reply" || line+=$F"write a comment" }
+      vw "$line"
+    else line="$T$line"; vw "$line"; fi
+    BX+=("$pad_$Y│$R $line$R${(l:w - REPLY:: :)} $Y│$R")
+  done
+  # Why it was not saved, under what you wrote, until you change it or send it again.
+  [[ -n $berr ]] && { fit "$berr" $w; BX+=("$pad_$Y│$R $X$REPLY$R${(l:w - ${(m)#REPLY}:: :)} $Y│$R") }
+  keys=" enter saves · ctrl-e your editor · esc "
+  (( ${#keys} > bw - 4 )) && keys=" enter saves · esc "
+  (( bfocus )) || keys=
+  BX+=("$pad_$Y└$C$keys$Y${(l:bw - 2 - ${#keys}::─:)}┘$R")
+  # The push: all of it open, none of it closing, and what the clock has shown of it.
+  if [[ $bstate == closing ]]; then btarget=0; else btarget=$#BX; fi
+  (( bshown = int(bshow + 0.5), bshown > $#BX ? (bshown = $#BX) : 0 ))
+  if (( bshown >= 2 )); then BXS=("${(@)BX[1,bshown-1]}" "$BX[-1]")
+  elif (( bshown == 1 )); then BXS=("$BX[1]")
+  else BXS=(); fi
+  [[ $rid[cur] == $brid ]] || { bshown=0 BXS=() }
+  (( bfocus && bline + bshown > poff + ph - phd )) && (( poff = bline + bshown - (ph - phd) ))
+}
+# box_tick: the saved answer taken up, and the push a step on, on the
+# loop's clock; true when either changed the screen.
+box_tick() {
+  local rc
+  integer was=$bshown
+  if [[ $bstate == sending && -e $st/box.rc ]]; then
+    rc=$(<$st/box.rc); rm -f $st/box.rc
+    if [[ $rc == 0 ]]; then
+      bstate=sent bsent=$EPOCHREALTIME; unset "bkept[$bargs]"
+    else
+      # Never lost: back in the box, saying why, to try again; or kept for c on those lines.
+      berr="not saved: ${$(head -1 $st/box.out 2>/dev/null):-git-mr-say failed}"
+      if [[ $rid[cur] == $brid ]]; then bstate= bfocus=1
+      else bkept[$bargs]=$btext box=0 flash="$berr: c on those lines brings it back"; fi
+    fi
+    return 0
+  fi
+  # Saved: it goes once the pane comes back with the comment in it.
+  [[ $bstate == sent ]] && { [[ $pfile != $bpf ]] || (( EPOCHREALTIME - bsent > 6 )) } && bstate=closing
+  float dt=$(( EPOCHREALTIME - bclock ))
+  bclock=$EPOCHREALTIME
+  (( dt > 0.05 )) && dt=0.05
+  (( bshow += (btarget - bshow) * (1 - exp(-dt / 0.22)) ))
+  (( abs(btarget - bshow) < 0.3 )) && bshow=$btarget
+  # Said in the footer once the box is gone, where nothing redraws it away.
+  if [[ $bstate == closing ]] && (( bshow == 0 )); then
+    (( bsent )) && { [[ $GMR_KIND == mine ]] && flash="sent" || flash="saved as a draft: S submits them all" }
+    box=0 bshown=0 BXS=() bsent=0
+    return 0
+  fi
+  (( int(bshow + 0.5) != was )) && return 0
+  [[ $bstate == sending ]] && { spin_frame; [[ $REPLY != $bspun ]] } && return 0
+  return 1
+}
+
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 # used <key>: a line in the key log (keys_used), with what this picker says
@@ -2240,6 +2431,7 @@ handle() {
   # Any key or the mouse lands a transition at once, and goes on from there.
   xstop
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
+  (( bfocus )) && { box_key "$1"; return; }
   (( cfocus )) && { chat_key "$1"; return; }
   local k=$1
   keyname "$k"; local n=$REPLY was=$lastn
@@ -2291,10 +2483,14 @@ handle() {
     read -r tid tres tdone tdraft <<< $selthread
     local keep="git-mr-threads --json $GMR_IID $GMR_RANGE '' > \"\$GIT_FZF_STATE/threads.json\" 2>/dev/null"
     case $n in
-      c) [[ $tdraft == true ]] && { flash="a draft has no thread to reply to yet: e edits it"; dirty=1; return; } ;|
-      c|e|d)
+      c)
+        [[ $tdraft == true ]] && { flash="a draft has no thread to reply to yet: e edits it"; dirty=1; return; }
+        used c
+        box_open $s2 "in the thread above" "--reply $GMR_IID $GMR_RANGE $tid" "" "$keep"
+        dirty=1; return ;;
+      e|d)
         used $n
-        local how=reply; [[ $n == e ]] && how=edit; [[ $n == d ]] && how=delete
+        local how=edit; [[ $n == d ]] && how=delete
         sel=0 selthread=
         run "execute($keep; git-mr-say --$how $GMR_IID $GMR_RANGE $tid)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
         dirty=1; return ;;
@@ -2320,10 +2516,11 @@ handle() {
          fi ;;
       c) if [[ -n $GMR_IID ]] && (( selgut )); then
            used c
-           local side first last p='{2}'; read -r side first last <<< $selr
-           [[ -n $selpath ]] && p=${(qq)selpath}
-           sel=0 selr= selpath= selgut=0
-           run "execute(git-mr-say --new $GMR_IID $GMR_RANGE $p $side $first $last)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
+           local side first last cfile=$selpath on
+           read -r side first last <<< $selr
+           [[ -n $cfile ]] || { fields $cur; cfile=$fld[2]; }
+           on="on ${cfile:t} line $first"; [[ $first != $last ]] && on="on ${cfile:t} lines $first–$last"
+           box_open $s2 "$on" "--new $GMR_IID $GMR_RANGE ${(qq)cfile} $side $first $last" "$selsay"
            dirty=1; return
          fi ;;
       esc) sel=0 selr= selpath= selgut=0; return ;;
@@ -2456,7 +2653,7 @@ while :; do
   # 10ms a frame of the whole pane, under a multiplexer, came out in bursts.
   # A key's command or a reload out is looked for as often: v is one after
   # the other, and at the resting tick each sat landed for 25ms on average.
-  zselect -t $(( xon || lon || $#jobs || $#rpid ? 2 : tmo )) -r $tty ${winch:+-r} $winch
+  zselect -t $(( xon || lon || $#jobs || $#rpid || (box && bshow != btarget) ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize
@@ -2487,6 +2684,7 @@ while :; do
       [[ -e $st/walk.pending && -e $st/walk ]] && { (( gen++ )); changed=1; }
     fi
     (( chat )) && chat_tick && changed=1
+    (( box )) && box_tick && changed=1
     # The list landing is the drawn panes being there too: the screen
     # opened without them rather than wait (panes_load, before the loop).
     landed && { changed=1; [[ -n $panescmd && -z $pdir ]] && panes_load; }

@@ -1,7 +1,7 @@
 #!/bin/sh
-# git-mr-say --new <iid> <range> <path> <side> <first> <last>   a new thread on lines first..last
+# git-mr-say --new <iid> <range> <path> <side> <first> <last> [<text>]   a new thread on lines first..last
 #                                    (side new, old, or the ends' apart, old,new: git-mr-position)
-# git-mr-say --reply <iid> <range> <thread id>                   a reply in a thread
+# git-mr-say --reply <iid> <range> <thread id> [<text>]                   a reply in a thread
 # git-mr-say --edit <iid> <range> <thread id>                    your latest comment in a thread, rewritten
 # git-mr-say --delete <iid> <range> <thread id>                  your latest comment in a thread, gone (asks)
 #
@@ -20,6 +20,10 @@
 #
 # Yours, to edit or delete, is a draft or a comment by your GitLab user, as
 # in nvim; a comment of more than one line is edited in your editor.
+#
+# With the text given, nothing is asked: it is sent as it is, off the
+# terminal (otis-symbols' box, typed under the lines), and a failure is one
+# line saying why, the text kept by whoever gave it.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 mode=$1 iid=$2 range=$3
@@ -30,6 +34,7 @@ drafting=1
 
 fail() {
   printf '%s\n' "$1"
+  [ -n "$given" ] && exit 1
   [ -n "$text" ] && printf "\n${GK_CONTEXT}what you wrote:${GK_R}\n%s\n" "$text"
   printf '\npress enter\n'
   read -r _
@@ -43,6 +48,7 @@ clip() { awk -v w="$((cols - 4))" '{ gsub(/\t/, "    "); gsub(/[\001-\037\177]/,
 case $mode in
   --new)
     path=$1 side=$2 first=$3 last=$4
+    [ $# -ge 5 ] && given=1 text=$5
     rev=${range#*..}; [ "$side" = old ] && rev=${range%%..*}
     where=$first; [ "$first" != "$last" ] && where="$first-$last"
     bar=$(printf "${GK_CONTEXT}│${GK_R}")
@@ -65,6 +71,7 @@ case $mode in
     ;;
   --reply)
     id=$1
+    [ $# -ge 2 ] && given=1 text=$2
     case $id in draft-*) fail "that is a draft of yours, not yet a thread to reply to; enter edits it" ;; esac
     # Clipped here rather than by clip, which would take the colors with
     # the control characters.
@@ -110,13 +117,16 @@ fi
 # which key ended it, since an empty line is a choice too. An edit starts
 # from what the comment says, and one of several lines goes straight to the
 # editor, since the prompt holds one.
-case $was in
-  *"
+if [ -n "$given" ]; then how=send
+else
+  case $was in
+    *"
 "*) how=edit text=$was ;;
-  *) out=$(otis-ask "$prompt" --header "$context" --footer "enter $verb · ctrl-e your editor · esc cancels" --query "$was") || exit 0
-     how=send; [ "$(printf '%s\n' "$out" | head -1)" = ctrl-e ] && how=edit
-     text=$(printf '%s\n' "$out" | sed 1,2d) ;;
-esac
+    *) out=$(otis-ask "$prompt" --header "$context" --footer "enter $verb · ctrl-e your editor · esc cancels" --query "$was") || exit 0
+       how=send; [ "$(printf '%s\n' "$out" | head -1)" = ctrl-e ] && how=edit
+       text=$(printf '%s\n' "$out" | sed 1,2d) ;;
+  esac
+fi
 if [ "$how" = edit ]; then
   f=$(mktemp "${TMPDIR:-/tmp}/otis-comment.XXXXXX") || exit 1
   trap 'rm -f "$f"' EXIT
@@ -127,7 +137,7 @@ fi
 # Nothing written is nothing sent.
 [ -n "$(printf '%s' "$text" | tr -d ' \n\t')" ] || exit 0
 
-printf "${GK_CONTEXT}sending ...${GK_R}\n"
+[ -n "$given" ] || printf "${GK_CONTEXT}sending ...${GK_R}\n"
 if [ "$mode" = --edit ]; then
   [ "$text" = "$was" ] && exit 0
   out=$(jq -n --arg f "$field" --arg t "$text" '{($f): $t}' | git-forge api -X PUT "$url" -H "Content-Type: application/json" --input - 2>&1) ||

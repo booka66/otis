@@ -2165,6 +2165,18 @@ if picker_open "GMR_KIND=review git-mr-say --new 7 $b..$h f.ts new 2 2"; then
 else
   expect mr-say/prompt-opens "no" "yes"
 fi
+# The text given (otis-symbols' box, typed under the lines): nothing asked,
+# the same draft posted, a reply in its thread; a failure is one line saying
+# why, with no prompt to wait at.
+rm -f "$tmp/glab.posted"
+GMR_KIND=review git-mr-say --new 7 "$b..$h" f.ts new 2 2 'given words' </dev/null >/dev/null
+expect mr-say/given-body "$(sed 1d "$tmp/glab.posted" | jq -c '[.note, .position.new_line]')" '["given words",2]'
+rm -f "$tmp/glab.posted"
+GIT_FZF_STATE=$lst GMR_KIND=review git-mr-say --reply 7 "$b..$h" abc 'me too' </dev/null >/dev/null
+expect mr-say/given-reply "$(sed 1d "$tmp/glab.posted" | jq -c '[.note, .in_reply_to_discussion_id]')" '["me too","abc"]'
+expect mr-say/given-fails "$(GMR_KIND=review git-mr-say --new 7 "$b..$b" f.ts new 2 2 'stale' </dev/null; echo "exit $?")" \
+  "the MR has moved on since this review opened, so these line numbers are not its own; u catches up
+exit 1"
 # e, without nvim: your comment in the thread, at the prompt with what it
 # says, and saved in place.
 rm -f "$tmp/glab.posted"

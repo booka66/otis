@@ -205,23 +205,31 @@ function band(label, labelColor, text, textStyle, ground = "") {
 }
 
 /** The design red flags on this case (flags.mjs), in red above the rest of it: what is wrong, what it costs the
- * next change, the smaller design, and the two places it is. */
+ * next change, the smaller design, what to say to the author, and the two places it is. Each place's line is
+ * numbered, to comment on as the route's are, with what to say typed in for you (the map's tenth field); the
+ * threads on it are drawn under it. */
 const NAMED = { shallow: "shallow module", leak: "information leakage", "special case": "special-general mixture", "two jobs": "two jobs complected",
   exposure: "overexposure", defensive: "defensive code", "wrong layer": "fix in the wrong layer", bespoke: "bespoke abstraction", "unlike its neighbours": "unlike its neighbours" };
 function showFlags() {
   let found;
   try { found = JSON.parse(readFileSync(file.replace(/\.json$/, ".flags.json"), "utf8")); } catch { return; }
-  for (const flag of (found.flags ?? []).filter((one) => one.case === part.text)) {
+  const changed = new Set(outline.sentences.flatMap((one) => (one.stops ?? []).filter((stop) => stop.inChange).map((stop) => stop.path)));
+  const room = Math.min(W - 18, 92), from = 16;
+  (found.flags ?? []).filter((one) => one.case === part.text).forEach((flag, k) => {
     say(`  ${X}${B}⚑ ${(NAMED[flag.flag] ?? flag.flag).toUpperCase()}${R}`);
     for (const line of prose(flag.claim, Math.min(W - 4, 100))) say(`  ${line}`);
     band("next change", X, flag.cost, T);
     band("smaller", G, flag.smaller, T);
+    if (flag.comment) band("say", YOURS, flag.comment, T);
+    const words = flag.comment ? `\t${flag.comment.replace(/[\t\n]/g, " ")}` : "";
     for (const [label, ref] of [["here", flag.line], ["and", flag.caller]]) {
-      say(`  ${pad(` ${C}${label}${R}`, 13)}${C}${ref.path}:${ref.line}${R}`);
-      for (const line of wrap(ref.code.trim(), Math.min(W - 18, 92))) say(`  ${" ".repeat(13)}${RAISE}${T}${line}${R}`);
+      say(`  ${pad(` ${C}${label}${R}`, 13)}${C}${ref.path}${R}`);
+      const what = `line\t${ref.path}\t${ref.side}\t${ref.line}\t${ref.line}\t${changed.has(ref.path) ? 1 : 0}\t${from}\t${from + room - 1}\tflag${k}${label}${words}`;
+      wrap(ref.code.trim(), room).forEach((line, at) => say(`  ${at ? " ".repeat(13) : `${C}${String(ref.line).padStart(11)}${R}  `}${RAISE}${T}${line}${R}`, what));
+      for (const one of threadsAt.get(`${ref.path}\t${ref.side}\t${ref.line}`) ?? []) if (!drawnThreads.has(one.id)) drawThread(one, `  ${" ".repeat(13)}`, room);
     }
     say();
-  }
+  });
 }
 
 /** A case: the situation, how it ended before and how it ends now, then its route through the code in the
