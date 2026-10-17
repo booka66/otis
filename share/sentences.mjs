@@ -711,6 +711,8 @@ function callIn(a, b) {
   const N = escape(name);
   const calls = new RegExp(`(^|[^\\w$.])(new\\s+)?${N}\\s*(<[^>]*>)?\\s*\\(|\\.${N}\\s*(<[^>]*>)?\\s*\\(`);
   const reads = new RegExp(`(^|[^\\w$.])${N}\\s*[.[]|<${N}(?=[\\s/>]|$)`);
+  // Handed to another function to call: `errors.some(name)`, or a callback on a line of its own.
+  const passes = new RegExp(`(^|[(,])\\s*${N}\\s*[,)]`);
   const local = new RegExp(`\\b(const|let|var)\\s+${N}\\b|\\b(const|let|var)\\s*\\{[^}]*\\b${N}\\b[^}]*\\}\\s*=`);
   let shadowed = false, best = null;
   for (let n = range[0]; n <= range[1]; n++) {
@@ -718,7 +720,7 @@ function callIn(a, b) {
     if (own && n >= own[0] && n <= own[1]) continue;
     if (local.test(line)) { shadowed = true; continue; }
     if (shadowed || COMMENT.test(line) || /^\s*import\b/.test(line)) continue;
-    const verb = calls.test(line) ? "calls" : reads.test(line) ? "uses" : "";
+    const verb = calls.test(line) ? "calls" : passes.test(line) ? "passes" : reads.test(line) ? "uses" : "";
     if (!verb) continue;
     // A call in a block that leaves (a return, a continue) before a line the case is cited at further on is one
     // the case went past, not through.
