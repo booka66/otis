@@ -93,9 +93,11 @@ light() {
     ($m // $a) as $mr |
 
     # What it is, in a line: its number, whose it is, its size, and what it
-    # is built on. Its title is on its row, whole, so it is said here only
-    # when all of it is read at once (the gate all). A branch with no merge
-    # request says that. Then how each of its gates stands, in a line.
+    # is built on: the MR under it in a stack by its number, as the board
+    # shows that one, else the branch. Its title is on its row, whole, so it
+    # is said here only when all of it is read at once (the gate all). A
+    # branch with no merge request says that. Then how each of its gates
+    # stands, in a line.
     (if $mr then
        (if $gate == "all" then ($mr.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i") | wrapl($w; 9)[] | B + text + . + UB + r) else empty end),
        (attention + "!\($mr.iid)" + r
@@ -103,7 +105,11 @@ light() {
          + (if ($m | not) and $mr.author then dot + context + $mr.author.username + r else "" end)
          + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
               + dot + context + "\(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else "" end)
-         + (if $mr.targetBranch != $main then dot + context + "on top of " + $mr.targetBranch + r else "" end))
+         + (if $mr.targetBranch != $main then
+              (($mine[0].data.currentUser.authoredMergeRequests.nodes // []) + ($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // [])
+               | map(select(.sourceBranch == $mr.targetBranch)) | .[0]) as $under |
+              dot + context + "on top of " + (if $under then "!\($under.iid)" else $mr.targetBranch end) + r
+            else "" end))
      else
        (if $gate == "all" then (B + elsewhere + ($row | ltrimstr("c-b-")) + UB + r) else empty end),
        (context + "a branch with no merge request yet" + r)
