@@ -592,10 +592,9 @@ row() {
         # in a branch's color.
         [[ ${own[i]:-$lane[i]} == (draft|sent|moving|waiting|unsent) || -n $fold[i] ]] && tc=$C
         [[ -z $iid[i] ]] && tc=$EL
-        (( on )) && tc=$B$T
-        # A draft's title slants: its color says how much it wants you, so
-        # that it is not out yet has to be said some other way.
-        [[ -n $draft[i] ]] && tc+=$IT
+        # A draft's title in the color of yours, under the cursor too.
+        [[ -n $draft[i] ]] && tc=$Y
+        (( on )) && tc=$B${${draft[i]:+$Y}:-$T}
         t=$title[i] ;;
       here)
         # The branch whole, then how it stands.
@@ -633,7 +632,7 @@ row() {
     # The title whole: what of it does not fit on the line goes on under
     # it. What stands beside it is on its line when both fit, else under.
     whole "$t" $(( w - used - iw - rw - (iw + rw ? 1 : 0) ))
-    put "$tc" "$reply[1]"; line+=$UB$UIT; more=("${(@)reply[2,-1]}")
+    put "$tc" "$reply[1]"; line+=$UB; more=("${(@)reply[2,-1]}")
     if [[ -n $s ]]; then
       if (( ! $#more && used + 3 + ${(m)#s} <= w - iw - rw - 1 )); then put "" "   "; put "$nc" "$s"
       else whole "$s" $(( w - mind - 1 )); more2=("${reply[@]}"); fi
@@ -650,8 +649,8 @@ row() {
   fi
   pad $w
   # The last rows out of a group on its way, faint: out, they come up to
-  # their colors, and they go faint before they go. A draft's stays slanted.
-  [[ -n $foldg && $fold[i] == $foldg ]] && (( gpos[i] > foldn - 2 )) && line=$F${line//$e\[([0-9;]#~(3|23))m/$F}
+  # their colors, and they go faint before they go.
+  [[ -n $foldg && $fold[i] == $foldg ]] && (( gpos[i] > foldn - 2 )) && line=$F${line//$e\[[0-9;]#m/$F}
   (( on )) && line=$BG${line//$R/$R$BG}
   line+=$R
   emit $i
