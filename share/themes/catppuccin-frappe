@@ -8,6 +8,7 @@ text=38;2;198;208;245
 context=38;2;115;121;148
 faint=38;2;81;87;109
 main=38;2;129;200;190
+review=38;2;202;158;230
 codebg=48;2;65;69;89
 errbg=48;2;81;66;81
 delta_syntax=Catppuccin Frappe

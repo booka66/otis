@@ -8,6 +8,7 @@ text=38;2;101;123;131
 context=38;2;147;161;161
 faint=38;2;201;195;174
 main=38;2;42;161;152
+review=38;2;108;113;196
 codebg=48;2;238;232;213
 errbg=48;2;251;227;221
 delta_syntax=Solarized (light)

@@ -592,9 +592,10 @@ row() {
         # in a branch's color.
         [[ ${own[i]:-$lane[i]} == (draft|sent|moving|waiting|unsent) || -n $fold[i] ]] && tc=$C
         [[ -z $iid[i] ]] && tc=$EL
-        # A draft's title in the color of yours, under the cursor too.
-        [[ -n $draft[i] ]] && tc=$Y
-        (( on )) && tc=$B${${draft[i]:+$Y}:-$T}
+        # One of yours with its reviewers in the color of review, under the
+        # cursor too; a draft stays grey whoever has it.
+        if [[ ${own[i]:-$lane[i]} == sent && -z $draft[i] ]]; then tc=$RV; (( on )) && tc=$B$RV
+        elif (( on )); then tc=$B$T; fi
         t=$title[i] ;;
       here)
         # The branch whole, then how it stands.

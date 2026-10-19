@@ -8,6 +8,7 @@ text=38;2;248;248;242
 context=38;2;117;113;94
 faint=38;2;73;72;62
 main=38;2;174;129;255
+review=38;2;174;129;255
 codebg=48;2;62;61;50
 errbg=48;2;77;40;48
 delta_syntax=Monokai Extended

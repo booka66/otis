@@ -8,6 +8,7 @@ text=38;2;248;248;242
 context=38;2;98;114;164
 faint=38;2;68;71;90
 main=38;2;139;233;253
+review=38;2;255;121;198
 codebg=48;2;68;71;90
 errbg=48;2;79;50;60
 delta_syntax=Dracula

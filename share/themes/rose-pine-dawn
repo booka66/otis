@@ -8,6 +8,7 @@ text=38;2;87;82;121
 context=38;2;152;147;165
 faint=38;2;223;218;217
 main=38;2;40;105;131
+review=38;2;162;111;146
 codebg=48;2;242;233;225
 errbg=48;2;240;222;220
 delta_syntax=OneHalfLight

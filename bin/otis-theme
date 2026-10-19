@@ -9,7 +9,7 @@
 # otis-theme --list         the themes there are, with what each is
 # otis-theme --sample       otis's rows and a diff in the theme loaded now
 #
-# A theme is a file in share/themes: the nine colors the palette names by
+# A theme is a file in share/themes: the ten colors the palette names by
 # their job (share/palette.sh says which is which), as SGR parameters, and
 # what delta, bat and glow need to match, and its ground for a page drawn
 # in it (git-trace --page; the terminal themes have none). What a changed
@@ -28,7 +28,7 @@
 # strings rather than starting anything.
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir=$root/share/themes
-keys='attention good bad elsewhere yours text context faint main codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
+keys='attention good bad elsewhere yours text context faint main review codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
 
 case $1 in
   --env | --env-fish)

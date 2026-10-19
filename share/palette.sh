@@ -21,4 +21,5 @@ GK_TEXT="\033[${OTIS_T_TEXT}m"            # what the row is about
 GK_CONTEXT="\033[${OTIS_T_CONTEXT}m"      # true, but not why you are looking
 GK_FAINT="\033[${OTIS_T_FAINT}m"          # structure: rules, separators, empty slots
 GK_MAIN="\033[${OTIS_T_MAIN}m"            # main, and things that are not yours to move
+GK_REVIEW="\033[${OTIS_T_REVIEW}m"        # yours, with its reviewers
 GK_R='\033[0m'

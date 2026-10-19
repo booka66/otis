@@ -8,6 +8,7 @@ text=38;2;131;148;150
 context=38;2;88;110;117
 faint=38;2;7;54;66
 main=38;2;42;161;152
+review=38;2;108;113;196
 codebg=48;2;7;54;66
 errbg=48;2;40;44;53
 delta_syntax=Solarized (dark)

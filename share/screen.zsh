@@ -15,6 +15,9 @@ R=$e'[0m' B=$e'[1m' UB=$e'[22m' IT=$e'[3m' UIT=$e'[23m'
 A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
 EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
 C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
+# A shell that loaded its theme before review was a color has none: load it.
+(( ${+OTIS_T_REVIEW} )) || eval "$(otis-theme --env)"
+RV=$e"[${OTIS_T_REVIEW}m"
 BG=$e"[${OTIS_T_CODEBG:-48;5;236}m"
 CODEBG=$e"[${OTIS_T_CODEBG}m"
 

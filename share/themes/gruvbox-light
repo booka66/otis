@@ -8,6 +8,7 @@ text=38;2;60;56;54
 context=38;2;146;131;116
 faint=38;2;213;196;161
 main=38;2;66;123;88
+review=38;2;143;63;113
 codebg=48;2;235;219;178
 errbg=48;2;237;205;170
 delta_syntax=gruvbox-light

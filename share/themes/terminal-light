@@ -8,6 +8,7 @@ text=39
 context=90
 faint=2
 main=34
+review=95
 codebg=48;5;254
 errbg=48;5;224
 delta_syntax=ansi

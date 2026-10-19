@@ -8,6 +8,7 @@ text=38;2;76;79;105
 context=38;2;140;143;161
 faint=38;2;172;176;190
 main=38;2;23;146;153
+review=38;2;136;57;239
 codebg=48;2;204;208;218
 errbg=48;2;251;224;227
 delta_syntax=Catppuccin Latte
