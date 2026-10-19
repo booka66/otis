@@ -98,7 +98,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--copy) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -203,6 +203,25 @@ case $mode in
     rm -rf "$noop"
     [ $ok = 0 ] || exec git-fzf-note "$(printf '%s\n' "$err" | grep -m1 . || echo "seam could not write the page")"
     exec otis-open --fzf "$(printf '%s\n' "$err" | grep '\.html$' | tail -1)" ;;
+  # P: the cases page, the one G opens, uploaded to the MR and linked first in its description,
+  # in place of the link a last P put there.
+  --publish)
+    [ -n "$GMR_IID" ] || exec git-fzf-note "only an MR's cases have a description to link them from"
+    { read -r sentf 2>/dev/null < "$st/sentences" && page=${sentf%.tsv}.html && [ -s "$page" ]; } ||
+      exec git-fzf-note "the cases are not told yet"
+    git-forge can upload || exec git-fzf-note "GitHub takes no uploads to link the page from"
+    mr=$(git-forge api "projects/:fullpath/merge_requests/$GMR_IID") || exec git-fzf-note "could not read !$GMR_IID from GitLab"
+    tmp=$(mktemp -d) && cp "$page" "$tmp/cases-$GMR_IID.html" || exit 1
+    up=$(git-forge api "projects/:fullpath/uploads" --form "file=@$tmp/cases-$GMR_IID.html" 2>&1)
+    rm -rf "$tmp"
+    url=$(printf '%s' "$up" | jq -r '.url // empty' 2>/dev/null)
+    [ -n "$url" ] || exec git-fzf-note "the upload failed: $(printf '%s' "$up" | head -c 200)"
+    printf '%s' "$mr" | jq --arg url "$url" '{description: ((.description // "")
+      | sub("^\\s*\\[Cases Walkthrough\\]\\(/uploads/[^)]*\\)\\s*"; "")
+      | "[Cases Walkthrough](\($url))" + (if . == "" then "" else "\n\n" + . end))}' > "$st/publish.json"
+    err=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$GMR_IID" -H 'Content-Type: application/json' --input "$st/publish.json" 2>&1 >/dev/null) ||
+      exec git-fzf-note "the page is uploaded but the description was not changed: $(printf '%s' "$err" | head -c 200)"
+    exec git-fzf-note "linked first in !$GMR_IID's description as Cases Walkthrough" ;;
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
@@ -1995,7 +2014,7 @@ else
   # A commit or a branch: its cases, its symbols, and tab on from there its files (git-commit-open). nvim opens in the diff against the
   # change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   export OTIS_TABS=1
-  keys='tab=cases / symbols / files,shift-tab=the tab before,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='tab=cases / symbols / files,shift-tab=the tab before,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,'"${GMR_IID:+P=link the page first in the description of !$GMR_IID,}"'y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
     --bind "tab:transform(git-symbols --tab '$files')+reload($list)+refresh-preview" \
@@ -2004,6 +2023,7 @@ else
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
     --bind "G:transform(git-symbols --page $rev {12})" \
+    --bind "P:transform(git-symbols --publish)" \
     --bind "b:execute-silent(git-symbols --flip)+reload($fold)" \
     --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
     --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \
