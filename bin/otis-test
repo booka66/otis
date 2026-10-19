@@ -890,6 +890,8 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect sentences/summary "$(cat "$tmp/sentst/header")" "The whole change, said once."
   GIT_FZF_STATE=$tmp/sentst git-symbols --open sentence:1
   expect sentences/open "$(srows | awk -F'\t' '$12 == "sentence:1>lib.ts#run" { print $13 ":" $14 }')" "sym:1"
+  # Drawn, a symbol's row is its name, in the color of what it is.
+  expect sentences/name "$(OTIS_T_FUNCTION=7 srows | awk -F'\t' '$12 == "sentence:1>lib.ts#run" { print $25 }')" "$(printf '\033[7mrun\033[0m')"
   expect sentences/close-child "$(GIT_FZF_STATE=$tmp/sentst git-symbols --close 'sentence:1>lib.ts#run' x)" "pos(2)+reload(x)"
   GIT_FZF_STATE=$tmp/sentst git-symbols --viewed "$base..$head" toggle sentence:1
   expect sentences/viewed-all "$(srows | awk -F'\t' '$12 == "sentence:1" { print $20 }')" "all"

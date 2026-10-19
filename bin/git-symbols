@@ -1832,9 +1832,12 @@ if [ "$mode" = --rows ]; then
       room = budget - 3 * depth - 4
       if (kind == "class") head = gk_elide_rest(head)
       lab = ""
-      # A closed row has how much is under it after its label.
-      # Whole for otis-symbols, which wraps what is too long for its list.
-      if (draw) { lab = (ex ? "export " : "") head; lab = (ch == "removed" || dim) ? lab : "\036" lab "\036" }
+      # For otis-symbols, its name in the color of what it is, a member'"'"'s with
+      # its class'"'"'s unless under it; plain when removed or viewed, as it dims those.
+      if (draw) {
+        lab = (par != "" && !parent ? par "." : "") name
+        if (ch != "removed" && !dim) lab = (kind ~ /^(fn|constfn|method|macro)$/ ? GK_FUNCTION : kind ~ /^(const|field)$/ ? GK_VALUE : GK_TYPE) lab GK_R
+      }
       head = gk_sig((ex ? "export " : "") head, room)
       # The signature, marked for highlight; a removed or viewed one plain and dim.
       head = (ch == "removed" || dim) ? GK_CONTEXT head GK_R : "\036" head "\036"
@@ -1850,7 +1853,7 @@ if [ "$mode" = --rows ]; then
         (draw ? "\tsym\t" depth "\t" (kids ? ((rid in open) ? "open" : (again || done) ? "quiet" : "closed") : "") "\t" kids "\t" ch "\t" add "\t" del \
           "\t" (dim ? "all" : (kids && !(rid in open) && vdone) ? vdone "/" vtot : "") "\t" to "\t" td "\t" (newedge(parent, i) ? 1 : "") "\t" (dim ? 1 : "") "\t" lab "\t\t" cm[p "#" (par != "" ? par : name)] : "")
       if (!(rid in open)) return
-      for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, 0)
+      for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, i)
       for (x = 1; x <= nc; x++) {
         cid = cs[x]
         if (cid == "" || !(cid in at_id) || index(anc, "|" cid "|")) continue
@@ -1894,7 +1897,8 @@ if [ "$mode" = --rows ]; then
         }
         head = chead[id, x]
         if (head ~ /^(export )?(abstract )?class /) head = gk_elide_rest(head)
-        lab = draw ? head : ""
+        # Named, as a symbol is; code at its file'"'"'s top level by its file.
+        lab = !draw ? "" : (cid[id, x] ~ /#/) ? substr(cid[id, x], index(cid[id, x], "#") + 1) : head
         head = gk_sig(head, budget - 3 * (depth + 2) - 4)
         print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " th "     " indent "       " (cerr[id, x] ? ((cp[id, x] in fixedp) ? " " GK_GOOD "\342\234\223" GK_R " " : " " GK_BAD "\342\234\227" GK_R " ") : "   ") GK_CONTEXT head GK_R \
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \

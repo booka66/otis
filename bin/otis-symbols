@@ -227,10 +227,11 @@ typeset -a RL RU RX
 # wrapc <text> <room> <more room>: colored text in lines, the first room
 # columns wide and each after it more room, broken after the last space, /
 # or comma that fits, so a word goes down whole; a word longer than the room
-# after its last _ or - that fits, else where the room ends. Each line opens
-# with the colors in force where it starts. In reply.
+# after its last _ or - that fits, or before a capital that starts a word in
+# a name (replyModel|Test), else where the room ends. Each line opens with
+# the colors in force where it starts. In reply.
 wrapc() {
-  local s=$1 tok st= bst= bst2=
+  local s=$1 tok st= bst= bst2= pv=
   integer lim=$2 more=$3 w=0 cw bk=0 bkw=0 bk2=0 bkw2=0
   local -a lt rest
   reply=()
@@ -244,18 +245,22 @@ wrapc() {
       continue
     fi
     cw=${(m)#tok}
+    (( w )) && [[ $tok == [[:upper:]] && $pv == [[:lower:][:digit:]] ]] && bk2=$#lt bkw2=$w bst2=$st
     if (( w + cw > lim )); then
       (( ! bk && bk2 )) && bk=$bk2 bkw=$bkw2 bst=$bst2
+      lim=$more
       if (( bk )); then
         reply+=("${(j::)lt[1,bk]}$R")
         rest=("${(@)lt[bk+1,-1]}"); lt=("$bst" "${(@)rest}"); (( w -= bkw ))
+        # A break in what goes down after the one taken is still there to take.
+        if (( bk2 > bk )); then (( bk2 -= bk - 1, bkw2 -= bkw )); else bk2=0; fi
+        bk=0
       else
-        reply+=("${(j::)lt}$R"); lt=("$st"); w=0
+        reply+=("${(j::)lt}$R"); lt=("$st"); w=0 bk2=0
         [[ $tok == ' ' ]] && continue
       fi
-      lim=$more bk=0 bk2=0
     fi
-    lt+=("$tok"); (( w += cw ))
+    lt+=("$tok"); (( w += cw )); pv=$tok
     [[ $tok == [\ /,] ]] && bk=$#lt bkw=$w bst=$st
     [[ $tok == [_-] ]] && bk2=$#lt bkw2=$w bst2=$st
   done
@@ -279,9 +284,32 @@ cells() {
   if [[ $fld[10] == 1 ]]; then [[ $fld[9] == 1 ]] && put "$A" $x || put "$X" $x; else put "$F" .; fi
   put "" " "
 }
+# rcells <row>: its cells on the right, in REPLY: threads, viewed, the
+# lines. Each a cell, so they stay in their columns down the list.
+rcells() {
+  local i=$1 line= dm=${dim[$1]:+$C}
+  integer used=0
+  if (( mr )); then
+    # What Claude's review did with it, beyond the diff: opened its file, searched for it.
+    case $cm[i] in read) put "$G" "● " ;; grep) put "$EL" "◐ " ;; *) put "" "  " ;; esac
+    put "" "  "
+    if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-${nop[i]}}}"; else put "" "   "; fi
+    if (( ndr[i] > 0 )); then put "$Y" "✎${(r:2:: :)ndr[i]}"; else put "" "   "; fi
+  fi
+  case $vwd[i] in
+    all) put "" "    "; put "$G" "✓ " ;;
+    */*) put "" "${(l:6-$#vwd[i]:: :)}"; put "$C" "$vwd[i]" ;;
+    *) put "" "      " ;;
+  esac
+  put "" " "
+  if (( add[i] > 0 )); then put "${dm:-$G}" "+${(l:wa:: :)add[i]}"; else put "" "${(l:wa+1:: :)}"; fi
+  put "" " "
+  if (( del[i] > 0 )); then put "${dm:-$X}" "-${(l:wd:: :)del[i]}"; else put "" "${(l:wd+1:: :)}"; fi
+  REPLY=$line
+}
 rowline() {
-  local i=$1 t lc lcs cont
-  integer w=$(( lw - 2 )) rz room ind
+  local i=$1 t lc lcs cont rs
+  integer w=$(( lw - 2 )) rz room ind lent
   line= used=0 RX[i]=
   case $typ[i] in
     head)
@@ -332,6 +360,13 @@ rowline() {
       (( rz = 1 + (wa + wd + 4) + 6 + (mr ? 10 : 0) ))
       # Callers elsewhere have none of the right's cells: their words run on.
       [[ $typ[i] == (callers|package|caller) ]] && rz=0
+      # The blank columns its right cells open with, short of the lines, it
+      # lends to its name, one kept apart: a long name goes on along the row.
+      if (( rz )); then
+        rcells $i; rs=$REPLY t=${rs%%[^ ]*}
+        (( lent = rz - 1 - (wa + wd + 4) ))
+        (( $#t < lent )) && (( lent = $#t ? $#t - 1 : 0 ))
+      fi
       lc=$lab[i]
       case $typ[i] in
         sym) if [[ -n $dim[i] || $chg[i] == removed ]]; then lcs=$C$lc; else lcs=$lc; fi ;;
@@ -347,7 +382,7 @@ rowline() {
       # Whole, on as many lines as it takes, each under where it starts, the
       # tree's lines carried down beside it; the right's cells are on the
       # first, so the lines after it have the list's whole width.
-      (( room = w - rz - used ))
+      (( room = w - rz + lent - used ))
       [[ $fold[i] == (closed|quiet) && -n $kids[i] && $typ[i] == sym ]] && (( room -= 1 + ${#kids[i]} ))
       (( room < 12 )) && room=12
       vw "$lcs"
@@ -366,28 +401,10 @@ rowline() {
       # The width so far is added up piece by piece (put, and the label and
       # the guide measured on their own), so the right's columns stand where
       # every other row has them without measuring the whole line again.
-      (( used > w - rz )) && { cut "$line" $(( w - rz )); line=$REPLY; vw "$line"; used=$REPLY; }
-      pad $(( w - rz ))
+      (( used > w - rz + lent )) && { cut "$line" $(( w - rz + lent )); line=$REPLY; vw "$line"; used=$REPLY; }
+      pad $(( w - rz + lent ))
       (( rz )) || { pad $w; RL[i]=$line$R RU[i]=$used; return; }
-      # The right: threads, viewed, the lines. Each a cell, so they stay in
-      # their columns down the list.
-      if (( mr )); then
-        # What Claude's review did with it, beyond the diff: opened its file, searched for it.
-        case $cm[i] in read) put "$G" "● " ;; grep) put "$EL" "◐ " ;; *) put "" "  " ;; esac
-        put "" "  "
-        if (( nop[i] > 0 )); then put "$EL" "${(r:3:: :)${:-${nop[i]}}}"; else put "" "   "; fi
-        if (( ndr[i] > 0 )); then put "$Y" "✎${(r:2:: :)ndr[i]}"; else put "" "   "; fi
-      fi
-      case $vwd[i] in
-        all) put "" "    "; put "$G" "✓ " ;;
-        */*) put "$C" "${(l:6:: :)vwd[i]}" ;;
-        *) put "" "      " ;;
-      esac
-      put "" " "
-      local dm=${dim[i]:+$C}
-      if (( add[i] > 0 )); then put "${dm:-$G}" "+${(l:wa:: :)add[i]}"; else put "" "${(l:wa+1:: :)}"; fi
-      put "" " "
-      if (( del[i] > 0 )); then put "${dm:-$X}" "-${(l:wd:: :)del[i]}"; else put "" "${(l:wd+1:: :)}"; fi
+      line+=${rs[lent+1,-1]}; vw "${rs[lent+1,-1]}"; (( used += REPLY ))
       ;;
   esac
   pad $w

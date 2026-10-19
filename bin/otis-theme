@@ -12,8 +12,10 @@
 # A theme is a file in share/themes: the ten colors the palette names by
 # their job (share/palette.sh says which is which), as SGR parameters, and
 # what delta, bat and glow need to match, and its ground for a page drawn
-# in it (git-trace --page; the terminal themes have none). What a changed
-# line changed is on plus_word and minus_word, else on halfway from the
+# in it (git-trace --page; the terminal themes have none). A symbol's name
+# in the review's list is in the color of what it is, a function, a value or
+# a type: main's, elsewhere's and attention's in a theme that names none.
+# What a changed line changed is on plus_word and minus_word, else on halfway from the
 # theme's good and bad to its diff grounds, so a sentence rewritten in a long
 # line stands out from the rest of it. The theme is
 # otis.theme, else terminal, which takes the terminal's own 16 colors and so
@@ -28,7 +30,7 @@
 # strings rather than starting anything.
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir=$root/share/themes
-keys='attention good bad elsewhere yours text context faint main review codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
+keys='attention good bad elsewhere yours text context faint main review function value type codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
 
 case $1 in
   --env | --env-fish)
@@ -62,6 +64,9 @@ case $1 in
         if (syntax != "") v["delta_syntax"] = syntax
         if (v["minus"] != "" && v["plus_word"] == "") v["plus_word"] = half(v["good"], v["plus"])
         if (v["minus"] != "" && v["minus_word"] == "") v["minus_word"] = half(v["bad"], v["minus"])
+        if (v["function"] == "") v["function"] = v["main"]
+        if (v["value"] == "") v["value"] = v["elsewhere"]
+        if (v["type"] == "") v["type"] = v["attention"]
         n = split(keys, K, " ")
         for (j = 1; j <= n; j++) set(K[j], v[K[j]])
         set("name", name)

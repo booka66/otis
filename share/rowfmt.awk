@@ -27,6 +27,9 @@ BEGIN {
   GK_CONTEXT   = gk_sgr("CONTEXT", "90")     # true, but not why you are looking
   GK_FAINT     = gk_sgr("FAINT", "2")        # structure: rules, separators, empty slots
   GK_MAIN      = gk_sgr("MAIN", "34")        # main, and things that are not yours to move
+  GK_FUNCTION  = gk_sgr("FUNCTION", "34")    # a symbol's name: a function
+  GK_VALUE     = gk_sgr("VALUE", "36")       # a symbol's name: a value
+  GK_TYPE      = gk_sgr("TYPE", "33")        # a symbol's name: a type
   GK_R         = "\033[0m"
   # The time, once, for the ages the rows show: a date process cost as much
   # as the awk that used it.
