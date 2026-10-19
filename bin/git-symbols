@@ -218,7 +218,8 @@ case $mode in
     [ -n "$url" ] || exec git-fzf-note "the upload failed: $(printf '%s' "$up" | head -c 200)"
     printf '%s' "$mr" | jq --arg url "$url" '{description: ((.description // "")
       | sub("^\\s*\\[Cases Walkthrough\\]\\(/uploads/[^)]*\\)\\s*"; "")
-      | "[Cases Walkthrough](\($url))" + (if . == "" then "" else "\n\n" + . end))}' > "$st/publish.json"
+      | "[Cases Walkthrough](\($url))" + (if . == "" then "" else "\n\n" + . end))}' > "$st/publish.json" ||
+      exec git-fzf-note "could not read !$GMR_IID's description, so it was not changed"
     err=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$GMR_IID" -H 'Content-Type: application/json' --input "$st/publish.json" 2>&1 >/dev/null) ||
       exec git-fzf-note "the page is uploaded but the description was not changed: $(printf '%s' "$err" | head -c 200)"
     exec git-fzf-note "linked first in !$GMR_IID's description as Cases Walkthrough" ;;
