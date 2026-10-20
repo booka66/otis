@@ -90,7 +90,9 @@ run() {
   new=$(mktemp "$cache.XXXXXX") || return 1
   # Killed mid-fetch (the picker closed): leave nothing behind.
   trap 'rm -f "$new" "$new.stderr"; exit 1' HUP TERM INT
-  if "$@" > "$new" 2> "$new.stderr" &&
+  "$@" > "$new" 2> "$new.stderr"
+  rc=$?
+  if [ "$rc" = 0 ] &&
     [ "$(jq -r 'if type == "object" then (.errors // []) | length else 0 end' "$new" 2>/dev/null)" = 0 ]; then
     rm -f "$new.stderr"
     return 0
@@ -103,7 +105,11 @@ run() {
   fi
   err=$(mktemp "$cache.err.XXXXXX")
   { jq -r '.errors[]?.message // empty' "$new" 2>/dev/null; cat "$new.stderr"; } > "$err"
-  [ -s "$err" ] || printf '%s failed without saying why\n' "$1" > "$err"
+  # The whole command, since most lists are one git-forge or another.
+  if [ ! -s "$err" ]; then
+    if [ "$rc" = 0 ]; then printf '%s printed no JSON\n' "$*"
+    else printf '%s exited %s without saying why\n' "$*" "$rc"; fi > "$err"
+  fi
   mv "$err" "$cache.err"
   rm -f "$new" "$new.stderr"
   return 1

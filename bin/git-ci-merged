@@ -34,11 +34,15 @@ days=7
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
 repo=$(otis-config project)
+# jq -e fails without a word when GitLab's answer is empty or null, so each
+# query that reads one through it says which it was.
+empty_answer() { printf '%s came back empty\n' "$1" >&2; exit 1; }
 since=$(jq -rn --argjson days "$days" 'now - $days * 86400 | strftime("%Y-%m-%dT%H:%M:%SZ")')
 mrs=$(git-forge api graphql -f repo="$repo" -f query='query($repo: String!) { currentUser {
   authoredMergeRequests(state: merged, first: 20, projectPath: $repo, sort: MERGED_AT_DESC) { nodes {
     iid title sourceBranch targetBranch mergedAt mergeCommitSha webUrl } } } }' |
-  jq -e --arg since "$since" '[.data.currentUser.authoredMergeRequests.nodes[] | select(.mergedAt >= $since)]') || exit 1
+  jq -e --arg since "$since" '[.data.currentUser.authoredMergeRequests.nodes[] | select(.mergedAt >= $since)]') ||
+  empty_answer "the merged MRs query"
 
 # Production in one query: the newest successful deploys or rollbacks
 # (migrations share the environment, hence 20), and the deploy job of recent
@@ -53,7 +57,8 @@ prod=$(git-forge api graphql -f repo="$repo" -f env="$env" -f job="$job" -f main
        | {sha, at: .finishedAt, pipeline: (.job.pipeline.id | gid), url: ($url + .job.webPath),
           status: "success", job: .job.name, id: .job.id}][0]),
      deploys: [.pipelines.nodes[] | select(.job) | {sha, pipeline: (.id | gid), url: ($url + .job.webPath),
-       status: (.job.status | ascii_downcase), at: (.job.startedAt // .job.queuedAt // .job.createdAt)}]}') || exit 1
+       status: (.job.status | ascii_downcase), at: (.job.startedAt // .job.queuedAt // .job.createdAt)}]}') ||
+  empty_answer "the production deploys query"
 running=$(printf '%s' "$prod" | jq '[.deploys[] | select(.status | IN("running", "pending", "preparing"))]')
 queued=$(printf '%s' "$prod" | jq '[.deploys[] | select(.status == "waiting_for_resource")]')
 latest=$(printf '%s' "$prod" | jq '.latest')
@@ -63,9 +68,11 @@ rollback=null
 if [ "$(printf '%s' "$latest" | jq -r .job)" = "$rollback_job" ]; then
   version=$(git-forge api graphql -f repo="$repo" -f id="$(printf '%s' "$latest" | jq -r .id)" -f query='query($repo: ID!, $id: JobID!) {
     project(fullPath: $repo) { job(id: $id) { inputs { name value } } } }' |
-    jq -er '.data.project.job.inputs[] | select(.name == "version") | .value | tostring') || exit 1
+    jq -er '.data.project.job.inputs[] | select(.name == "version") | .value | tostring') ||
+    empty_answer "the rollback's version query"
   restored=$(git-forge api graphql -f repo="$repo" -f iid="$version" -f query='query($repo: ID!, $iid: ID!) {
-    project(fullPath: $repo) { pipeline(iid: $iid) { sha } } }' | jq -er '.data.project.pipeline.sha') || exit 1
+    project(fullPath: $repo) { pipeline(iid: $iid) { sha } } }' | jq -er '.data.project.pipeline.sha') ||
+    empty_answer "the rolled-back pipeline query"
   rollback=$(printf '%s' "$latest" | jq --arg version "$version" --arg restored "$restored" '. + {on: .sha, sha: $restored, version: $version}')
   latest=$rollback
 fi
@@ -182,7 +189,7 @@ done)
 pipes='{}'
 if [ -n "$fields" ]; then
   pipes=$(git-forge api graphql -f repo="$repo" -f query="query(\$repo: ID!) { project(fullPath: \$repo) { $fields } }" |
-    jq -e '.data.project') || exit 1
+    jq -e '.data.project') || empty_answer "the waiting MRs' pipelines query"
 fi
 
 # git-alerts runs from ~ and runs this script to notice MRs going live, so it

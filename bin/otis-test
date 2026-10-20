@@ -1770,6 +1770,11 @@ touch -t 202001010000 "$cj/heal.json" "$cj/heal.json.tried" "$cj/calm.json"
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do [ -e "$cj/heal.json.err" ] || break; sleep 0.1; done
 expect cached/failed-mends-unasked "$(cat "$cj/heal.json"):$([ -e "$cj/heal.json.err" ] && echo err)" '{"new":1}:'
 expect cached/working-waits-for-u "$(cat "$cj/calm.json")" '{"old":1}'
+# A fetch that fails without a word is named whole, with how it ended, so
+# the footer says which of the git-forge lists it was.
+expect cached/silent-names-command "$(git-cached-json --sync mute 0 -- sh -c 'exit 4'; cat "$cj/mute.json.err"
+  git-cached-json --sync blank 0 -- sh -c 'echo hi'; cat "$cj/blank.json.err")" 'sh -c exit 4 exited 4 without saying why
+sh -c echo hi printed no JSON'
 # A screen with no picker that names a file to be told by (the dashboard)
 # has a cache that works fetched behind it too, and the file says it landed.
 cp "$cj/calm.json" "$cj/told.json"; touch -t 202001010000 "$cj/told.json"; rm -f "$tmp/fetched"
