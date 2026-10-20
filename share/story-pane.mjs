@@ -51,6 +51,8 @@ const RAISE = env.OTIS_T_CODEBG ? `\x1b[${env.OTIS_T_CODEBG}m` : "\x1b[48;5;237m
 // A line Claude cites stands out on a stronger ground: the diff's emphasis, or the code's ground lifted.
 const PLUS_EMPH = bgOf(env.OTIS_T_PLUS_EMPH, "\x1b[48;5;28m"), MINUS_EMPH = bgOf(env.OTIS_T_MINUS_EMPH, "\x1b[48;5;88m");
 const LIFT = ((rgb) => (rgb ? `\x1b[48;2;${rgb.slice(1).map((c) => Math.max(0, Math.min(255, Number(c) + (env.OTIS_T_LIGHT ? -24 : 24)))).join(";")}m` : "\x1b[48;5;239m"))(/48;2;(\d+);(\d+);(\d+)/.exec(RAISE));
+// What a changed line changed, on the ground the diff's preview has it on (share/delta.sh), stronger than a cited line's.
+const PLUS_WORD = bgOf(env.OTIS_T_PLUS_WORD, "\x1b[48;5;34m"), MINUS_WORD = bgOf(env.OTIS_T_MINUS_WORD, "\x1b[48;5;124m");
 
 const YOURS = fg("OTIS_T_YOURS", "35");
 
@@ -131,6 +133,81 @@ function cut(text, room) {
   }
   pieces.push(piece);
   return pieces;
+}
+
+/** What each changed line changed, as the diff's preview marks it (delta): in a run of changed lines, each removed
+ * line is paired with the first added line after the last pair alike enough to be it edited, and the columns where
+ * the two differ are lit. lines are [sign, text] (no colors), null where a run stops; the lit columns by line. */
+function changedWords(lines) {
+  const lit = lines.map(() => new Set());
+  let run = [];
+  for (const [at, line] of [...lines, null].entries()) {
+    if (line && line[0] !== " ") { run.push(at); continue; }
+    const words = (sign) => run.filter((k) => lines[k][0] === sign).map((k) => [k, lines[k][1].match(/[\w$]+|\s+|[^\w$\s]/gu) ?? []]);
+    const gone = words("-"), came = words("+");
+    run = [];
+    let from = 0;
+    for (const [k, x] of gone) for (let j = from; j < came.length; j++) {
+      const differs = differ(x, came[j][1]);
+      if (!differs) continue;
+      [lit[k], lit[came[j][0]]] = differs;
+      from = j + 1;
+      break;
+    }
+  }
+  return lit;
+}
+/** Where two lines' words differ: the columns of each one's words the other lacks; none when over 60% of them
+ * differs (delta's cut), too unlike to read as one line edited. */
+function differ(x, y) {
+  // What they start and end with is the same; the words between are matched, in order, keeping the most text.
+  let head = 0, tail = 0;
+  while (head < x.length && head < y.length && x[head] === y[head]) head++;
+  while (tail < x.length - head && tail < y.length - head && x.at(-1 - tail) === y.at(-1 - tail)) tail++;
+  const n = x.length - head - tail, m = y.length - head - tail;
+  const wide = (tokens) => tokens.reduce((sum, token) => sum + [...token].length, 0);
+  const total = wide(x) + wide(y);
+  // Too unlike to be one line edited even if every word between that both have were matched: no need to match.
+  const left = new Map();
+  for (const token of x.slice(head, head + n)) left.set(token, (left.get(token) ?? 0) + 1);
+  let shared = 0;
+  for (const token of y.slice(head, head + m)) if (left.get(token) > 0) { left.set(token, left.get(token) - 1); shared += 2 * [...token].length; }
+  if (wide(x.slice(head, head + n)) + wide(y.slice(head, head + m)) - shared > 0.6 * total) return null;
+  const common = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) common[i][j] = x[head + i] === y[head + j] ? common[i + 1][j + 1] + [...x[head + i]].length : Math.max(common[i + 1][j], common[i][j + 1]);
+  const goneX = new Set(), goneY = new Set();
+  for (let i = 0, j = 0; i < n || j < m;) {
+    if (i < n && j < m && x[head + i] === y[head + j]) { i++; j++; }
+    else if (j === m || (i < n && common[i + 1][j] >= common[i][j + 1])) goneX.add(head + i++);
+    else goneY.add(head + j++);
+  }
+  // A space between two changed words is changed too, so a phrase rewritten is lit as one.
+  let changed = 0;
+  const columns = (tokens, gone) => {
+    const lit = new Set();
+    let at = 0;
+    tokens.forEach((token, k) => {
+      const size = [...token].length;
+      if (gone.has(k)) changed += size;
+      if (gone.has(k) || (/^\s/.test(token) && gone.has(k - 1) && gone.has(k + 1))) for (let c = at; c < at + size; c++) lit.add(c);
+      at += size;
+    });
+    return lit;
+  };
+  const lit = [columns(x, goneX), columns(y, goneY)];
+  return changed <= 0.6 * total ? lit : null;
+}
+/** A colored line on its ground, its lit columns on the word's ground; a reset in it goes back to whichever it is on. */
+function grounded(text, lit, ground, word) {
+  let out = "", at = 0, on = false;
+  for (const token of text.split(/(\x1b\[[0-9;]*m)/)) {
+    if (token.startsWith("\x1b[")) { out += token === R ? R + (on ? word : ground) : token; continue; }
+    for (const ch of token) {
+      if (lit.has(at++) !== on) { on = !on; out += on ? word : ground; }
+      out += ch;
+    }
+  }
+  return on ? out + ground : out;
 }
 
 const KIND = { fn: "function", method: "method", const: "constant", var: "variable", type: "type", interface: "type", enum: "enum", class: "class" };
@@ -358,7 +435,8 @@ function showCase() {
     const is = (stop.is ?? "").replace(new RegExp(`^\`?${stop.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`?\\s+`), "");
     if (is) for (const line of prose(is, room - 2)) say(`  ${rail(depth + 1)}${line}`);
     // Its code, every line in its file's colors on the diff's ground: the lines Claude cites on a stronger ground,
-    // with what holds there beside them in yellow. A stop it calls is drawn under the line that calls it.
+    // with what holds there beside them in yellow, and what a changed line changed on the strongest. A stop it
+    // calls is drawn under the line that calls it.
     const lead = rail(depth + 1), code = edge - 2 * (depth + 1) - gutter;
     const calledAt = new Map();
     for (const k of kids[i]) calledAt.set(part.stops[k].call.n, [...(calledAt.get(part.stops[k].call.n) ?? []), k]);
@@ -367,7 +445,9 @@ function showCase() {
     // stop it calls or the end of the stop comes first.
     let pending = [];
     const flush = () => { for (const one of pending) say(`  ${lead}${" ".repeat(gutter + code)}${one}`); pending = []; };
-    const draw = (line) => {
+    const bodies = stop.code.map((line) => (line.gap ? "" : dent((line.paint ?? T + line.t).replace(/\t/g, "    "), shared[i])));
+    const words = changedWords(stop.code.map((line, at) => (line.gap ? null : [line.sign, bodies[at].replace(ANSI, "")])));
+    const draw = (line, at) => {
       const calls = line.mine ? calledAt.get(line.n) ?? [] : [];
       // Where the line is, for a comment on it: a line the change removed is on the side the stop is not.
       const side = line.mine === false ? otherSide(stop.side) : stop.side, from = 3 + 2 * (depth + 1) + gutter;
@@ -376,8 +456,7 @@ function showCase() {
       const lit = line.cited || wrong;
       const ground = lit ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
       const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
-      const text = line.t.replace(/\t/g, "    ");
-      const body = dent((line.paint ?? T + text).replace(/\t/g, "    "), shared[i]).replace(/\x1b\[0m/g, R + ground);
+      const body = grounded(bodies[at], words[at], ground, line.sign === "+" ? PLUS_WORD : MINUS_WORD);
       // A line the change removed is numbered in red: its number is from before the change.
       const number = `${wrong ? B + X : line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
       const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
@@ -385,8 +464,8 @@ function showCase() {
       if (value) { flush(); pending = prose(value, Math.max(8, aside - 2), style).map((one, k) => `   ${k ? " " : line.cited ? `${A}◀${R}` : " "} ${one}`); }
       if (wrong) { if (!value) flush(); pending.push(...prose(wrong, Math.max(8, aside - 2), B + X).map((one, k) => `   ${k ? " " : `${X}⚑${R}`} ${one}`)); }
       const what = `line\t${stop.path}\t${side}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
-      cut(body, code).forEach((piece, at) => {
-        say(`  ${lead}${ground}${at ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
+      cut(body, code).forEach((piece, k) => {
+        say(`  ${lead}${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
       });
       // The review's threads on it, under it.
       const here = (line.joined ?? [line.n]).flatMap((n) => threadsAt.get(`${stop.path}\t${side}\t${n}`) ?? []).filter((one) => !drawnThreads.has(one.id));
@@ -397,7 +476,7 @@ function showCase() {
     };
     stop.code.forEach((line, at) => {
       if (line.gap) { flush(); say(`  ${lead}${" ".repeat(digits - 1)}${C}⋯ ${line.gap} line${line.gap === 1 ? "" : "s"}${R}`); }
-      else if (draw(line) && at < stop.code.length - 1) say(`  ${lead}${prose(`↩ back in \`${stop.name}\``, code, C)[0]}`);
+      else if (draw(line, at) && at < stop.code.length - 1) say(`  ${lead}${prose(`↩ back in \`${stop.name}\``, code, C)[0]}`);
     });
     flush();
     for (const k of kids[i]) if (!drawn.has(k)) drawStop(k, depth + 1);
@@ -542,13 +621,15 @@ for (const row of boxes) {
   const gutter = digits + 3, code = W - 3 - gutter - (aside ? aside + 3 : 0);
   let pending = [];
   const flush = () => { for (const one of pending) say(`  ${" ".repeat(gutter + code)}${one}`); pending = []; };
+  const texts = row.lines.map((raw, at) => (row.paint?.[at] ?? T + raw.slice(1)).replace(/\t/g, "    "));
+  const words = changedWords(row.lines.map((raw, at) => (/^[-+ ]/.test(raw) ? [raw[0], texts[at].replace(ANSI, "")] : null)));
   row.lines.forEach((raw, at) => {
     const sign = raw[0];
     if (sign === "#") { flush(); say(); say(`  ${T}${raw.slice(1).trim()}${R}`); return; }
     if (sign === "~") { flush(); say(`  ${" ".repeat(gutter)}${C}⋯${raw.length > 1 ? "  " + raw.slice(1) : ""}${R}`); return; }
     const ground = sign === "+" ? PLUS : sign === "-" ? MINUS : "";
     const mark = sign === "+" ? `${G}+` : sign === "-" ? `${X}−` : " ";
-    const text = (row.paint?.[at] ?? T + raw.slice(1)).replace(/\t/g, "    ").replace(/\x1b\[0m/g, R + ground);
+    const text = grounded(texts[at], words[at], ground, sign === "+" ? PLUS_WORD : MINUS_WORD);
     const note = row.notes?.[at];
     if (note) { flush(); pending = wrap(note, aside - 2).map((one, k) => `   ${E}${k ? " " : "◀"} ${one}${R}`); }
     cut(text, code).forEach((piece, i) => {

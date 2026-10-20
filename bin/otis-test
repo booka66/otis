@@ -105,6 +105,23 @@ expect delta/each-side-colored-as-its-file "$(drawn | grep -c 'return [ab0];\|ex
 expect delta/side-by-side-too "$(drawn always | grep -c 'return [ab0];\|export function\|if (')|$(drawn always | strip | grep -c '│ *6 *│  return a; *│ *7 *│    return 0;')" "0|1"
 rm -rf "$tmp/delta"
 
+# --- share/story-pane.mjs: in a case's route, a line the change removed and
+# the line it became have what changed on the word grounds delta.sh draws it
+# on, here in [ ]; a line put in between them pairs with neither.
+cat > "$tmp/case.json" <<'EOF'
+{"sentences": [{"kind": "case", "text": "A text is cut", "facts": [], "runs": [], "stops": [{"name": "cut", "path": "a.ts", "side": "new", "where": "a.ts", "mark": "◆", "inChange": true, "parent": -1, "lines": [], "code": [
+  {"n": 1, "sign": " ", "t": "function cut(text) {", "mine": true},
+  {"n": 2, "sign": "-", "t": "  return text.slice(0, MAX);", "mine": false},
+  {"n": 2, "sign": "+", "t": "  const count = 1;", "mine": true},
+  {"n": 3, "sign": "+", "t": "  return truncate(text, MAX);", "mine": true},
+  {"n": 4, "sign": " ", "t": "}", "mine": true}]}]}]}
+EOF
+e=$(printf '\033')
+expect story-pane/changed-words "$(FZF_PREVIEW_COLUMNS=80 git-sentences --pane "$tmp/case.json" 1 |
+  sed -E "s/$e\[48;2;(67;131;69|156;53;43)m([^$e]*)$e\[48;2;(38;51;42|60;32;34)m/[\2]/g" | strip | sed -n 's/^ *│ *[0-9]* [−+] *\(.*[^ ]\) *$/\1/p' | tr '\n' '|')" \
+  "return text[.slice(0], MAX);|const count = 1;|return [truncate(]text, MAX);|"
+rm -f "$tmp/case.json"
+
 # --- otis-keys only names keys its picker declares: a key renamed in one and
 # not the other labels a key that does nothing, or leaves one unlabelled.
 # A picker whose keys the forge can trim (git-forge lacks) names them in
