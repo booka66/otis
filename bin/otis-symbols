@@ -2015,15 +2015,16 @@ selrange() {
 ongutter() {
   local -a pc
   pmap
-  if [[ -n $PCOL[$1] ]]; then pc=(${=PCOL[$1]}); (( $2 < pc[1] )); return; fi
+  if [[ $PMAP[$1] == line$'\t'* ]]; then pc=(${=PCOL[$1]}); (( $2 < pc[1] )); return; fi
   (( $#PMAP )) && return 1
   plain "$P[$1]"; gut "$REPLY"
   (( REPLY > 0 && $2 < REPLY ))
 }
 # pmap: what the pane's lines are, when its preview says (wrapin's .map), as
-# PMAP, a line of P to what it is, and PCOL, a line of code to the columns
-# its code is in, with + after for a piece of the line above it (a copy
-# takes the code alone, and the pieces as one line).
+# PMAP, a line of P to what it is, and PCOL, a line of code or of a
+# paragraph to the columns its code or words are in, with + after for a
+# piece of the line above it, and _ for one that goes on from it after a
+# space (a copy takes the code or words alone, and the pieces as one line).
 typeset -A PMAP
 pmapof=
 pmap() {
@@ -2035,10 +2036,15 @@ pmap() {
   for l in ${(f)"$(<$pfile.map)"}; do
     n=${l%%$'\t'*} what=${l#*$'\t'}
     PMAP[$n]=$what
-    [[ $what == line$'\t'* ]] || continue
     f=("${(@ps:\t:)what}")
-    PCOL[$n]="$f[7] $f[8]"
-    [[ $PMAP[$(( n - 1 ))] == $what ]] && PCOL[$n]+=" +"
+    case $f[1] in
+      line)
+        PCOL[$n]="$f[7] $f[8]"
+        [[ $PMAP[$(( n - 1 ))] == $what ]] && PCOL[$n]+=" +" ;;
+      text)
+        PCOL[$n]="$f[2] $f[3]"
+        case $f[4] in cut) PCOL[$n]+=" +" ;; word) PCOL[$n]+=" _" ;; esac ;;
+    esac
   done
 }
 inpane() { (( y >= py + phd && y < py + ph && (side ? x >= px : 1) )); }

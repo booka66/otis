@@ -351,8 +351,9 @@ whole() {
 # it is up.
 integer sel=0 sa=0 ca=0 sb=0 cb=0 s1=0 c1=0 s2=0 c2=0
 typeset -a P
-# PCOL: a line of P whose code a preview placed, to the columns it is in
-# ("from to", and + for a piece of the line above), which a copy takes.
+# PCOL: a line of P whose code or words a preview placed, to the columns
+# they are in ("from to", and + for a piece of the line above, _ for one
+# that goes on from it after a space), which a copy takes.
 typeset -A PCOL
 # selgut: the selection was made on a diff's line numbers, so it is whole
 # lines (to comment on), lit whole and not copied.
@@ -405,15 +406,19 @@ copy() {
   [[ -s $1 ]] && for l in ${(f)"$(<$1)"}; do piece[${l% *}]=${l#* }; done
   for (( n = s1; n <= s2; n++ )); do
     plain "$P[n]"; t=$REPLY
-    # A line whose code the preview placed (PCOL, a case's pane): the code
-    # selected of it, as text is, without the numbers before it or the notes
-    # beside it.
+    # A line whose code or words the preview placed (PCOL, a case's pane):
+    # what is selected of them, as text is, without the numbers or the label
+    # before them or the notes beside them.
     if [[ -n $PCOL[$n] ]]; then
       pc=(${=PCOL[$n]})
       (( n == s1 && c1 > pc[1] )) && pc[1]=$c1
       (( n == s2 && c2 < pc[2] )) && pc[2]=$c2
       t=${${t[pc[1],pc[2]]}%%[[:space:]]#}
-      if (( n > s1 )) && [[ $pc[3] == + ]]; then out+=$t; else out+=${out:+$'\n'}$t; fi
+      case $(( n > s1 ))$pc[3] in
+        1+) out+=$t ;;
+        1_) out+=${out:+ }$t ;;
+        *) out+=${out:+$'\n'}$t ;;
+      esac
       continue
     fi
     gut "$t"

@@ -8,7 +8,9 @@
 // after the route, each under its own line. With OTIS_PANE_MAP set, the pane opens with "\036map N" and N lines
 // saying what a line of it is, by its number: a line of code (line, its file, side, first and last number, 1 if
 // the file is in the change, the columns its code is in, and the place it is part of: a stop, or a thread's line)
-// or a thread's (thread, its id, resolvable, resolved and draft), for otis-symbols to comment from what you select.
+// or a thread's (thread, its id, resolvable, resolved and draft), for otis-symbols to comment from what you select;
+// or a paragraph's (text, the columns its words are in, and how it goes on from the line above: new, word after a
+// space, or cut inside a word too long for a line), for otis-symbols to copy it as the one line it was.
 // It also pins a case's title and how it ends ("\036pin N" and N lines), held at the pane's top while the rest scrolls.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -57,7 +59,7 @@ const PLUS_WORD = bgOf(env.OTIS_T_PLUS_WORD, "\x1b[48;5;34m"), MINUS_WORD = bgOf
 const YOURS = fg("OTIS_T_YOURS", "35");
 
 const out = [], map = [], pinned = [];
-/** A line of the pane, and, for a line you can comment from, what it is (the map). */
+/** A line of the pane, and, for a line you can comment from or copy as a paragraph, what it is (the map). */
 const say = (line = "", what = "") => { out.push(line); if (what) map.push(`${out.length}\t${what}`); };
 
 // The review's threads on lines, by where they sit; each drawn once, under the first line of the pane it is on.
@@ -227,7 +229,10 @@ function describe(row) {
 
 /** Words wrapped to a width, whole, each line in style on ground, with the code names in them drawn as code:
  * a name Claude put in backticks, or one no English word looks like (camelCase, snake_case). */
-function prose(text, room, style = T, ground = "") {
+function prose(text, room, style = T, ground = "") { return wrapped(text, room, style, ground).map((one) => one.line); }
+
+/** prose's lines, each with whether it goes on inside a word the line above cut (cut). */
+function wrapped(text, room, style = T, ground = "") {
   const words = [];
   let word = [], code = 0, spans = 0;
   const end = () => { if (word.length) words.push(word); word = []; };
@@ -246,7 +251,7 @@ function prose(text, room, style = T, ground = "") {
     const [, before, name, after] = named.exec(one[at].t);
     one.splice(at, 1, ...[{ t: before, code: 0 }, { t: name, code: -1 }, { t: after, code: 0 }].filter((piece) => piece.t));
   }
-  // A word longer than the line is the only one cut.
+  // A word longer than the line is the only one cut: the lines its pieces after the first start go on inside it.
   const size = (one) => one.reduce((n, piece) => n + [...piece.t].length, 0);
   const chop = (one) => {
     const out = [];
@@ -261,27 +266,35 @@ function prose(text, room, style = T, ground = "") {
     return out;
   };
   const lines = [];
-  let line = [], used = 0;
-  for (const one of words.flatMap((w) => (size(w) > room ? chop(w) : [w]))) {
-    if (line.length && used + 1 + size(one) > room) { lines.push(line); line = []; used = 0; }
+  let line = [], used = 0, cut = false;
+  for (const [one, inside] of words.flatMap((w) => (size(w) > room ? chop(w).map((piece, k) => [piece, k > 0]) : [[w, false]]))) {
+    if (line.length && used + 1 + size(one) > room) { lines.push({ words: line, cut }); line = []; used = 0; cut = inside; }
     used += (line.length ? 1 : 0) + size(one);
     line.push(one);
   }
-  if (line.length || !lines.length) lines.push(line);
+  if (line.length || !lines.length) lines.push({ words: line, cut });
   const back = `${R}${ground}${style}`;
   const draw = (piece) => (piece.code ? `${RAISE}${T}${piece.t}${back}` : piece.t);
-  return lines.map((one) => style + one.map((w, k) => {
+  return lines.map(({ words: one, cut }) => ({ cut, line: style + one.map((w, k) => {
     const joined = k && one[k - 1].at(-1).code > 0 && one[k - 1].at(-1).code === w[0].code;
     return (k ? (joined ? `${RAISE} ${back}` : " ") : "") + w.map(draw).join("");
-  }).join("") + R);
+  }).join("") + R }));
+}
+
+/** Lines of prose (wrapped) said as a paragraph, each after lead, the first after first (a label as wide), and each
+ * in the map: the columns its words are in and how it goes on from the line above, so a copy takes the words
+ * alone, as the one line they were. */
+function paragraph(lines, lead, first = lead) {
+  const from = width(lead) + 1;
+  lines.forEach(({ line, cut }, at) => say(`${at ? lead : first}${line}`,
+    `text\t${from}\t${from + [...line.replace(ANSI, "").trimEnd()].length - 1}\t${!at ? "new" : cut ? "cut" : "word"}`));
 }
 
 /** A band of the story: its label, and its words wrapped beside it on its ground. */
 function band(label, labelColor, text, textStyle, ground = "") {
   const room = Math.min(W - 18, 92);
-  prose(text, room, textStyle, ground).forEach((line, at) => {
-    say(`  ${ground}${pad(` ${at ? "" : labelColor + label + R + ground}`, 13)}${line}${ground}${" ".repeat(Math.max(0, room - width(line) + 1))}${R}`);
-  });
+  paragraph(wrapped(text, room, textStyle, ground).map(({ line, cut }) => ({ cut, line: `${line}${ground}${" ".repeat(Math.max(0, room - width(line) + 1))}${R}` })),
+    `  ${ground}${" ".repeat(13)}`, `  ${ground}${pad(` ${labelColor}${label}${R}${ground}`, 13)}`);
 }
 
 /** The design red flags on this case (flags.mjs), in red above the rest of it: what is wrong, what it costs the
@@ -298,7 +311,7 @@ function showFlags() {
   const room = Math.min(W - 18, 92), from = 16;
   flags.forEach((flag, k) => {
     say(`  ${X}${B}⚑ ${(NAMED[flag.flag] ?? flag.flag).toUpperCase()}${R}`);
-    for (const line of prose(flag.claim, Math.min(W - 4, 100))) say(`  ${line}`);
+    paragraph(wrapped(flag.claim, Math.min(W - 4, 100)), "  ");
     band("next change", X, flag.cost, T);
     band("smaller", G, flag.smaller, T);
     if (flag.comment) band("say", YOURS, flag.comment, T);
@@ -330,15 +343,15 @@ function showCase() {
   if (env.OTIS_PANE_MAP) pinned.push(...head, `  ${C}${"─".repeat(W - 4)}${R}`);
   say();
   if (!env.OTIS_PANE_MAP) for (const line of head) say(line);
-  if (part.setup) for (const line of prose(part.setup, W - 4)) say(`  ${line}`);
+  if (part.setup) paragraph(wrapped(part.setup, W - 4), "  ");
   say();
-  if (rewording) { for (const line of prose("Claude is telling this case again in your words", W - 4, A)) say(`  ${line}`); say(); }
+  if (rewording) { paragraph(wrapped("Claude is telling this case again in your words", W - 4, A), "  "); say(); }
   showFlags();
   // Where in the system this happens, for a reader who has never seen this code: in full in every case, so a
   // case read on its own has the words it uses.
   if (part.where) {
     say(`  ${C}WHERE THIS RUNS${R}`);
-    for (const line of prose(part.where, Math.min(W - 4, 100))) say(`  ${line}`);
+    paragraph(wrapped(part.where, Math.min(W - 4, 100)), "  ");
     say();
   }
 
@@ -346,7 +359,7 @@ function showCase() {
   // has no before: none of it ran.
   if (part.ends) {
     say(`  ${C}HOW IT ENDS${R}`);
-    for (const line of prose(part.ends, Math.min(W - 4, 100))) say(`  ${line}`);
+    paragraph(wrapped(part.ends, Math.min(W - 4, 100)), "  ");
     say();
   }
   const facts = part.facts;
@@ -433,7 +446,7 @@ function showCase() {
     else { say(`  ${rail(depth)}${head}`); say(`  ${rail(depth + 1)}${place}`); }
     // What it is for, without the name it opens with when Claude starts there: the line above says it.
     const is = (stop.is ?? "").replace(new RegExp(`^\`?${stop.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`?\\s+`), "");
-    if (is) for (const line of prose(is, room - 2)) say(`  ${rail(depth + 1)}${line}`);
+    if (is) paragraph(wrapped(is, room - 2), `  ${rail(depth + 1)}`);
     // Its code, every line in its file's colors on the diff's ground: the lines Claude cites on a stronger ground,
     // with what holds there beside them in yellow, and what a changed line changed on the strongest. A stop it
     // calls is drawn under the line that calls it.
@@ -487,7 +500,7 @@ function showCase() {
     const from = part.stops[i].from;
     if (at) {
       const how = from ? `↓ ${from.fn ? `\`${from.fn}\`` : "code outside any function"} in ${from.where}:${from.n} ${from.verb} it` : "↓ next";
-      for (const line of prose(how, W - 4, C)) say(`  ${line}`);
+      paragraph(wrapped(how, W - 4, C), "  ");
     }
     drawStop(i, 0);
   });

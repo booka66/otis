@@ -121,6 +121,13 @@ expect story-pane/changed-words "$(FZF_PREVIEW_COLUMNS=80 git-sentences --pane "
   sed -E "s/$e\[48;2;(67;131;69|156;53;43)m([^$e]*)$e\[48;2;(38;51;42|60;32;34)m/[\2]/g" | strip | sed -n 's/^ *│ *[0-9]* [−+] *\(.*[^ ]\) *$/\1/p' | tr '\n' '|')" \
   "return text[.slice(0], MAX);|const count = 1;|return [truncate(]text, MAX);|"
 rm -f "$tmp/case.json"
+# A paragraph of a case's pane says in its map how each of its lines goes on from the one above, after a space or
+# inside a word too long for a line, so a selection of it copies as the one line it was: here where it runs,
+# wrapped, the author band, and a test file's path, cut.
+printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"stops":[],"where":"The page a merchant opens to turn a product on, one row a product.","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}]}' > "$tmp/case.json"
+expect story-pane/paragraphs "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | awk 'NR == 1 { n = $2; next } NR <= n + 1' | awk -F'\t' '$2 == "text" { print $5 }' | tr '\n' ' ')" \
+  "new word new new cut "
+rm -f "$tmp/case.json"
 
 # --- otis-keys only names keys its picker declares: a key renamed in one and
 # not the other labels a key that does nothing, or leaves one unlabelled.
@@ -921,7 +928,7 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # A case's title and how it ends are pinned to the top of its pane, so they stay while the rest scrolls, and said once.
   printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"stops":[],"code":[],"tests":[],"links":[],"runs":[]}]}' > "$tmp/case.json"
   pane=$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | strip)
-  expect sentences/case-pinned "$(printf '%s\n' "$pane" | head -3 | tr '\036\n' '^|'):$(printf '%s\n' "$pane" | grep -c 'A retry runs out')" "^pin 3|  A retry runs out|  it hangs → it gives up|:1"
+  expect sentences/case-pinned "$(printf '%s\n' "$pane" | awk '/^\036pin/ { on = 1 } on' | head -3 | tr '\036\n' '^|'):$(printf '%s\n' "$pane" | grep -c 'A retry runs out')" "^pin 3|  A retry runs out|  it hangs → it gives up|:1"
   expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
   # A screen with tabs lists cases, never the tree: before they come, it says why there are none.
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"
