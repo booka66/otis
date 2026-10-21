@@ -747,6 +747,11 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # p on run's row at a preview this wide, afresh: the notes under its names.
   peek() { rm -f "$tmp/symst/peeks"; printf '%s' "${1:-100}" > "$tmp/symst/cols"; GIT_FZF_STATE=$tmp/symst git-symbols --peeks "$base..$head" lib.ts new 2 4 'lib.ts#run'; }
   rows=$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head")
+  # otis.callers off (as here) is no tsgo in otis, so nothing kept for it either: node_modules is never installed.
+  mkdir -p "$tmp/nmstub" "$tmp/nmst"
+  printf '#!/bin/sh\necho "run $*" >> "%s"\n' "$tmp/nm-called" > "$tmp/nmstub/otis-node-modules" && chmod +x "$tmp/nmstub/otis-node-modules"
+  PATH=$tmp/nmstub:$PATH GIT_FZF_STATE=$tmp/nmst git-symbols --rows "$base..$head" >/dev/null 2>&1
+  expect symbols/no-tsgo-no-node-modules "$(cat "$tmp/nm-called" 2>/dev/null)" ""
   table=$tmp/symst/symbols.tsv
   # Roots first (nothing changed mentions them), then what they use: Opts is
   # under run and fresh.

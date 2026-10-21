@@ -35,7 +35,9 @@
 #
 # Lazy and cached like the gloss (git-symbols-gloss): a commit, branch or MR
 # by its shas for good, the worktree by its symbols. git config otis.callers
-# off turns it off; without tsgo or node nothing runs. tsgo resolves the
+# off turns it off, and with it every tsgo run in otis (the walk's types, the
+# split's members) and the node_modules kept for them; callers already found
+# still show. Without tsgo or node nothing runs. tsgo resolves the
 # workspace's packages through node_modules, which a worktree gets mirrored
 # from the main checkout's first, and which is brought up to the lockfile
 # before tsgo reads it where otis.install says how (otis-node-modules --wait),
@@ -163,7 +165,7 @@ if [ "$mode" = --recheck ] || [ "$mode" = --recheck-run ]; then
   if [ "$mode" = --recheck ]; then
     [ "$(head -1 "$disk" 2>/dev/null)" = "$stamp" ] && { printf '%s\n' "$disk"; exit 0; }
     [ -s "$rrun" ] && kill -0 "$(cat "$rrun")" 2>/dev/null && { echo running; exit 0; }
-    command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
+    [ "$(git config --get otis.callers)" != off ] && command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
     otis-detach git-callers --recheck-run "$rev" "$table" </dev/null >/dev/null 2>>"$dir/$key.err" &
     echo $! > "$rrun"
     echo running

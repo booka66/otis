@@ -1289,8 +1289,10 @@ if [ "$mode" = --rows ]; then
   # (otis-node-modules): a worktree's mirrored from main's, the repo's new
   # packages linked, the install started when the lockfile moved. Once per
   # picker: the checkout under it does not change, and the script finding
-  # nothing to do was three processes on every reload.
-  if [ -z "$GIT_FZF_STATE" ] || [ ! -e "$st/node-modules" ]; then
+  # nothing to do was three processes on every reload. None at all with
+  # git config otis.callers off, which is no tsgo in otis.
+  tsgo=1; [ "$(git config --get otis.callers)" = off ] && tsgo=
+  if [ -n "$tsgo" ] && { [ -z "$GIT_FZF_STATE" ] || [ ! -e "$st/node-modules" ]; }; then
     otis-node-modules >/dev/null 2>&1
     [ -n "$GIT_FZF_STATE" ] && : > "$st/node-modules"
   fi
@@ -1942,7 +1944,7 @@ if [ "$mode" = --rows ]; then
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
     # node_modules against its lockfile (otis-node-modules --state): being
     # installed, or behind it, which is what a callers check is reading.
-    [ -n "$held" ] || nm=$(otis-node-modules --state 2>/dev/null)
+    [ -n "$held" ] || [ -z "$tsgo" ] || nm=$(otis-node-modules --state 2>/dev/null)
     case $nm in
       installing) note="$note · $(printf "${GK_ATTENTION}installing node_modules${GK_R}")" ;;
       behind) note="$note · $(printf "${GK_ATTENTION}node_modules is behind the lockfile${GK_R}")" ;;

@@ -19,8 +19,9 @@
 # seam runs it only to split (#seam: split) and keeps the answer by the two
 # commits. The changed files are opened as the head has them, from git, so
 # the checkout can be anywhere; everything else tsgo reads off the disk.
-# Without tsgo or node it says nothing and seam splits as it would have.
-command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
+# Without tsgo or node, or with git config otis.callers off (no tsgo in
+# otis), it says nothing and seam splits as it would have.
+[ "$(git config --get otis.callers)" != off ] && command -v tsgo >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || exit 0
 share=$(cd "$(dirname "$0")/../.." && pwd)
 root=$(git rev-parse --show-toplevel) || exit 0
 tmp=$(mktemp -d) || exit 1
