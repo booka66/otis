@@ -925,6 +925,21 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   GIT_FZF_STATE=$tmp/sentst git-symbols --viewed "$base..$head" toggle sentence:1
   expect sentences/viewed-none "$(srows | awk -F'\t' '$12 == "sentence:1" { print "[" $20 "]" }')" "[]"
   expect sentences/pane "$(GIT_FZF_STATE=$tmp/sentst git-symbols --preview "$base..$head" "" "" "" "" sentence:1 | strip | grep -c 'Head')" "1"
+  # A case runs through the meat of the change: Claude never sees the generated file, and a stop it gives in a
+  # test or a generated file, or data it names there, is dropped.
+  mkdir -p "$tmp/meatstub"
+  cat > "$tmp/meatstub/claude" <<EOF
+#!/bin/sh
+cat > "$tmp/meat-prompt"
+stop() { jq -n --arg p "\$1" --argjson n "\$2" --arg c "\$3" '{name: "x", is: "", path: \$p, side: "new", lines: [{line: \$n, code: \$c, value: ""}]}'; }
+jq -n --argjson a "\$(stop lib.spec.ts 2 'export const r = run({ a: 1 });')" --argjson b "\$(stop gen.generated.ts 1 'export const G = run({ a: 1 }, true);')" \\
+  --argjson c "\$(stop lib.ts 2 'export function run(o: Opts, twice: boolean): number {')" \\
+  '{structured_output: {summary: "", groups: [], cases: [{group: "a run", name: "run is called", setup: "", was: "", now: "", change: "ends differently",
+    described: false, said: "", facts: [], stops: [\$a, \$b, \$c], ends: "", stopped: "", tests: [], data: ["gen.generated.ts"]}]}, num_turns: 1, total_cost_usd: 0}'
+EOF
+  chmod +x "$tmp/meatstub/claude"
+  SEAM_CLAUDE=$tmp/meatstub/claude node "$root/share/sentences.mjs" "$base" "$head" --model stub --outline "$tmp/meat.json" >/dev/null 2>&1
+  expect sentences/meat-only "$(jq -r '.sentences[0] | "\([.stops[].path] | unique | join(" ")):\(.data | join(" ")):\([.units[][1]] | unique | join(" "))"' "$tmp/meat.json"):$(grep -c 'gen.generated.ts' "$tmp/meat-prompt")" "lib.ts::lib.ts:0"
   # A case's title and how it ends are pinned to the top of its pane, so they stay while the rest scrolls, and said once.
   printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"stops":[],"code":[],"tests":[],"links":[],"runs":[]}]}' > "$tmp/case.json"
   pane=$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | strip)

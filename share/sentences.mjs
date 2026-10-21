@@ -72,9 +72,14 @@ const files = parseDiff(git("diff", "--no-color", "--no-ext-diff", "--no-renames
 const commitFiles = commits.map((commit) => new Set(git("diff-tree", "--no-commit-id", "--name-only", "-r", commit.sha).split("\n").filter(Boolean)));
 
 const TESTISH = /(^|[\/._-])(tests?|specs?|e2e|pe2e|__tests__)([\/._-]|$)/i;
-const testFiles = new Set((graph?.definitions ?? []).filter((def) => def.box?.kind === "tests").map((def) => def.path));
-for (const entry of graph?.files ?? []) if (entry.box?.kind === "tests") testFiles.add(entry.path);
+// What seam says each changed file is (tests, gen, cfg or source): on its definitions, or the file's own row.
+const kinds = new Map([...(graph?.definitions ?? []), ...(graph?.files ?? [])].map((one) => [one.path, one.box?.kind]));
+const testFiles = new Set([...kinds].filter(([, kind]) => kind === "tests").map(([path]) => path));
 for (const path of files.keys()) if (TESTISH.test(path)) testFiles.add(path);
+// Cases run through the meat of the change: never its tests, generated files or build wiring, which the files
+// tab keeps under headings of their own.
+const wiring = (path) => kinds.get(path) === "gen" || kinds.get(path) === "cfg";
+const meat = (path) => !testFiles.has(path) && !TESTISH.test(path) && !wiring(path);
 
 const COMMENT = /^\s*(\/\/|\/\*|\*|#(?![!\[])|--\s|"""|''')/;
 const KIND = { fn: "fn", constfn: "fn", method: "fn", const: "const", var: "const", interface: "type", type: "type", enum: "type", class: "class" };
@@ -374,7 +379,7 @@ async function tellCases(only = null, told = null) {
     "",
     "groups: for each group your cases use (its words exactly as the cases give them), where: two to four sentences for a teammate who has never seen this part of the code: what this part of the system is for and why it exists; what it does; each word it gives its own meaning, defined in plain words (an eval's case, label and passing; a billing window; a gateway); and the main steps a case passes through, naming their functions in the order they run.",
     "",
-    "Every changed row of code below must be on some case's route: some case's stops cite lines inside it. Before you answer, go through the rows one by one; for a row none of your cases runs yet, find what calls it or reads what it changes, and make that a case, or put it on the route of the case it belongs to. A test is on a case when that case names it in tests.",
+    "Every changed row of code below must be on some case's route: some case's stops cite lines inside it. Before you answer, go through the rows one by one; for a row none of your cases runs yet, find what calls it or reads what it changes, and make that a case, or put it on the route of the case it belongs to. A test is never a stop: it is on a case when that case names it in tests.",
     "",
     ...(reader ? [reader, ""] : []),
     "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
@@ -392,7 +397,7 @@ async function tellCases(only = null, told = null) {
     ...(sources.length ? sources.flatMap((source) => ["", `## ${source.from === "description" ? "merge request description" : `commit ${source.from}`}`, source.text]) : ["", "(none)"]),
     "",
     "# The changed rows: each line's number on its side, + added, - removed",
-    ...(only ?? rows).flatMap((row) => [
+    ...(only ?? rows.filter((row) => !wiring(row.path))).flatMap((row) => [
       "",
       `## ${row.name}${row.cases ? ` [${row.cases}]` : ""}`,
       `${row.test ? "test code" : "code"}, ${row.kind}, ${row.mark}${row.tag ? `, ${row.tag}` : ""}, +${row.add} -${row.del}, ${row.path}`,
@@ -541,7 +546,7 @@ const identifiers = (lines) => new Set(lines.flatMap((line) => line.t.match(/[A-
 /** Changed definitions by the name a line would use for them: a member by its own name, a constructor by its class's. */
 const named = new Map();
 for (const row of rows) {
-  if (!row.symbol) continue;
+  if (!row.symbol || !meat(row.path)) continue;
   const [owner, own] = row.name.includes(".") ? row.name.split(".") : [null, row.name];
   const word = own === "constructor" ? owner : own;
   if (word.length < 6 && !/[a-z][A-Z]/.test(word)) continue;
@@ -628,10 +633,12 @@ function ownOf(side, path, n) {
 /** A case's stops, as otis finds them in the code: each cited line where its code is (within a few lines of where
  * Claude said; a line otis can't find is dropped), what it replaced, and which changed rows it runs through. Each
  * line goes under the function it is in, as the code has it: a function inside another is a stop of its own, and
- * a stop Claude named for a function its lines are not in takes the name of the one they are in. */
+ * a stop Claude named for a function its lines are not in takes the name of the one they are in. A stop in a test,
+ * a generated file or build wiring is dropped. */
 function placeStops(stop) {
   const path = stop.path.trim().replace(/^(\.\/|[ab]\/)/, "");
   const side = stop.side === "old" ? "old" : "new";
+  if (!meat(path)) return [];
   const text = textAt(side, path);
   if (!text) return [];
   const lines = [];
@@ -745,7 +752,7 @@ const blockHas = (text, open, n) => { let depth = 0; for (let k = open; k < n; k
 
 /** What in the code calls a stop nothing on the route calls (or uses it: hands it on, reads it), so the reader
  * sees how the case gets there: the first such line in the change's code, else in the stop's own folder, with
- * the function it is in. Tests are no way in. null when there is none. */
+ * the function it is in. Only the meat of the change is a way in. null when there is none. */
 function caller(stop) {
   const name = callee(stop);
   if (!name) return null;
@@ -758,7 +765,7 @@ function caller(stop) {
     if (COMMENT.test(t) || /^\s*(import|export\s*(\{|\*))\b/.test(t) || defines.test(t)) return "";
     return calls.test(t) ? "calls" : uses.test(t) ? "uses" : "";
   };
-  const code = (path) => /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|sh|zsh)$/.test(path) && !testFiles.has(path) && !TESTISH.test(path);
+  const code = (path) => /\.(m?[jt]sx?|cjs|py|go|rs|rb|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala|sh|zsh)$/.test(path) && meat(path);
   const found = (path, n, verb) => ({ fn: ownOf("new", path, n)?.name ?? "", path, where: where(path), n, verb });
   // A function of the same name (a wrapper, a re-export) is no way in: it says the name again and nothing more.
   const fresh = (hit) => hit.fn !== name;
@@ -994,11 +1001,8 @@ const trimPainted = (painted) => {
 // build, so the cases come all at once and cover the change. Kept with the first answer.
 if (told && !told.cached) {
   const covered = new Set();
-  for (const one of told.cases) {
-    for (const stop of (one.stops ?? []).flatMap(placeStops)) for (const row of stop.covers) covered.add(row);
-    for (const row of testsNamed(one.tests)) covered.add(row);
-  }
-  const left = rows.filter((row) => !row.test && !row.imports && !covered.has(row));
+  for (const one of told.cases) for (const stop of (one.stops ?? []).flatMap(placeStops)) for (const row of stop.covers) covered.add(row);
+  const left = rows.filter((row) => meat(row.path) && !row.imports && !covered.has(row));
   if (left.reduce((n, row) => n + row.add + row.del, 0) >= 20) {
     const more = await tellCases(left, told);
     if (more) {
@@ -1067,8 +1071,8 @@ if (told) {
       keys.push(`${stop.side}\t${stop.path}`);
       if (stop.code.some((line) => line.n && !line.mine)) keys.push(`${stop.side === "old" ? "new" : "old"}\t${stop.path}`);
     }
-    // The changed files that hold the data it runs on: a case file, a fixture, a migration.
-    const data = [...new Set((one.data ?? []).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && !runs.some((run) => run.path === path)))];
+    // The changed files that hold the data it runs on: a case file, a migration.
+    const data = [...new Set((one.data ?? []).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && meat(path)))];
     const change = RANK[one.change] == null ? "ends differently" : one.change;
     parts.push({
       kind: said ? "case" : "also", title: bare(one.name), group: groups[groupAt(one)],
@@ -1078,10 +1082,8 @@ if (told) {
       // New code: the route starts in code the change adds, so the case has no before; one that ends the same had one.
       stops, fresh: change !== "the same" && stops.length > 0 && stops.filter((stop) => stop.parent < 0).every((stop) => stop.fresh),
       ends: coded(one.ends), stopped: coded(one.stopped), runs, data,
-      // Its tests bring their own setup: the suites, helpers and imports of the files they are in.
-      rows: [...new Set([...stops.flatMap((stop) => [...stop.covers]), ...runs,
-        ...rows.filter((row) => row.test && !(row.block && row.kind === "test") && runs.some((run) => run.path === row.path)),
-        ...rows.filter((row) => data.includes(row.path))])],
+      // Its tests are named under it, not read in it.
+      rows: [...new Set([...stops.flatMap((stop) => [...stop.covers]), ...rows.filter((row) => data.includes(row.path))])],
     });
   }
   await paint(keys);
@@ -1101,7 +1103,8 @@ if (told) {
   commits.forEach((commit, at) => parts.push({ kind: "story", title: commit.subject, quote: "", origin: short(commit.sha), rows: rows.filter((row) => row.commit === at) }));
 }
 const onRoute = new Set(parts.flatMap((part) => part.rows));
-const loose = rows.filter((row) => !onRoute.has(row));
+// Told as cases, what no case runs is only the meat: the tests and wiring are read in the files tab.
+const loose = rows.filter((row) => !onRoute.has(row) && (!told || meat(row.path)));
 if (loose.length) parts.push({ kind: "rest", title: told ? "Changed lines no case runs" : "In the change, and in no part", quote: "", origin: null, rows: loose });
 const sentences = parts.filter((part) => part.rows.length || part.stops?.length);
 let numbered = 0;
