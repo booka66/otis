@@ -426,16 +426,26 @@ async function tellCases(only = null, told = null) {
       "--allowedTools", `Bash(git -C ${root} grep:*)`, `Bash(git -C ${root} show:*)`,
       "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence", "--permission-prompts", "none",
       "--max-budget-usd", budget, "--output-format", "json", "--json-schema", JSON.stringify(schema),
-    ], { cwd: empty, encoding: "utf8", maxBuffer: MAX, timeout: 1800000 }, (error, out) => done(out || null)).stdin.end(prompt);
+    ], { cwd: empty, encoding: "utf8", maxBuffer: MAX, timeout: 1800000 }, (error, out, err) => done({ out, error, err })).stdin.end(prompt);
   });
   rmSync(empty, { recursive: true, force: true });
-  let answered;
-  try { answered = JSON.parse(answer).structured_output; } catch { answered = null; }
-  if (!answered?.cases?.length) {
-    if (!only) console.error(`sentences: ${model} found no cases, so it is one part a commit: ${String(answer).slice(0, 300)}`);
+  let spent;
+  try { spent = JSON.parse(answer.out); } catch { spent = null; }
+  const answered = spent?.is_error ? null : spent?.structured_output;
+  // Claude gave no answer (its usage limit, its budget): no cases rather than the commits passed off as them, and
+  // why, which git-sentences keeps until r asks again.
+  if (!answered) {
+    if (only) return null;
+    const why = spent?.subtype === "error_max_budget_usd" ? `it spent its $${budget} (git config otis.sentencesBudget)`
+      : answer.error?.killed ? "it ran past 30 minutes"
+      : [spent?.result, answer.err].join("\n").split("\n").find((line) => line.trim()) ?? "claude ended without a word";
+    console.error(`sentences: Claude could not tell its cases: ${why}`);
+    process.exit(1);
+  }
+  if (!answered.cases?.length) {
+    if (!only) console.error(`sentences: ${model} found no cases, so it is one part a commit`);
     return null;
   }
-  const spent = JSON.parse(answer);
   // The reader's words it was told with, so the pane knows which words a case already tells your way.
   const result = { model, cases: answered.cases, groups: answered.groups ?? [], summary: coded(answered.summary), turns: spent.num_turns, cost: spent.total_cost_usd, reader };
   if (only) return result;

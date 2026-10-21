@@ -494,7 +494,7 @@ headline() {
   if [[ -s $st/footer ]]; then
     segs=("${(@s: · :)${(j: · :)${(f)$(<$st/footer)}}}") s=
     segs+=("")
-    for t in $segs; do
+    for t in "${segs[@]}"; do
       vw "$s · $t"
       if [[ -n $s ]] && { [[ -z $t ]] || (( REPLY > w - 4 )) }; then
         wrapc "$s" $(( w - 4 )) $(( w - 4 ))

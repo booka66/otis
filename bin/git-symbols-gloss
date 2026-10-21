@@ -1,9 +1,11 @@
 #!/bin/sh
 # git-symbols-gloss <rev> <table>            the cache file once glossed; else "running", having started
 #                                            the glossing in the background unless it already runs;
-#                                            nothing when it is off or claude is not here
+#                                            "failed <why>" once a run has failed, which nothing starts
+#                                            again but --again; nothing when it is off or claude is not here
+# git-symbols-gloss --again <rev> <table>    the same, a failed run started again (r)
 # git-symbols-gloss --file <rev> <table>     the cache file for this change, if it has been glossed
-# git-symbols-gloss --state <rev> <table>    running, done, or none
+# git-symbols-gloss --state <rev> <table>    running, done, failed, or none
 # git-symbols-gloss --run <rev> <table>      the calls themselves
 #
 # What the symbol tree cannot work out, a fast model adds while you read: what
@@ -21,12 +23,13 @@
 # Lazy: the picker never waits for it. git-symbols starts this on every
 # list: a commit, a branch or an MR never changes, so their gloss is cached
 # by their shas for good; the worktree's is keyed by its symbols, so an edit
-# glosses again and staging does not (g asks again by hand). It goes into the
+# glosses again and staging does not. A run that fails is not started again
+# until r asks (git-symbols --again). It goes into the
 # picker when it lands: the picker waits on the run (git-symbols --rows).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 mode=
-case $1 in --file|--state|--run) mode=$1; shift ;; esac
+case $1 in --file|--state|--run|--again) mode=$1; shift ;; esac
 rev=$1 table=$2
 [ -n "$rev" ] && [ -s "$table" ] || exit 0
 
@@ -45,13 +48,14 @@ if [ -n "$OTIS_SYMBOLS_KEY" ]; then key=$OTIS_SYMBOLS_KEY; else
 fi
 file=$dir/$key.json
 running=$dir/$key.running
+failed=$dir/$key.failed
 
 alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
 
 case $mode in
   --file) [ -s "$file" ] && printf '%s\n' "$file"; exit 0 ;;
   --state)
-    if alive; then echo running; elif [ -s "$file" ]; then echo done; else echo none; fi
+    if alive; then echo running; elif [ -s "$file" ]; then echo done; elif [ -s "$failed" ]; then echo failed; else echo none; fi
     exit 0 ;;
 esac
 
@@ -63,6 +67,10 @@ if [ "$mode" != --run ]; then
   # Start it, once: not when off, not without claude.
   [ "$(git config --get otis.symbolsModel || echo claude-haiku-4-5)" != off ] && command -v "${SEAM_CLAUDE:-claude}" >/dev/null 2>&1 &&
     command -v seam >/dev/null 2>&1 || exit 0
+  # Nor once it has failed, until r asks again: every list starts this, and Claude at its usage limit
+  # failed each start in a second, which landed, reloaded the list and started the next.
+  [ "$mode" = --again ] && rm -f "$failed"
+  [ -s "$failed" ] && { printf 'failed %s\n' "$(cat "$failed")"; exit 0; }
   mkdir -p "$dir" || exit 0
   cp "$table" "$dir/$key.table"
   otis-detach git-symbols-gloss --run "$rev" "$dir/$key.table" </dev/null >/dev/null 2>"$dir/$key.err" &
@@ -93,7 +101,13 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=seam.glossModel GIT_CONFIG_VALUE_0=$model \
           edges: (.edges | to_entries | map((.key | split(">")) as $k | {from: $k[0], to: $k[1], gloss: .value})),
           order: .order, spine: .spine}' > "$file.new" 2>>"$dir/$key.err" && mv "$file.new" "$file"
 rm -rf "$dir/$key.table"
-[ -s "$file" ] && rm -f "$dir/$key.err"
+# A failure is kept with seam's last word on why ("seam: Claude did not gloss this: You've hit your
+# limit"); a run killed on the way says nothing, and the next list starts it again.
+if [ -s "$file" ]; then rm -f "$dir/$key.err" "$failed"
+else
+  why=$(grep -E '^[a-z.-]+: ' "$dir/$key.err" | tail -1)
+  [ -n "$why" ] && printf '%s\n' "${why#*: }" > "$failed"
+fi
 # The open picker takes it from here: it waits on this run (git-symbols
 # --rows) and reloads when it is done.
 exit 0

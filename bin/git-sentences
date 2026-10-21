@@ -1,7 +1,8 @@
 #!/bin/sh
-# git-sentences [--open | --warm | --text] [<rev>]: a change as its cases, each a situation the code meets,
-# how it ended before and how it ends now, and its route through the code as it runs (share/sentences.mjs).
-# The symbol view lists by its cases; G there is --open.
+# git-sentences [--open | --warm | --again | --text] [<rev>]: a change as its cases, each a situation the code
+# meets, how it ended before and how it ends now, and its route through the code as it runs (share/sentences.mjs).
+# The symbol view lists by its cases; G there is --open. --warm tells them behind you, but not once Claude has
+# failed to (<key>.failed says why); --again, r in the symbol view, does.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 
@@ -12,7 +13,7 @@ if [ "$1" = --pane ]; then
 fi
 
 mode=page
-case $1 in --open | --warm | --text | --build) mode=${1#--}; shift ;; esac
+case $1 in --open | --warm | --again | --text | --build) mode=${1#--}; shift ;; esac
 rev=$1
 
 # stop <why>: say it where it will be read. Under a picker that is the terminal, until a key.
@@ -35,7 +36,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/symbols-sentences"
 key=$base-$head
-page=$dir/$key.html rows=$dir/$key.tsv running=$dir/$key.running
+page=$dir/$key.html rows=$dir/$key.tsv running=$dir/$key.running failed=$dir/$key.failed
 mkdir -p "$dir" || exit 1
 alive() { [ -s "$running" ] && kill -0 "$(cat "$running")" 2>/dev/null; }
 # What is kept stands until the change does not: its two commits never move, so only a newer otis writes again.
@@ -64,6 +65,7 @@ build() {
     | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change] | @tsv),
       ($s.units[] | ["R", $n] + . | @tsv))' "$dir/$key.json.$$" > "$rows.$$" || return 1
   mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows" || return 1
+  rm -f "$failed"
   # Then its design red flags, behind it (share/flags.mjs).
   otis-detach node "$share/flags.mjs" "$dir/$key.json" </dev/null >/dev/null 2>&1 &
 }
@@ -73,10 +75,15 @@ case $mode in
   build)
     echo $$ > "$running"
     trap 'rm -f "$running" "$page.$$" "$rows.$$" "$dir/$key.json.$$"; [ -s "$dir/$key.err" ] || rm -f "$dir/$key.err"' EXIT
-    build
-    exit ;;
-  warm)
-    fresh || alive || { otis-detach git-sentences --build "$base..$head" </dev/null >/dev/null 2>"$dir/$key.err" & }
+    build && exit
+    # Kept with its last word on why ("sentences: Claude could not tell its cases: You've hit your limit"), so
+    # the screen says it and no look starts it again: each was another call to fail.
+    why=$(grep -E '^[a-z.-]+: ' "$dir/$key.err" | tail -1)
+    [ -n "$why" ] && printf '%s\n' "${why#*: }" > "$failed"
+    exit 1 ;;
+  warm | again)
+    [ "$mode" = again ] && rm -f "$failed"
+    fresh || alive || [ -s "$failed" ] || { otis-detach git-sentences --build "$base..$head" </dev/null >/dev/null 2>"$dir/$key.err" & }
     exit 0 ;;
 esac
 

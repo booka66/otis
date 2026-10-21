@@ -84,11 +84,14 @@ jq -r '.data.currentUser as $u | $u.reviewRequestedMergeRequests.nodes[]?
     glossed=$([ -z "$gloss" ] && echo 1)
     for f in "$cache/symbols-gloss"/*-"$head".json; do [ -s "$f" ] && glossed=1; done
     for f in "$cache/symbols-gloss"/*-"$head".running; do kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && glossed=1; done
+    # One that failed is asked again only by r in the review, not on every prefetch.
+    for f in "$cache/symbols-gloss"/*-"$head".failed; do [ -s "$f" ] && glossed=1; done
     tabled=
     for f in "$cache/symbols"/*-"$head"-$tabs*.tsv; do [ -s "$f" ] && tabled=1; done
     # And told as a story (git-sentences), which is the list a review opens on: again once otis tells it another way.
     sentenced=$([ -z "$gloss" ] && echo 1)
     for f in "$cache/symbols-sentences"/*-"$head".tsv; do [ -s "$f" ] && [ ! "$story" -nt "$f" ] && sentenced=1; done
+    for f in "$cache/symbols-sentences"/*-"$head".failed; do [ -s "$f" ] && sentenced=1; done
     [ -n "$glossed" ] && [ -n "$tabled" ] && [ -n "$sentenced" ] && continue
     have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue
     b=$(git rev-parse "$(git-mr-base "$base" "$head" "$start")") || continue
@@ -105,7 +108,7 @@ jq -r '.data.currentUser.authoredMergeRequests.nodes[]? | select(.iid and .diffR
     have "$head" && have "$base" || continue
     sentenced=
     for f in "$cache/symbols-sentences"/*-"$head".tsv; do [ -s "$f" ] && [ ! "$story" -nt "$f" ] && sentenced=1; done
-    for f in "$cache/symbols-sentences"/*-"$head".running; do [ -s "$f" ] && sentenced=1; done
+    for f in "$cache/symbols-sentences"/*-"$head".running "$cache/symbols-sentences"/*-"$head".failed; do [ -s "$f" ] && sentenced=1; done
     [ -n "$sentenced" ] && continue
     [ "$telling" -lt 2 ] || break
     have "$start" || start=$(git rev-parse -q --verify "origin/$target") || continue

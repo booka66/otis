@@ -25,6 +25,7 @@
 #                                            there (git-mr-prefetch, ahead of a review)
 # git-symbols --copy <row id>               y: "<symbol> in <path>" on the clipboard, a file row its path;
 #                                            prints the footer note's fzf actions
+# git-symbols --again <rev>                  r: Claude asked again for the gloss and the cases, where it failed
 # git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
 #                                            the file line the row's preview is scrolled to, else <line>:
 #                                            enter opens there, where you are
@@ -98,7 +99,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -223,6 +224,13 @@ case $mode in
     err=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$GMR_IID" -H 'Content-Type: application/json' --input "$st/publish.json" 2>&1 >/dev/null) ||
       exec git-fzf-note "the page is uploaded but the description was not changed: $(printf '%s' "$err" | head -c 200)"
     exec git-fzf-note "linked first in !$GMR_IID's description as Cases Walkthrough" ;;
+  # A gloss or a telling of the cases that failed (Claude at its usage limit, say) stays failed, and says why,
+  # rather than being asked again on every list; r asks again, for the change the last list was of.
+  --again)
+    read -r key 2>/dev/null < "$st/key"
+    OTIS_SYMBOLS_KEY=$key git-symbols-gloss --again "$1" "$st/symbols.tsv" >/dev/null
+    read -r base head 2>/dev/null < "$st/symbols.tsv.rev" && git-sentences --again "$base..$head" >/dev/null 2>&1
+    exit 0 ;;
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
@@ -1332,10 +1340,9 @@ if [ "$mode" = --rows ]; then
           { git-sentences --warm "${now% *}..${now#* }" >/dev/null 2>&1; echo asked > "$asked"; }
       fi
       [ -s "$asked" ] && sentwait=1 || casesoff=1
-      # A build that stopped with an error and is no longer running: what it said, in place of the wait.
-      sd=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }
-      if [ -n "$sentwait" ] && [ -s "$sd.err" ] && ! { [ -s "$sd.running" ] && kill -0 "$(cat "$sd.running")" 2>/dev/null; }; then
-        failed=$(grep -m1 . "$sd.err" | cut -c1-200) sentwait=
+      # A telling that failed, and why (git-sentences), in place of the wait.
+      if [ -n "$sentwait" ] && read -r failed 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.failed"; then
+        sentwait=
       fi
     fi
   fi
@@ -1351,12 +1358,12 @@ if [ "$mode" = --rows ]; then
   # Claude's glosses, once they have landed (git-symbols-gloss), started
   # here; g asks again for the worktree. The cache is looked for here, a
   # file test, and the script is asked only when there is none to start it.
-  gf=; glossing=
+  gf=; glossing= glossfailed=
   if [ -s "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json" ] && grep -q '"does"' "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json"; then
     gf=$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json
   else
     glossed=$(git-symbols-gloss "$rev" "$table")
-    case $glossed in running) glossing=1 ;; /*) gf=$glossed ;; esac
+    case $glossed in running) glossing=1 ;; failed\ *) glossfailed=${glossed#failed } ;; /*) gf=$glossed ;; esac
   fi
   # Where the changed code broke before (git-symbols-past), for the
   # previews: started here; the screen draws it when it lands (otis-symbols
@@ -1629,9 +1636,10 @@ if [ "$mode" = --rows ]; then
       # The cases tab of a screen with tabs: until the cases come, it says why there are none.
       if (tabs) {
         heading("cases", "gk-cases-heading")
-        if (failed != "") { more(GK_BAD "Claude could not follow it case by case: " failed GK_R, "m", ""); more(GK_CONTEXT "tab shows its files" GK_R, "m", "") }
-        else if (casesoff) { more(GK_CONTEXT "cases need Claude, and git config otis.symbolsModel is off" GK_R, "m", ""); more(GK_CONTEXT "tab shows its files" GK_R, "m", "") }
-        else { more(GK_ATTENTION "Claude is following it case by case, a minute or two the first time" GK_R, "m", ""); more(GK_CONTEXT "tab shows its files meanwhile" GK_R, "m", "") }
+        tw = (draw ? draw : gk_list_width(cols)) - 6; if (tw < 20) tw = 20
+        if (failed != "") { flow(failed, "", tw, "", 0, GK_BAD, ""); flow("r asks Claude again · tab shows its files", "", tw, "", 0, GK_CONTEXT, "") }
+        else if (casesoff) { flow("cases need Claude, and git config otis.symbolsModel is off", "", tw, "", 0, GK_CONTEXT, ""); flow("tab shows its files", "", tw, "", 0, GK_CONTEXT, "") }
+        else { flow("Claude is following it case by case, a minute or two the first time", "", tw, "", 0, GK_ATTENTION, ""); flow("tab shows its files meanwhile", "", tw, "", 0, GK_CONTEXT, "") }
         print syms + 0, length(files), 0 > counts; exit
       }
       if (spine != "") {
@@ -1939,8 +1947,12 @@ if [ "$mode" = --rows ]; then
     ncases=$(awk -F'\t' '$1 == "S" && ($3 == "case" || $3 == "also")' "$sentf" 2>/dev/null | wc -l | tr -d ' ')
     [ "${ncases:-0}" -gt 0 ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, followed in %s cases${GK_R}" "$syms" "$nfiles" "$fs" "$ncases")
     [ -n "$sentwait" ] && note="$note · $(printf "${GK_ATTENTION}Claude is following it case by case${GK_R}")"
+    # The cases tab says a failed telling in place of its cases; over cases an older otis told, here.
+    [ -n "$failed" ] && [ "$sentf" != /dev/null ] && note="$note · $(printf "${GK_BAD}%s${GK_R}" "$failed")"
     if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
+    elif [ -n "$glossfailed" ]; then note="$note · $(printf "${GK_BAD}%s${GK_R}" "$glossfailed")"
     elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
+    { [ -n "$glossfailed" ] || { [ -n "$failed" ] && [ "$sentf" != /dev/null ]; }; } && note="$note · $(printf "${GK_CONTEXT}r asks Claude again${GK_R}")"
     [ -n "$finding" ] && note="$note · $(printf "${GK_ATTENTION}tsgo is finding callers elsewhere${GK_R}")"
     # node_modules against its lockfile (otis-node-modules --state): being
     # installed, or behind it, which is what a callers check is reading.
@@ -1994,14 +2006,14 @@ elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $roo
 else files="execute(OTIS_UNDER=symbols OTIS_TABS_STATE=\$GIT_FZF_STATE git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker, by symbol, to stage one at a time; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,g=Claude glosses them,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,r=ask Claude again,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
     --bind "a:execute-silent(git add -A)+reload($list)+refresh-preview" \
     --bind "U:execute-silent(git reset -q)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
-    --bind "g:execute-silent(git-symbols-gloss worktree \$GIT_FZF_STATE/symbols.tsv)+reload($list)" \
+    --bind "r:execute-silent(git-symbols --again $rev)+reload($list)" \
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
@@ -2017,8 +2029,9 @@ else
   # A commit or a branch: its cases, its symbols, and tab on from there its files (git-commit-open). nvim opens in the diff against the
   # change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
   export OTIS_TABS=1
-  keys='tab=cases / symbols / files,shift-tab=the tab before,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,'"${GMR_IID:+P=link the page first in the description of !$GMR_IID,}"'y=copy its name,t=tests/config/generated,u=refresh'
+  keys='tab=cases / symbols / files,shift-tab=the tab before,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,'"${GMR_IID:+P=link the page first in the description of !$GMR_IID,}"'y=copy its name,t=tests/config/generated,r=ask Claude again,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
+    --bind "r:execute-silent(git-symbols --again $rev)+reload($list)" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
     --bind "tab:transform(git-symbols --tab '$files')+reload($list)+refresh-preview" \
     --bind "btab:transform(git-symbols --tab back '$files')+reload($list)+refresh-preview" \

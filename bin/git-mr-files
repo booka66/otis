@@ -122,7 +122,7 @@ refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
 first="tab=cases / symbols / files,shift-tab=the tab before,enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=web,u=refresh'
+rest='l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=web,r=ask Claude again,u=refresh'
 set --
 if [ "$kind" = review ]; then
   first="$first,A=approve"
@@ -157,6 +157,7 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
   --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "m:execute(gl $range)" \
+  --bind "r:execute-silent(git-symbols --again $range)+reload($list)" \
   --bind "w:transform(otis-open --fzf '$url')" \
   "$@" \
   --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12}" </dev/null)
