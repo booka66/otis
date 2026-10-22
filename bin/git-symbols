@@ -1949,9 +1949,17 @@ if [ "$mode" = --rows ]; then
     [ -n "$sentwait" ] && note="$note · $(printf "${GK_ATTENTION}Claude is following it case by case${GK_R}")"
     # The cases tab says a failed telling in place of its cases; over cases an older otis told, here.
     [ -n "$failed" ] && [ "$sentf" != /dev/null ] && note="$note · $(printf "${GK_BAD}%s${GK_R}" "$failed")"
-    # Its red flags being found (share/flags.mjs, started above): they land on the case rows when it is done.
-    [ "$sentf" != /dev/null ] && read -r fpid 2>/dev/null < "${sentf%.tsv}.flags.running" && kill -0 "$fpid" 2>/dev/null &&
-      note="$note · $(printf "${GK_ATTENTION}Claude is looking for red flags${GK_R}")"
+    # Its red flags (share/flags.mjs, started above): being found, then how many it kept, so a look that kept
+    # none is not taken for one that never ran. They land on the case rows.
+    if [ "$sentf" != /dev/null ]; then
+      fk=${sentf%.tsv}.flags
+      if read -r fpid 2>/dev/null < "$fk.running" && kill -0 "$fpid" 2>/dev/null; then
+        note="$note · $(printf "${GK_ATTENTION}Claude is looking for red flags${GK_R}")"
+      elif [ -s "$fk.tsv" ]; then
+        nf=$(wc -l < "$fk.tsv" | tr -d ' ')
+        note="$note · $(printf "${GK_BAD}%s red flag%s${GK_R}" "$nf" "$([ "$nf" -eq 1 ] || echo s)")"
+      elif [ -e "$fk.tsv" ]; then note="$note · $(printf "${GK_CONTEXT}no red flags${GK_R}")"; fi
+    fi
     if [ -n "$glossing" ]; then note="$note · $(printf "${GK_ATTENTION}Claude is glossing them${GK_R}")"
     elif [ -n "$glossfailed" ]; then note="$note · $(printf "${GK_BAD}%s${GK_R}" "$glossfailed")"
     elif [ -n "$gf" ]; then note="$note · $(printf "${GK_CONTEXT}glossed by Claude${GK_R}")"; fi
