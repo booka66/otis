@@ -27,7 +27,8 @@
 # main, in an argument or either end of a range (main..HEAD), means origin/main.
 # git fetch never moves a local branch, and otis rebases onto origin/main
 # without ever touching local main, so local main is whatever it was the last
-# time you pulled in that checkout: gl main stopped a day back, short of
+# time you pulled in that checkout, or the board moved it (git-main-forward,
+# never while it has changes): gl main stopped a day back, short of
 # everything that has landed since. An explicit refs/heads/main still names
 # the local branch.
 share=$(cd "$(dirname "$0")/../share" && pwd)

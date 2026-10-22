@@ -497,4 +497,6 @@ w=${counts%%	*} g=${counts#*	}
 # Walks of MRs you have approved, or that merged, stopped (git-walk --settle),
 # from the same lists.
 git-walk --settle "$st/mrs.json" "$st/ci.json" </dev/null >/dev/null 2>&1 &
+# Your local main kept up with origin's, as lazygit does (git-main-forward).
+git-main-forward </dev/null >/dev/null 2>&1 &
 exit 0

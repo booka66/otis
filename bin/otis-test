@@ -2645,6 +2645,42 @@ git worktree remove --force "$(git-worktree-path named claude-fix)"
 git worktree remove --force "$rs/wt"
 cd "$here"
 
+# --- git-main-forward: the board keeps your local main up with origin's, a
+# fast-forward wherever that is safe and nothing anywhere else. origin is a
+# bare repo, and main lands there from a second clone (mf_land).
+here=$PWD mf=$tmp/mf
+git init -q --bare -b main "$mf/origin.git"
+git init -q -b main "$mf/repo" && cd "$mf/repo" && git config user.email t@t && git config user.name t
+printf 'a\n' > f && git add f && git commit -qm a && git remote add origin "$mf/origin.git" && git push -q origin main
+git clone -q "$mf/origin.git" "$mf/gitlab" && git -C "$mf/gitlab" config user.email g@g && git -C "$mf/gitlab" config user.name g
+mf_land() { (cd "$mf/gitlab" && git pull -q && echo landed >> f && git commit -qam landed && git push -q origin main) >/dev/null 2>&1; }
+# mf_run: as the board does, a minute after the last time.
+mf_run() { rm -f "$mf/repo/.git/main-forwarded"; git-main-forward; }
+mf_origin() { git --git-dir="$mf/origin.git" rev-parse main; }
+git switch -qc feat
+mf_land; mf_run
+expect main-forward/not-checked-out "$(git rev-parse main)" "$(mf_origin)"
+mf_land; git-main-forward
+expect main-forward/once-a-minute "$(git rev-list --count main..origin/main; git rev-parse origin/main | grep -cxF "$(mf_origin)")" "0
+0"
+git worktree add -q "$mf/wt" main
+mf_run
+expect main-forward/checked-out-clean "$(git rev-parse main; git -C "$mf/wt" status --porcelain)" "$(mf_origin)"
+mf_land; echo mine >> "$mf/wt/f"; mf_run
+expect main-forward/checked-out-changed "$(git rev-list --count main..origin/main)" "1"
+git -C "$mf/wt" checkout -q f
+# A main being rebased is checked out nowhere, its checkout detached, and git
+# refuses to move it all the same.
+git -C "$mf/wt" rebase -q --exec false HEAD~1 >/dev/null 2>&1
+mf_run
+expect main-forward/being-rebased "$(git rev-list --count main..origin/main)" "1"
+git -C "$mf/wt" rebase --abort
+(cd "$mf/wt" && echo mine > g && git add g && git commit -qm mine)
+mf_land; mf_run
+expect main-forward/own-commits-left "$(git log -1 --format=%s main)" "mine"
+git worktree remove --force "$mf/wt"
+cd "$here"
+
 # --- git-forge: GitLab's calls pass to glab untouched; on GitHub the same
 # calls are answered from gh in GitLab's shapes. gh is a stub answering from
 # fixtures, and the repo is a local one set to GitHub, so nothing is fetched.

@@ -1,0 +1,32 @@
+#!/bin/sh
+# git-main-forward: keep your local main up with origin's, as lazygit does.
+#
+# otis itself only reads origin/main (otis-config base), but your editor,
+# git checkout -b and anything else run in the checkout that sits on main read
+# the local one, and nothing moved it: it fell a hundred commits behind in an
+# afternoon. The board runs this behind its rows. At most once a minute it
+# fetches origin's main and fast-forwards the local one to it, never more:
+# a main with commits of its own is left as it is.
+#
+# A main checked out somewhere moves there only while nothing tracked is
+# changed in that checkout. Unlike lazygit, that includes the checkout you
+# are in, since the board's checkout is the one that sits on main.
+. "${0%/*}/../share/repo.sh" || exit 1
+stamp=$OTIS_GITDIR/main-forwarded
+[ -n "$(find "$stamp" -maxdepth 0 -mmin -1 2>/dev/null)" ] && exit 0
+touch "$stamp"
+
+main=$(otis-config main)
+mine=refs/heads/$main theirs=refs/remotes/origin/$main
+GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' git fetch --quiet --no-tags origin "+refs/heads/$main:$theirs" || exit 1
+counts=$(git rev-list --left-right --count "$mine...$theirs" 2>/dev/null) || exit 0
+[ "${counts%%	*}" = 0 ] && [ "${counts##*	}" != 0 ] || exit 0
+
+wt=$(git worktree list --porcelain | awk -v b="branch $mine" '/^worktree / { w = substr($0, 10) } $0 == b { print w }')
+if [ -z "$wt" ]; then
+  # Fetched from this repo into itself, which git refuses for a main that is
+  # being rebased or bisected anywhere.
+  git fetch --quiet --no-write-fetch-head . "$theirs:$mine" 2>/dev/null
+elif [ -z "$(git -C "$wt" --no-optional-locks status --porcelain --untracked-files=no)" ]; then
+  git -C "$wt" merge --quiet --ff-only "$theirs"
+fi
