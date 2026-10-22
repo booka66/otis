@@ -181,13 +181,15 @@ if [ "$kind" = deploy ]; then
         function fit(s, n,   out, i, c, k) { if (ulen(s) <= n) return s; k = 0; out = ""
           for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c !~ /[\200-\277]/ && ++k > n - 1) break; out = out c }
           return out "\342\200\246" }
+        # The number as gk_iid in share/rowfmt.awk has it: the last three digits stand out.
+        function mr(n) { return F "!" substr(n, 1, length(n) - 3) R A substr(n, length(n) - 2) R }
         BEGIN { k = split(mine, m, " "); for (i = 1; i <= k; i++) own[m[i]] = 1 }
         { sub(/^\001+/, "") }
         $2 == "" { next }
         { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
           title = $3; sub(/\001.*/, "", title); if (title == "") title = $2
-          if (iid != "" && (iid in own)) top[++nt] = "  " Y "\342\230\205 " A "!" iid R " " T "\033[1m" fit(title, w - 16 - length(iid)) R Y "  you" R
-          else if (iid != "") rest[++nr] = "    " A "!" iid R " " T fit(title, w - 6 - length(iid)) R
+          if (iid != "" && (iid in own)) top[++nt] = "  " Y "\342\230\205 " mr(iid) " " T "\033[1m" fit(title, w - 16 - length(iid)) R Y "  you" R
+          else if (iid != "") rest[++nr] = "    " mr(iid) " " T fit(title, w - 6 - length(iid)) R
           else rest[++nr] = "    " C $1 " " fit($2, w - 13) R }
         END { shown = 0
           for (i = 1; i <= nt; i++) { print top[i]; shown++ }

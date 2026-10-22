@@ -24,7 +24,7 @@ jq -r -L "$share" --arg iid "$iid" --argjson w "$(( ${FZF_PREVIEW_COLUMNS:-80} -
    elif .state == "rolledback" then callout(bad; "Rolled back: production does not have it"; "The next deploy of a later commit brings it back.")
    elif .state == "branch" then callout(elsewhere; "Merged into " + .targetBranch + ", not main"; "It goes out once that branch reaches main.")
    else callout(yours; "Not out yet"; "") end),
-  ((.iid | length) as $il | attention + B + "!\(.iid)" + r + "  " + text + (.title | cut($w - $il - 3)) + r),
+  ((.iid | length) as $il | (.iid | iid(B + attention)) + "  " + text + (.title | cut($w - $il - 3)) + r),
   (context + ((.sourceBranch + " → " + .targetBranch + "  ·  merged " + (.mergedAt | ago) + " ago") | cut($w)) + r),
   (if .via then context + (("reached main with !" + .via) | cut($w)) + r else empty end),
   "",

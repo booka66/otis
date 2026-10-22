@@ -644,8 +644,11 @@ row() {
     fi
     (( rw )) && [[ -n $when[i] ]] && { pad $(( w - iw - 6 )); put "" "  "; put "$C" "${(l:3:: :)when[i]}"; }
     if (( iw )) && [[ -n $iid[i] ]]; then
-      pad $(( w - 1 - mw ))
-      (( on )) && put "$A" "${(l:mw:: :):-!$iid[i]}" || put "$C" "${(l:mw:: :):-!$iid[i]}"
+      # Its last three digits are what tell the board's MRs apart; the rest
+      # is the same on every row, so it is faint.
+      pad $(( w - 2 - $#iid[i] ))
+      put "$F" "!${iid[i][1,-4]}"; line+=$R
+      (( on )) && put "$A" "${iid[i][-3,-1]}" || put "$T" "${iid[i][-3,-1]}"
     fi
   fi
   pad $w

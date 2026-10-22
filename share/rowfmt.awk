@@ -43,6 +43,8 @@ function gk_now() { srand(); return srand() }
 function gk_rep(s, n,   out) { out = ""; while (n-- > 0) out = out s; return out }
 function gk_padl(s, n) { s = s ""; while (length(s) < n) s = " " s; return s }
 function gk_padr(s, n) { s = s ""; while (length(s) < n) s = s " "; return s }
+# An MR's number, as otis.jq's iid: its last three digits in tail, the rest faint.
+function gk_iid(n, tail) { n = n ""; return GK_FAINT "!" substr(n, 1, length(n) - 3) GK_R tail substr(n, length(n) - 2) GK_R }
 
 # A path shortened to `budget` columns: the name always survives, then as many
 # parent directories as fit, with "…/" marking what was dropped. Only a name

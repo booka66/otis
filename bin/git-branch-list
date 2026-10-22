@@ -169,7 +169,7 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
 
     # The MR sits in the fixed zone beside the state, since "open MR" and its
     # number are the same fact and belong together.
-    iid = ($5 != "") ? GK_ATTENTION gk_padr("!" $5, 6) GK_R : "      "
+    iid = ($5 != "") ? gk_iid($5, GK_ATTENTION) gk_rep(" ", 5 - length($5)) : "      "
 
     mark = (place == "here") ? GK_ELSEWHERE "\342\226\266 " GK_R : "  "
     where = ""

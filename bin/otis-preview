@@ -100,7 +100,7 @@ light() {
     # stands, in a line.
     (if $mr then
        (if $gate == "all" then ($mr.title | sub("^(draft:|\\[draft\\]|wip:)\\s*"; ""; "i") | wrapl($w; 9)[] | B + text + . + UB + r) else empty end),
-       (attention + "!\($mr.iid)" + r
+       (($mr.iid | iid(attention))
          + (if $mr.draft then dot + yours + "draft" + r else "" end)
          + (if ($m | not) and $mr.author then dot + context + $mr.author.username + r else "" end)
          + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
@@ -296,7 +296,7 @@ EOF
     verb="${b:-detached HEAD}"
     callout "$why"
     [ -z "$b" ] && printf "${GK_ATTENTION}at %s${GK_R}\n\n" "$(git rev-parse --short HEAD 2>/dev/null)"
-    [ -n "$iid" ] && printf "${GK_ATTENTION}!%s${GK_R}${GK_CONTEXT}  its merge request${GK_R}\n\n" "$iid"
+    [ -n "$iid" ] && printf "${GK_FAINT}!%s${GK_R}${GK_ATTENTION}%s${GK_R}${GK_CONTEXT}  its merge request${GK_R}\n\n" "${iid%???}" "${iid#"${iid%???}"}"
     if [ -n "$status" ]; then
       heading "uncommitted"
       printf '%s\n' "$status" | awk -v g="$GK_GOOD" -v y="$GK_YOURS" -v x="$GK_BAD" -v c="$GK_CONTEXT" -v t="$GK_TEXT" -v R="$GK_R" '

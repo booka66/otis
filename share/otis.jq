@@ -15,6 +15,9 @@ def text: c("TEXT"; "39");            # what the row is about
 def context: c("CONTEXT"; "90");      # true, but not why you are looking
 def faint: c("FAINT"; "2");           # structure: rules, separators, empty slots
 def main: c("MAIN"; "34");            # main, and things that are not yours to move
+# An MR's number, its last three digits in $tail and the rest faint: those
+# three tell the MRs on a screen apart, and the rest is the same on all of them.
+def iid($tail): tostring | faint + "!" + .[:-3] + r + $tail + .[-3:] + r;
 
 # A GraphQL global id's number: "gid://gitlab/Ci::Pipeline/123" -> "123".
 def gid: . // "" | tostring | sub("^gid://gitlab/[A-Za-z:]+/"; "");
