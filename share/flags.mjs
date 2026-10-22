@@ -8,8 +8,8 @@
 // tries to throw each one out (the base had it, the neighbours do it so, the smaller design is not smaller).
 // Only what that leaves standing is shown, each with the comment a reviewer would leave on its line, which the
 // case's pane types in for you when you comment there, and a note at each of its two lines, which the pane
-// writes beside them in red where the case's route runs through them. Without --now, at most two run at once. otis.flagsModel picks the
-// model, off for none.
+// writes beside them in red where the case's route runs through them. Without --now, at most two run at once, and
+// none on a change whose last commit is yours. otis.flagsModel picks the model, off for none.
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,6 +38,9 @@ try {
 } catch { /* not found yet */ }
 const alive = (path) => { try { process.kill(Number(readFileSync(path, "utf8")), 0); return true; } catch { return false; } };
 if (alive(at("running"))) process.exit(0);
+// Your own change is pushed many times before anyone reads it: three in four Opus runs went to its pushes.
+// It is looked at when you open it (--now).
+if (!now && git("log", "-1", "--format=%ae", outline.head).trim() === config("user.email")) process.exit(0);
 if (!now && readdirSync(dir).filter((name) => name.endsWith(".flags.running") && alive(join(dir, name))).length >= 2) process.exit(0);
 writeFileSync(at("running"), String(process.pid));
 const done = () => { try { unlinkSync(at("running")); } catch { /* gone */ } };
