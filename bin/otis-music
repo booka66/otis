@@ -1,0 +1,201 @@
+#!/usr/bin/env -S zsh -f
+# otis-music: what cliamp is playing, on a screen of its own (M on the
+# board): its title, its bars big (cliamp's ClassicPeak, as every screen has
+# under its rows), where it is in the track, and what plays next. space
+# pauses and plays, n and p skip, the arrows seek, + and - turn it up and
+# down, s shuffles, and / searches YouTube: enter on a result plays it, a
+# adds it to what plays next. What you pick plays in your cliamp, started
+# headless (cliamp --daemon) if none is running, so it goes on once you
+# leave and every screen keeps showing it.
+#
+#   otis-music --search <words>   YouTube's results through yt-dlp, a row
+#                                 each: its link, then how long, who and what
+#   otis-music --play <link>      play it now
+#   otis-music --queue <link>     play it next
+setopt extendedglob no_nomatch typeset_silent
+[[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
+
+# cliamp_up: a cliamp to talk to, started headless where none answers on its
+# socket (one left by a cliamp that crashed answers nothing).
+cliamp_up() {
+  zmodload zsh/net/socket
+  local sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock
+  zsocket $sock 2>/dev/null && { exec {REPLY}>&-; return 0 }
+  nohup cliamp --daemon >/dev/null 2>&1 </dev/null &!
+  repeat 50; do [[ -S $sock ]] && return 0; sleep 0.1; done
+  return 1
+}
+case $1 in
+  --search)
+    command -v yt-dlp >/dev/null 2>&1 || { print -r -- $'\t'"YouTube is searched through yt-dlp, which is not installed"; exit 0 }
+    local C=$'\e'"[${OTIS_T_CONTEXT}m" EL=$'\e'"[${OTIS_T_ELSEWHERE}m" T=$'\e'"[${OTIS_T_TEXT}m" R=$'\e[0m'
+    yt-dlp --flat-playlist --no-warnings --print '%(id)s	%(duration_string)s	%(channel)s	%(title)s' "ytsearch25:$2" 2>/dev/null |
+      while IFS=$'\t' read -r id len who what; do
+        print -r -- "https://www.youtube.com/watch?v=$id"$'\t'$C${(l:8:: :)len}$R"  "$EL$who$R"  "$T$what$R
+      done
+    exit 0 ;;
+  --play|--queue)
+    cliamp_up || exit 1
+    now=true; [[ $1 == --queue ]] && now=false
+    cliamp remote call url.load --params "$(jq -cn --arg p "$2" --argjson now $now '{path: $p, play: $now}')" --wait >/dev/null 2>&1
+    exit ;;
+esac
+
+unset FZF_PORT FZF_API_KEY
+export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-music.$$.$RANDOM
+mkdir -m 700 $GIT_FZF_STATE || exit 1
+st=$GIT_FZF_STATE
+. ${0:A:h:h}/share/screen.zsh
+typeset -a KEYS=(
+  space 'play or pause'
+  'n p' 'the next track and the one before'
+  '← →' 'ten seconds back and on'
+  '+ -' 'louder and quieter'
+  s     'shuffle'
+  /     'search YouTube'
+  q     'back'
+)
+keys_open otis-music 'space=play or pause,n=next,p=before,left=back ten seconds,right=on ten seconds,+=louder,-=quieter,s=shuffle,/=search YouTube'
+screen_start
+flash=
+float flasht=0
+
+# clock <seconds>: as 41:12, or 1:11:45 past an hour.
+clock() {
+  integer s=${1%.*}
+  if (( s >= 3600 )); then REPLY=$(( s / 3600 )):${(l:2::0:)$(( s % 3600 / 60 ))}:${(l:2::0:)$(( s % 60 ))}
+  else REPLY=$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}; fi
+}
+draw() {
+  local -a fr
+  local s right
+  integer y top bot
+  if (( W < 30 || H < 12 )); then
+    music_space; shown_rows=()
+    print -nu $tty -- $e'[2J'$e'[1;1H'$C"  too small for the music"$R
+    return
+  fi
+  # The top line: what this is, and how the player stands.
+  if (( $#mstate )); then
+    if [[ $mstate[1] == playing ]]; then right=$G"playing"$R; else right=$C$mstate[1]$R; fi
+    (( mstate[7] > 1 )) && right+=$C"  ·  $(( mstate[6] + 1 )) of $mstate[7]"$R
+    right+=$C"  ·  ${mstate[8]%%.*} dB"$R
+    [[ $mstate[9] == true ]] && right+=$C"  ·  shuffle"$R
+  elif ! command -v cliamp >/dev/null 2>&1; then right=$C"cliamp is not installed"$R
+  else right=$C"nothing playing"$R; fi
+  line= used=0; put "$B$T" "  ♪ music"; line+=$UB
+  vw "$right"; pad $(( W - REPLY - 2 )); line+=$right
+  fr+=("$line" "")
+  if (( $#mstate )); then
+    whole "$mstate[4]" $(( W - 4 ))
+    for s in "${(@)reply[1,2]}"; do fr+=("  $B$T$s$UB$R"); done
+    [[ -n $mstate[5] ]] && { whole "$mstate[5]" $(( W - 4 )); fr+=("  $C$reply[1]$R"); }
+  elif ! command -v cliamp >/dev/null 2>&1; then
+    fr+=("  ${T}otis plays music through cliamp 2:$R ${EL}https://github.com/bjarneo/cliamp$R")
+  else
+    fr+=("  ${T}Nothing is playing.$R" "  $C/ searches YouTube, and what you pick plays in cliamp.$R")
+  fi
+  fr+=("")
+  # The bars stand under that and over the clock, as tall as there is room.
+  (( top = $#fr + 1, bot = H - 5 ))
+  while (( $#fr < bot )); do fr+=(""); done
+  if (( $#mstate && bot - top >= 2 )); then music_space "3 $(( W - 4 )) $bot $(( bot - top + 2 )) $(( bot - top + 1 ))"
+  else music_space; fi
+  fr+=("")
+  # Where it is in the track, a line as long as the track.
+  if (( $#mstate && mstate[3] > 0 )); then
+    typeset -F at=$mstate[2]
+    [[ $mstate[1] == playing ]] && (( at += EPOCHREALTIME - mat ))
+    (( at > mstate[3] )) && at=$mstate[3]
+    clock $at; local l=$REPLY; clock $mstate[3]; local r=$REPLY
+    integer bw=$(( W - 8 - ${#l} - ${#r} )) done
+    (( done = bw * at / mstate[3] ))
+    fr+=("  $T$l$R  $A${(l:done::━:)}$R$F${(l:bw-done::─:)}$R  $C$r$R")
+  else fr+=(""); fi
+  # What plays next, where it fits whole.
+  if (( $#mnext )) && (( ${(m)#mnext[1]} + 10 <= W )); then fr+=("  ${C}next$R  $T$mnext[1]$R")
+  else fr+=(""); fi
+  music_rule; fr+=("$REPLY")
+  local foot="  " k v
+  if [[ -n $flash ]]; then foot+=$A$flash$R
+  else
+    for k v in "${KEYS[@]}"; do
+      vw "$foot$A$k$R $C$v$R   "; (( REPLY > W )) && break
+      foot+=$A$k$R" "$C$v$R"   "
+    done
+  fi
+  fr+=("$foot")
+  local body=
+  (( $#shown_rows )) || body+=$e'[2J'
+  for (( y = 1; y <= $#fr; y++ )); do
+    [[ $fr[y] == "$shown_rows[y]" ]] && continue
+    body+=$e"[$y;1H"$fr[y]$R$e'[K'
+  done
+  shown_rows=("${fr[@]}")
+  print -rnu $tty -- $body
+}
+# act <key> <label> <cliamp's arguments...>: a key's command, behind the
+# screen, the footer saying it until the player has changed, or for a second
+# and a half where nothing it shows does (a seek).
+act() {
+  keys_used "$1" "$2"
+  flash="$2…" flasht=$EPOCHREALTIME
+  { cliamp "${@:3}" >/dev/null 2>&1 } &!
+}
+search() {
+  local q pick
+  keys_used / 'search YouTube'
+  run_tty "otis-popup text 'search YouTube' > ${(q)st}/q" sh
+  q=$(<$st/q) 2>/dev/null; rm -f $st/q
+  [[ -n ${q// } ]] || { draw; return }
+  local title="YouTube: $q " load="start:reload(otis-music --search ${(q)q})"
+  run_tty "git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
+    --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' > ${(q)st}/pick" sh
+  pick=$(<$st/pick) 2>/dev/null; rm -f $st/pick
+  if [[ -n $pick ]]; then flash="starting it…"; { otis-music --play ${pick%%$'\t'*} } >/dev/null 2>&1 &!; fi
+  draw
+}
+handle() {
+  case $1 in
+    ' ') act space 'play or pause' toggle ;;
+    n) act n next next ;;
+    p) act p 'the one before' prev ;;
+    $e'[D'|h) act left 'back ten seconds' remote call seek --params '{"value":-10}' ;;
+    $e'[C'|l) act right 'on ten seconds' remote call seek --params '{"value":10}' ;;
+    +|=) act + louder remote call volume.adjust --params '{"value":2}' ;;
+    -) act - quieter remote call volume.adjust --params '{"value":-2}' ;;
+    s) act s shuffle shuffle ;;
+    /) search ;;
+    q|$e|$'\x03') quit 130 ;;
+  esac
+}
+
+strip=1
+screen_on
+size
+draw
+integer stick=0
+was=
+while :; do
+  reply=()
+  music_wait -t 5 -r $tty ${winch:+-r} $winch
+  if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then sysread -s 64 -i $winch _; size; shown_rows=(); draw; fi
+  if (( ${reply[(I)$tty]} )); then
+    readkey; handle $REPLY
+    while zselect -t 0 -r $tty; do readkey; handle $REPLY; done
+    draw
+  else
+    if (( EPOCHSECONDS != stick )); then
+      stick=$EPOCHSECONDS
+      orphaned && quit 1
+      [[ -z $winch ]] && size
+      [[ -n $flash ]] && (( EPOCHREALTIME - flasht > 1.5 )) && flash=
+      draw
+    fi
+    # The player has changed (not its clock): what a key asked for is done.
+    if [[ "$mstate[1] $mstate[4] $mstate[6] $mstate[8] $mstate[9] $mnext[1]" != $was ]]; then
+      was="$mstate[1] $mstate[4] $mstate[6] $mstate[8] $mstate[9] $mnext[1]"
+      flash=; draw
+    fi
+  fi
+done

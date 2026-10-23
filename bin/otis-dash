@@ -107,6 +107,7 @@ typeset -a KEYS=(
   'g c'    else   ''       'otis settings'
   'g s'    else   ''       'Slack'
   F        else   files    'find a file in your editor'
+  M        else   ''       'music: what cliamp is playing'
 )
 # KL: a key's whole words, by the key. The log is told every key the screen
 # offers as it opens, less the ones that only move.
@@ -1596,6 +1597,7 @@ handle() {
        flash="nothing on this row can be removed" ;;
     m|b|a|P|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
+    M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
     # ctrl-c is a key here (-isig), since a signal's trap would never run.
     # With ? up, q and esc close it rather than the dashboard.
     q|$e) (( help )) && { help=0 poff=0; return; } ;|

@@ -1,11 +1,11 @@
 #!/usr/bin/env -S zsh -f
-# otis-music-feed strip <cells> <places> | screen <columns> <rows>: what
-# cliamp is playing, drawn (share/music.awk), a line a frame, for a screen to
-# paint: for every screen, the strip of bars in the rule over its footer and
-# the background (otis.musicBackground) in the empty places the screen keeps
-# listed in the file <places>, read again each frame; or, for a screen that
-# is the music alone, its bars. It reads cliamp's own socket, so it costs the screen
-# reading it a line a frame and nothing else.
+# otis-music-feed <cells> <places>: what cliamp is playing, drawn
+# (share/music.awk), a frame at a time, for a screen to paint: the strip of
+# bars in the rule over its footer and the background (otis.musicBackground)
+# in the empty places the screen keeps listed in the file <places>, read
+# again each frame, and the player's state and what plays next for a screen
+# that shows them (otis-music). It reads cliamp's own socket, so it costs the
+# screen reading it a line a frame and nothing else.
 #
 # It asks for the spectrum otis.musicFps times a second (cliamp 2's
 # spectrum.get, what its visstream reads), the player's state four times a
@@ -16,9 +16,10 @@
 setopt extendedglob
 zmodload zsh/net/socket zsh/zselect zsh/datetime zsh/system zsh/mathfunc
 command -v cliamp >/dev/null 2>&1 || exit 0
-mode=$1
+# A screen opened before this was one mode of two still says which.
+[[ $1 == strip ]] && shift
 typeset -a cfg=("${(@f)$(otis-config music musicColors musicFps musicBackground)}")
-[[ $mode == strip && $cfg[1] == off ]] && exit 0
+[[ $cfg[1] == off ]] && exit 0
 integer fps=${cfg[3]:-30}
 (( fps < 1 || fps > 60 )) && fps=30
 # Where cliamp keeps it: CLIAMP_CONFIG_DIR, else under XDG_CONFIG_HOME or ~/.config.
@@ -48,7 +49,7 @@ state() {
     st=("${(@ps:\t:)$(print -r -- $s | jq -r '(.snapshot // .) | [.state // "stopped", ((.track.title // "") | gsub("[\t\n]"; " ")), ((.track.artist // "") | gsub("[\t\n]"; " ")), (.index // -1), (.total // 0), (.volume // 0), (.shuffle // false)] | @tsv' 2>/dev/null)}")
   fi
   print -r -- "S"$'\t'"${st[1]:-stopped}"$'\t'$pos$'\t'$dur$'\t'"${(pj:\t:)st[2,-1]}"
-  [[ $mode == screen && ( $p != $prev || $st[4] != $at ) ]] && { prev=$p at=$st[4]; upnext }
+  [[ $p != $prev || $st[4] != $at ]] && { prev=$p at=$st[4]; upnext }
 }
 # upnext: the three tracks after this one, as a Q line. queue.list is an
 # operation: submitted, and asked after until it is done.
@@ -63,8 +64,7 @@ upnext() {
   print -r -- "Q"$'\t'"$(print -r -- $REPLY | jq -r '[(.job.result // .result // {}).tracks[]?.title // empty | gsub("[\t\n]"; " ")] | join("\t")' 2>/dev/null)"
 }
 # places: the screen's empty places, as A lines, when they have changed.
-places= lastp=
-[[ $mode == strip ]] && places=$3
+places=$2 lastp=
 places() {
   local p
   p=$(<$places) 2>/dev/null
@@ -79,7 +79,7 @@ stream() {
   float next=$EPOCHREALTIME snext=0
   while :; do
     ask $c spectrum.get || return
-    [[ -n $places ]] && places
+    places
     [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]] && print -r -- "B ${match[1]//,/ }"
     if (( EPOCHREALTIME >= snext )); then
       (( snext = EPOCHREALTIME + 0.25 ))
@@ -102,4 +102,4 @@ stream() {
     print Z || exit 0
     zselect -t 200
   done
-} | LC_ALL=C awk -v mode=$mode -v fps=$fps -v w=${2:-24} -v h=${${mode:#strip}:+$3} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk
+} | LC_ALL=C awk -v fps=$fps -v w=${1:-24} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk

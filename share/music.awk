@@ -1,20 +1,24 @@
-# music.awk: what cliamp plays, drawn. otis-music-feed hands it a line for
-# each frame of cliamp's spectrum (B and the bands, each 0 to 1, lowest
-# first), the player's state now and then (S), what plays next (Q), Z while
-# nothing plays, and, from a screen, its empty places (A); it hands the
-# screen what to paint, ready to paint.
+# music.awk: what cliamp plays, drawn for a screen. otis-music-feed hands it
+# a line for each frame of cliamp's spectrum (B and the bands, each 0 to 1,
+# lowest first), the player's state now and then (S), what plays next (Q), Z
+# while nothing plays, and, from the screen, its empty places (A); it hands
+# the screen what to paint, a frame at a time:
 #
-#   -v mode=strip   for every screen: w cells of bars a frame for the rule
-#                   over its footer, "b<TAB>bars"; and, under look, the
-#                   background in its empty places, a line
-#                   "p<TAB>row<TAB>column<TAB>width<TAB>text" for each row of
-#                   a place that changed; then "f", the frame whole, which is
-#                   when the screen paints it, so it never shows half of one
-#   -v mode=screen  for the music screen: w columns by h rows of bars, a line
-#                   "r<TAB>row<TAB>text" for each row that changed, then "f"
-#   -v style=bars|mirror|led   how the music screen draws them
-#   -v look=hills|river|glow|spectrogram|off   the background: the spectrum
-#                   as hills, the beat as a line flowing left, a light from
+#   b<TAB>bars        w cells of bars for the rule over the footer, for a
+#                     screen with no room for the background; empty while it
+#                     has room
+#   p<TAB>row<TAB>column<TAB>width<TAB>text
+#                     a row of a place, where it changed
+#   f                 the frame whole, which is when the screen paints it, so
+#                     it never shows half of one
+#
+# S, Q and Z go on as s, q and z. A bare A starts a screen's places over, and
+# "A <column> <width> <bottom row> <rows> [<most rows>]" is one: a stretch of
+# blank rows standing on its bottom row, as tall as deep at most unless it
+# says otherwise.
+#
+#   -v look=hills|river|glow|spectrogram|off   the background: cliamp's
+#                   ClassicPeak, the beat as a line flowing left, a light from
 #                   below that rises with the bass, or every band's loudness
 #                   flowing left, the bass at the bottom
 #   -v deep=<rows>  how tall the background is at most; a place has it as
@@ -22,18 +26,11 @@
 #                   and none at all under three
 #   -v colors=theme|winamp|rainbow|mono
 #
-# S, Q and Z go on as s, q and z, for the screen to read. A bare A starts a
-# screen's places over, and "A <column> <width> <bottom row> <rows>" is one:
-# a stretch of blank rows standing on its bottom row.
-#
-# The strip's bars are for a screen with no room for the background: while
-# the background has a place, the strip is the title alone ("b" and no bars).
-#
-# A bar's color is how high it is: the theme's colors from cool to warm
-# (elsewhere, main, attention, yours), blended where the theme gives them
-# as RGB, else stepped. winamp is the old green to red, rainbow moves a hue
-# along the bars, mono is the theme's review color alone. Never the theme's
-# bad: on otis, red means something broke.
+# The strip's bars and a river's or spectrogram's cells are the color of how
+# high they are: the theme's colors from cool to warm (elsewhere, main,
+# attention, yours), blended where the theme gives them as RGB, else
+# stepped. winamp is the old green to red, rainbow moves a hue along the
+# bars, mono is the theme's review color alone.
 #
 # Run with LC_ALL=C: a river's braille is made a byte at a time.
 BEGIN {
@@ -42,19 +39,12 @@ BEGIN {
   if (colors == "winamp") nst = split("38;2;0;190;60 38;2;150;220;0 38;2;250;220;0 38;2;255;150;0 38;2;255;60;30", st, " ")
   else if (colors == "mono") nst = split(ENVIRON["OTIS_T_REVIEW"], st, " ")
   else nst = split(ENVIRON["OTIS_T_ELSEWHERE"] " " ENVIRON["OTIS_T_MAIN"] " " ENVIRON["OTIS_T_ATTENTION"] " " ENVIRON["OTIS_T_YOURS"], st, " ")
-  faint = ENVIRON["OTIS_T_FAINT"]; peakc = ENVIRON["OTIS_T_TEXT"]
-  w += 0; h += 0; deep += 0
+  faint = ENVIRON["OTIS_T_FAINT"]
+  w += 0; deep += 0
   if (w < 1) w = 1
-  if (h < 1) h = 1
   if (deep < 1) deep = 12
-  # The music screen's bars: two columns wide, a column apart, centered.
-  nbar = mode == "screen" ? int((w + 1) / 3) : w
-  if (nbar < 1) nbar = 1
-  lpad = mode == "screen" ? int((w - (nbar * 3 - 1)) / 2) : 0
-  pad = lpad > 0 ? sprintf("%" lpad "s", "") : ""
-  hu = style == "mirror" ? int((h + 1) / 2) : h
+  nbar = w
   for (i = 0; i < 9; i++) lvl[i] = ramp(i / 8)
-  for (r = 0; r < hu; r++) rowc[r] = ramp(hu > 1 ? r / (hu - 1) : 1)
   back_init()
 }
 function rgb(s, a) {
@@ -96,16 +86,6 @@ function spread(n, out,   i, x, j, f, a, b) {
     if (out[i] < 0) out[i] = 0
   }
 }
-# Peaks: each bar's highest lately, held a moment, then falling faster as
-# it goes, as on a hi-fi.
-function peaks(   i) {
-  for (i = 0; i < nbar; i++) {
-    if (v[i] >= pk[i]) { pk[i] = v[i]; pv[i] = 0; hold[i] = 12; continue }
-    if (hold[i] > 0) { hold[i]--; continue }
-    pv[i] += 0.0018; pk[i] -= pv[i]
-    if (pk[i] < v[i]) pk[i] = v[i]
-  }
-}
 function strip(   i, s, l, c, last) {
   if (ns && look != "off") { print "b\t"; return }
   s = ""; last = ""
@@ -117,51 +97,6 @@ function strip(   i, s, l, c, last) {
   }
   print "b\t" s e "0m"
 }
-# cell <bar> <row from the bottom> <rows>: what a bar shows in that row, in
-# cs (its two columns) and cc (its color).
-function cell(i, rb, n,   h8, fill, p8, prow) {
-  h8 = v[i] * n * 8; fill = h8 - rb * 8
-  cc = colors == "rainbow" ? hue(i / nbar * 0.8 + fc * 0.004) : rowc[rb]
-  if (style == "led") {
-    if (fill >= 4) { cs = "▄▄"; return }
-    p8 = pk[i] * n * 8
-    if (int(p8 / 8) == rb && p8 > 4) { cs = "▄▄"; cc = peakc; return }
-    cs = "▄▄"; cc = faint; return
-  }
-  if (fill >= 8) { cs = "██"; return }
-  if (fill >= 1) { cs = blk[int(fill)] blk[int(fill)]; return }
-  if (style == "bars") {
-    p8 = pk[i] * n * 8; prow = int(p8 / 8)
-    if (prow == rb && p8 - h8 >= 6) { cs = (p8 - prow * 8 >= 4) ? "▔▔" : "▁▁"; cc = peakc; return }
-  }
-  cs = "  "; cc = ""
-}
-# A row of the mirror's lower half: the bars hanging down, dim.
-function under(i, k,   h8, fill) {
-  h8 = v[i] * hu * 8; fill = h8 - k * 8
-  cc = colors == "rainbow" ? hue(i / nbar * 0.8 + fc * 0.004) : rowc[k < hu ? k : hu - 1]
-  if (fill >= 8) cs = "██"
-  else if (fill >= 4) cs = "▀▀"
-  else if (fill >= 1) cs = "▔▔"
-  else { cs = "  "; cc = "" }
-}
-function screen(   r, i, s, last, c, dim) {
-  for (r = 0; r < h; r++) {
-    s = pad; last = ""
-    dim = style == "mirror" && r >= hu
-    for (i = 0; i < nbar; i++) {
-      if (dim) under(i, r - hu)
-      else cell(i, (style == "mirror" ? hu : h) - 1 - r, style == "mirror" ? hu : h)
-      c = cc == "" ? "" : (dim ? "0;2;" : "0;") cc
-      if (c != last && cs != "  ") { s = s e c "m"; last = c }
-      s = s cs (i < nbar - 1 ? " " : "")
-    }
-    s = s e "0m"
-    if (s != shown[r]) { shown[r] = s; print "r\t" r "\t" s }
-  }
-  print "f"
-}
-
 # --- the background ---------------------------------------------------------------
 # Under what a screen shows, in its empty places only, standing on their
 # bottom rows: one spectrum across the whole screen, so the hills under the
@@ -205,7 +140,7 @@ function glyph(bits) { return sprintf("%c%c%c", 226, 160 + int(bits / 64), 128 +
 function place(   k) {
   if (NF == 1) { ns = 0; sw = 0; split("", painted); return }
   if ($5 - 1 < 3) return
-  ns++; px[ns] = $2; pw[ns] = $3; pb[ns] = $4; pd[ns] = $5 - 1 > deep ? deep : $5 - 1
+  ns++; px[ns] = $2; pw[ns] = $3; pb[ns] = $4; pd[ns] = $5 - 1 > (NF > 5 ? $6 : deep) ? (NF > 5 ? $6 : deep) : $5 - 1
   if (px[ns] + pw[ns] - 1 > sw) { sw = px[ns] + pw[ns] - 1; hn = 2 * sw; for (k = 0; k < hn; k++) hist[k] = 0.5; split("", sg); sh = 0 }
 }
 function back(   k, rb, t, b) {
@@ -335,11 +270,10 @@ $1 == "B" {
   for (i = 0; i < nb; i++) band[i] = $(i + 2) + 0
   fc++
   spread(nbar, v)
-  if (mode == "strip") { strip(); back(); print "f" }
-  else { peaks(); screen() }
+  strip(); back(); print "f"
   fflush()
   next
 }
 $1 == "A" { place(); next }
-$1 == "Z" { print "z"; if (mode == "strip") print "f"; fflush(); next }
+$1 == "Z" { print "z"; print "f"; fflush(); next }
 { sub(/^S/, "s"); sub(/^Q/, "q"); print; fflush() }

@@ -205,12 +205,18 @@ orphaned() { ! kill -0 $PPID 2>/dev/null; }
 # draws music itself (otis-music) sets strip=0.
 integer mfd=0 strip=1 mcells=24 mlabw=0
 mbuf= mbars= mlab= mrule=
+# The player as the feed last said, for a screen that shows it (otis-music):
+# its state, position and duration in seconds, title, artist, place in the
+# playlist and its length, volume in dB, shuffle; mat, when that was said;
+# mnext, the titles that play next.
+typeset -a mstate mnext
+float mat=0
 # music_start: the feed, once, as the screen is first on. It holds nothing of
 # the screen's: not the port, which a screen opened after this one binds.
 music_start() {
   (( strip && ! mfd )) || return 0
   : > $st/music-places
-  exec {mfd}< <(unlisten; exec {tty}>&-; exec otis-music-feed strip $mcells $st/music-places 2>/dev/null)
+  exec {mfd}< <(unlisten; exec {tty}>&-; exec otis-music-feed $mcells $st/music-places 2>/dev/null)
 }
 # music_wait <zselect's arguments>: zselect, the strip painted whenever a frame
 # of it comes, and back with reply as zselect would be once something else is
@@ -242,7 +248,7 @@ music_take() {
   local chunk l out=
   local -a f
   if ! sysread -s 65536 -i $mfd chunk; then
-    exec {mfd}<&-; mfd=0 mbars= mlab= mbuf=
+    exec {mfd}<&-; mfd=0 mbars= mlab= mbuf= mstate=() mnext=()
     music_paint; music_blank
     return
   fi
@@ -254,8 +260,9 @@ music_take() {
     case $l in
       b$'\t'*) mbars=${l#b$'\t'} ;;
       p$'\t'*) f=("${(@ps:\t:)l}"); mback[$f[2]:$f[3]:$f[4]]=$f[5] ;;
-      s$'\t'*) music_label "${(@ps:\t:)l}" ;;
-      z) mbars= mlab= ;;
+      s$'\t'*) mstate=("${(@ps:\t:)${l#s$'\t'}}") mat=$EPOCHREALTIME; music_label ;;
+      q$'\t'*|q) mnext=("${(@ps:\t:)${l#q$'\t'}}"); mnext=(${mnext:#}) ;;
+      z) mbars= mlab= mstate=() mnext=() ;;
     esac
   done
   mbuf=${mbuf##*$'\n'f$'\n'}
@@ -312,13 +319,13 @@ music_blank() {
   mback=() mshown=()
   (( screen )) && [[ -n $out ]] && print -rnu $tty -- $e'[?2026h'$e'7'$out$e'8'$e'[?2026l'
 }
-# music_label <s> <state> <position> <duration> <title> <artist>...: what the
-# strip says beside its bars, in mlab: the title while it plays, paused and
-# the title while it is not. Nothing playing at all, no strip.
+# music_label: what the strip says beside its bars, in mlab: the title while
+# it plays, paused and the title while it is not. Nothing playing at all, no
+# strip.
 music_label() {
-  case $2 in
-    playing) mlab=$A"♪"$R" "$C$5$R mlabw=$(( 2 + ${(m)#5} )) ;;
-    paused) mlab=$F"♪ paused  "$5$R mlabw=$(( 10 + ${(m)#5} )) ;;
+  case $mstate[1] in
+    playing) mlab=$A"♪"$R" "$C$mstate[4]$R mlabw=$(( 2 + ${(m)#mstate[4]} )) ;;
+    paused) mlab=$F"♪ paused  "$mstate[4]$R mlabw=$(( 10 + ${(m)#mstate[4]} )) ;;
     *) mbars= mlab= ;;
   esac
 }
