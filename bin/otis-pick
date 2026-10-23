@@ -651,7 +651,11 @@ draw() {
   (( dirty || rlw != lw )) && list
   settle_cur
   headline $lw
-  (( nh = $#HL, total = nh + $#ROWI, rows = lh ))
+  # While music plays, the foot of the rows on a wide screen is the music's,
+  # a place of its own the rows scroll above.
+  mh=0
+  (( side && $#mstate && lh >= 24 )) && mh=9
+  (( nh = $#HL, total = nh + $#ROWI, rows = lh - mh ))
   (( cur && RY[cur] )) && (( lo = hi = nh + RY[cur] ))
   (( hi > top + rows )) && (( top = hi - rows ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
@@ -692,6 +696,7 @@ draw() {
     (( side )) && s=$e"[${lw}X"$s$e"[$(( lw + 1 ))G"$R" "$F"│"$R
     fr+=("$s")
   done
+  for (( y = 1; y <= mh; y++ )); do fr+=($e"[${lw}X"$e"[$(( lw + 1 ))G"$R" "$F"│"$R); done
   (( side )) || fr+=("$F${(l:W::─:)}$R")
   for (( y = 1; y <= ph; y++ )); do
     f=$(( y + poff )) s=
@@ -703,7 +708,9 @@ draw() {
   # The blank rows under the rows, beside the pane, and under the pane: where
   # the music's background may move.
   local -a sp
-  (( side && total - top < rows )) && sp+=("1 $lw $rows $(( rows - total + top ))")
+  integer lb=$(( rows - total + top ))
+  (( lb < 0 )) && lb=0
+  (( side && lb + mh > 0 )) && sp+=("1 $lw $(( rows + mh )) $(( lb + mh ))")
   (( ph > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - plen + poff ))")
   music_space $sp
   # The footer: a note a key left, or what enter does and the keys to reach
@@ -965,7 +972,8 @@ mouse() {
     (( sel )) && ends
     return
   fi
-  if (( b == 0 && ! up && y <= lh )) && (( side ? x < lw : 1 )); then
+  # A click on the music under the rows (mh) is on no row.
+  if (( b == 0 && ! up && y <= lh - mh )) && (( side ? x < lw : 1 )); then
     local at=$(( y + top - $#HL ))
     (( at > 0 && at <= $#ROWI && ROWI[at] > 0 )) && go $ROWI[at]
   fi
@@ -1107,7 +1115,7 @@ layout
 draw
 run "$startacts" 0
 for i in $ticks; do (( tnext[$i] = EPOCHREALTIME + i )); done
-integer tmo=5 stick=0
+integer tmo=5 stick=0 mh=0 mwas=0
 lspun=
 while :; do
   reply=()
@@ -1136,6 +1144,8 @@ while :; do
     landed_jobs && changed=1
     spun_on && changed=1
     (( ! loaded )) && { spin_frame; [[ $REPLY != $lspun ]] && { lspun=$REPLY; changed=1; }; }
+    # Music started or stopped: the foot of the rows is the music's, or theirs again.
+    (( ($#mstate > 0) != mwas )) && { (( mwas = $#mstate > 0 )); changed=1; }
     [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
     # This row's preview landing: one file test, not a look through pv/.
     (( cur && ! help && pshow )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }

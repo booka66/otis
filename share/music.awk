@@ -140,7 +140,7 @@ function glyph(bits) { return sprintf("%c%c%c", 226, 160 + int(bits / 64), 128 +
 function place(   k) {
   if (NF == 1) { ns = 0; sw = 0; split("", painted); return }
   if ($5 - 1 < 3) return
-  ns++; px[ns] = $2; pw[ns] = $3; pb[ns] = $4; pd[ns] = $5 - 1 > (NF > 5 ? $6 : deep) ? (NF > 5 ? $6 : deep) : $5 - 1
+  ns++; px[ns] = $2; pw[ns] = $3; pb[ns] = $4; pn[ns] = $5; pd[ns] = $5 - 1 > (NF > 5 ? $6 : deep) ? (NF > 5 ? $6 : deep) : $5 - 1
   if (px[ns] + pw[ns] - 1 > sw) { sw = px[ns] + pw[ns] - 1; hn = 2 * sw; for (k = 0; k < hn; k++) hist[k] = 0.5; split("", sg); sh = 0 }
 }
 function back(   k, rb, t, b) {
@@ -155,6 +155,11 @@ function back(   k, rb, t, b) {
       t = look == "river" ? river(k, rb) : look == "glow" ? glow(k, rb) : look == "spectrogram" ? spec(k, rb) : hills(k, rb)
       if (painted[pb[k] - rb, px[k]] != t) { painted[pb[k] - rb, px[k]] = t; print "p\t" (pb[k] - rb) "\t" px[k] "\t" pw[k] "\t" t }
     }
+    # Over the bars, the rest of the place blank: a place that has just got
+    # shorter at the top had bars there that nothing else would take away.
+    if (!(pw[k] in sp)) sp[pw[k]] = sprintf("%" pw[k] "s", "")
+    for (rb = pd[k]; rb < pn[k] && rb <= deep; rb++)
+      if (painted[pb[k] - rb, px[k]] != sp[pw[k]]) { painted[pb[k] - rb, px[k]] = sp[pw[k]]; print "p\t" (pb[k] - rb) "\t" px[k] "\t" pw[k] "\t" sp[pw[k]] }
   }
 }
 # hills <place> <row from its bottom>: the spectrum filled up from the

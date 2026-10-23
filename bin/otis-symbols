@@ -1641,8 +1641,12 @@ draw() {
     (( lw != ccw )) && chat_load
     chat_frame
   fi
+  # While music plays, the foot of the list on a wide screen is the music's,
+  # a place of its own the rows scroll above, as the panel's is the panel's.
+  mh=0
+  (( side && ! chh && $#mstate && lh >= 24 )) && mh=9
   # The cursor's row in view, the headline kept when it fits.
-  (( rows = lh, lrows = lh - chh ))
+  (( rows = lh, lrows = lh - chh - mh ))
   for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
   while (( hi && ${MP[$(( hi + 1 ))]:-0} == cur )); do (( hi++ )); done
   (( hi > top + lrows )) && (( top = hi - lrows ))
@@ -1710,7 +1714,7 @@ draw() {
   for (( y = 1; y <= rows; y++ )); do
     i=$(( y + top ))
     s=
-    if (( y > lrows )); then s="  ${CF[y - lrows]}"
+    if (( y > lrows )); then (( chh )) && s="  ${CF[y - lrows]}"
     elif (( i <= $#L )); then
       if (( LI[i] )); then
         f=$LI[i]
@@ -1747,7 +1751,9 @@ draw() {
   # The blank rows under the list, beside the pane, and under the pane:
   # where the music's background may move.
   local -a sp
-  (( side && ! chh && $#L - top < lrows )) && sp+=("1 $lw $lrows $(( lrows - $#L + top ))")
+  integer lb=$(( lrows - $#L + top ))
+  (( lb < 0 )) && lb=0
+  (( side && ! chh && lb + mh > 0 )) && sp+=("1 $lw $(( lrows + mh )) $(( lb + mh ))")
   (( ph - phd > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - phd - plen + poff ))")
   music_space $sp
   # The footer: a note a key left, or what enter does and the keys to reach
@@ -2113,7 +2119,8 @@ mouse() {
     (( sel )) && ends
     return
   fi
-  if (( b == 0 && ! up && y <= lh )) && (( side ? x < lw : 1 )); then
+  # A click on the music under the rows (mh) is on no row.
+  if (( b == 0 && ! up && y <= lh - mh )) && (( side ? x < lw : 1 )); then
     local at=$(( y + top ))
     # A row's own line, or one it goes on to.
     (( at <= $#LI && LI[at] > 0 )) && go $LI[at]
@@ -2788,7 +2795,7 @@ opened=1
 # A walk's steps and a tour's panes are asked for now, beside the rows.
 [[ -n $stepscmd ]] && steps_load
 [[ -n $panescmd ]] && panes_load
-integer tmo=5 stick=0 wtick=0 rewidth=0
+integer tmo=5 stick=0 wtick=0 rewidth=0 mh=0 mwas=0
 lspun=
 while :; do
   reply=()
@@ -2828,6 +2835,8 @@ while :; do
     fi
     (( chat )) && chat_tick && changed=1
     (( box )) && box_tick && changed=1
+    # Music started or stopped: the list's foot is the music's, or the list's again.
+    (( ($#mstate > 0) != mwas )) && { (( mwas = $#mstate > 0 )); changed=1; }
     # The list landing is the drawn panes being there too: the screen
     # opened without them rather than wait (panes_load, before the loop).
     landed && { changed=1; [[ -n $panescmd && -z $pdir ]] && panes_load; }
