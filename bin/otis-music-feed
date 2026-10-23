@@ -22,6 +22,13 @@ typeset -a cfg=("${(@f)$(otis-config music musicColors musicFps musicBackground)
 [[ $cfg[1] == off ]] && exit 0
 integer fps=${cfg[3]:-30}
 (( fps < 1 || fps > 60 )) && fps=30
+# A write to a connection cliamp has let go of fails rather than ends this
+# (the default for a pipe gone): cliamp closes one that has asked nothing for
+# a minute, as this one has while a screen was opened over its own, and it
+# reconnects. Its own lines go out through out, which ends it once the
+# screen reading them has gone.
+trap '' PIPE
+out() { print -rl -- "$@" || exit 0; }
 # Where cliamp keeps it: CLIAMP_CONFIG_DIR, else under XDG_CONFIG_HOME or ~/.config.
 sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock
 
@@ -48,7 +55,7 @@ state() {
     rev=$r
     st=("${(@ps:\t:)$(print -r -- $s | jq -r '(.snapshot // .) | [.state // "stopped", ((.track.title // "") | gsub("[\t\n]"; " ")), ((.track.artist // "") | gsub("[\t\n]"; " ")), (.index // -1), (.total // 0), (.volume // 0), (.shuffle // false)] | @tsv' 2>/dev/null)}")
   fi
-  print -r -- "S"$'\t'"${st[1]:-stopped}"$'\t'$pos$'\t'$dur$'\t'"${(pj:\t:)st[2,-1]}"
+  out "S"$'\t'"${st[1]:-stopped}"$'\t'$pos$'\t'$dur$'\t'"${(pj:\t:)st[2,-1]}"
   [[ $p != $prev || $st[4] != $at ]] && { prev=$p at=$st[4]; upnext }
 }
 # upnext: the three tracks after this one, as a Q line. queue.list is an
@@ -61,7 +68,7 @@ upnext() {
     id=$match[1]
     ask $c job.get ",\"job_id\":\"$id\"" || return
   done
-  print -r -- "Q"$'\t'"$(print -r -- $REPLY | jq -r '[(.job.result // .result // {}).tracks[]?.title // empty | gsub("[\t\n]"; " ")] | join("\t")' 2>/dev/null)"
+  out "Q"$'\t'"$(print -r -- $REPLY | jq -r '[(.job.result // .result // {}).tracks[]?.title // empty | gsub("[\t\n]"; " ")] | join("\t")' 2>/dev/null)"
 }
 # places: the screen's empty places, as A lines, when they have changed.
 places=$2 lastp=
@@ -70,8 +77,8 @@ places() {
   p=$(<$places) 2>/dev/null
   [[ $p == $lastp ]] && return
   lastp=$p
-  print A
-  [[ -n $p ]] && print -rl -- "A "${^${(f)p}}
+  out A
+  [[ -n $p ]] && out "A "${^${(f)p}}
 }
 # stream: frames until cliamp goes. While it is not playing the bars have
 # fallen flat, so a few frames a second do.
@@ -80,7 +87,7 @@ stream() {
   while :; do
     ask $c spectrum.get || return
     places
-    [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]] && print -r -- "B ${match[1]//,/ }"
+    [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]] && out "B ${match[1]//,/ }"
     if (( EPOCHREALTIME >= snext )); then
       (( snext = EPOCHREALTIME + 0.25 ))
       ask $c state.get || return
@@ -95,11 +102,15 @@ stream() {
   while :; do
     if [[ -S $sock ]] && zsocket $sock 2>/dev/null; then
       c=$REPLY
+      float began=$EPOCHREALTIME
       stream
       exec {c}>&-
       rev=-1 prev=-1 at=-1 st=()
+      # Let go of after a while (cliamp's minute, above): straight back,
+      # with nothing to say meanwhile, so the screen shows no gap.
+      (( EPOCHREALTIME - began > 2 )) && continue
     fi
-    print Z || exit 0
+    out Z
     zselect -t 200
   done
 } | LC_ALL=C awk -v fps=$fps -v w=${1:-24} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk
