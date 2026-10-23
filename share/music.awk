@@ -177,6 +177,7 @@ function back_init(   g, l) {
   if (g ~ /^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$/) { gr = hex(substr(g, 1, 2)); gg = hex(substr(g, 3, 2)); gb = hex(substr(g, 5, 2)); ground = 1 }
   if (look == "glow" && !(ground && rgb(ramp(0.75)))) look = "hills"
   if (alpha == "") alpha = 0.3
+  bar += 0; gap += 0; if (bar < 1) bar = 1
   # By how high each column is, as the strip's bars are; a river's line is
   # thin where hills are solid, so it is drawn brighter to be as there.
   for (l = 0; l < 9; l++) bl[l] = dim(ramp(l / 8), look == "river" ? alpha * 1.7 : alpha)
@@ -199,7 +200,7 @@ function back(   k, rb, t, b) {
   if (look == "river") flow()
   else if (look == "spectrogram") { for (b = 0; b < nb; b++) sg[sh, b] = band[b]; sh = (sh + 1) % sw }
   else if (look == "glow") { lit += ((band[0] + band[1]) / 2 - lit) * ((band[0] + band[1]) / 2 > lit ? 0.5 : 0.07); rgb(ramp(0.75)) }
-  else spread(sw, bv)
+  else spread(int((sw + gap) / (bar + gap)) + 1, bv)
   for (k = 1; k <= ns; k++) {
     if (look == "river") bank(k)
     for (rb = 0; rb < pd[k]; rb++) {
@@ -210,12 +211,14 @@ function back(   k, rb, t, b) {
 }
 # hills <place> <row from its bottom>: the spectrum filled up from the
 # bottom, each column the color of how high it stands.
-function hills(k, rb,   c, f, l, t, last) {
+function hills(k, rb,   c, f, l, t, last, i) {
   t = ""; last = ""
   for (c = px[k]; c < px[k] + pw[k]; c++) {
-    f = bv[c - 1] * pd[k] * 8 * 0.9 - rb * 8
+    if ((c - 1) % (bar + gap) >= bar) { t = t " "; continue }
+    i = int((c - 1) / (bar + gap))
+    f = bv[i] * pd[k] * 8 * 0.9 - rb * 8
     if (f < 1) { t = t " "; continue }
-    l = int(bv[c - 1] * 8 + 0.5); if (l < 1) l = 1
+    l = int(bv[i] * 8 + 0.5); if (l < 1) l = 1
     if (bl[l] != last) { t = t e "0;" bl[l] "m"; last = bl[l] }
     t = t (f >= 8 ? "█" : blk[int(f)])
   }

@@ -277,7 +277,9 @@ music_space() {
   local p=${(F)argv} x w b n
   integer y
   if [[ $p != $mspace ]]; then
-    mspace=$p mok=()
+    # What took a row over drew over the background there, so none of what
+    # was drawn counts as there any more: the feed draws every row again.
+    mspace=$p mok=() mshown=()
     for x w b n in ${=p}; do
       for (( y = b - n + 1; y <= b; y++ )); do mok[$y:$x:$w]=1; done
     done
