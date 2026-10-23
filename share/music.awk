@@ -176,11 +176,15 @@ function back_init(   g, l) {
   sub(/^#/, "", g)
   if (g ~ /^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$/) { gr = hex(substr(g, 1, 2)); gg = hex(substr(g, 3, 2)); gb = hex(substr(g, 5, 2)); ground = 1 }
   if (look == "glow" && !(ground && rgb(ramp(0.75)))) look = "hills"
-  if (alpha == "") alpha = 0.3
+  # Bars two columns wide with a column between, at 60% of their color: fewer
+  # and brighter read as music, where every column at 30% read as a wash.
+  if (alpha == "") alpha = 0.6
+  if (bar == "") bar = 2
+  if (gap == "") gap = 1
   bar += 0; gap += 0; if (bar < 1) bar = 1
   # By how high each column is, as the strip's bars are; a river's line is
-  # thin where hills are solid, so it is drawn brighter to be as there.
-  for (l = 0; l < 9; l++) bl[l] = dim(ramp(l / 8), look == "river" ? alpha * 1.7 : alpha)
+  # thin where bars are solid, so it is drawn brighter to be as there.
+  for (l = 0; l < 9; l++) bl[l] = dim(ramp(l / 8), look == "river" ? (alpha * 1.4 > 1 ? 1 : alpha * 1.4) : alpha)
 }
 function hex(s,   d) { d = "0123456789abcdef"; s = tolower(s); return (index(d, substr(s, 1, 1)) - 1) * 16 + index(d, substr(s, 2, 1)) - 1 }
 # dim <SGR> <0..1>: the color that far from the ground toward it.
@@ -285,7 +289,7 @@ function river(k, rb,   c, x, j, d, bits, t, last, l) {
 # bass is loud, rising fast and falling slowly; blank, in a color.
 function glow(k, rb,   a) {
   if (!(pw[k] in sp)) sp[pw[k]] = sprintf("%" pw[k] "s", "")
-  a = alpha * 0.55 * lit * ((pd[k] - rb) / pd[k]) ^ 2
+  a = alpha * 0.28 * lit * ((pd[k] - rb) / pd[k]) ^ 2
   if (a < 0.01) return e "0m" sp[pw[k]]
   return sprintf("%s0;48;2;%d;%d;%dm%s%s0m", e, gr + (R - gr) * a, gg + (G - gg) * a, gb + (B - gb) * a, sp[pw[k]], e)
 }
