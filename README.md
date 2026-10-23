@@ -44,6 +44,10 @@ A team can commit a `.otis` file at the top of its repo, in git config format, w
 
 Claude's background runs have no shell, so a hostile MR's text cannot get Claude to run a command.
 
+## Music
+
+While [cliamp](https://github.com/bjarneo/cliamp) 2 is playing, in its own pane or headless (`cliamp --daemon`), every otis screen shows it: its bars and what is playing along the rule over the footer, and a dim visualizer in the empty rows under the board, the lists and the panes, never behind text. otis reads cliamp's own socket, a process apart from the screen, so the screen only paints those rows as they come and keys answer as fast as they did before. `otis.musicBackground` picks what moves in the empty rows: `hills` (the spectrum, each column the color of how high it stands), `river` (the beat as a line flowing left), `glow` (a light from below with the bass) or `off`; `otis.musicColors` their colors, `otis.musicFps` how often they move, and `otis.music off` takes it all off the screens. Without cliamp nothing changes.
+
 ## Uninstall
 
 Remove the line `otis-setup` added to your shell config, and `~/.local/share/otis`. Caches are in `~/.cache/git-alias` and each repo's `.git/git-alias-cache`. Claude's run records are under `.git/gmr-claude`, `gmr-fix`, `gmr-watch` and `otis-verify`, and otis's worktrees are under `.claude/worktrees`.

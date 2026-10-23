@@ -49,6 +49,17 @@
 #                (git config otis.terminalBrowser false turns it off); on by default
 #   lessons      exit 0 when Claude's review comments and fixes should each come with a lesson on the
 #                principle behind it, for you alone (git config --global otis.lessons true); off by default
+#   music        on when every screen shows what cliamp 2 is playing, its bars and title in the rule over
+#                the footer and a dim visualizer in the empty rows (musicBackground); off for none: otis.music,
+#                else on
+#   musicColors  what color the bars are: theme, the theme's colors from cool to warm as they rise; winamp,
+#                green to red; rainbow, moving along them; mono, the theme's review color: otis.musicColors,
+#                else theme
+#   musicBackground  what moves in the empty space under a screen's rows while cliamp plays, dim and never
+#                behind text: hills, the spectrum, each column the color of how high it stands; river, the
+#                beat as a line flowing left; glow, a light from below that rises with the bass; or off:
+#                otis.musicBackground, else hills
+#   musicFps     frames a second the bars move at, 1 to 60: otis.musicFps, else 30
 #   gitlab       exit 0 when origin is on GitLab: its host is <host>, or has gitlab in its name (ends the run, so ask it alone)
 #
 # No key opens every one in a picker, with its value and where that came
@@ -71,7 +82,7 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the agent, your
 # editor, or where worktrees go.
-names='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees install editor terminalBrowser lessons'
+names='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees install editor terminalBrowser lessons music musicColors musicBackground musicFps'
 sharednames='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak'
 nl='
 '
@@ -165,7 +176,7 @@ cfg_bool() {
   esac
 }
 
-keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees editor terminalBrowser lessons gitlab'
+keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees editor terminalBrowser lessons music musicColors musicBackground musicFps gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -242,6 +253,10 @@ one() {
       { command -v nvim >/dev/null 2>&1 && echo nvim; } || echo "${VISUAL:-${EDITOR:-vi}}" ;;
     terminalBrowser) [ "$(cfg_bool terminalBrowser || echo true)" = true ] ;;
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
+    music) case $(cfg music) in off) echo off ;; *) echo on ;; esac ;;
+    musicColors) case $(cfg musicColors) in winamp | rainbow | mono) cfg musicColors ;; *) echo theme ;; esac ;;
+    musicBackground) case $(cfg musicBackground) in river | glow | off) cfg musicBackground ;; *) echo hills ;; esac ;;
+    musicFps) case $(cfg musicFps) in [1-9] | [1-5][0-9] | 60) cfg musicFps ;; *) echo 30 ;; esac ;;
     gitlab)
       origin_parts || exit 1
       [ "$host" = "$(cfg host)" ] && exit 0
@@ -278,7 +293,7 @@ one() {
 # inside it; a .otis that differs between branches checked out there is the
 # one thing this would miss. A worktree asked on its own, with no environment
 # from above, reads its own .otis into its own cache (repo_facts).
-envkeys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons gitlab'
+envkeys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees terminalBrowser lessons music musicColors musicBackground musicFps gitlab'
 boolkeys='verifyRetro verifyFix verifyBreak terminalBrowser lessons gitlab'
 cachename=otis-config-cache
 tab='	'
@@ -529,7 +544,7 @@ $(git config --file "$repofile" --show-origin --get-all "otis.$n" 2>/dev/null)"
         grep -v -e '^#' -e '^$' "$f" | while IFS= read -r v; do git config "--$scope" --add "otis.$n" "$v"; done
         rm -f "$f" ;;
       # One of a few values: picked from them, not typed.
-      forge | agent | engine | sideBySide | verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons)
+      forge | agent | engine | sideBySide | verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons | music | musicColors | musicBackground)
         case $n in
           forge) c='gitlab	merge requests on GitLab, through glab
 github	pull requests on GitHub, through gh' ;;
@@ -540,10 +555,20 @@ cursor	Cursor'"'"'s agent' ;;
 dagger	dagger, over tsc --lsp' ;;
           sideBySide) c='always	side by side at any width
 auto	side by side from 120 columns' ;;
+          music) c='on	on every screen, while cliamp plays
+off	nowhere' ;;
+          musicBackground) c='hills	the spectrum as dim hills, each column the color of how high it stands
+river	the beat as a line flowing left
+glow	a light from below that rises with the bass
+off	nothing' ;;
+          musicColors) c='theme	the theme'"'"'s colors, cool to warm as they rise
+winamp	green to red
+rainbow	a rainbow moving along them
+mono	the theme'"'"'s review color' ;;
           *) c='true	on
 false	off' ;;
         esac
-        v=$(printf '%s\n' "$c" | awk -F'\t' -v now="$(cfg "$n")" '{ printf "%-8s %s%s\t%s\n", $1, $2, ($1 == now ? "  (set now)" : ""), $1 }' |
+        v=$(printf '%s\n' "$c" | awk -F'\t' -v now="$(cfg "$n")" '{ printf "%-11s %s%s\t%s\n", $1, $2, ($1 == now ? "  (set now)" : ""), $1 }' |
           git-fzf "otis.$n ($scope) " 'enter=set it' --delimiter='\t' --with-nth=1 | cut -f2)
         [ -n "$v" ] && git config "--$scope" "otis.$n" "$v" ;;
       *)

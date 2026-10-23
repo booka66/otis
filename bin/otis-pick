@@ -700,9 +700,15 @@ draw() {
     fi
     pr+=("$s")
   done
+  # The blank rows under the rows, beside the pane, and under the pane: where
+  # the music's background may move.
+  local -a sp
+  (( side && total - top < rows )) && sp+=("1 $lw $rows $(( rows - total + top ))")
+  (( ph > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - plen + poff ))")
+  music_space $sp
   # The footer: a note a key left, or what enter does and the keys to reach
   # for first, as many as fit.
-  fr+=("$F${(l:W::─:)}$R")
+  music_rule; fr+=("$REPLY")
   foot="  "
   local nm=0
   for i in ${(k)marked}; do (( marked[$i] )) && (( nm++ )); done
@@ -1105,7 +1111,7 @@ integer tmo=5 stick=0
 lspun=
 while :; do
   reply=()
-  zselect -t $tmo -r $tty ${winch:+-r} $winch ${${lfd:#0}:+-r} ${lfd:#0}
+  music_wait -t $tmo -r $tty ${winch:+-r} $winch ${${lfd:#0}:+-r} ${lfd:#0}
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize

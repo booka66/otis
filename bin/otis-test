@@ -155,6 +155,9 @@ trap 'rm -rf "$tmp"' EXIT
 # scripts get 45% of this, the same budget the rows had back when a 100-column
 # terminal still gave the list all of itself.
 export HOME=$tmp XDG_CACHE_HOME=$tmp/cache GIT_CONFIG_GLOBAL=$tmp/gitconfig FZF_COLUMNS=220
+# No cliamp of yours: the screens' music strip and background would be drawn
+# over what the tests read of them.
+unset CLIAMP_CONFIG_DIR XDG_CONFIG_HOME
 git init -q -b main "$tmp/origin" && (
   cd "$tmp/origin" && git config user.email t@t && git config user.name t &&
   printf 'a\n' > a.ts && printf 'b\n' > b.spec.ts && mkdir -p src && printf 'c\n' > src/c.ts &&

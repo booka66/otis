@@ -1744,9 +1744,15 @@ draw() {
       pr+=("$s")
     fi
   done
+  # The blank rows under the list, beside the pane, and under the pane:
+  # where the music's background may move.
+  local -a sp
+  (( side && ! chh && $#L - top < lrows )) && sp+=("1 $lw $lrows $(( lrows - $#L + top ))")
+  (( ph - phd > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - phd - plen + poff ))")
+  music_space $sp
   # The footer: a note a key left, or what enter does and the keys to reach
   # for first, as many as fit.
-  fr+=("$F${(l:W::─:)}$R")
+  music_rule; fr+=("$REPLY")
   foot="  "
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
   elif [[ -n $flash ]]; then
@@ -2790,7 +2796,7 @@ while :; do
   # 10ms a frame of the whole pane, under a multiplexer, came out in bursts.
   # A key's command or a reload out is looked for as often: v is one after
   # the other, and at the resting tick each sat landed for 25ms on average.
-  zselect -t $(( xon || lon || $#jobs || $#rpid || (box && bshow != btarget) ? 2 : tmo )) -r $tty ${winch:+-r} $winch
+  music_wait -t $(( xon || lon || $#jobs || $#rpid || (box && bshow != btarget) ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize

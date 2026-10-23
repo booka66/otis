@@ -1,6 +1,7 @@
 # screen.zsh: what the screens drawn by hand share (otis-dash, otis-symbols,
 # otis-agent): the terminal taken and given back, keys read, text measured
-# and cut, and a selection in a pane copied. Sourced by a zsh -f script
+# and cut, a selection in a pane copied, and the bars of what cliamp is
+# playing along the rule over the footer. Sourced by a zsh -f script
 # after it has made its state directory ($st) and loaded the theme; it
 # calls screen_start once, then screen_on.
 #
@@ -86,6 +87,7 @@ screen_on() {
     shown_pane=("${shown_rows[@]}")
   fi
   print -nu $tty -- $alt$e'[?25l'$e'[?7l'$e'[?1002h'$e'[?1006h'; screen=1
+  music_start
 }
 # on_alt: the terminal says it is still on the alternate screen (DECRQM); one
 # that does not answer in a tenth of a second is taken as not.
@@ -192,6 +194,151 @@ size() { local s; s=$(stty size <&$tty); H=${s% *} W=${s#* }; }
 # orphaned: whatever opened this is gone, so it should go too rather than
 # read keys under a shell's prompt. Cheap: ask it once a second.
 orphaned() { ! kill -0 $PPID 2>/dev/null; }
+
+# --- the music strip ---------------------------------------------------------------
+# While cliamp 2 plays, its bars and what it is playing run along the right of
+# the rule over the footer, on every screen (otis.music). otis-music-feed
+# draws them in a process of its own, a line a frame; the screen only paints
+# that one row as each line comes, between keys, never a frame of its own:
+# its main wait is music_wait, which is zselect with the strip painted
+# meanwhile, and its draw puts music_rule where the rule was. A screen that
+# draws music itself (otis-music) sets strip=0.
+integer mfd=0 strip=1 mcells=24 mlabw=0
+mbuf= mbars= mlab= mrule=
+# music_start: the feed, once, as the screen is first on. It holds nothing of
+# the screen's: not the port, which a screen opened after this one binds.
+music_start() {
+  (( strip && ! mfd )) || return 0
+  : > $st/music-places
+  exec {mfd}< <(unlisten; exec {tty}>&-; exec otis-music-feed strip $mcells $st/music-places 2>/dev/null)
+}
+# music_wait <zselect's arguments>: zselect, the strip painted whenever a frame
+# of it comes, and back with reply as zselect would be once something else is
+# ready or the time is up.
+music_wait() {
+  (( mfd )) || { zselect "$@"; return }
+  local -a args=("$@")
+  integer i=${args[(i)-t]} rc
+  float end=-1
+  (( i < $#args )) && { (( end = EPOCHREALTIME + args[i+1] / 100.0 )); args[i,i+1]=(); }
+  while :; do
+    reply=()
+    if (( end < 0 )); then zselect "${args[@]}" -r $mfd
+    else zselect -t $(( end > EPOCHREALTIME ? int((end - EPOCHREALTIME) * 100 + 0.999) : 0 )) "${args[@]}" -r $mfd; fi
+    rc=$?
+    i=${reply[(I)$mfd]}
+    (( rc == 0 && i )) || return rc
+    reply[i-1,i]=()
+    music_take
+    (( $#reply )) && return 0
+    (( end >= 0 && EPOCHREALTIME >= end )) && return 1
+  done
+}
+# music_take: what the feed has said since: the rule painted with its last
+# frame, and each row of the background that changed, where it is still an
+# empty place. The feed gone (otis.music says screen, or no cliamp), or the
+# music stopped, the rule is plain and the places blank again.
+music_take() {
+  local chunk l out=
+  local -a f
+  if ! sysread -s 65536 -i $mfd chunk; then
+    exec {mfd}<&-; mfd=0 mbars= mlab= mbuf=
+    music_paint; music_blank
+    return
+  fi
+  mbuf+=$chunk
+  [[ $mbuf == *$'\n'* ]] || return
+  for l in "${(@f)${mbuf%$'\n'*}}"; do
+    case $l in
+      b$'\t'*) mbars=${l#b$'\t'} ;;
+      p$'\t'*) f=("${(@ps:\t:)l}"); mback[$f[2]:$f[3]:$f[4]]=$f[5] ;;
+      s$'\t'*) music_label "${(@ps:\t:)l}" ;;
+      z) mbars= mlab= ;;
+    esac
+  done
+  mbuf=${mbuf##*$'\n'}
+  music_paint
+  [[ -n $mbars ]] || music_blank
+}
+# The background as the feed last drew it, a row of a place a key (row:
+# column:width); which keys are empty places now (music_space); and what of
+# it is on the screen.
+typeset -A mback mok mshown
+mspace=
+# music_space <place>...: the screen's empty places as it has just drawn
+# them, each "<column> <width> <bottom row> <rows>": blank rows standing on
+# a bottom row, where the background may draw and nowhere else. Its draw
+# says them every frame; only a change reaches the feed. A frame drawn whole
+# wiped what the background had drawn, so it is drawn again.
+music_space() {
+  (( mfd )) || return 0
+  local p=${(F)argv} x w b n
+  integer y
+  if [[ $p != $mspace ]]; then
+    mspace=$p mok=()
+    for x w b n in ${=p}; do
+      for (( y = b - n + 1; y <= b; y++ )); do mok[$y:$x:$w]=1; done
+    done
+    print -r -- $p > $st/music-places
+  fi
+  (( $#shown_rows )) && [[ $shown_rows[1] != $'\0' ]] || mshown=()
+}
+# music_back: the background's rows that changed, painted, in REPLY.
+music_back() {
+  local k
+  local -a b
+  REPLY=
+  for k in ${(k)mback}; do
+    [[ -n $mok[$k] && $mshown[$k] != $mback[$k] ]] || continue
+    b=(${(s.:.)k})
+    REPLY+=$e"[$b[1];$b[2]H"$mback[$k]
+    mshown[$k]=$mback[$k]
+  done
+}
+# music_blank: the places as they were, the music gone.
+music_blank() {
+  (( $#mshown )) || { mback=(); return }
+  local k out=
+  local -a b
+  for k in ${(k)mshown}; do
+    [[ -n $mok[$k] ]] || continue
+    b=(${(s.:.)k})
+    out+=$e"[$b[1];$b[2]H"$R${(l:b[3]:: :)}
+  done
+  mback=() mshown=()
+  (( screen )) && [[ -n $out ]] && print -rnu $tty -- $e'7'$out$e'8'
+}
+# music_label <s> <state> <position> <duration> <title> <artist>...: what the
+# strip says beside its bars, in mlab: the title while it plays, paused and
+# the title while it is not. Nothing playing at all, no strip.
+music_label() {
+  case $2 in
+    playing) mlab=$A"♪"$R" "$C$5$R mlabw=$(( 2 + ${(m)#5} )) ;;
+    paused) mlab=$F"♪ paused  "$5$R mlabw=$(( 10 + ${(m)#5} )) ;;
+    *) mbars= mlab= ;;
+  esac
+}
+# music_rule: the rule over the footer, W wide, in REPLY: with the strip at its
+# right end while something plays, the title there only where it fits whole.
+# Cheap, as it is a frame's work: the widths are known, nothing is measured.
+music_rule() {
+  REPLY=$F${(l:W::─:)}$R
+  [[ -n $mbars ]] && (( W >= 40 )) || return 0
+  integer n=$(( mcells + 4 ))
+  local tail=" "$mbars$R
+  (( W - n - mlabw - 1 >= 8 )) && { tail+=" "$mlab; (( n += mlabw + 1 )); }
+  REPLY=$F${(l:W-n::─:)}$R$tail" "$F"──"$R
+}
+# music_paint: the rule's row and the background's as they are now, and
+# nothing else, in one write, the cursor and colors put back as they were.
+music_paint() {
+  (( screen )) || return
+  local was=$mrule out=
+  music_rule; mrule=$REPLY
+  [[ $mrule == $was ]] || out=$e"[$(( H - 1 ));1H"$mrule$R$e'[K'
+  music_back; out+=$REPLY
+  [[ -n $out ]] && print -rnu $tty -- $e'7'$out$e'8'
+}
 
 # --- keys ----------------------------------------------------------------------------
 # readkey: one key in REPLY: an escape sequence whole (an arrow, \e[B or

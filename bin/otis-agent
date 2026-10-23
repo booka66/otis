@@ -501,7 +501,9 @@ draw() {
     (( i <= $#P )) && { if (( sel && i >= s1 && i <= s2 )); then selected $i; s=$REPLY; else s=$P[i]; fi; }
     fr+=("  $s$R")
   done
-  fr+=("$F${(l:W::─:)}$R")
+  # The blank rows under the pane: where the music's background may move.
+  (( ph > plen - poff )) && music_space "3 $(( W - 2 )) $(( py + ph - 1 )) $(( ph - plen + poff ))" || music_space
+  music_rule; fr+=("$REPLY")
   foot="  "
   # A note or a flash stays until the next key: the clock redraws every
   # second, and a note gone on the next frame was gone before it was read.
@@ -677,7 +679,7 @@ integer stick=0
 wspun=
 while :; do
   reply=()
-  zselect -t 5 -r $tty ${winch:+-r} $winch
+  music_wait -t 5 -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then sysread -s 64 -i $winch _; resize; fi
   if (( ${reply[(I)$tty]} )); then
     readkey; handle $REPLY

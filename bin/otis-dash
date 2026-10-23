@@ -1034,7 +1034,13 @@ draw() {
     fi
     pr+=("$s")
   done
-  fr+=("$F${(l:W::─:)}$R") fy+=($(( H - 1 )))
+  # The blank rows under the board, where it has the screen's height, and
+  # under the pane: where the music's background may move.
+  local -a sp
+  (( (side || ! ph) && $#L - top < rows )) && sp+=("1 $lw $rows $(( rows - $#L + top ))")
+  (( pw > 0 && ph > $#P - poff )) && sp+=("$px $(( W - px + 1 )) $(( py + ph - 1 )) $(( ph - $#P + poff ))")
+  music_space $sp
+  music_rule; fr+=("$REPLY") fy+=($(( H - 1 )))
   # The footer: a note if a key left one, else what enter does on the row
   # (and d, where it removes), then the same few keys on every row, the
   # ones used most; ? has them all.
@@ -1679,7 +1685,7 @@ lap() {
 while :; do
   reply=()
   # A fold on its way is a frame every 30ms; else a tick every 50.
-  zselect -t ${${foldg:+3}:-$tmo} -r $tty ${winch:+-r} $winch
+  music_wait -t ${${foldg:+3}:-$tmo} -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize

@@ -1,0 +1,105 @@
+#!/usr/bin/env -S zsh -f
+# otis-music-feed strip <cells> <places> | screen <columns> <rows>: what
+# cliamp is playing, drawn (share/music.awk), a line a frame, for a screen to
+# paint: for every screen, the strip of bars in the rule over its footer and
+# the background (otis.musicBackground) in the empty places the screen keeps
+# listed in the file <places>, read again each frame; or, for a screen that
+# is the music alone, its bars. It reads cliamp's own socket, so it costs the screen
+# reading it a line a frame and nothing else.
+#
+# It asks for the spectrum otis.musicFps times a second (cliamp 2's
+# spectrum.get, what its visstream reads), the player's state four times a
+# second, and what plays next when the playlist changes. While nothing plays,
+# or cliamp is not running, it says so (Z) every two seconds and looks again;
+# a screen that has gone is found out on that line, which has nowhere to go.
+# Where otis.music is off, the strip has nothing to draw and it ends.
+setopt extendedglob
+zmodload zsh/net/socket zsh/zselect zsh/datetime zsh/system zsh/mathfunc
+command -v cliamp >/dev/null 2>&1 || exit 0
+mode=$1
+typeset -a cfg=("${(@f)$(otis-config music musicColors musicFps musicBackground)}")
+[[ $mode == strip && $cfg[1] == off ]] && exit 0
+integer fps=${cfg[3]:-30}
+(( fps < 1 || fps > 60 )) && fps=30
+# Where cliamp keeps it: CLIAMP_CONFIG_DIR, else under XDG_CONFIG_HOME or ~/.config.
+sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock
+
+# ask <fd> <method> [<json after the method>]: one request, its answer's line
+# in REPLY; status 1 when cliamp is gone or has not answered in two seconds.
+ask() {
+  print -u $1 -- "{\"version\":2,\"id\":\"o\",\"method\":\"$2\"$3}" 2>/dev/null || return 1
+  zselect -t 200 -r $1 || return 1
+  read -r -u $1 REPLY
+}
+# state <snapshot>: the player as an S line: its state, where it is and how
+# long it is, the track, and what plays next when the playlist has moved.
+# jq only when the snapshot's revision says something other than the clock
+# has changed.
+integer rev=-1 prev=-1 at=-1
+st=() pos=0 dur=0
+state() {
+  local s=$1 r p
+  [[ $s == *[{,]'"revision":'(#b)([0-9]##)* ]] && r=$match[1]
+  [[ $s == *'"position":'(#b)([0-9.eE+-]##)* ]] && pos=$match[1]
+  [[ $s == *[{,]'"duration":'(#b)([0-9.eE+-]##)* ]] && dur=$match[1]
+  [[ $s == *'"playlist_revision":'(#b)([0-9]##)* ]] && p=$match[1]
+  if [[ $r != $rev ]]; then
+    rev=$r
+    st=("${(@ps:\t:)$(print -r -- $s | jq -r '(.snapshot // .) | [.state // "stopped", ((.track.title // "") | gsub("[\t\n]"; " ")), ((.track.artist // "") | gsub("[\t\n]"; " ")), (.index // -1), (.total // 0), (.volume // 0), (.shuffle // false)] | @tsv' 2>/dev/null)}")
+  fi
+  print -r -- "S"$'\t'"${st[1]:-stopped}"$'\t'$pos$'\t'$dur$'\t'"${(pj:\t:)st[2,-1]}"
+  [[ $mode == screen && ( $p != $prev || $st[4] != $at ) ]] && { prev=$p at=$st[4]; upnext }
+}
+# upnext: the three tracks after this one, as a Q line. queue.list is an
+# operation: submitted, and asked after until it is done.
+upnext() {
+  local j id
+  integer n=0
+  ask $c operation.submit ",\"operation\":\"queue.list\",\"params\":{\"offset\":$(( at + 1 )),\"limit\":3}" || return
+  while [[ $REPLY == *'"state":"'(queued|running)'"'* && $REPLY == *'"job":{"id":"'(#b)([^\"]##)* ]] && (( n++ < 20 )); do
+    id=$match[1]
+    ask $c job.get ",\"job_id\":\"$id\"" || return
+  done
+  print -r -- "Q"$'\t'"$(print -r -- $REPLY | jq -r '[(.job.result // .result // {}).tracks[]?.title // empty | gsub("[\t\n]"; " ")] | join("\t")' 2>/dev/null)"
+}
+# places: the screen's empty places, as A lines, when they have changed.
+places= lastp=
+[[ $mode == strip ]] && places=$3
+places() {
+  local p
+  p=$(<$places) 2>/dev/null
+  [[ $p == $lastp ]] && return
+  lastp=$p
+  print A
+  [[ -n $p ]] && print -rl -- "A "${^${(f)p}}
+}
+# stream: frames until cliamp goes. While it is not playing the bars have
+# fallen flat, so a few frames a second do.
+stream() {
+  float next=$EPOCHREALTIME snext=0
+  while :; do
+    ask $c spectrum.get || return
+    [[ -n $places ]] && places
+    [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]] && print -r -- "B ${match[1]//,/ }"
+    if (( EPOCHREALTIME >= snext )); then
+      (( snext = EPOCHREALTIME + 0.25 ))
+      ask $c state.get || return
+      state "$REPLY"
+    fi
+    if [[ $st[1] == playing ]]; then (( next += 1.0 / fps )); else (( next += 0.25 )); fi
+    (( next < EPOCHREALTIME )) && next=$EPOCHREALTIME
+    zselect -t $(( int((next - EPOCHREALTIME) * 100 + 0.5) ))
+  done
+}
+{
+  while :; do
+    if [[ -S $sock ]] && zsocket $sock 2>/dev/null; then
+      c=$REPLY
+      stream
+      exec {c}>&-
+      rev=-1 prev=-1 at=-1 st=()
+    fi
+    print Z || exit 0
+    zselect -t 200
+  done
+} | LC_ALL=C awk -v mode=$mode -v w=${2:-24} -v h=${${mode:#strip}:+$3} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk
