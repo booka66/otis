@@ -57,7 +57,8 @@
 #                else theme
 #   musicBackground  what moves in the empty space under a screen's rows while cliamp plays, dim and never
 #                behind text: hills, the spectrum, each column the color of how high it stands; river, the
-#                beat as a line flowing left; glow, a light from below that rises with the bass; or off:
+#                beat as a line flowing left; glow, a light from below that rises with the bass; spectrogram,
+#                every band's loudness flowing left, the bass at the bottom; or off:
 #                otis.musicBackground, else hills
 #   musicFps     frames a second the bars move at, 1 to 60: otis.musicFps, else 30
 #   gitlab       exit 0 when origin is on GitLab: its host is <host>, or has gitlab in its name (ends the run, so ask it alone)
@@ -255,7 +256,7 @@ one() {
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
     music) case $(cfg music) in off) echo off ;; *) echo on ;; esac ;;
     musicColors) case $(cfg musicColors) in winamp | rainbow | mono) cfg musicColors ;; *) echo theme ;; esac ;;
-    musicBackground) case $(cfg musicBackground) in river | glow | off) cfg musicBackground ;; *) echo hills ;; esac ;;
+    musicBackground) case $(cfg musicBackground) in river | glow | spectrogram | off) cfg musicBackground ;; *) echo hills ;; esac ;;
     musicFps) case $(cfg musicFps) in [1-9] | [1-5][0-9] | 60) cfg musicFps ;; *) echo 30 ;; esac ;;
     gitlab)
       origin_parts || exit 1
@@ -560,6 +561,7 @@ off	nowhere' ;;
           musicBackground) c='hills	the spectrum as dim hills, each column the color of how high it stands
 river	the beat as a line flowing left
 glow	a light from below that rises with the bass
+spectrogram	every band'"'"'s loudness flowing left, the bass at the bottom
 off	nothing' ;;
           musicColors) c='theme	the theme'"'"'s colors, cool to warm as they rise
 winamp	green to red

@@ -247,8 +247,10 @@ music_take() {
     return
   fi
   mbuf+=$chunk
-  [[ $mbuf == *$'\n'* ]] || return
-  for l in "${(@f)${mbuf%$'\n'*}}"; do
+  # Whole frames only: a frame read in two pieces and painted as it came
+  # showed the top of one over the bottom of the last.
+  [[ $mbuf == *$'\n'f$'\n'* ]] || return
+  for l in "${(@f)${mbuf%$'\n'f$'\n'*}}"; do
     case $l in
       b$'\t'*) mbars=${l#b$'\t'} ;;
       p$'\t'*) f=("${(@ps:\t:)l}"); mback[$f[2]:$f[3]:$f[4]]=$f[5] ;;
@@ -256,9 +258,9 @@ music_take() {
       z) mbars= mlab= ;;
     esac
   done
-  mbuf=${mbuf##*$'\n'}
+  mbuf=${mbuf##*$'\n'f$'\n'}
   music_paint
-  [[ -n $mbars ]] || music_blank
+  [[ -n $mlab ]] || music_blank
 }
 # The background as the feed last drew it, a row of a place a key (row:
 # column:width); which keys are empty places now (music_space); and what of
@@ -306,7 +308,7 @@ music_blank() {
     out+=$e"[$b[1];$b[2]H"$R${(l:b[3]:: :)}
   done
   mback=() mshown=()
-  (( screen )) && [[ -n $out ]] && print -rnu $tty -- $e'7'$out$e'8'
+  (( screen )) && [[ -n $out ]] && print -rnu $tty -- $e'[?2026h'$e'7'$out$e'8'$e'[?2026l'
 }
 # music_label <s> <state> <position> <duration> <title> <artist>...: what the
 # strip says beside its bars, in mlab: the title while it plays, paused and
@@ -318,26 +320,30 @@ music_label() {
     *) mbars= mlab= ;;
   esac
 }
-# music_rule: the rule over the footer, W wide, in REPLY: with the strip at its
-# right end while something plays, the title there only where it fits whole.
+# music_rule: the rule over the footer, W wide, in REPLY: at its right end
+# while something plays, the title where it fits whole, and the bars when
+# the background has nowhere to be (the feed sends none while it has).
 # Cheap, as it is a frame's work: the widths are known, nothing is measured.
 music_rule() {
   REPLY=$F${(l:W::─:)}$R
-  [[ -n $mbars ]] && (( W >= 40 )) || return 0
-  integer n=$(( mcells + 4 ))
-  local tail=" "$mbars$R
+  [[ -n $mlab ]] && (( W >= 40 )) || return 0
+  integer n=3
+  local tail=
+  [[ -n $mbars ]] && { tail=" "$mbars$R; (( n += mcells + 1 )); }
   (( W - n - mlabw - 1 >= 8 )) && { tail+=" "$mlab; (( n += mlabw + 1 )); }
-  REPLY=$F${(l:W-n::─:)}$R$tail" "$F"──"$R
+  [[ -n $tail ]] && REPLY=$F${(l:W-n::─:)}$R$tail" "$F"──"$R
 }
 # music_paint: the rule's row and the background's as they are now, and
-# nothing else, in one write, the cursor and colors put back as they were.
+# nothing else, in one write the terminal shows at once (synchronized
+# output, which one that does not know it ignores), the cursor and colors
+# put back as they were.
 music_paint() {
   (( screen )) || return
   local was=$mrule out=
   music_rule; mrule=$REPLY
   [[ $mrule == $was ]] || out=$e"[$(( H - 1 ));1H"$mrule$R$e'[K'
   music_back; out+=$REPLY
-  [[ -n $out ]] && print -rnu $tty -- $e'7'$out$e'8'
+  [[ -n $out ]] && print -rnu $tty -- $e'[?2026h'$e'7'$out$e'8'$e'[?2026l'
 }
 
 # --- keys ----------------------------------------------------------------------------
