@@ -56,7 +56,7 @@
 #                green to red; rainbow, moving along them; mono, the theme's review color: otis.musicColors,
 #                else theme
 #   musicBackground  what moves in the empty space under a screen's rows while cliamp plays, dim and never
-#                behind text: hills, the spectrum as bars, each the color of how high it stands; river, the
+#                behind text: hills, cliamp's ClassicPeak: thin bars green to red as they rise, their caps thrown up and falling; river, the
 #                beat as a line flowing left; glow, a light from below that rises with the bass; spectrogram,
 #                every band's loudness flowing left, the bass at the bottom; or off:
 #                otis.musicBackground, else hills
@@ -558,7 +558,7 @@ dagger	dagger, over tsc --lsp' ;;
 auto	side by side from 120 columns' ;;
           music) c='on	on every screen, while cliamp plays
 off	nowhere' ;;
-          musicBackground) c='hills	the spectrum as bars, each the color of how high it stands
+          musicBackground) c='hills	thin bars green to red as they rise, their caps falling (cliamp'"'"'s ClassicPeak)
 river	the beat as a line flowing left
 glow	a light from below that rises with the bass
 spectrogram	every band'"'"'s loudness flowing left, the bass at the bottom

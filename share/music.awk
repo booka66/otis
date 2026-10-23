@@ -176,12 +176,21 @@ function back_init(   g, l) {
   sub(/^#/, "", g)
   if (g ~ /^[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]$/) { gr = hex(substr(g, 1, 2)); gg = hex(substr(g, 3, 2)); gb = hex(substr(g, 5, 2)); ground = 1 }
   if (look == "glow" && !(ground && rgb(ramp(0.75)))) look = "hills"
-  # Bars two columns wide with a column between, at 60% of their color: fewer
-  # and brighter read as music, where every column at 30% read as a wash.
+  # hills are cliamp's ClassicPeak: bars a column wide with a column between,
+  # each row the color of how high it is (low, mid and high: the theme's
+  # good, attention and bad), so a bar's color holds still as it moves.
   if (alpha == "") alpha = 0.6
-  if (bar == "") bar = 2
+  if (bar == "") bar = 1
   if (gap == "") gap = 1
   bar += 0; gap += 0; if (bar < 1) bar = 1
+  if (colors == "winamp") split("38;2;0;190;60 38;2;250;220;0 38;2;255;60;30", zc, " ")
+  else if (colors == "mono") split(ENVIRON["OTIS_T_REVIEW"] " " ENVIRON["OTIS_T_REVIEW"] " " ENVIRON["OTIS_T_REVIEW"], zc, " ")
+  else split(ENVIRON["OTIS_T_GOOD"] " " ENVIRON["OTIS_T_ATTENTION"] " " ENVIRON["OTIS_T_BAD"], zc, " ")
+  for (l = 1; l <= 3; l++) zc[l] = dim(zc[l], 0.85)
+  split("⎺ ⎻ ⎼ ⎽", capg, " ")
+  # Each frame is a 30th of a second, or what otis.musicFps makes it.
+  if (fps < 1) fps = 30
+  dt = 1 / fps; rise = 1 - exp(-34 * dt); fall = 1 - exp(-10 * dt)
   # By how high each column is, as the strip's bars are; a river's line is
   # thin where bars are solid, so it is drawn brighter to be as there.
   for (l = 0; l < 9; l++) bl[l] = dim(ramp(l / 8), look == "river" ? (alpha * 1.4 > 1 ? 1 : alpha * 1.4) : alpha)
@@ -204,7 +213,7 @@ function back(   k, rb, t, b) {
   if (look == "river") flow()
   else if (look == "spectrogram") { for (b = 0; b < nb; b++) sg[sh, b] = band[b]; sh = (sh + 1) % sw }
   else if (look == "glow") { lit += ((band[0] + band[1]) / 2 - lit) * ((band[0] + band[1]) / 2 > lit ? 0.5 : 0.07); rgb(ramp(0.75)) }
-  else spread(int((sw + gap) / (bar + gap)) + 1, bv)
+  else { nbb = int((sw + gap) / (bar + gap)) + 1; spread(nbb, bv); classic(nbb) }
   for (k = 1; k <= ns; k++) {
     if (look == "river") bank(k)
     for (rb = 0; rb < pd[k]; rb++) {
@@ -215,16 +224,44 @@ function back(   k, rb, t, b) {
 }
 # hills <place> <row from its bottom>: the spectrum filled up from the
 # bottom, each column the color of how high it stands.
-function hills(k, rb,   c, f, l, t, last, i) {
-  t = ""; last = ""
+# classic <bars>: each bar eased toward the spectrum, rising fast and falling
+# slower, and its cap: thrown up by a rise, held a moment at the top, then
+# fallen back onto the bar under gravity. cliamp's ClassicPeak, its numbers.
+function classic(n,   i, lv, was) {
+  for (i = 0; i < n; i++) {
+    lv = bv[i]
+    bp[i] += (lv - bp[i]) * (lv > bp[i] ? rise : fall)
+    if (cv[i] == 0 && cp[i] <= bp[i] + 0.01 && lv > cp[i]) {
+      cv[i] = 0.8 + 1.4 * (lv - cp[i]); if (cv[i] > 1.7) cv[i] = 1.7
+      cp[i] = lv; ch[i] = 0
+    }
+    if (ch[i] > 0) { ch[i] -= dt; if (ch[i] > 0) continue }
+    was = cv[i]; cp[i] += cv[i] * dt; cv[i] -= 9.5 * dt
+    if (cp[i] > 1) cp[i] = 1
+    if (was > 0 && cv[i] <= 0 && cp[i] > bp[i] + 0.01) { cv[i] = 0; ch[i] = 0.08; continue }
+    if (cp[i] <= bp[i]) { cp[i] = bp[i]; cv[i] = 0; ch[i] = 0 }
+  }
+}
+# hills <place> <row from its bottom>: the bars, eighths of a row at their
+# tops, and each cap a scan line a quarter of a row high where it is, in the
+# row's color.
+function hills(k, rb,   n, c, f, t, last, i, z, col, g, dy, top) {
+  n = pd[k]; t = ""; last = ""
+  z = rb / n >= 0.6 ? 3 : rb / n >= 0.3 ? 2 : 1
+  top = n - 1 - rb
   for (c = px[k]; c < px[k] + pw[k]; c++) {
     if ((c - 1) % (bar + gap) >= bar) { t = t " "; continue }
     i = int((c - 1) / (bar + gap))
-    f = bv[i] * pd[k] * 8 * 0.9 - rb * 8
-    if (f < 1) { t = t " "; continue }
-    l = int(bv[i] * 8 + 0.5); if (l < 1) l = 1
-    if (bl[l] != last) { t = t e "0;" bl[l] "m"; last = bl[l] }
-    t = t (f >= 8 ? "█" : blk[int(f)])
+    f = int((bp[i] * n - rb) * 8)
+    g = f >= 8 ? "█" : f >= 1 ? blk[f] : ""
+    if (g == "" && cp[i] > bp[i] + (0.5 / (n * 4) > 0.01 ? 0.5 / (n * 4) : 0.01)) {
+      dy = int((1 - (cp[i] < 1 ? cp[i] : 1)) * (n * 4 - 1) + 0.5)
+      if (int(dy / 4) == top) g = capg[dy % 4 + 1]
+    }
+    if (g == "") { t = t " "; continue }
+    col = colors == "rainbow" ? dim(hue(i / nbb * 0.8 + fc * 0.004), 0.85) : zc[z]
+    if (col != last) { t = t e "0;" col "m"; last = col }
+    t = t g
   }
   return t e "0m"
 }

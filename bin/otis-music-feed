@@ -102,4 +102,4 @@ stream() {
     print Z || exit 0
     zselect -t 200
   done
-} | LC_ALL=C awk -v mode=$mode -v w=${2:-24} -v h=${${mode:#strip}:+$3} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk
+} | LC_ALL=C awk -v mode=$mode -v fps=$fps -v w=${2:-24} -v h=${${mode:#strip}:+$3} -v look=${cfg[4]:-hills} -v colors=${cfg[2]:-theme} -f ${0:A:h:h}/share/music.awk
