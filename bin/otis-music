@@ -46,19 +46,20 @@ export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-music.$$.$RANDOM
 mkdir -m 700 $GIT_FZF_STATE || exit 1
 st=$GIT_FZF_STATE
 . ${0:A:h:h}/share/screen.zsh
+# The footer's keys, the ones used most first: as many as fit show.
 typeset -a KEYS=(
   space 'play or pause'
-  'n p' 'the next track and the one before'
-  '← →' 'ten seconds back and on'
+  /     'search YouTube'
+  'n p' 'next and previous'
+  '← →' 'seek ten seconds'
   '+ -' 'louder and quieter'
   s     'shuffle'
-  /     'search YouTube'
   q     'back'
 )
 keys_open otis-music 'space=play or pause,n=next,p=before,left=back ten seconds,right=on ten seconds,+=louder,-=quieter,s=shuffle,/=search YouTube'
 screen_start
 flash=
-float flasht=0
+float flashend=0
 
 # clock <seconds>: as 41:12, or 1:11:45 past an hour.
 clock() {
@@ -86,7 +87,7 @@ draw() {
   line= used=0; put "$B$T" "  ♪ music"; line+=$UB
   vw "$right"; pad $(( W - REPLY - 2 )); line+=$right
   fr+=("$line" "")
-  if (( $#mstate )); then
+  if [[ -n $mstate[4] ]]; then
     whole "$mstate[4]" $(( W - 4 ))
     for s in "${(@)reply[1,2]}"; do fr+=("  $B$T$s$UB$R"); done
     [[ -n $mstate[5] ]] && { whole "$mstate[5]" $(( W - 4 )); fr+=("  $C$reply[1]$R"); }
@@ -139,7 +140,7 @@ draw() {
 # and a half where nothing it shows does (a seek).
 act() {
   keys_used "$1" "$2"
-  flash="$2…" flasht=$EPOCHREALTIME
+  flash="$2…" flashend=$(( EPOCHREALTIME + 1.5 ))
   { cliamp "${@:3}" >/dev/null 2>&1 } &!
 }
 search() {
@@ -152,7 +153,8 @@ search() {
   run_tty "git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
     --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' > ${(q)st}/pick" sh
   pick=$(<$st/pick) 2>/dev/null; rm -f $st/pick
-  if [[ -n $pick ]]; then flash="starting it…"; { otis-music --play ${pick%%$'\t'*} } >/dev/null 2>&1 &!; fi
+  # Until it plays, which takes yt-dlp a few seconds to find its audio.
+  if [[ -n $pick ]]; then flash="starting it…" flashend=$(( EPOCHREALTIME + 20 )); { otis-music --play ${pick%%$'\t'*} } >/dev/null 2>&1 &!; fi
   draw
 }
 handle() {
@@ -189,7 +191,7 @@ while :; do
       stick=$EPOCHSECONDS
       orphaned && quit 1
       [[ -z $winch ]] && size
-      [[ -n $flash ]] && (( EPOCHREALTIME - flasht > 1.5 )) && flash=
+      [[ -n $flash ]] && (( EPOCHREALTIME > flashend )) && flash=
       draw
     fi
     # The player has changed (not its clock): what a key asked for is done.
