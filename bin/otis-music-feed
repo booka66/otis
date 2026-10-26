@@ -80,20 +80,26 @@ places() {
   out A
   [[ -n $p ]] && out "A "${^${(f)p}}
 }
-# stream: frames until cliamp goes. While it is not playing the bars have
-# fallen flat, so a few frames a second do.
+# stream: frames until cliamp goes. Paused or stopped, a few frames a second
+# do once the bars have fallen flat: cliamp's bands fade out over a moment,
+# and the caps they threw up take a second more to land, which a few frames
+# a second showed in slow motion.
 stream() {
-  float next=$EPOCHREALTIME snext=0
+  float next=$EPOCHREALTIME snext=0 loud=0
+  local b
   while :; do
     ask $c spectrum.get || return
     places
-    [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]] && out "B ${match[1]//,/ }"
+    if [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]]; then
+      out "B ${match[1]//,/ }"
+      for b in ${(s:,:)match[1]}; do (( b > 0.01 )) && { loud=$EPOCHREALTIME; break; }; done
+    fi
     if (( EPOCHREALTIME >= snext )); then
       (( snext = EPOCHREALTIME + 0.25 ))
       ask $c state.get || return
       state "$REPLY"
     fi
-    if [[ $st[1] == playing ]]; then (( next += 1.0 / fps )); else (( next += 0.25 )); fi
+    if [[ $st[1] == playing ]] || (( EPOCHREALTIME - loud < 1.5 )); then (( next += 1.0 / fps )); else (( next += 0.25 )); fi
     (( next < EPOCHREALTIME )) && next=$EPOCHREALTIME
     zselect -t $(( int((next - EPOCHREALTIME) * 100 + 0.5) ))
   done
