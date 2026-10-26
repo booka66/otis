@@ -340,7 +340,7 @@ async function tellCases(only = null, told = null) {
   ];
   if (model === "off" || !rows.length) return null;
   const said = sources.map((source) => source.text).join("\n\n");
-  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 16])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([said, rows.map((row) => [row.id, row.add, row.del]), model, 17])).digest("hex").slice(0, 16);
   const cached = cacheDir && join(cacheDir, `${base}-${head}.${key}.json`);
   if (!only && cached && existsSync(cached)) { try { return { ...JSON.parse(readFileSync(cached, "utf8")), sources, cached: true }; } catch { /* asked again */ } }
 
@@ -360,12 +360,13 @@ async function tellCases(only = null, told = null) {
     `  git -C ${root} show ${head}:<path>`,
     "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending, and say where you stopped. Use up to about 150 commands: a large change needs them, since its cases have to run through all of its code.",
     "",
-    "cases: the situations whose ending this change moves, as many as it takes for every changed row of code to be on some case's route: usually 6 to 16, more for a large change. In the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix.",
+    "cases: the situations whose ending this change moves, as many as it takes for every changed row of code to be on some case's route: usually 6 to 16, more for a large change. In the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix. Each situation is told once: never two cases a reader would call the same one, told from another function along its route.",
+    "Code the change removes is told by what a person or another system could do with it: one case for each (a button they clicked, a call another system made), what it did before and what happens now. How the removed code failed, what it stored and the helpers only it used are stops on that case, never cases of their own. Removed code that nothing could reach (a path no caller took) is one case for all of it, which says nothing reached it.",
     "- group: where the case comes in, 2 to 6 everyday words, like \"we send Apple a message\". Cases that come in the same way use the same words.",
     "- name: the situation, at most 10 everyday words a newcomer understands without reading anything else, like \"Apple never answers a message we send\".",
     "- setup: one or two sentences that make it concrete for someone who has never seen this code. The first time a thing comes up in a case, say what it is in everyday words: never a bare word from the code's own world like \"a provider\", but \"the AI service the judge sends the question to, like OpenAI\". Name who does what as the code has it: before you say a person sets or triggers something, check who the code lets do it (a permission check, an admin gate).",
     "- was, now: how it ended before and how it ends now, at most 8 words each, each a plain clause with its subject, the same words where they agree, like \"it is tried again\" and \"it fails, and may have been sent\".",
-    "- change: \"ends differently\", \"only a label\" or \"the same\". Before you say a case ends differently because a value changed (a flag like retryable, an error's type), find what reads that value: when nothing acts on it, only logs, metrics or a stored field read it, the case is \"only a label\", and its was and now say what a person or system actually sees.",
+    "- change: \"ends differently\", \"only a label\" or \"the same\". Before you say a case ends differently because a value changed (a flag like retryable, an error's type), find what reads that value: when nothing acts on it, only logs, metrics or a stored field read it, the case is \"only a label\", and its was and now say what a person or system actually sees. A check, a guard or a path the change removes is never only a label.",
     "- described: true when the author's words below describe this case, false when they never mention it.",
     "- said: the author's own sentence about this case, copied exactly from their words below, or \"\".",
     "- facts: at most 5 things a reviewer would compare, each about one thing (when a count and a list move differently, they are two facts): what (a question a newcomer would ask about this case, at most 6 words, like \"Is the model called?\" or \"What does the shopper see?\"), before and after (its answer before and after the change, at most 8 words each, plain enough to read alone, never a label only this code uses), and test (the one line of a test in this change that asserts this answer: path, its line number after the change, its code copied exactly; or path \"\", line 0 and code \"\" when no test asserts it). In everyday words a teammate from outside this code would use; a code value only when it is what a person or another system sees, like a 400 status or a reason \"delivery_unknown\". before is what the code before the change does with this same situation: when the situation needs something this change adds (a setting, a field), say what the old code does without it, never what it would have done with it. When nothing ran for this case before the change, before is \"\".",
@@ -379,18 +380,18 @@ async function tellCases(only = null, told = null) {
     "",
     "groups: for each group your cases use (its words exactly as the cases give them), where: two to four sentences for a teammate who has never seen this part of the code: what this part of the system is for and why it exists; what it does; each word it gives its own meaning, defined in plain words (an eval's case, label and passing; a billing window; a gateway); and the main steps a case passes through, naming their functions in the order they run.",
     "",
-    "Every changed row of code below must be on some case's route: some case's stops cite lines inside it. Before you answer, go through the rows one by one; for a row none of your cases runs yet, find what calls it or reads what it changes, and make that a case, or put it on the route of the case it belongs to. A test is never a stop: it is on a case when that case names it in tests.",
+    "Every changed row of code below must be on some case's route: some case's stops cite lines inside it. A type, a constant, a schema or a logger is on the route of any case whose stops use it, and needs no case of its own. Before you answer, go through the rows one by one; for a row none of your cases runs yet, put it on the route of the case it belongs to, and make it a case of its own only when no case you have runs it. A test is never a stop: it is on a case when that case names it in tests.",
     "",
     ...(reader ? [reader, ""] : []),
-    "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
+    "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". Never coin a name for one either (\"the marker\", \"the defer option\"): say what the code does with it, like \"the caller runs the other agent itself\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
     "",
     "Plain words in every sentence, nothing a teammate would have to ask about, and no markdown, with one exception: in setup, where, is, value, facts, ends and stopped, put each name from the code in backticks, like `needsJudgment` or `orderValue`, so a reader can tell it from an English word. Nowhere else.",
     "",
     ...(only ? [
       "# Cases already told",
-      ...told.cases.map((one) => `- ${one.group}: ${one.name}`),
+      ...told.cases.flatMap((one, at) => [`${at + 1}. ${one.group}: ${one.name}`, `   ${one.setup}`, `   route: ${(one.stops ?? []).map((stop) => `${stop.name} (${stop.path})`).join(", ")}`]),
       "",
-      "The changed rows of code below are on none of those cases' routes. Write the cases they need, to read after those already told: every one of these rows on some new case's route. A case that comes in the way one above does uses its group's words; give where only for a new group. summary is \"\".",
+      "The changed rows of code below are on none of those cases' routes yet. Most belong on one: the situation that runs a row, or that the row serves (a check it makes, a value it reads, a step it logs), is usually a case above. For each such case, give one entry whose adds is that case's number and whose stops are the stops to add to its route; its other fields are not read, so leave them short. Only for a row no case above runs, write a new case (adds 0), a situation no case above tells, to read after those already told; it uses the words of the group it comes in by, and gives where only for a new group. summary is \"\".",
       "",
     ] : []),
     "# The author's words",
@@ -413,7 +414,7 @@ async function tellCases(only = null, told = null) {
       change: { enum: ["ends differently", "only a label", "the same"] }, described: { type: "boolean" }, said: text,
       facts: list(object({ what: text, before: text, after: text, test: object({ path: text, line: { type: "integer" }, code: text }) })),
       stops: list(object({ name: text, is: text, path: text, side: { enum: ["new", "old"] }, lines: list(object({ line: { type: "integer" }, code: text, value: text })) })),
-      ends: text, stopped: text, tests: list(text), data: list(text),
+      ends: text, stopped: text, tests: list(text), data: list(text), ...(only ? { adds: { type: "integer" } } : {}),
     })),
     groups: list(object({ group: text, where: text })),
     summary: text,
@@ -549,6 +550,11 @@ function smallestUnit(path, side, n) {
   return best;
 }
 const rowByUnit = new Map(rows.map((row) => [row.unit, row]));
+// What each changed row's code mentions among the others (seam's edges): the type, constant or logger a case's
+// function uses is read with that case, never given one of its own.
+const rowById = new Map(rows.map((row) => [row.id, row]));
+const uses = new Map(rows.map((row) => [row, new Set()]));
+for (const edge of graph?.edges ?? []) { const from = rowById.get(edge.from), to = rowById.get(edge.to); if (from && to && from !== to) uses.get(from).add(to); }
 
 /** The names in some lines worth matching on: long or camel-cased, and not the language's own words. */
 const COMMON = new Set(["function", "readonly", "constructor", "undefined", "instanceof", "Response", "response", "Promise", "continue", "toString", "stringify", "default"]);
@@ -1012,11 +1018,20 @@ const trimPainted = (painted) => {
 if (told && !told.cached) {
   const covered = new Set();
   for (const one of told.cases) for (const stop of (one.stops ?? []).flatMap(placeStops)) for (const row of stop.covers) covered.add(row);
+  for (const row of [...covered]) for (const used of uses.get(row)) covered.add(used);
   const left = rows.filter((row) => meat(row.path) && !row.imports && !covered.has(row));
   if (left.reduce((n, row) => n + row.add + row.del, 0) >= 20) {
     const more = await tellCases(left, told);
     if (more) {
-      told.cases.push(...more.cases);
+      // Most of what was left belongs on a case already told: its stops go on that case's route, and only the
+      // rest are cases of their own.
+      for (const one of more.cases) {
+        const to = told.cases[one.adds - 1];
+        if (!to) { told.cases.push(one); continue; }
+        to.stops = [...(to.stops ?? []), ...one.stops];
+        to.tests = [...new Set([...(to.tests ?? []), ...one.tests])];
+        to.data = [...new Set([...(to.data ?? []), ...one.data])];
+      }
       for (const group of more.groups) if (!told.groups.some((one) => bare(one.group).toLowerCase() === bare(group.group).toLowerCase())) told.groups.push(group);
       told.cost += more.cost;
       told.turns += more.turns;
@@ -1113,6 +1128,8 @@ if (told) {
   commits.forEach((commit, at) => parts.push({ kind: "story", title: commit.subject, quote: "", origin: short(commit.sha), rows: rows.filter((row) => row.commit === at) }));
 }
 const onRoute = new Set(parts.flatMap((part) => part.rows));
+// A row no route runs that a case's row uses goes under the first case that uses it.
+if (told) for (const part of parts) for (const row of [...part.rows]) for (const used of uses.get(row)) if (!onRoute.has(used) && meat(used.path)) { part.rows.push(used); onRoute.add(used); }
 // Told as cases, what no case runs is only the meat: the tests and wiring are read in the files tab.
 const loose = rows.filter((row) => !onRoute.has(row) && (!told || meat(row.path)));
 if (loose.length) parts.push({ kind: "rest", title: told ? "Changed lines no case runs" : "In the change, and in no part", quote: "", origin: null, rows: loose });
