@@ -651,10 +651,11 @@ draw() {
   (( dirty || rlw != lw )) && list
   settle_cur
   headline $lw
-  # While music plays, the foot of the rows on a wide screen is the music's,
-  # a place of its own the rows scroll above.
+  # While music plays or is paused, the foot of the rows on a wide screen is
+  # the music's, a place of its own the rows scroll above. A cliamp left
+  # stopped has nothing to draw there.
   mh=0
-  (( side && $#mstate && lh >= 24 )) && mh=9
+  (( side && $#mlab && lh >= 24 )) && mh=9
   (( nh = $#HL, total = nh + $#ROWI, rows = lh - mh ))
   (( cur && RY[cur] )) && (( lo = hi = nh + RY[cur] ))
   (( hi > top + rows )) && (( top = hi - rows ))
@@ -1145,7 +1146,7 @@ while :; do
     spun_on && changed=1
     (( ! loaded )) && { spin_frame; [[ $REPLY != $lspun ]] && { lspun=$REPLY; changed=1; }; }
     # Music started or stopped: the foot of the rows is the music's, or theirs again.
-    (( ($#mstate > 0) != mwas )) && { (( mwas = $#mstate > 0 )); changed=1; }
+    (( ($#mlab > 0) != mwas )) && { (( mwas = $#mlab > 0 )); changed=1; }
     [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
     # This row's preview landing: one file test, not a look through pv/.
     (( cur && ! help && pshow )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }

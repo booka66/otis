@@ -1641,10 +1641,11 @@ draw() {
     (( lw != ccw )) && chat_load
     chat_frame
   fi
-  # While music plays, the foot of the list on a wide screen is the music's,
-  # a place of its own the rows scroll above, as the panel's is the panel's.
+  # While music plays or is paused, the foot of the list on a wide screen is
+  # the music's, a place of its own the rows scroll above, as the panel's is
+  # the panel's. A cliamp left stopped has nothing to draw there.
   mh=0
-  (( side && ! chh && $#mstate && lh >= 24 )) && mh=9
+  (( side && ! chh && $#mlab && lh >= 24 )) && mh=9
   # The cursor's row in view, the headline kept when it fits.
   (( rows = lh, lrows = lh - chh - mh ))
   for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
@@ -2836,7 +2837,7 @@ while :; do
     (( chat )) && chat_tick && changed=1
     (( box )) && box_tick && changed=1
     # Music started or stopped: the list's foot is the music's, or the list's again.
-    (( ($#mstate > 0) != mwas )) && { (( mwas = $#mstate > 0 )); changed=1; }
+    (( ($#mlab > 0) != mwas )) && { (( mwas = $#mlab > 0 )); changed=1; }
     # The list landing is the drawn panes being there too: the screen
     # opened without them rather than wait (panes_load, before the loop).
     landed && { changed=1; [[ -n $panescmd && -z $pdir ]] && panes_load; }
