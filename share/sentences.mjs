@@ -1128,8 +1128,13 @@ if (told) {
   commits.forEach((commit, at) => parts.push({ kind: "story", title: commit.subject, quote: "", origin: short(commit.sha), rows: rows.filter((row) => row.commit === at) }));
 }
 const onRoute = new Set(parts.flatMap((part) => part.rows));
-// A row no route runs that a case's row uses goes under the first case that uses it.
-if (told) for (const part of parts) for (const row of [...part.rows]) for (const used of uses.get(row)) if (!onRoute.has(used) && meat(used.path)) { part.rows.push(used); onRoute.add(used); }
+// A row no route runs goes under the first case that uses it, and a file's lines outside any symbol (its imports,
+// say) under the first case with a stop in that file.
+const under = (part, row) => { if (!onRoute.has(row) && meat(row.path)) { part.rows.push(row); onRoute.add(row); } };
+if (told) for (const part of parts) {
+  for (const row of [...part.rows]) for (const used of uses.get(row)) under(part, used);
+  for (const stop of part.stops) for (const row of rows) if (row.rest && row.path === stop.path) under(part, row);
+}
 // Told as cases, what no case runs is only the meat: the tests and wiring are read in the files tab.
 const loose = rows.filter((row) => !onRoute.has(row) && (!told || meat(row.path)));
 if (loose.length) parts.push({ kind: "rest", title: told ? "Changed lines no case runs" : "In the change, and in no part", quote: "", origin: null, rows: loose });
