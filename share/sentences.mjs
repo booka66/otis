@@ -1128,12 +1128,11 @@ if (told) {
   commits.forEach((commit, at) => parts.push({ kind: "story", title: commit.subject, quote: "", origin: short(commit.sha), rows: rows.filter((row) => row.commit === at) }));
 }
 const onRoute = new Set(parts.flatMap((part) => part.rows));
-// A row no route runs goes under the first case that uses it, and a file's lines outside any symbol (its imports,
-// say) under the first case with a stop in that file.
-const under = (part, row) => { if (!onRoute.has(row) && meat(row.path)) { part.rows.push(row); onRoute.add(row); } };
-if (told) for (const part of parts) {
-  for (const row of [...part.rows]) for (const used of uses.get(row)) under(part, used);
-  for (const stop of part.stops) for (const row of rows) if (row.rest && row.path === stop.path) under(part, row);
+// A file's lines outside any symbol (its imports, say) go under the first case with a stop in that file; what a row
+// on a route uses opens under that row in the list (git-symbols), so it is read there, not as a loose row.
+if (told) {
+  for (const part of parts) for (const stop of part.stops) for (const row of rows) if (row.rest && row.path === stop.path && !onRoute.has(row)) { part.rows.push(row); onRoute.add(row); }
+  for (const row of [...onRoute]) for (const used of uses.get(row)) onRoute.add(used);
 }
 // Told as cases, what no case runs is only the meat: the tests and wiring are read in the files tab.
 const loose = rows.filter((row) => !onRoute.has(row) && (!told || meat(row.path)));

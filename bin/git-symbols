@@ -1743,7 +1743,7 @@ if [ "$mode" = --rows ]; then
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
-    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
+    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen, nc, cs, reached) {
       numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
       ind = sprintf("%" (numw + 2) "s", "")
       w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
@@ -1808,9 +1808,11 @@ if [ "$mode" = --rows ]; then
           else { id = row[i, 1] "#" row[i, 3]; show(i, 1, rid ">" id, "|" id "|", 0) }
         }
       }
-      # A row of the table no sentence took: shown, so nothing in the change is out of sight.
+      # A row of the table no sentence took: shown, so nothing in the change is out of sight. One a row under a
+      # sentence uses is not loose: it opens under that row.
+      for (i in placed) { nc = split(row[i, 18], cs, "|"); for (x = 1; x <= nc; x++) if (cs[x] != "") reached[cs[x]] = 1 }
       for (i = 1; i <= m; i++) {
-        if ((i in placed) || (row[i, 2] != "file" && row[i, 4] == "" && members[row[i, 1] "#" row[i, 3]] != "")) continue
+        if ((i in placed) || ((row[i, 1] "#" row[i, 3]) in reached) || (row[i, 2] != "file" && row[i, 4] == "" && members[row[i, 1] "#" row[i, 3]] != "")) continue
         if (!loose++) { more("", "m", ""); heading("in the change, under no sentence", "gk-loose-heading") }
         if (row[i, 2] == "file") filerow(i, 0, row[i, 1])
         else if (row[i, 4] != "") show(i, 0, row[i, 1] "#" row[i, 4] "+" row[i, 3], "|", 0)
