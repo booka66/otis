@@ -7,8 +7,10 @@
 #   b<TAB>bars        w cells of bars for the rule over the footer, for a
 #                     screen with no room for the background; empty while it
 #                     has room
-#   p<TAB>row<TAB>column<TAB>width<TAB>text
-#                     a row of a place, where it changed
+#   p<TAB>row:column:width:bottom:rows<TAB>text
+#                     a row of a place, where it changed, under the place
+#                     it was drawn for: a frame drawn before the feed read
+#                     the screen's new places matches none of them
 #   f                 the frame whole, which is when the screen paints it, so
 #                     it never shows half of one
 #
@@ -141,6 +143,7 @@ function place(   k) {
   if (NF == 1) { ns = 0; sw = 0; split("", painted); return }
   if ($5 - 1 < 3) return
   ns++; px[ns] = $2; pw[ns] = $3; pb[ns] = $4; pn[ns] = $5; pd[ns] = $5 - 1 > (NF > 5 ? $6 : deep) ? (NF > 5 ? $6 : deep) : $5 - 1
+  pk[ns] = ":" $2 ":" $3 ":" $4 ":" $5
   if (px[ns] + pw[ns] - 1 > sw) { sw = px[ns] + pw[ns] - 1; hn = 2 * sw; for (k = 0; k < hn; k++) hist[k] = 0.5; split("", sg); sh = 0 }
 }
 function back(   k, rb, t, b) {
@@ -153,13 +156,13 @@ function back(   k, rb, t, b) {
     if (look == "river") bank(k)
     for (rb = 0; rb < pd[k]; rb++) {
       t = look == "river" ? river(k, rb) : look == "glow" ? glow(k, rb) : look == "spectrogram" ? spec(k, rb) : hills(k, rb)
-      if (painted[pb[k] - rb, px[k]] != t) { painted[pb[k] - rb, px[k]] = t; print "p\t" (pb[k] - rb) "\t" px[k] "\t" pw[k] "\t" t }
+      if (painted[pb[k] - rb, px[k]] != t) { painted[pb[k] - rb, px[k]] = t; print "p\t" (pb[k] - rb) pk[k] "\t" t }
     }
     # Over the bars, the rest of the place blank: a place that has just got
     # shorter at the top had bars there that nothing else would take away.
     if (!(pw[k] in sp)) sp[pw[k]] = sprintf("%" pw[k] "s", "")
     for (rb = pd[k]; rb < pn[k] && rb <= deep; rb++)
-      if (painted[pb[k] - rb, px[k]] != sp[pw[k]]) { painted[pb[k] - rb, px[k]] = sp[pw[k]]; print "p\t" (pb[k] - rb) "\t" px[k] "\t" pw[k] "\t" sp[pw[k]] }
+      if (painted[pb[k] - rb, px[k]] != sp[pw[k]]) { painted[pb[k] - rb, px[k]] = sp[pw[k]]; print "p\t" (pb[k] - rb) pk[k] "\t" sp[pw[k]] }
   }
 }
 # hills <place> <row from its bottom>: the spectrum filled up from the

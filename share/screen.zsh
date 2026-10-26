@@ -246,7 +246,6 @@ music_wait() {
 # music stopped, the rule is plain and the places blank again.
 music_take() {
   local chunk l out=
-  local -a f
   if ! sysread -s 65536 -i $mfd chunk; then
     exec {mfd}<&-; mfd=0 mbars= mlab= mbuf= mstate=() mnext=()
     music_paint; music_blank
@@ -259,7 +258,7 @@ music_take() {
   for l in "${(@f)${mbuf%$'\n'f$'\n'*}}"; do
     case $l in
       b$'\t'*) mbars=${l#b$'\t'} ;;
-      p$'\t'*) f=("${(@ps:\t:)l}"); mback[$f[2]:$f[3]:$f[4]]=$f[5] ;;
+      p$'\t'*) l=${l#p$'\t'}; mback[${l%%$'\t'*}]=${l#*$'\t'} ;;
       s$'\t'*) mstate=("${(@ps:\t:)${l#s$'\t'}}") mat=$EPOCHREALTIME; music_label ;;
       q$'\t'*|q) mnext=("${(@ps:\t:)${l#q$'\t'}}"); mnext=(${mnext:#}) ;;
       z) mbars= mlab= mstate=() mnext=() ;;
@@ -270,25 +269,29 @@ music_take() {
   [[ -n $mlab ]] || music_blank
 }
 # The background as the feed last drew it, a row of a place a key (row:
-# column:width); which keys are empty places now (music_space); and what of
-# it is on the screen.
+# column:width:bottom:rows, the place it was drawn for); which keys are
+# empty places now (music_space); and what of it is on the screen.
 typeset -A mback mok mshown
 mspace=
 # music_space <place>...: the screen's empty places as it has just drawn
-# them, each "<column> <width> <bottom row> <rows>": blank rows standing on
-# a bottom row, where the background may draw and nowhere else. Its draw
-# says them every frame; only a change reaches the feed. A frame drawn whole
-# wiped what the background had drawn, so it is drawn again.
+# them, each "<column> <width> <bottom row> <rows> [<most rows>]": blank rows
+# standing on a bottom row, where the background may draw and nowhere else.
+# Its draw says them every frame; only a change reaches the feed. A frame
+# drawn whole wiped what the background had drawn, so it is drawn again.
 music_space() {
   (( mfd )) || return 0
-  local p=${(F)argv} x w b n
+  local p=${(F)argv} pl
+  local -a a
   integer y
   if [[ $p != $mspace ]]; then
     # What took a row over drew over the background there, so none of what
     # was drawn counts as there any more: the feed draws every row again.
-    mspace=$p mok=() mshown=()
-    for x w b n in ${=p}; do
-      for (( y = b - n + 1; y <= b; y++ )); do mok[$y:$x:$w]=1; done
+    # Rows it drew for the places before go: once a window grew, an old
+    # place's rows lay in the new one's, and its bars stayed for good.
+    mspace=$p mok=() mshown=() mback=()
+    for pl; do
+      a=(${=pl})
+      for (( y = a[3] - a[4] + 1; y <= a[3]; y++ )); do mok[$y:$a[1]:$a[2]:$a[3]:$a[4]]=1; done
     done
     print -r -- $p > $st/music-places
   fi
