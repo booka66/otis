@@ -20,7 +20,7 @@ Installed through Homebrew before? `brew uninstall otis`, then the line above; `
 
 `otis-setup` checks what's missing and offers to install it, asks a few questions (branch prefix, editor, theme), and adds one line to your shell config. It won't change anything without asking, and you can rerun it whenever you like. Open a new terminal when it's done.
 
-You need zsh installed, though your own shell can be zsh, bash or fish. You also need git 2.41+, jq 1.7+, glab logged in to your GitLab, delta, and a Nerd Font. Setup checks all of these. nvim 0.10+, seam, ast-grep, glow and Claude Code are optional, and each turns on more features: with nvim, a review opens with its comments inline beside the diff; without it, files open in your editor and you comment from the review itself.
+You need zsh installed, though your own shell can be zsh, bash or fish. You also need git 2.41+, jq 1.7+, glab logged in to your GitLab, delta, and a Nerd Font. Setup checks all of these. nvim 0.10+, seam, ast-grep, glow and Claude Code are optional, and each turns on more features: with nvim, a review and the symbol views open inside it, the list on the left and the code enter opens on the right, a review's comments inline; without it, files open in your editor and you comment from the review itself.
 
 The symbol view reads a change with seam by default. `git config --global otis.engine dagger` (or `otis config`) has [dagger](https://github.com/joshmoody24/dagger) read it instead, through language servers (TypeScript 7's `tsc --lsp` for TypeScript: `npm install -g typescript`), and `G` opens dagger's page. seam still scores, splits and glosses what dagger reads, so keep both installed.
 

@@ -11,7 +11,8 @@ line=${line%%:*}
 [ -n "$spec" ] && [ -n "$p" ] || exit 2
 git cat-file -e "$spec" 2>/dev/null || { otis-popup say "${spec%%:*} has no $p"; exit 0; }
 name=$(otis-edit --name)
-case $name in
+# In otis-frame's nvim the copy below opens beside the picker instead.
+[ -z "$OTIS_FRAME" ] && case $name in
   nvim|vim|vi) git show "$spec" | exec "$name" -M -R "+$line" -c "silent file $p" -c 'filetype detect' - ;;
 esac
 # Any other editor opens files, not stdin: a read-only copy under $TMPDIR, by

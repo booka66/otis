@@ -928,6 +928,11 @@ end
 if base and vim.env.GMR_DELETED then
   show_deleted(vim.api.nvim_get_current_win(), vim.env.GMR_DELETED)
 end
+-- :GmrDeleted <path>: the same panes in this window, for the review's frame
+-- (otis-frame), whose nvim is up before the file is asked for.
+vim.api.nvim_create_user_command("GmrDeleted", function(o)
+  show_deleted(vim.api.nvim_get_current_win(), o.args)
+end, { nargs = 1 })
 
 vim.api.nvim_create_autocmd("ColorScheme", {
   callback = function()

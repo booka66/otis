@@ -2124,10 +2124,12 @@ if [ -z "$head" ]; then
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 else
   # A commit or a branch: its symbols, and tab its files, in place (--files). nvim opens on the file, with
-  # NVIM_DIFF_BASE naming the change's base, as from a review, for an nvim config's own diff to read.
+  # NVIM_DIFF_BASE naming the change's base, as from a review, for an nvim config's own diff to read:
+  # exported, so the frame's nvim (otis-frame), up before any enter, has it too.
+  export NVIM_DIFF_BASE=$base
   keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
-    --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
+    --bind "enter:execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
     --bind "tab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "btab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
@@ -2139,8 +2141,9 @@ else
     --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 fi
-# Drawn by hand (otis-symbols), from the same keys and bindings fzf took.
-otis-symbols "" "$keys" --header-from-state \
+# Drawn by hand (otis-symbols), from the same keys and bindings fzf took,
+# inside nvim, so what enter opens shows beside the list (otis-frame).
+otis-frame otis-symbols "" "$keys" --header-from-state \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=12 \
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "l:execute-silent(git-symbols --open {12})+reload($fold)" \
