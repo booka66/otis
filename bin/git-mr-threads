@@ -1,8 +1,6 @@
 #!/bin/sh
 # git-mr-threads <iid> <range>                    picker of the threads no line shows
 # git-mr-threads --list <iid> <range>             its rows
-# git-mr-threads --drafts <iid> <range>           picker of your unpublished drafts, Claude's first
-# git-mr-threads --drafts-list <iid> <range>      its rows
 # git-mr-threads --show <id> [range]              one thread in full, its preview
 # git-mr-threads --overview <iid>                 unresolved threads on the MR, for gmr
 # git-mr-threads --open <id>                      reply in nvim, edit or delete there
@@ -184,29 +182,6 @@ case $mode in
         .id, (.resolvable | tostring), (.resolved | tostring), ($n.id | tostring)
       ] | join("\t")' "$st/threads.json"
     ;;
-  --drafts-list)
-    if ! git-mr-threads --json "$iid" "$range" "reload(git-mr-threads --drafts-list $iid $range)" > "$st/threads.json"; then
-      printf "${GK_CONTEXT}loading the drafts ...${GK_R}\n" > "$st/footer"
-      exit 0
-    fi
-    # Every draft, where it sits: a new thread that is one, or a reply
-    # waiting at the end of a thread. Claude's first, in the order of the
-    # file and line they are on.
-    jq -r -L "$share" --arg who "$(git-mr-claude --who "$iid")" '
-      include "otis";
-      [ .[] | . as $t | .notes[] | select(.draft) | {t: $t, n: .} ]
-      | (map(select(.n.claude)) | length) as $c | (length) as $all
-      | ("\($all) \(if $all == 1 then "draft" else "drafts" end), \($c) of them \($who)\u0027s: none is published until you submit") as $foot
-      | $foot, (sort_by([(if .n.claude then 0 else 1 end), .t.where.path // "", .t.where.line // 0])[]
-        | .t.where as $w |
-        [ (if .n.claude then yours + "✎ " + ($who + "        " | .[0:8]) else attention + "✎ yours   " end) + r
-            + (if $w.state == "line" then elsewhere + "\($w.path | split("/") | .[-1]):\(if ($w.from // $w.line) != $w.line then "\($w.from)-" else "" end)\($w.line)"
-               elif $w.state == "file" then elsewhere + $w.path elif $w.state == "overview" then context + "on the MR"
-               else attention + "outdated " + elsewhere + "\($w.path):\($w.line)" end) + r + "  "
-            + text + (.n.body | gsub("[\t\n]+"; " ") | .[0:120]) + r,
-          .t.id, ($w.path // ""), (($w.line // "") | tostring), ($w.side // ""), (.n.id | tostring)
-        ] | join("\t"))' "$st/threads.json" | { IFS= read -r foot; printf '%s\n' "$foot" > "$st/footer"; cat; }
-    ;;
   --show)
     range=${2:-$GMR_RANGE}
     jq -r -L "$share" --arg id "$1" '
@@ -280,24 +255,6 @@ case $mode in
       git-fzf-error "resolve the thread" "$response"
     fi
     echo "reload(git-mr-threads --list $iid $range)"
-    ;;
-  --drafts)
-    # Your drafts, Claude's among them, to go through before you submit:
-    # each with the code it is on and, for Claude's, why it wrote it. e
-    # rewrites one, d drops it, enter opens its line in your editor, S
-    # publishes them all as your review.
-    list="git-mr-threads --drafts-list $iid $range"
-    GMR_RANGE=$range git-fzf "!$iid drafts " 'e=edit it,d=drop it,enter=open its line in your editor,S=submit them all as your review,|,w=web,u=refresh' \
-      --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
-      --bind "start:reload($list)" \
-      --bind "e:execute(git-mr-say --edit $iid $range {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
-      --bind "d:execute(git-mr-say --delete $iid $range {2})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
-      --bind "enter:execute(if [ -n {3} ]; then git-commit-open $range {3} {4}; fi)" \
-      --bind "S:execute(git-mr-submit $iid $range ${GMR_KIND:-review})+execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
-      --bind "w:transform(otis-open --fzf \"\$(git-mr-url $iid)\")" \
-      --bind "u:execute-silent[git-mr-threads --refresh $iid 'reload($list)']+reload($list)" \
-      --preview "git-mr-threads --show {2} $range" </dev/null >/dev/null
-    exit 0
     ;;
   *)
     list="git-mr-threads --list $iid $range"

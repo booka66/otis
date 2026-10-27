@@ -923,16 +923,13 @@ part_verify_how() {
 part_verify_run() {
   heading $1
   say "A change on the board says ${k}verifying${r} while one runs, then ${g}verify passed${r}, ${b}verify broke${r} or verify inconclusive. Its view (${k}V${r} again, or enter when that is what its row says) works like $who's other runs, plus the evidence:"
-  key enter "the step under the cursor in full; G follows the newest"
-  key "v l /" "more detail, all of it in less, search"
-  key "x r c" "stop it (asks; the tester goes too), run it again, pick up a failed run"
+  key "j k G" "the steps, the one under the cursor in full below; G follows the newest"
+  key "x r" "stop it (asks; the tester goes too), run it again"
+  key y "copy its folder and what is in it, for $who"
   key o "the tester in Cursor"
   key a "the artifacts: recordings, screenshots, output; enter opens each"
   key w "the report in your browser: the verdict, the concerns, and each claim with the recordings that show it. One file, videos inside, so it can be sent on as it is"
   key p "after a confirm, upload the report to the MR and link it at the end of its description"
-  key i "act on the retrospective: a fix run from main, apart from this change, whose proposals edit the verify-env brief; B puts them on a branch of their own"
-  key m "copy the message the retrospective drafted for infra (git config otis.infraContact names them)"
-  key f "the fix the judge accepted, in the proposals picker: space accepts, F folds it into your commits and pushes"
   print
   say "Nothing else is posted to GitLab. The tester is told not to commit or push; that is a prompt, not a guarantee."
   say "What the tester knows about your repo, how to run the environment, how to get into the app and where secrets come from, is the repo's .agents/skills/verify-env/SKILL.md. Whatever else the tester may use there, a real phone standing in for the customer among them, the brief is where it says so."
@@ -968,13 +965,12 @@ part_ship_merge() {
   heading $1
   say "On the board, an MR goes from open to merged without the browser. Its row says what it needs next: ${b}pipeline broke${r}, ${y}answer 2 threads${r}, ${a}ask for review${r}, ${g}merge it${r}. Beside the board (under it on a narrow screen), how its pipeline, its review and its merge each stand, in words. A pipeline failing only on approval gates waits on a gate; it has not broken."
   key enter "what the row says: the failed jobs, the threads, who to ask, the merge"
-  key J "its pipeline's jobs and logs, whatever the row says: r retries a job, P plays a manual one, X cancels, ctrl-x cancels the pipeline"
   key "r N" "retry what failed, start a new pipeline"
   key m "merge, or set it to merge itself once approved and green; with no pipeline yet (the next layer of a stack), starts one first"
   key b "have GitLab rebase it onto its target, after a confirm; on a glab stack, the whole stack"
   key R "draft or ready, on yours"
-  key "A L a" "approve, labels, reviewers"
-  key "s W" "switch to its branch, or open it in its own worktree"
+  key "A a" "approve, reviewers"
+  key s "switch to its branch"
   key "w y" "open it in the browser, copy its link"
   pause
 }
@@ -997,7 +993,7 @@ part_dashboard() {
   look 1 "What wants you comes first. Production trouble, then what is broken: a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what $who has left you, and what you can finish: one ready to merge, one nobody is reviewing. Red is only for a change of yours that broke."
   look 2 "One row a change, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, ${b}pipeline broke${r}, because that is what you would do next. Beside the board, the row the cursor is on in full: how its verification, pipeline, review and merge each stand."
   look 3 "Under those, what is moving without you, and the branch you are on: uncommitted, unpushed, behind. Then everything else, folded to a line each: other open MRs, branches not sent yet, what shipped, what can be cleaned up, worktrees, deploys. ${k}enter${r} opens a group in place."
-  look 4 "${k}enter${r} does what the row says. Whatever it says, ${k}s${r} switches to its branch, ${k}V${r} verifies it, ${k}J${r} is its pipeline's jobs, ${k}o${r} opens the merge request and ${k}w${r} the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads all of the row in a pager. ${k}F${r} finds a file with your editor's own fuzzy finder. ${k}?${r} is every key, on one screen."
+  look 4 "${k}enter${r} does what the row says. Whatever it says, ${k}s${r} switches to its branch, ${k}V${r} verifies it, ${k}o${r} opens the merge request and ${k}w${r} the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads all of the row in a pager. ${k}F${r} finds a file with your editor's own fuzzy finder. ${k}?${r} is every key, on one screen."
   look 5 "It keeps itself fresh: GitLab is asked behind it a minute apart, and again after a key that changed something. ${k}u${r} asks now."
   say "Nothing waiting is the point: a part with nothing in it is simply gone."
   offer "Open otis" otis
@@ -1099,7 +1095,7 @@ part_cheatsheet() {
   print
   print -r -- "  ${m}the board${r}   otis"
   key "enter" "what the row says: review it, its failed jobs, its threads, merge it"
-  key "s V J o" "its branch, verify, its pipeline's jobs, the merge request"
+  key "s V o" "its branch, verify, the merge request"
   key "C" "$who drafts comments, or proposes fixes on yours"
   key "m b A a" "merge, rebase, approve, reviewers"
   key "D" "watch production (one that shipped)"

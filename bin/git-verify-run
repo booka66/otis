@@ -21,13 +21,10 @@
 # never stops for any of this: it runs in Cursor's cloud either way, and a
 # picked-up run follows its stream from the last event it saw.
 #
-# git-verify-run --retro <key>: only the retrospective, again, on a finished run.
 # The whole script is one block, so the shell reads all of it before running
 # any: a run lasts the better part of an hour, and an edit to this file under
 # it would otherwise have it go on reading the new file at the old offsets.
 {
-retro_only=
-[ "$1" = --retro ] && { retro_only=1; shift; }
 key=$1
 [ -n "$key" ] || exit 2
 share=$(cd "$(dirname "$0")/../share" && pwd)
@@ -247,17 +244,8 @@ EOF
   say "the environment notes are $(wc -l < "$envlocal" | tr -d ' ') lines now: $envlocal"
   say "$(jq -r .summary "$d/retro.json")"
   jq -r '.recommendations[] | "→ \(.where): \(.change | split("\n")[0])"' "$d/retro.json" | while IFS= read -r line; do say "$line"; done
-  if [ -n "$(jq -r '.ask // ""' "$d/retro.json")" ]; then say "a message for ${infra:-infra} is drafted; m copies it"; fi
+  if [ -n "$(jq -r '.ask // ""' "$d/retro.json")" ]; then say "a message for ${infra:-infra} is drafted, in the report"; fi
 }
-
-if [ -n "$retro_only" ]; then
-  [ -s "$d/verdict.json" ] || { say "no verdict yet to look over"; exit 1; }
-  retro
-  git-verify-html "$d"
-  [ -n "$wt" ] && git-claude-worktree release "$wt"
-  tell_picker refresh-preview
-  exit 0
-fi
 
 # How this repo's environment runs and what it cannot do, kept by the repo
 # itself as the watch-prod skill is, so it stays current with the environment

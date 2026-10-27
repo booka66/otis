@@ -13,15 +13,11 @@
 # the right, what is happening now (the step running and for how long), then
 # the steps, one a row, as they land, and under them the step under the
 # cursor in full, or the screenshot it names, drawn. The list follows the
-# newest step until you move up; G follows again. 1-9 show one criterion's steps alone, 0 all of them.
+# newest step until you move up; G follows again.
 #
-# The keys are git-claude-view's: enter opens the step in less, v more or
-# less detail (thinking, what tools returned), x stops the run, c picks up a
-# failed one, r runs it again, i acts on a verification's retrospective, y
-# copies its folder for Claude, f
-# shows the fix it proposes, l
-# all of it in less, o the tester in Cursor, a its artifacts, w the report in
-# the browser, p links it from the MR.
+# The keys are git-claude-view's: x stops the run, r runs it again, y copies
+# its folder for Claude, o opens the tester in Cursor, a its artifacts, w the
+# report in the browser, p links it from the MR.
 setopt extendedglob no_nomatch
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
@@ -36,13 +32,13 @@ mkdir $st/pv
 trace=${OTIS_AGENT_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/agent.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 . ${0:A:h:h}/share/screen.zsh
-keys_open run 'enter=this step in full,v=more or less detail,d=go through its drafts,x=stop it,c=pick up a failed run,r=run it again,i=act on the retrospective,m=copy the message for infra,y=copy it for Claude,f=the fix it proposes,l=all of it in less,o=the tester in Cursor,a=artifacts,w=the report in the browser,p=link the report from the MR,1-9=one criterion'"'"'s steps,0=all of them,?=keys'
+keys_open run 'x=stop it,r=run it again,y=copy it for Claude,o=the tester in Cursor,a=artifacts,w=the report in the browser,p=link the report from the MR,?=keys'
 screen_start
 integer code=0
 at_quit() { exit $code; }
 
 # --- the run ---------------------------------------------------------------------------
-key=${d:t} kind=${d:h:t}
+key=${d:t}
 title=; [[ -r $d/title ]] && title=$(<$d/title)
 about=$key
 [[ $about == v-* ]] && about="retro ${about#v-}"
@@ -86,9 +82,10 @@ costs() {
 # One a row, from git-claude-view --rows, taken in as events.jsonl grows: ek
 # its kind, et its text, eid its line in events.jsonl (what --show reads),
 # ew who, ea when, ec the criterion it is about (the last c<n> named at or
-# before it). detail 1 has the thinking and what tools returned too.
+# before it). Detail 0: no thinking or tool output among the rows, which the
+# pane shows for the step under the cursor.
 typeset -a ek et eid ew ea ec
-integer nev=0 detail=0
+integer nev=0
 # crit_of <text>: the last criterion named in it (c3, on its own), in REPLY.
 crit_of() { [[ $1 == (#b)(|*[^a-zA-Z0-9_])(c<->)(|[^a-zA-Z0-9_]*) ]] && REPLY=$match[2] || REPLY=; }
 lastcrit=
@@ -98,7 +95,7 @@ typeset -A seen
 take() {
   local line f
   local -a fs
-  for line in ${(f)"$(git-claude-view --rows $d $detail $nev $1)"}; do
+  for line in ${(f)"$(git-claude-view --rows $d 0 $nev $1)"}; do
     fs=("${(@ps:\t:)line}")
     ek+=("$fs[1]") et+=("$fs[2]") eid+=("$fs[3]") ew+=("$fs[4]") ea+=("$fs[5]")
     # The tester's steps carry the criterion it was last on; anyone else's
@@ -141,25 +138,25 @@ grown() {
 
 # --- the run's shape, on the left ------------------------------------------------------------
 # A verification: its criteria (plan.json), each where it is.
-typeset -a cid cplain cclaim cstate
+typeset -a cid cplain cstate
 integer ncrit=0
 criteria() {
-  cid=() cplain=() cclaim=() cstate=()
+  cid=() cplain=() cstate=()
   [[ -s $d/plan.json ]] || return
   local line i r now=
   local -a parts
   local -A res art
-  # plain is the claim in a reader's words, claim the tester's exact one; a
-  # run from before plain has only the claim.
+  # plain is the claim in a reader's words; a run from before plain has only
+  # the claim.
   # The breaker's checks (break.json) as soon as it has them, before they
   # join the plan after the tester's first round.
   local -a from=($d/plan.json)
   [[ -s $d/break.json ]] && from+=($d/break.json)
   for line in ${(f)"$(jq -rs '(.[0].criteria | map(.id)) as $have
     | (.[0].criteria + ((.[1].attacks // []) | map(select(.id as $i | $have | index($i) | not))))[]
-    | "\(.id)\t\(.plain // .claim | gsub("[\t\r\n]+"; " "))\t\(.claim | gsub("[\t\r\n]+"; " "))"' $from 2>/dev/null)"}; do
+    | "\(.id)\t\(.plain // .claim | gsub("[\t\r\n]+"; " "))"' $from 2>/dev/null)"}; do
     parts=("${(@ps:\t:)line}")
-    cid+=("$parts[1]") cplain+=("$parts[2]") cclaim+=("$parts[3]")
+    cid+=("$parts[1]") cplain+=("$parts[2]")
   done
   ncrit=$#cid
   local v=$d/verdict.json
@@ -237,20 +234,10 @@ resize() {
 }
 
 # --- the frame ------------------------------------------------------------------------------
-typeset -a shown_rows L LI vis
+typeset -a shown_rows L LI
 typeset -A pcache
 integer help=0
-filter=
 flash=
-# vis: the steps shown, the filter applied.
-visible() {
-  local i
-  vis=()
-  for (( i = 1; i <= $#et; i++ )); do
-    [[ -n $filter && $ec[i] != $filter ]] && continue
-    vis+=($i)
-  done
-}
 # who_of <who>: the color of an agent's label (judge ›), one of its own, so
 # each reads apart; the rows keep their kind's (tools blue, otis's own orange).
 who_of() { case $1 in judge) REPLY=$A ;; tester) REPLY=$e"[${OTIS_T_MAIN}m" ;; breaker) REPLY=$X ;; retro) REPLY=$C ;; *) REPLY= ;; esac; }
@@ -279,20 +266,15 @@ left() {
       esac
       n=0; for s in $ec; do [[ $s == $cid[i] ]] && (( n++ )); done
       line= used=0
-      [[ $filter == $cid[i] ]] && put "$A" "▌" || put "" " "
+      put "" " "
       put "$gc" "$g "; put "$B$A" "$cid[i]"; line+=$UB; put "" "  "
-      # The claim in plain words, two lines of it at most, its backticks
-      # off; with more detail (v), the exact claim, all of it.
-      if (( detail )); then wrap "${cclaim[i]//\`/}" $(( w - 8 )); else wrap "${cplain[i]//\`/}" $(( w - 8 )); fi
+      # The claim in plain words, two lines of it at most, its backticks off.
+      wrap "${cplain[i]//\`/}" $(( w - 8 ))
       local cc=$T; [[ $cstate[i] == wait ]] && cc=$C
       put "$cc" "${reply[1]}"
       pad $w; L+=("$line")
-      if (( detail )); then
-        for t in "${(@)reply[2,-1]}"; do L+=("       $cc$t$R"); done
-      else
-        t=${reply[2]}
-        if [[ -n $t ]]; then (( $#reply > 2 )) && { fit "$t" $(( w - 8 )); t=${REPLY%…}…; }; L+=("       $cc$t$R"); fi
-      fi
+      t=${reply[2]}
+      if [[ -n $t ]]; then (( $#reply > 2 )) && { fit "$t" $(( w - 8 )); t=${REPLY%…}…; }; L+=("       $cc$t$R"); fi
       case $cstate[i] in
         now) L+=("       $Y◌ the tester is on it$R$C · $n step${${n:#1}:+s}$R") ;;
         in) L+=("       $C${cid[i]}.txt is in · $n step${${n:#1}:+s} · judged at the end$R") ;;
@@ -313,7 +295,7 @@ left() {
       [[ $ok == true ]] && L+=("  ${G}judge looked in$R$C · all as it should be$R") || L+=("  ${Y}judge stepped in$R$C · round $(( ${#ck} ))$R")
       wrap "$note" $(( w - 4 ))
       for t in ${reply[1,2]}; do L+=("  $T$t$R"); done
-      (( $#reply > 2 )) && L+=("  $C…  enter on its step shows the rest$R")
+      (( $#reply > 2 )) && L+=("  $C…  its step shows the rest$R")
     fi
   elif (( $#sid )); then
     integer nr=0 ng=0
@@ -339,7 +321,7 @@ left() {
     # and its length the count.
     local nd=0; local -a dl
     [[ -s $d/drafts.jsonl ]] && { dl=("${(@f)$(<$d/drafts.jsonl)}"); dl=(${dl:#}); nd=$#dl; }
-    (( nd > 0 )) && L+=("" "  ${Y}✎ $nd draft${${nd:#1}:+s}$R$C, yours to go through: ${A}d$R")
+    (( nd > 0 )) && L+=("" "  ${Y}✎ $nd draft${${nd:#1}:+s}$R$C, yours to go through in the review$R")
   else
     line= used=0; put "$C" "WHAT IT SAYS OF ITSELF"; L+=("$line" "")
     for (( i = 1; i <= $#et; i++ )); do
@@ -418,9 +400,7 @@ draw() {
   local y i s t lo body foot
   local -a fr
   integer rows=$lh
-  visible
-  if (( follow && $#vis )); then cur=$vis[-1]; fi
-  (( cur )) && (( ${vis[(Ie)$cur]} )) || { (( $#vis )) && cur=$vis[-1] || cur=0; }
+  (( follow || cur < 1 || cur > $#et )) && cur=$#et
   # The header: what it is, how it stands, what it cost.
   state; s=$REPLY t=$reply[1]
   costs
@@ -449,16 +429,14 @@ draw() {
   right+=("$nowline")
   right+=("")
   # The cursor's row in view.
-  local at=${vis[(Ie)$cur]}
   integer show=$(( rows - 2 ))
-  (( at > top + show )) && (( top = at - show ))
-  (( at > 0 && at <= top )) && (( top = at - 1 ))
-  (( top > $#vis - show )) && (( top = $#vis - show ))
+  (( cur > top + show )) && (( top = cur - show ))
+  (( cur > 0 && cur <= top )) && (( top = cur - 1 ))
+  (( top > $#et - show )) && (( top = $#et - show ))
   (( top < 0 )) && top=0
   for (( y = 1; y <= show; y++ )); do
     i=$(( y + top ))
-    if (( i <= $#vis )); then
-      i=$vis[i]
+    if (( i <= $#et )); then
       color_of $ek[i]; t=$REPLY
       line= used=0
       (( i == cur )) && put "$A" "▌" || put "" " "
@@ -485,9 +463,8 @@ draw() {
   if (( help )); then
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
-    for k v in enter "this step in full; a screenshot or recording it names, over the whole screen" j/k "move" g/G "top; bottom, and follow the newest" 1-9 "one criterion's steps" 0 "all of them" \
-      v "more or less detail: thinking, what tools returned, each criterion's exact claim" d "a review: go through its drafts, edit, drop, submit" x "stop it" c "pick up a failed run" r "run it again" i "act on the retrospective, on a branch off main" m "copy the message it drafted for infra" f "the fix it proposes" \
-      l "all of it in less" o "the tester in Cursor" a "artifacts" w "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
+    for k v in j/k "move" g/G "top; bottom, and follow the newest" x "stop it" r "run it again" y "copy it for Claude" \
+      o "the tester in Cursor" a "artifacts" w "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
     panewrap $(( W - 3 ))
@@ -509,21 +486,9 @@ draw() {
   elif working; then foot+=$A$REPLY$R" "$T${flash%…}$R$C"…"$R
   elif [[ -n $flash ]]; then foot+=$A$flash$R
   else
-    # A review with drafts: going through them is what it wants of you.
-    ndrafts
-    if (( REPLY )); then foot+=$B$A"d go through its $REPLY draft${${REPLY:#1}:+s}"$UB$R$C"   ·   "$R$A"⏎"$R$C" this step  "$R
-    else
-      # On a step whose screenshot or recording is in, enter is that.
-      (( cur )) && art_of "$et[cur]"
-      if (( cur )) && [[ -n $REPLY ]]; then foot+=$B$A"⏎ ${${${(M)REPLY:#*.(png|jpg|jpeg|gif|webp)}:+the screenshot, full screen}:-play the recording}"$UB$R$C"   ·   "$R
-      else foot+=$B$A"⏎ this step in full"$UB$R$C"   ·   "$R; fi
-    fi
-    (( ncrit )) && foot+=$A"1-$ncrit"$R$C" one criterion  "$R
-    foot+=$A"v"$R$C" detail  "$A"x"$R$C" stop  "$A"r"$R$C" again  "
+    foot+=$A"x"$R$C" stop  "$A"r"$R$C" again  "
     [[ -s $d/agent-url ]] && foot+=$A"o"$R$C" Cursor  "$A"a"$R$C" artifacts  "$R
-    [[ -s $d/verdict.json ]] && foot+=$A"w"$R$C" report  "$A"i"$R$C" act on the retro  "$R
-    [[ -n $(jq -r '.ask // empty' $d/retro.json 2>/dev/null) ]] && foot+=$A"m"$R$C" copy the note for infra  "$R
-    [[ $(jq -r .accept $d/verdict-fix.json 2>/dev/null) == true ]] && foot+=$A"f"$R$C" the fix  "$R
+    [[ -s $d/verdict.json ]] && foot+=$A"w"$R$C" report  "$R
     foot+=$A"?"$R$C" keys"$R
   fi
   fr+=("$foot")
@@ -543,24 +508,6 @@ draw() {
 }
 
 # --- keys ------------------------------------------------------------------------------------
-# drafts: a review's drafts, Claude's and yours, gone through where they sit
-# (git-mr-threads --drafts): e rewrites one, d drops it, S submits them.
-# The range is what the review read, as resume would run it.
-ndrafts() {
-  local -a dl
-  REPLY=0
-  [[ $kind == gmr-claude && -s $d/drafts.jsonl ]] || return
-  dl=("${(@f)$(<$d/drafts.jsonl)}"); dl=(${dl:#}); REPLY=$#dl
-}
-drafts() {
-  local range
-  [[ $kind == gmr-claude ]] || { flash="only a review has drafts"; return }
-  range=$(sed -n 4p $d/cmd 2>/dev/null)
-  [[ -n $range ]] || { flash="this review does not say what range it read"; return }
-  flash="go through its drafts…"
-  run_tty "GMR_IID=${(q)key} GMR_RANGE=${(q)range} GMR_KIND=review git-mr-threads --drafts ${(q)key} ${(q)range}"
-  flash=
-}
 # act <label> <subcommand...>: one of git-claude-view's, which prints fzf
 # actions or leaves a note; execute takes the screen, print(again) is r. It
 # runs in the background, some asking GitLab or Claude first, the footer
@@ -599,7 +546,6 @@ acted() {
       execute-silent\(*) zsh -fc "${${s#execute-silent\(}%\)}" </dev/null >/dev/null 2>&1 ;;
       print\(again\)) code=3 ;;
       accept) quit 0 ;;
-      reload\(*) pcache=(); reload ;;
     esac
   done
   flash=
@@ -607,11 +553,10 @@ acted() {
   return 0
 }
 step() {
-  local at=${vis[(Ie)$cur]}
-  (( $#vis )) || return
-  (( at += $1, at < 1 ? (at = 1) : 0, at > $#vis ? (at = $#vis) : 0 ))
-  cur=$vis[at] poff=0
-  (( at == $#vis )) && follow=1 || follow=0
+  (( $#et )) || return
+  (( cur += $1, cur < 1 ? (cur = 1) : 0, cur > $#et ? (cur = $#et) : 0 ))
+  poff=0
+  (( cur == $#et )) && follow=1 || follow=0
 }
 handle() {
   local k=$1
@@ -624,42 +569,26 @@ handle() {
       if (( y > py )); then (( poff += b == 64 ? -3 : 3 )); else step $(( b == 64 ? -1 : 1 )); fi
     elif (( b == 0 && ! up && y > 4 && y <= py && (! side || x >= rx) )); then
       local at=$(( y - 4 - 2 + top ))
-      (( at >= 1 && at <= $#vis )) && { cur=$vis[at]; follow=0; poff=0; }
+      (( at >= 1 && at <= $#et )) && { cur=$at; follow=0; poff=0; }
     fi
     return
   fi
   keyname "$k"
-  case $REPLY in enter|v|d|x|c|r|i|m|y|f|l|o|a|w|p|0|'?') keys_used $REPLY ;; [1-9]) keys_used 1-9 ;; esac
+  case $REPLY in x|r|y|o|a|w|p|'?') keys_used $REPLY ;; esac
   case $REPLY in
     j|down) step 1 ;;
     k|up) step -1 ;;
-    g) (( $#vis )) && cur=$vis[1] follow=0 poff=0 ;;
-    G) (( $#vis )) && cur=$vis[-1] follow=1 poff=0 ;;
+    g) (( $#et )) && cur=1 follow=0 poff=0 ;;
+    G) (( $#et )) && cur=$#et follow=1 poff=0 ;;
     ctrl-d) (( poff += ph / 2 )) ;;
     ctrl-u) (( poff -= ph / 2, poff < 0 ? (poff = 0) : 0 )) ;;
-    enter) (( cur )) && {
-             art_of "$et[cur]"
-             # The view clears the terminal's images, the pane's with them: sent again.
-             if [[ -n $REPLY ]]; then flash="${REPLY:t}…"; run_tty "git-verify --view ${(q)REPLY}"; pshown=
-             else flash="this step in full…"; run_tty "git-claude-view --show ${(q)d} ${(q)eid[cur]} | less -R"; fi
-             flash=; } ;;
-    v) detail=$(( !detail )); pcache=(); reload; flash="${${detail:#0}:+more}${${detail:#1}:+less} detail" ;;
     x) act "stop it" --x $d ;;
-    d) drafts ;;
-    c) act "pick it up" --continue $d ;;
     r) act "run it again" --again $d ;;
-    i) act "act on the retrospective" --improve $d ;;
-    m) act "copy the message for infra" --ask $d ;;
     y) act "copy it for Claude" --copy $d ;;
-    f) act "the fix" --fix $d ;;
-    l) flash="all of it in less…"; run_tty "git-claude-view --less ${(q)d}"; flash= ;;
     o) [[ -s $d/agent-url ]] && act "the tester in Cursor" --open "$(<$d/agent-url)" ;;
     a) act "artifacts" --artifacts $d ;;
     w) act "the report" --html $d ;;
     p) act "link the report from the MR" --attach $d ;;
-    [1-9]) if (( ncrit && REPLY <= ncrit )); then filter=c$REPLY; follow=1; flash="$filter's steps alone · 0 shows all"
-           elif (( ncrit )); then flash="there is no c$REPLY: it has $ncrit criteria"; fi ;;
-    0) filter=; follow=1 ;;
     '?') help=$(( !help )) poff=0 ;;
     # With ? up, q and esc close it rather than the screen.
     q|esc) (( help )) && { help=0 poff=0; return; } ;|

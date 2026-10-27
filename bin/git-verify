@@ -44,7 +44,7 @@
 # the VM first; then it checks again. A fix turned down with a way to do
 # better gets one attempt more. A fix comes with the smallest test that
 # would have caught it. One a fresh checker accepts is verified, and a proposal to
-# take in (f in its progress view, git-mr-fix f-<key>); one it does not is
+# take in (f on its row on the board, git-mr-fix f-<key>); one it does not is
 # only a line in the report.
 #
 # The tester works from what is on origin, so the branch must be pushed. From

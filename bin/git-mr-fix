@@ -294,31 +294,12 @@ if [ "$mode" = --run ]; then
             elif $w.state == "outdated" then "\($w.path), outdated (was line \($w.line))"
             elif $w.state == "file" then "\($w.path), the whole file" else "the MR" end), "",
           (.notes[] | "**\(.author.username)**: \(.body)", ""), ""' "$ctx/threads.json" > "$ctx/threads.md"
-    elif [ "$kind" = retro ]; then
-      say "reading $label ..."
-      [ -s "$retro_of/retro.json" ] || finish failed "no retrospective at $retro_of"
-      jq -r '"# \(.summary)", "",
-        (.recommendations | to_entries[] | "## recommendation \(.key + 1): \(.value.where) (\(.value.effort))", "", .value.change, "", "Why: " + .value.why, ""),
-        "# What got in the way", "", (.blockers[] | "- \(.who): \(.what) (cost: \(.cost); evidence: \(.evidence))")' "$retro_of/retro.json" > "$ctx/retro.md"
-      printf '# %s\n' "$label" > "$ctx/mr.md"
-      # The brief the tester and judge read, from the main checkout, as
-      # git-verify-run reads it; not yet committed is fine, it is seeded into
-      # the worktree so the proposals are edits to it as it stands.
-      brief=
-      for f in .agents/skills/verify-env/SKILL.md .claude/skills/verify-env/SKILL.md; do
-        [ -r "$(git-worktree-path main)/$f" ] && { brief=$f; break; }
-      done
-      if [ -n "$brief" ] && [ ! -e "$wt/$brief" ]; then
-        mkdir -p "$wt/$(dirname "$brief")" && cp "$(git-worktree-path main)/$brief" "$wt/$brief" &&
-          git -C "$wt" add "$brief" && git -C "$wt" -c user.name=Claude -c user.email=noreply@anthropic.com commit -q --no-verify -m "the verify-env brief as it stands"
-      fi
-      printf '%s\n' "${brief:-.agents/skills/verify-env/SKILL.md}" > "$ctx/brief-path"
     else
       say "reading what $label changes ..."
       printf '# %s\n\n%s commits past %s\n' "$label" "$(git rev-list --count "$base..$head")" "$base" > "$ctx/mr.md"
       git log --reverse --format='- %s%n%w(0,2,2)%b' "$base..$head" >> "$ctx/mr.md"
     fi
-    if [ "$kind" = retro ]; then : > "$ctx/diff.patch"; else git diff --no-color --no-ext-diff --no-renames -U10 "$base" "$head" > "$ctx/diff.patch"; fi
+    git diff --no-color --no-ext-diff --no-renames -U10 "$base" "$head" > "$ctx/diff.patch"
     stopping
   fi
 
@@ -360,14 +341,6 @@ if [ "$mode" = --run ]; then
     work='- one item per unresolved thread that asks for, or clearly needs, a code change (source "thread", with its thread_id). A thread that needs only an answer, or a decision only the author can make, goes in skipped with why instead.
 - then, from your own reading, anything worth fixing before this merges: bugs, cases the change gets wrong, clearly simpler ways to do the same thing (source "claude", thread_id ""). No style nits. None is a fine answer.'
     reading="the diff, the threads, and the code around them"
-  elif [ "$kind" = retro ]; then
-    brief=$(cat "$ctx/brief-path")
-    opening="You are acting on $label: what slowed a judge and a tester in verifying a change to this repository, and what they recommended changing, in the repository as it is checked out here."
-    sources="- The retrospective, its recommendations numbered, each with where it belongs and why: $ctx/retro.md
-- The brief the tester and the judge read, which the repository keeps: $brief (create it if it is not there)"
-    work='- one item per recommendation you can make here (source "claude", thread_id the recommendation number). Those for verify-env, tester-brief and judge-brief are edits to the brief: what every future tester or judge should know about this repository, written into the section it belongs to (a "For the tester" or "For the judge" section for standing instructions to one of them), merged with what is already there rather than repeated, and kept as short as the point allows. Those for the sandbox are changes to the development environment itself, only when the recommendation makes the change clear and small; one that needs design, or touches what you cannot see running, goes in skipped with why. Those for cursor-env and otis are not this repository to change: skipped, saying where they go.
-- Two recommendations that come to one change are one item.'
-    reading="the retrospective and the brief"
   else
     opening="You are helping the author of the branch $label, which has no merge request yet, get it ready for review."
     sources="- What the branch is, from its commit messages: $ctx/mr.md
@@ -472,7 +445,7 @@ EOF
     k=$((k + 1))
   done
   made=$(ls "$d"/[0-9][0-9].patch 2>/dev/null | wc -l | tr -d ' ')
-  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; $(if [ "$kind" = retro ]; then echo "enter on it on the board shows them; B puts the accepted on a branch off $(otis-config main)"; else echo "C there shows them"; fi)"
+  finish done "$made fix$([ "$made" -eq 1 ] || echo es) proposed for $label; C there shows them"
 fi
 
 # C: start a run after a confirm; while it runs, its progress; once it is
@@ -481,15 +454,18 @@ missing=$(otis-agent-run --ready) || { otis-popup say "$missing"; exit 0; }
 who=$(otis-agent-run --name)
 
 start() {
-  # No Claude run here makes a verification's fix, so none makes it again.
+  # No Claude run here makes a verification's fix, so none makes it again;
+  # a retrospective's proposals stand as they were made.
   if [ "$kind" = verified ]; then
     otis-popup say "$label came from its tester; V verifies again, and tries a fix again if one is needed"
     return 1
   fi
+  if [ "$kind" = retro ]; then
+    otis-popup say "$label's proposals stand as they were made; B puts the accepted on a branch of their own"
+    return 1
+  fi
   if [ "$kind" = mr ]; then
     note=$(git-confirm --note "$who works through $label's threads and proposes fixes for you to accept?") || return 1
-  elif [ "$kind" = retro ]; then
-    note=$(git-confirm --note "$who acts on $label, from $(otis-config main) and apart from this change, for you to accept and put on a branch of their own (B)?") || return 1
   else
     note=$(git-confirm --note "$who reads what $label changes and proposes fixes for you to accept?") || return 1
   fi
@@ -501,13 +477,10 @@ start() {
   [ -n "$note" ] && printf '%s\n' "$note" > "$d/note"
   otis-config agent > "$d/agent-cli"
   date +%s > "$d/started"
-  # A retrospective's changes make the next verification smoother, whatever
-  # the change was: they start from the base, apart from your branch, and B
-  # puts them on a branch of their own.
-  if [ "$kind" = retro ]; then git rev-parse "${range%%..*}"; else git rev-parse HEAD; fi > "$d/head"
+  git rev-parse HEAD > "$d/head"
   git branch --show-current > "$d/branch"
   printf '%s..%s\n' "${range%%..*}" "$(cat "$d/head")" > "$d/range"
-  if [ "$kind" = retro ]; then printf "%s acts on %s\n" "$who" "$label"; else printf "%s's fixes for %s at %.8s\n" "$who" "$label" "$(cat "$d/head")"; fi > "$d/title"
+  printf "%s's fixes for %s at %.8s\n" "$who" "$label" "$(cat "$d/head")" > "$d/title"
   : > "$d/events.jsonl"
   # What resume runs, and where, if the laptop kills it (share/claude-run.sh).
   printf '%s\n' git-mr-fix --run "$key" "${range%%..*}..$(cat "$d/head")" > "$d/cmd"

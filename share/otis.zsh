@@ -116,7 +116,7 @@ _g_goto_branch() {
     return
   fi
   if ! git switch "$b"; then
-    print -u2 "to leave this checkout as it is, open $b in a worktree of its own: W in gb or on the board"
+    print -u2 "to leave this checkout as it is, open $b in a worktree of its own: W in gb"
     return 1
   fi
 }
@@ -153,7 +153,7 @@ gl() {
   # `git log ''` is a fatal error, which empties the list on reload.
   local args
   (( $# )) && args="${(q)@}"
-  git-fzf 'log ' 'enter=read it by symbol,o=its files,t=tests,y=copy sha,f=fold staged in,r=reword,m=reset mixed,s=reset soft,h=reset hard' --ansi --no-sort \
+  git-fzf 'log ' 'enter=read it by symbol,o=its files,t=tests,y=copy sha,f=fold staged in,r=reword' --ansi --no-sort \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 \
       --bind "start:reload(git-log-list $args)" \
       --preview 'git-preview-commit --tests-toggle {2}' \
@@ -163,9 +163,6 @@ gl() {
       --bind 'o:execute(git-commit-open {2})' \
       --bind "f:transform[git-log-do fixup {2} \"reload(git-log-list $args)\"]" \
       --bind "r:transform[git-log-do reword {2} \"reload(git-log-list $args)\"]" \
-      --bind "m:execute(git-reset-to mixed {2})+reload(git-log-list $args)" \
-      --bind "s:execute(git-reset-to soft {2})+reload(git-log-list $args)" \
-      --bind "h:execute(git-reset-to hard {2})+reload(git-log-list $args)" \
       --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' </dev/null
 }
 
@@ -459,7 +456,6 @@ otis() {
         # s on a change, or enter on a worktree: only a shell can go
         # there, and it is where the board was leaving you.
         goto$'\t'*) _g_goto_branch "${out#*$'\t'}"; return ;;
-        gotow$'\t'*) _g_goto_branch "${out#*$'\t'}" worktree; return ;;
         cd$'\t'*) _g_cd "${out#*$'\t'}"; return ;;
         *)   return 0 ;;
       esac

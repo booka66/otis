@@ -80,19 +80,14 @@ typeset -a KEYS=(
   c        change commits  'its commits'
   C        change ''       'Claude reviews or fixes it'
   f        change ''       'fold in a fix that is ready'
-  p        change ''       'push it (asks first)'
-  n        change ''       'open an MR for it'
   s        change ''       'switch to its branch'
-  W        change ''       'its branch in its own worktree'
   w        change web      'open it in the browser'
   y        change link     'copy its link'
   x        change ''       'stop showing a verdict or a fix'
   d        change ''       'remove what can go (asks first)'
   o        mr     ''       'open it: review or its threads'
-  J        mr     ''       'its pipeline: jobs and logs'
   a        mr     ''       'reviewers'
   A        mr     ''       'approve'
-  L        mr     ''       'labels'
   m        mr     ''       'merge'
   b        mr     ''       'rebase, with any stack it is in'
   R        mr     ''       'draft or ready'
@@ -104,7 +99,6 @@ typeset -a KEYS=(
   u        else   ''       "ask $forge now"
   'g b'    else   ''       'branches'
   'g c'    else   ''       'otis settings'
-  'g s'    else   ''       'Slack'
   F        else   files    'find a file in your editor'
   M        else   ''       'music: what cliamp is playing'
 )
@@ -1127,7 +1121,6 @@ typeset -a BEHIND=(
   'git-mr-approve *'                  approving
   'git-mr-close *'                    closing
   'git-mr-do flip *'                  marking
-  'git-branch-push *'                 pushing
   'git-branch-delete *'               removing
   '(cd * && |)git-worktree-remove *'  removing
   'git-agent-list --forget *'         forgetting
@@ -1387,15 +1380,15 @@ rbehind() { keys_used $1 "$KL[$1]"; behind "$KL[$1]" "$2"; }
 # (the here row) is the branch you are on, and takes what gb's row for it
 # took. 1 when it is not such a key, or the row is not one it acts on.
 # Enter is the row's move; each of the gates behind it has a key of its own
-# whatever the move is: s its branch, V its verification, J its pipeline's
-# jobs, o the merge request, m merging it.
+# whatever the move is: s its branch, V its verification, o the merge
+# request, m merging it.
 rowkey() {
   (( $#id )) || return 1
   # The rows are still the last screen's (early): a change's key waits for
   # the ones being made, as enter does, and is pressed then, on the row the
   # cursor is on. It was refused before, as a key the row had nothing for.
   if (( early )); then
-    [[ $1 == (V|C|c|p|n|W|s|o|J|m|b|A|R|X|L|a|r|N|D) ]] || return 1
+    [[ $1 == (V|C|c|s|o|m|b|A|R|X|a|r|N|D) ]] || return 1
     pend=(handle $1); flash="$KL[$1]…" at0=$EPOCHREALTIME
     return 0
   fi
@@ -1416,20 +1409,15 @@ rowkey() {
        elif [[ -n $asb ]]; then rtty C "git-branch-fix ${(q)br} ${(q)i}"
        else return 1; fi ;;
     c) [[ -n $br ]] && [[ $type[cur] == (change|here) ]] || return 1; rtty c "git-branch-log ${(q)br}" ;;
-    p) [[ -n $br && $kind != review ]] && [[ $type[cur] == (change|here) ]] || return 1; rbehind p "git-branch-push ${(q)br}" ;;
-    n) [[ -n $asb ]] && [[ -z $i || $type[cur] == here ]] || return 1; rask n git-mr-new --check $br "$i" ;;
-    W) [[ $type[cur] == change && -n $br ]] || return 1; keys_used W "$KL[W]"; leave gotow "$br" ;;
     s) [[ $type[cur] == change && -n $br ]] || return 1
        [[ -n $mark[cur] ]] && { flash="you are on it"; return 0; }
        keys_used s "$KL[s]"; leave goto "$br" ;;
     o) [[ -n $mr ]] || return 1; rask o git-mr-do open $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]" ;;
-    J) [[ -n $mr && -n $pipeline[cur] ]] || return 1; rask J git-ci-do jobs "$pipeline[cur]" $i ;;
     m) [[ -n $own ]] || return 1; rask m git-ci-merge --check $i ;;
     b) [[ -n $mr ]] || return 1; rask b git-mr-rebase --check $kind $i ;;
     A) [[ -n $mr ]] || return 1; rask A git-mr-do approve $kind $i "$head[cur]" "$base[cur]" ;;
     R) [[ -n $own ]] || return 1; rask R git-mr-do draft $kind $i ;;
     X) [[ -n $own ]] || return 1; rask X git-mr-do close $kind $i ;;
-    L) [[ -n $mr ]] || return 1; rask L git-mr-do labels $i 'execute-silent(:)' ;;
     a) [[ -n $mr ]] || return 1; rask a git-mr-do reviewers $i 'execute-silent(:)' ;;
     r) [[ -n $mr ]] || return 1; rask r git-ci-do retry "$pipeline[cur]" $i ;;
     N) [[ -n $mr ]] || return 1; rask N git-ci-do new "$pipeline[cur]" $i ;;
@@ -1567,9 +1555,6 @@ handle() {
     case $1 in
       g) (( $#id )) && go 1; return ;;
       b|c) hub g$1 $1 ;;
-      # Your workspace: git config otis.slackUrl, else Slack's own front door.
-      s) keys_used gs "$KL[g s]"; u=$(git config --get otis.slackUrl || print https://app.slack.com)
-         run_tty "otis-open --bare ${(q)u}" sh; refresh; return ;;
       # The lists these opened are groups on the board now.
       m|a|d|w) flash="that list is a group on the board now, under the rows"; return ;;
     esac
@@ -1584,13 +1569,12 @@ handle() {
     h|$e'[D') if [[ $type[cur] == group ]]; then [[ -n $open[$lane[cur]] ]] && toggle $lane[cur]
               elif [[ -n $fold[cur] ]]; then parent $cur; go $REPLY; fi ;;
     l|$e'[C') [[ $type[cur] == group && -z $open[$lane[cur]] ]] && toggle $lane[cur] ;;
-    # g starts a two-key name: gg the top, gb branches, gc otis's settings,
-    # gs Slack.
+    # g starts a two-key name: gg the top, gb branches, gc otis's settings.
     g) pre=$EPOCHREALTIME flash="g…" ;;
     # On a worktree or under clean up, d removes, as it does in gb.
     d) removable && { remove; return; }
        flash="nothing on this row can be removed" ;;
-    m|b|a|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;
+    m|b|a|V|c|C|A|R|X|r|N|D|s|o) flash="nothing on this row for $1 ($KL[$1])" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
     M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
     # A thread of Claude's on the workspace (otis-thread): on the branch of

@@ -25,15 +25,12 @@
 # following. The step under the cursor shows in full below the list. The
 # footer says where the run stands, redrawn every second. q leaves, and the
 # run keeps going; x, after a confirm, stops it (it sees <dir>/stopping, and
-# what it runs is killed); c, when it failed, picks it up from its last
-# finished step; r, once it is over, exits 3 so the caller starts it afresh.
-# v shows or hides the detail (thinking, what tools returned), enter and l
-# open a step, or the whole progress, in less, o opens the tester in Cursor,
-# a lists what the run brought back (git-verify --artifacts), y copies its
-# folder and what is in it for Claude, w opens a
-# verification's report in the browser (git-verify-html; terminal-browser
-# where otis.terminalBrowser is on), and p links it
-# from the MR's description (git-verify --attach).
+# what it runs is killed); r, once it is over, exits 3 so the caller starts it
+# afresh. o opens the tester in Cursor, a lists what the run brought back
+# (git-verify --artifacts), y copies its folder and what is in it for Claude,
+# w opens a verification's report in the browser (git-verify-html;
+# terminal-browser where otis.terminalBrowser is on), and p links it from the
+# MR's description (git-verify --attach).
 if [ "$1" = --events ]; then
   exec jq --unbuffered -c --arg who "$2" '
     (if .type == "system" and .subtype == "init" then {type: "init", model, mcp: [.mcp_servers[]? | {name, status}]}
@@ -88,7 +85,7 @@ lines() {
         elif ($line | test("^\\s*```")) then .fence = ($line | sub("^\\s*```"; "")) | .rows += ["```" + .fence] | .n = 0
         elif ($line | test("\\S")) then .rows += [$line] else . end)
        | if .fence != null then .rows[-1] += " … \(.n) line\(if .n == 1 then "" else "s" end)" else . end | .rows
-       | if length > 12 then .[0:12] + ["(+\(length - 12) more lines, enter shows it all)"] else . end)[]
+       | if length > 12 then .[0:12] + ["(+\(length - 12) more lines, all of it in the pane)"] else . end)[]
       | "text\t\($by)" + .
     elif .type == "thinking" then if $detail == 1 then .text | split("\n")[] | select(test("\\S")) | "think\t\($by)… " + . else empty end
     elif .type == "output" then
@@ -121,23 +118,6 @@ lines() {
 }
 
 
-# paint <width>: color kind<tab>text[<tab>id] lines, each cut to <width> (0:
-# never), the id kept after a tab for fzf.
-paint() {
-  awk -F'\t' -v w="$1" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
-    BEGIN {
-      c["head"] = GK_ATTENTION; c["keys"] = GK_CONTEXT; c["tool"] = GK_ELSEWHERE; c["text"] = GK_TEXT; c["otis"] = GK_YOURS
-      c["think"] = GK_CONTEXT; c["out"] = GK_FAINT; c["bad"] = GK_BAD
-    }
-    {
-      text = $2
-      gsub(/\033\[[0-9;]*[a-zA-Z]/, "", text)
-      gsub(/[\002-\010\013-\036\177]/, "", text)
-      if (w > 0 && length(text) > w - 1) text = substr(text, 1, w - 2) "…"
-      printf "%s%s%s%s\n", c[$1], text, GK_R, (NF >= 3 ? "\t" $3 : "")
-    }'
-}
-
 case $1 in
   # --rows <dir> <detail> <from> [to]: the events after line <from> (to line <to>) as rows,
   # kind, text, the event's line, who and when (epoch seconds), for
@@ -148,7 +128,7 @@ case $1 in
     # that counted the lines first must take exactly those, or it takes a
     # line written meanwhile twice.
     sed -n "$(( ${4:-0} + 1 )),${5:-\$}p" "$d/events.jsonl" | lines "$3" "${4:-0}" true ;;
-  # --show <dir> <id>: one event in full, for the preview and enter.
+  # --show <dir> <id>: one event in full, for the pane.
   --show)
     d=$2
     [ -n "$3" ] || exit 0
@@ -157,7 +137,7 @@ case $1 in
       (if .who then "\(.who) · " else "" end) as $by |
       if .type == "tool" then "\($by)\(.name)\n\n" + (.input | to_entries | map("\(.key): \(.value | if type == "string" then rel else tostring end)") | join("\n"))
       elif .type == "output" then "\($by)what it returned" + (if .error then " (an error)" else "" end) + "\n\n" + .text
-        + (if (.text | length) >= 600 then "\n\n… the first 600 characters; l opens the raw log with all of it" else "" end)
+        + (if (.text | length) >= 600 then "\n\n… the first 600 characters; the raw log in the run folder has all of it" else "" end)
       elif .type == "thinking" then "\($by)thinking\n\n" + .text
       elif .type == "text" then "\($by)said\n\n" + .text
       elif .type == "result" then "\($by)finished: \(.subtype)" + (if .total_cost_usd then ", $\(.total_cost_usd * 100 | round / 100)" else "" end) + "\n\n" + (.result // "")
@@ -182,45 +162,10 @@ case $1 in
   --again)
     d=$2
     if running "$d"; then exec git-fzf-note "still running; x stops it"; else echo 'print(again)+accept'; fi ;;
-  # --continue <dir>: c, a run that failed started again from its last
-  # finished step (resume, share/claude-run.sh), and followed.
-  --continue)
-    d=$2
-    running "$d" && exec git-fzf-note "still running"
-    [ "$(cat "$d/status" 2>/dev/null)" = failed ] || exec git-fzf-note "only a run that failed picks up again; r runs it again"
-    [ -s "$d/cmd" ] || exec git-fzf-note "this one cannot pick up again; r runs it again"
-    rm -f "$d/status" "$d/ended" "$d/lives"
-    resume "$d"
-    echo 'reload()' ;;
-  # --improve <dir>: i, as fzf actions: a fix run from the base, apart from
-  # the change, on the verification's retrospective (git-mr-fix, key v-<verification>).
-  --improve)
-    d=$2
-    [ -s "$d/retro.json" ] || exec git-fzf-note "no retrospective here to act on"
-    echo "execute(git-mr-fix 'v-${d##*/}' \"\$(otis-config base)..HEAD\")" ;;
-  # --ask <dir>: m, the message the retrospective drafted for whoever keeps
-  # the development environment (git-verify-run's ask), onto the clipboard.
-  --ask)
-    d=$2
-    ask=$(jq -r '.ask // ""' "$d/retro.json" 2>/dev/null)
-    [ -n "$ask" ] || exec git-fzf-note "no message for infra here: the retrospective found nothing only they can change"
-    printf '%s\n' "$ask" | otis-copy || exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel)"
-    exec git-fzf-note "copied the message for $(git config --get otis.infraContact || echo infra)" ;;
   # --copy <dir>: y, the run's folder and what is in it, for Claude, as the
   # dashboard's y copies it (otis-do).
   --copy)
     exec otis-do copy run run "$2" "" "" "" "" "" "" "" "" ;;
-  # --fix <dir>: f, the fix a failed verification's judge accepted
-  # (git-verify-run's fix), in the proposals picker.
-  --fix)
-    d=$2
-    [ -s "$d/verdict-fix.json" ] || exec git-fzf-note "no fix tried here: only a failed verification whose judge puts the cause in the change tries one"
-    [ "$(jq -r .accept "$d/verdict-fix.json")" = true ] || exec git-fzf-note "the judge turned the tester's fix down: $(jq -r .summary "$d/verdict-fix.json")"
-    echo "execute(git-mr-fix 'f-${d##*/}' '')" ;;
-  --less)
-    d=$2
-    { printf 'keys\traw logs, in full: %s\nkeys\t\n' "$(cd "$d" && ls claude.jsonl tester.sse 2>/dev/null | sed "s#^#$d/#" | tr '\n' ' ')"
-      lines 1 < "$d/events.jsonl"; } | paint 0 | cut -f1 | less -R +G ;;
   --artifacts)
     d=$2
     [ -n "$(ls "$d/artifacts" 2>/dev/null)" ] || exec git-fzf-note "nothing brought back yet"
