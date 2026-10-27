@@ -10,8 +10,8 @@
 # It asks for the spectrum otis.musicFps times a second (cliamp 2's
 # spectrum.get, what its visstream reads), the player's state four times a
 # second, and what plays next when the playlist changes. While nothing plays,
-# or cliamp is not running, it says so (Z) every two seconds and looks again;
-# a screen that has gone is found out on that line, which has nowhere to go.
+# or cliamp is not running, it says so (Z) every two seconds and looks again.
+# It ends with the screen it draws for (out).
 # Where otis.music is off, the strip has nothing to draw and it ends.
 setopt extendedglob
 zmodload zsh/net/socket zsh/zselect zsh/datetime zsh/system zsh/mathfunc
@@ -26,9 +26,11 @@ integer fps=${cfg[3]:-30}
 # (the default for a pipe gone): cliamp closes one that has asked nothing for
 # a minute, as this one has while a screen was opened over its own, and it
 # reconnects. Its own lines go out through out, which ends it once the
-# screen reading them has gone.
+# screen it was started by has gone (screen.zsh's orphaned asks the same),
+# before writing: a pipe whose end something the screen started still held
+# (a cliamp, a run) took its lines until it was full, then held this for good.
 trap '' PIPE
-out() { print -rl -- "$@" || exit 0; }
+out() { kill -0 $PPID 2>/dev/null && print -rl -- "$@" || exit 0; }
 # Where cliamp keeps it: CLIAMP_CONFIG_DIR, else under XDG_CONFIG_HOME or ~/.config.
 sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock
 
@@ -81,18 +83,22 @@ places() {
   [[ -n $p ]] && out "A "${^${(f)p}}
 }
 # stream: frames until cliamp goes. Paused or stopped, a few frames a second
-# do once the bars have fallen flat: cliamp's bands fade out over a moment,
+# do once the bars have fallen flat. cliamp goes on answering with the last
+# bands it had, which stood the bars still where the music stopped, so the
+# bands it says are silence then: the bars fall as they do between beats,
 # and the caps they threw up take a second more to land, which a few frames
 # a second showed in slow motion.
 stream() {
   float next=$EPOCHREALTIME snext=0 loud=0
-  local b
+  local b bands
   while :; do
     ask $c spectrum.get || return
     places
     if [[ $REPLY == *'"bands":['(#b)([^\]]#)']'* ]]; then
-      out "B ${match[1]//,/ }"
-      for b in ${(s:,:)match[1]}; do (( b > 0.01 )) && { loud=$EPOCHREALTIME; break; }; done
+      bands=${match[1]//,/ }
+      [[ $st[1] == playing ]] || bands=${bands//[^ ]##/0}
+      out "B $bands"
+      for b in ${=bands}; do (( b > 0.01 )) && { loud=$EPOCHREALTIME; break; }; done
     fi
     if (( EPOCHREALTIME >= snext )); then
       (( snext = EPOCHREALTIME + 0.25 ))

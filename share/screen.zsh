@@ -202,7 +202,7 @@ orphaned() { ! kill -0 $PPID 2>/dev/null; }
 # that one row as each line comes, between keys, never a frame of its own:
 # its main wait is music_wait, which is zselect with the strip painted
 # meanwhile, and its draw puts music_rule where the rule was. A screen that
-# draws music itself (otis-music) sets strip=0.
+# says what is playing itself (otis-music) replaces music_rule with its own.
 integer mfd=0 strip=1 mcells=24 mlabw=0
 mbuf= mbars= mlab= mrule=
 # The player as the feed last said, for a screen that shows it (otis-music):
@@ -336,6 +336,8 @@ music_label() {
 # while something plays, the title where it fits whole, and the bars when
 # the background has nowhere to be (the feed sends none while it has).
 # Cheap, as it is a frame's work: the widths are known, nothing is measured.
+# A screen may define its own after this file (otis-music's is plain), since
+# music_paint asks for it by name every frame.
 music_rule() {
   REPLY=$F${(l:W::─:)}$R
   [[ -n $mlab ]] && (( W >= 40 )) || return 0

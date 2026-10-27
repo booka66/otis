@@ -16,12 +16,15 @@ setopt extendedglob no_nomatch typeset_silent
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 
 # cliamp_up: a cliamp to talk to, started headless where none answers on its
-# socket (one left by a cliamp that crashed answers nothing).
+# socket (one left by a cliamp that crashed answers nothing). It holds none
+# of the screen's files: one that held the end of a screen's music feed kept
+# that feed writing to it, stuck, for as long as cliamp ran.
 cliamp_up() {
   zmodload zsh/net/socket
-  local sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock
+  local sock=${CLIAMP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cliamp}/cliamp.sock fd
   zsocket $sock 2>/dev/null && { exec {REPLY}>&-; return 0 }
-  nohup cliamp --daemon >/dev/null 2>&1 </dev/null &!
+  ( for fd in /dev/fd/<3->(N:t); do exec {fd}>&-; done 2>/dev/null
+    exec nohup cliamp --daemon >/dev/null 2>&1 </dev/null ) &!
   repeat 50; do [[ -S $sock ]] && return 0; sleep 0.1; done
   return 1
 }
@@ -29,8 +32,12 @@ case $1 in
   --search)
     command -v yt-dlp >/dev/null 2>&1 || { print -r -- $'\t'"YouTube is searched through yt-dlp, which is not installed"; exit 0 }
     local C=$'\e'"[${OTIS_T_CONTEXT}m" EL=$'\e'"[${OTIS_T_ELSEWHERE}m" T=$'\e'"[${OTIS_T_TEXT}m" R=$'\e[0m'
-    yt-dlp --flat-playlist --no-warnings --print '%(id)s	%(duration_string)s	%(channel)s	%(title)s' "ytsearch25:$2" 2>/dev/null |
-      while IFS=$'\t' read -r id len who what; do
+    # Videos alone: a search answers with channels too (YoutubeTab), which
+    # have no length and nothing to play. A video with no length is live.
+    yt-dlp --flat-playlist --no-warnings --print '%(ie_key)s	%(id)s	%(duration_string)s	%(channel)s	%(title)s' "ytsearch25:$2" 2>/dev/null |
+      while IFS=$'\t' read -r kind id len who what; do
+        [[ $kind == Youtube ]] || continue
+        [[ $len == NA ]] && len=live
         print -r -- "https://www.youtube.com/watch?v=$id"$'\t'$C${(l:8:: :)len}$R"  "$EL$who$R"  "$T$what$R
       done
     exit 0 ;;
@@ -46,18 +53,20 @@ export GIT_FZF_STATE=${TMPDIR:-/tmp}/otis-music.$$.$RANDOM
 mkdir -m 700 $GIT_FZF_STATE || exit 1
 st=$GIT_FZF_STATE
 . ${0:A:h:h}/share/screen.zsh
-# The footer's keys, the ones used most first: as many as fit show.
+# The footer's keys after space, which says what it will do (tog), the ones
+# used most first: as many as fit show.
 typeset -a KEYS=(
-  space 'play or pause'
-  /     'search YouTube'
-  'n p' 'next and previous'
-  '← →' 'seek ten seconds'
-  '+ -' 'louder and quieter'
-  s     'shuffle'
-  q     'back'
+  /     search
+  'n p' skip
+  '← →' seek
+  '+ -' volume
+  s     shuffle
+  q     back
 )
 keys_open otis-music 'space=play or pause,n=next,p=before,left=back ten seconds,right=on ten seconds,+=louder,-=quieter,s=shuffle,/=search YouTube'
 screen_start
+# The title is this screen's own, big at its top, so its rule is a plain one.
+music_rule() { REPLY=$F${(l:W::─:)}$R }
 flash=
 float flashend=0
 
@@ -67,10 +76,13 @@ clock() {
   if (( s >= 3600 )); then REPLY=$(( s / 3600 )):${(l:2::0:)$(( s % 3600 / 60 ))}:${(l:2::0:)$(( s % 60 ))}
   else REPLY=$(( s / 60 )):${(l:2::0:)$(( s % 60 ))}; fi
 }
+# tog: what space does now, pause or play, as the player last said.
+tog=play
 draw() {
   local -a fr
   local s right
   integer y top bot
+  [[ $mstate[1] == playing ]] && tog=pause || tog=play
   if (( W < 30 || H < 12 )); then
     music_space; shown_rows=()
     print -nu $tty -- $e'[2J'$e'[1;1H'$C"  too small for the music"$R
@@ -120,7 +132,7 @@ draw() {
   local foot="  " k v
   if [[ -n $flash ]]; then foot+=$A$flash$R
   else
-    for k v in "${KEYS[@]}"; do
+    for k v in space $tog "${KEYS[@]}"; do
       vw "$foot$A$k$R $C$v$R   "; (( REPLY > W )) && break
       foot+=$A$k$R" "$C$v$R"   "
     done
@@ -149,8 +161,8 @@ search() {
   run_tty "otis-popup text 'search YouTube' > ${(q)st}/q" sh
   q=$(<$st/q) 2>/dev/null; rm -f $st/q
   [[ -n ${q// } ]] || { draw; return }
-  local title="YouTube: $q " load="start:reload(otis-music --search ${(q)q})"
-  run_tty "git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
+  local title="♪ $q " load="start:reload(otis-music --search ${(q)q})"
+  run_tty "OTIS_SCREEN=youtube git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
     --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' > ${(q)st}/pick" sh
   pick=$(<$st/pick) 2>/dev/null; rm -f $st/pick
   # Until it plays, which takes yt-dlp a few seconds to find its audio.
@@ -159,7 +171,7 @@ search() {
 }
 handle() {
   case $1 in
-    ' ') act space 'play or pause' toggle ;;
+    ' ') act space $tog toggle ;;
     n) act n next next ;;
     p) act p 'the one before' prev ;;
     $e'[D'|h) act left 'back ten seconds' remote call seek --params '{"value":-10}' ;;

@@ -379,7 +379,8 @@ headline() {
     put "" "   "; put "$A" "/"; put "" " "; put "$T" "$query"
     (( searching )) && put "$A" "▏"
   fi
-  (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
+  # A list already up being made again; before the first, loading… says so.
+  (( $#rpid && loaded )) && { pad $(( w - 3 )); put "$F" "↻"; }
   if (( used > w - 1 )); then wrapc "$line" $(( w - 1 )) 2; HF+=("${reply[@]}")
   else HF+=("$line"); fi
   if [[ -n $header ]]; then
