@@ -281,11 +281,15 @@ cells() {
   [[ $chg[$1] == added ]] && x=A; [[ $chg[$1] == removed ]] && x=D
   fields $1
   if [[ $fld[9] == 1 ]]; then put "$G" $x; else put "$F" .; fi
-  if [[ $fld[10] == 1 ]]; then [[ $fld[9] == 1 ]] && put "$A" $x || put "$X" $x; else put "$F" .; fi
+  if [[ $fld[10] == 1 ]]; then [[ $fld[9] == 1 ]] && put "$A" $x || put "$Y" $x; else put "$F" .; fi
   put "" " "
 }
+# num <count>: the count as every screen shows one, a comma every three
+# digits (share/rowfmt.awk's gk_num), in REPLY.
+num() { local n=$1 s=; while (( $#n > 3 )); do s=,${n[-3,-1]}$s n=${n[1,-4]}; done; REPLY=$n$s; }
 # rcells <row>: its cells on the right, in REPLY: threads, viewed, the
-# lines. Each a cell, so they stay in their columns down the list.
+# lines. Each a cell, so they stay in their columns down the list, each
+# count at the right of its column (gk_stat).
 rcells() {
   local i=$1 line= dm=${dim[$1]:+$C}
   integer used=0
@@ -302,9 +306,9 @@ rcells() {
     *) put "" "      " ;;
   esac
   put "" " "
-  if (( add[i] > 0 )); then put "${dm:-$G}" "+${(l:wa:: :)add[i]}"; else put "" "${(l:wa+1:: :)}"; fi
+  if (( add[i] > 0 )); then num $add[i]; put "${dm:-$G}" "${(l:wa+1:: :)${:-+$REPLY}}"; else put "" "${(l:wa+1:: :)}"; fi
   put "" " "
-  if (( del[i] > 0 )); then put "${dm:-$X}" "-${(l:wd:: :)del[i]}"; else put "" "${(l:wd+1:: :)}"; fi
+  if (( del[i] > 0 )); then num $del[i]; put "${dm:-$RM}" "${(l:wd+1:: :)${:-−$REPLY}}"; else put "" "${(l:wd+1:: :)}"; fi
   REPLY=$line
 }
 rowline() {
@@ -354,7 +358,7 @@ rowline() {
       # What the change did to it, a glyph; a caller, whether it breaks.
       case $typ[i]:$chg[i]:$err[i] in
         caller:*:x) put "$X" "✗ " ;; caller:*:fixed) put "$G" "✓ " ;; ref:*) put "$C" "↑ " ;;
-        *:signature:*) put "$B$A" "~ "; line+=$UB ;; *:added:*) put "$G" "+ " ;; *:removed:*) put "$X" "- " ;;
+        *:signature:*) put "$B$A" "~ "; line+=$UB ;; *:added:*) put "$G" "+ " ;; *:removed:*) put "$RM" "− " ;;
         sym:*|file:*) put "$F" "· " ;; *) put "" "  " ;;
       esac
       (( rz = 1 + (wa + wd + 4) + 6 + (mr ? 10 : 0) ))
@@ -828,7 +832,7 @@ crumb() {
       case $chg[i] in
         signature) put "$C" "  ·  "; put "$A" "signature changed" ;;
         added) put "$C" "  ·  "; put "$G" "added" ;;
-        removed) put "$C" "  ·  "; put "$X" "removed" ;;
+        removed) put "$C" "  ·  "; put "$RM" "removed" ;;
         body) [[ $typ[i] == (sym|ref) ]] && { put "$C" "  ·  "; put "$C" "body changed"; } ;;
       esac
       [[ $typ[i] == caller ]] && { put "$C" "  ·  "; put "$C" "not in the change"; }
@@ -934,11 +938,11 @@ helplines() {
     numbers "in a review, drag down a diff's line numbers, or tap one: those lines; c opens a box under them to write in, a flag's line with its comment typed in" \
     comment "in a case's pane, click one: c replies and e edits yours in a box under it, d deletes yours, r resolves it or opens it again" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
-    "?" "this, and back" "q/esc" "back"; do
+    "?" "these keys" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
   P+=("" "  ${B}${T}a row$R" ""
-    "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $X-$R$C removed   $F·$R$C its body alone$R"
+    "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $RM−$R$C removed   $F·$R$C its body alone$R"
     "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: nothing under it not drawn above already, or all viewed$R"
     "  $C↑$R$C drawn whole above: l goes to it   ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
     "  ${G}●$R$C in a review, the agent's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
@@ -1095,7 +1099,7 @@ draw() {
     foot+=$A"⏎"$R$C" asks  "$A"tab"$R$C" an idea  "$A"↑↓"$R$C" scroll  "$A"ctrl-f"$R$C" in Claude Code  "$A"/new"$R$C" starts over  "$A"esc"$R$C" back to the rows  "$R$A"ctrl-a"$R$C" hides it"$R
     cut "$foot" $(( W - 1 )); foot=$REPLY
   else
-    local n k v used_=2 room
+    local n v used_=2 room
     (( room = W - 14 ))
     (( chat )) && { foot+=$A"a"$R$C" asks Claude  "$A"ctrl-a"$R$C" hides it   ·   "$R; (( used_ += 34 )); }
     symkeys
@@ -1104,16 +1108,7 @@ draw() {
       v=$hv[n]; (( ${+rkl[enter]} )) && v=$rkl[enter]
       [[ -n $v ]] && { foot+=$B$A"⏎ "$v$UB$R$C"   ·   "$R; (( used_ += ${(m)#v} + 8 )); }
     done
-    for (( n = 1; n <= $#hk; n++ )); do
-      [[ $hk[n] == enter ]] && continue
-      (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
-      v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
-      [[ -n $v ]] || continue
-      k="$hk[n] $v"
-      (( used_ + ${(m)#k} + 2 > room )) && break
-      foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
-    done
-    foot+=$A"?"$R$C" keys"$R
+    foot_keys
   fi
   fr+=("$foot")
   # Only the rows that changed go out, the list's and the pane's apart, so
@@ -1887,7 +1882,7 @@ box_tick() {
 # What this screen's own keys are for, as the key log says it (keys_used);
 # the keys a caller offers say so themselves.
 typeset -A own=(']' 'next change' '[' 'previous change' . 'next one not viewed' , 'previous one not viewed'
-  / 'search the rows' '?' 'keys' ctrl-a "Claude's panel")
+  / 'search the rows' '?' 'these keys' ctrl-a "Claude's panel")
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 handle() {

@@ -690,7 +690,7 @@ helplines() {
   P+=("")
   for k v in j/k move g/G "top, bottom" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" \
-    drag "in the preview: its text, copied" "?" "this, and back" "q/esc" "back"; do
+    drag "in the preview: its text, copied" "?" "these keys" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
   (( multi )) && P+=("  ${A}${(r:9:: :)${:-space/tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
@@ -785,7 +785,7 @@ draw() {
   elif [[ -n $flash ]]; then foot+=$A$flash$R; flash=
   elif spinning; then spin_foot
   else
-    local n k v= used_=2 room
+    local v= used_=2 room
     (( room = W - 14 ))
     # What each key means on this row, where the picker says (--keys-from).
     rowkeys
@@ -800,16 +800,7 @@ draw() {
       [[ -n $v ]] && { foot+=$B$A"⏎ "$v$UB$R$C"   ·   "$R; (( used_ += ${(m)#v} + 8 )); }
       # A search kept after esc: the rows it left, and how to have them all.
       [[ -n $query ]] && { foot+=$A"esc"$R$C" shows every row  "$R; (( used_ += 21 )); }
-      for (( n = 1; n <= $#hk; n++ )); do
-        [[ $hk[n] == enter ]] && continue
-        (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
-        v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
-        [[ -n $v ]] || continue
-        k="$hk[n] $v"
-        (( used_ + ${(m)#k} + 2 > room )) && break
-        foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
-      done
-      foot+=$A"?"$R$C" keys"$R
+      foot_keys
     fi
   fi
   fr+=("$foot")
@@ -1057,7 +1048,7 @@ kname() {
 }
 # What this screen's own keys are for, as the key log says it (keys_used);
 # the keys a caller offers say so themselves.
-typeset -A own=(']' 'next change' '[' 'previous change' / 'search the rows' '?' 'keys')
+typeset -A own=(']' 'next change' '[' 'previous change' / 'search the rows' '?' 'these keys')
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 handle() {

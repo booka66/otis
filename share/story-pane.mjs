@@ -48,6 +48,7 @@ const bgOf = (hex, fallback) => (/^#[0-9a-f]{6}$/i.test(hex || "") ? `\x1b[48;2;
 const R = "\x1b[0m", B = "\x1b[1m", I = "\x1b[3m";
 const T = fg("OTIS_T_TEXT", "39"), C = fg("OTIS_T_CONTEXT", "90"), A = fg("OTIS_T_ATTENTION", "33");
 const G = fg("OTIS_T_GOOD", "32"), X = fg("OTIS_T_BAD", "31"), E = fg("OTIS_T_ELSEWHERE", "34");
+const RM = fg("OTIS_T_REMOVED", env.OTIS_T_CONTEXT || "90");
 const PLUS = bgOf(env.OTIS_T_PLUS, "\x1b[48;5;22m"), MINUS = bgOf(env.OTIS_T_MINUS, "\x1b[48;5;52m");
 const RAISE = env.OTIS_T_CODEBG ? `\x1b[${env.OTIS_T_CODEBG}m` : "\x1b[48;5;237m";
 // A line Claude cites stands out on a stronger ground: the diff's emphasis, or the code's ground lifted.
@@ -108,6 +109,8 @@ function markdown(items) {
 const ANSI = /\x1b\[[0-9;]*m/g;
 const width = (text) => [...text.replace(ANSI, "")].length;
 const pad = (text, to) => text + " ".repeat(Math.max(0, to - width(text)));
+// A count as every screen shows one, a comma every three digits (share/rowfmt.awk's gk_num).
+const num = (n) => n.toLocaleString("en-US");
 
 /** Words wrapped to a width, whole: a word longer than the width is the only one cut. */
 function wrap(text, room) {
@@ -618,7 +621,7 @@ const digits = Math.max(3, ...boxes.flatMap((row) => row.nums.map((n) => String(
 for (const row of boxes) {
   say();
   const name = row.cases && row.name.includes("%s") ? row.name.split("%s").join(row.cases) : row.name;
-  const size = `${row.add ? `${G}+${row.add}${R}${RAISE}` : ""}${row.add && row.del ? " " : ""}${row.del ? `${X}−${row.del}${R}${RAISE}` : ""}`;
+  const size = `${row.add ? `${G}+${num(row.add)}${R}${RAISE}` : ""}${row.add && row.del ? " " : ""}${row.del ? `${RM}−${num(row.del)}${R}${RAISE}` : ""}`;
   const head = `${B}${T}${name}${R}${RAISE}  ${C}${describe(row)}${R}${RAISE}`;
   const room = W - 4;
   if (width(head) + width(size) + 3 <= room) say(`  ${RAISE} ${pad(head, room - width(size) - 2)}${size} ${R}`);

@@ -73,11 +73,10 @@ summary() {
   git show --format= --numstat --summary --no-renames --diff-merges=first-parent "$sha" "$@" 2>/dev/null |
     LC_ALL=C awk -v w="$PANE_W" -v pushed="$pushed" -v hidden="$hidden" -v meta="${TMPDIR:-/tmp}/otis-commit.$$" \
       -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v G="$(printf "$GK_GOOD")" \
-      -v X="$(printf "$GK_BAD")" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" -v E="$(printf "$GK_ELSEWHERE")" \
-      -v R="$(printf "$GK_R")" "$PANE_AWK$(cat "$share/markdown.awk")"'
+      -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" -v E="$(printf "$GK_ELSEWHERE")" \
+      -v R="$(printf "$GK_R")" "$PANE_AWK${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$(cat "$share/markdown.awk")"'
     # Characters, not bytes, for a width (LC_ALL=C counts bytes).
     function len(s) { gsub(/[\200-\277]/, "", s); return length(s) }
-    function num(n,   s) { s = n ""; if (n >= 1000) s = substr(s, 1, length(s) - 3) " " substr(s, length(s) - 2); return s }
     function rep(c, n,   o) { o = ""; while (n-- > 0) o = o c; return o }
     function base(p) { sub(/.*\//, "", p); return p }
     BEGIN {
@@ -106,10 +105,10 @@ summary() {
       if (body != "") { print ""; gsub(/\n/, "\037", body); md(body, w, "") }
       if (!n) { print ""; print C "SHAPE" R "  " C "no changes" (hidden != "" ? "  \302\267  " hidden : "") R; print ""; exit }
       print ""
-      print C "SHAPE" R "  " C n " file" (n > 1 ? "s" : "") "  " R G "+" num(ta) R X " \342\210\222" num(td) R (hidden != "" ? F "  " hidden R : "")
+      print C "SHAPE" R "  " C n " file" (n > 1 ? "s" : "") "  " R gk_added(ta) " " gk_removed(td) (hidden != "" ? F "  " hidden R : "")
       print ""
       bw = w - 4; ga = (ta + td) ? int(ta * bw / (ta + td) + 0.5) : 0
-      print "  " G rep("\342\224\201", ga) R X rep("\342\224\201", bw - ga) R
+      print "  " G rep("\342\224\201", ga) R GK_REMOVED rep("\342\224\201", bw - ga) R
       print ""
       # Each file by what happened to it.
       for (i = 1; i <= n; i++) {
@@ -131,7 +130,7 @@ summary() {
       m_ = 0; for (j = 1; j <= K; j++) { idx[++m_] = topk[j]; intop[topk[j]] = 1 }
       for (i = 1; i <= n; i++) if (!(i in intop)) idx[++m_] = i
       split("new gone grew shrunk touched", order, " ")
-      col["new"] = G; col["gone"] = X; col["grew"] = G; col["shrunk"] = Y; col["touched"] = C
+      col["new"] = G; col["gone"] = GK_REMOVED; col["grew"] = G; col["shrunk"] = Y; col["touched"] = C
       # What happened to them, counted: BIGGEST names them, one a line.
       glyph["new"] = "+"; glyph["gone"] = "\342\210\222"; glyph["grew"] = "\342\226\262"; glyph["shrunk"] = "\342\226\274"; glyph["touched"] = "\302\267"
       line = "  "; used = 2
@@ -155,10 +154,9 @@ summary() {
           pn = pathlines(path[k], nw, pl); p = pl[1]
           ln = int(t * bw / (big ? big : 1) + 0.5); if (t && !ln) ln = 1
           g = t ? int(add[k] * ln / t + 0.5) : 0
-          nums = (add[k] ? G "+" num(add[k]) R : "") (add[k] && del[k] ? " " : "") (del[k] ? X "\342\210\222" num(del[k]) R : "")
-          if (isbin[k]) nums = C "binary" R
+          nums = isbin[k] ? C "binary" R : gk_counts(add[k], del[k])
           # Padded by characters, not bytes, so a name with an é lines up.
-          printf "  %s%s%s %s%s%s%s  %s%s%s%s%s  %s\n", col[kind[k]], glyph[kind[k]], R, T, p, R, rep(" ", nw - len(p)), G, rep("\342\224\201", g), X, rep("\342\224\201", ln - g), rep(" ", bw - ln), nums
+          printf "  %s%s%s %s%s%s%s  %s%s%s%s%s  %s\n", col[kind[k]], glyph[kind[k]], R, T, p, R, rep(" ", nw - len(p)), G, rep("\342\224\201", g), GK_REMOVED, rep("\342\224\201", ln - g), rep(" ", bw - ln), nums
           for (j = 2; j <= pn; j++) printf "    %s%s%s\n", T, pl[j], R
         }
       }
@@ -174,7 +172,7 @@ named=
 if [ $# -eq 1 ] && [ $diff -eq 0 ]; then
   case $as in added) as=A ;; deleted) as=D ;; changed) as=M ;; '') as=$(status "$1") ;; esac
   case $as in
-    D) plain "$GK_BAD" deleted "$(before):$1" "$1"; exit 0 ;;
+    D) plain "$GK_REMOVED" deleted "$(before):$1" "$1"; exit 0 ;;
     A) plain "$GK_GOOD" added "$(after):$1" "$1"; exit 0 ;;
   esac
 fi

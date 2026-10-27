@@ -164,11 +164,12 @@ GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/bra
     }
     name = gk_path(b, budget, GK_TEXT)
 
-    # One word: what an agent is up to on it, else where the branch stands.
+    # One word: what an agent is up to on it, else where the branch stands,
+    # in 11 columns: the label is ten (git-branch-facts) and a space.
     cw = claude(b, $5)
     aw = ai_word(b, $5, $10, cw)
     if (aw != "") word = aw sprintf("%" (11 - awn) "s", "")
-    else word = $4 "   "
+    else word = $4 " "
     head = mark word iid " " drift "  "
     tail = name where "  " GK_CONTEXT when GK_R "\t" b "\t" kind "\t" wt[b] "\t" $5 "\t" place "\t" $8 "\t" $9 "\t" cw
     if (kind == "main") pinned = head tail

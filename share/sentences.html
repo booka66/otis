@@ -13,6 +13,7 @@
   --ink:#fbf1c7; --text:#ebdbb2; --soft:#bdae93; --faint:#a89984; --comment:#928374;
   --red:#fb4934; --green:#b8bb26; --yellow:#fabd2f; --blue:#83a598; --purple:#d3869b; --aqua:#8ec07c; --orange:#fe8019;
   --tint:14%;
+  --removed:var(--comment);
   --add-bg:color-mix(in srgb, var(--green) var(--tint), var(--recess));
   --del-bg:color-mix(in srgb, var(--red) var(--tint), var(--recess));
   --hover:color-mix(in srgb, var(--raise) 55%, var(--panel));
@@ -70,7 +71,7 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
 .bar-id{color:var(--text)}
 .bar-id .mr{color:var(--yellow); font-family:var(--mono)}
 .bar-id .dim{color:var(--faint)}
-.bar-id .a{color:var(--green)} .bar-id .d{color:var(--red)}
+.bar-id .a{color:var(--green)} .bar-id .d{color:var(--removed)}
 #app[data-surface="mr"] .bar-id .lead{font-weight:600; color:var(--ink)}
 .zoom{display:inline-flex; align-items:center; gap:2px; margin-left:-8px}
 .zoom button{background:none; border:0; padding:3px 8px; border-radius:5px; color:var(--faint); cursor:pointer}
@@ -102,9 +103,9 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
 .pip{width:8px; height:8px; border-radius:2px; border:1.5px solid currentColor}
 .pip.read{background:currentColor}
 .size{font-variant-numeric:tabular-nums}
-.size .a, .cnt .a{color:var(--green)} .size .d, .cnt .d{color:var(--red)}
+.size .a, .cnt .a{color:var(--green)} .size .d, .cnt .d{color:var(--removed)}
 .prog.done{color:var(--green)}
-.m-new{color:var(--green)} .m-changed{color:var(--yellow)} .m-removed{color:var(--red)} .m-moved{color:var(--blue)}
+.m-new{color:var(--green)} .m-changed{color:var(--yellow)} .m-removed{color:var(--removed)} .m-moved{color:var(--blue)}
 
 /* level 2: the symbols behind it */
 .kids{margin-left:calc(var(--pad) + 2px); border-left:1px solid var(--rule-strong); padding:4px 0 10px; animation:rise .12s ease-out}
@@ -233,6 +234,8 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
   };
   const rowsOf = (s) => [...s.code, ...s.tests];
   const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+  // A count as the terminal shows it, a comma every three digits.
+  const num = (n) => n.toLocaleString("en-US");
 
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const span = (c, s) => '<span class="' + c + '">' + esc(s) + "</span>";
@@ -284,9 +287,9 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
     if (sym.tag) who.append(el("span", "tag", sym.tag));
 
     const cnt = el("span", "cnt");
-    if (sym.add) cnt.append(el("span", "a", "+" + sym.add));
+    if (sym.add) cnt.append(el("span", "a", "+" + num(sym.add)));
     if (sym.add && sym.del) cnt.append(" ");
-    if (sym.del) cnt.append(el("span", "d", "−" + sym.del));
+    if (sym.del) cnt.append(el("span", "d", "−" + num(sym.del)));
 
     const rd = el("button", "rd");
     rd.type = "button";
@@ -356,8 +359,8 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
     if (s.tests.length) meta.append(pipGroup("tests", s.tests));
     if (all.length) {
       const size = el("span", "size");
-      if (s.add) size.append(el("span", "a", "+" + s.add), " ");
-      if (s.del) size.append(el("span", "d", "−" + s.del));
+      if (s.add) size.append(el("span", "a", "+" + num(s.add)), " ");
+      if (s.del) size.append(el("span", "d", "−" + num(s.del)));
       meta.append(size);
     } else meta.append(el("span", null, "nothing in the change sits under this"));
     if (s.origin) meta.append(el("span", "origin sha", s.origin === "description" ? "the description" : s.origin));
@@ -548,7 +551,7 @@ button:focus-visible, .outline:focus-visible{outline:2px solid var(--yellow); ou
   }
 
   // The same outline in two places: a terminal pane, and a block on the merge request's page.
-  const size = () => [el("span", "a", "+" + DATA.add), " ", el("span", "d", "−" + DATA.del)];
+  const size = () => [el("span", "a", "+" + num(DATA.add)), " ", el("span", "d", "−" + num(DATA.del))];
   const commitCount = plural(DATA.commits.length, "commit");
   function setSurface(surface) {
     app.dataset.surface = surface;

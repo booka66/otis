@@ -163,7 +163,7 @@ case $1 in
         st = (section && state) ? $state : ""
         if (st != "added" && st != "deleted") st = ""
         # Under its own heading the state is said once; in a section, per row.
-        if (st != "" && kind != "") $1 = $1 (st == "added" ? GK_GOOD "  added" : GK_BAD "  deleted") GK_R
+        if (st != "" && kind != "") $1 = $1 (st == "added" ? GK_GOOD "  added" : GK_REMOVED "  deleted") GK_R
         if (kind == "tests") {
           tests++; held[tests] = $0
           if (!section && show) print

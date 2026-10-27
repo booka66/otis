@@ -445,7 +445,7 @@ out=$(jq -nr -L "$share" \
   def here_row:
     ($mine_mrs + $asked_all | map(select(.sourceBranch == $here.branch)) | .[0]) as $mr |
     ([ (if $here.dirty > 0 then "\($here.dirty) uncommitted" else empty end),
-       (if $here.unpushed > 0 then "\($here.unpushed) unpushed" else empty end),
+       (if $here.unpushed > 0 then "\($here.unpushed) not pushed" else empty end),
        (if $here.ahead > $here.unpushed then "\($here.ahead) past \($base)" else empty end),
        (if $here.behind > 0 then "\($here.behind) behind \($base)" else empty end) ]) as $bits |
     { kind: "here", rank: 0, g: "", gc: context, mark: true, id: "here",

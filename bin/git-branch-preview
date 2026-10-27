@@ -122,8 +122,7 @@ if [ -n "$unrelated" ]; then numstat=$(git log --numstat --format= "$base..$b" 2
 else numstat=$(git diff --numstat --no-renames "$base...$b" 2>/dev/null); fi
 if [ -n "$numstat" ]; then
   printf '%s\n' "$numstat" | LC_ALL=C awk -F'\t' -v w="$PANE_W" -v c="$(printf "$GK_CONTEXT")" -v t="$(printf "$GK_TEXT")" \
-    -v g="$(printf "$GK_GOOD")" -v x="$(printf "$GK_BAD")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
-    function num(v,   s) { v = v ""; s = ""; while (length(v) > 3) { s = " " substr(v, length(v) - 2) s; v = substr(v, 1, length(v) - 3) }; return v s }
+    -v g="$(printf "$GK_GOOD")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" "$PANE_AWK${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     # the next step of a path under a directory: a directory, or the file
     function child(p, pre,   rest) { rest = substr(p, length(pre) + 1)
       return index(rest, "/") ? pre substr(rest, 1, index(rest, "/")) : p }
@@ -146,8 +145,8 @@ if [ -n "$numstat" ]; then
     END {
       if (!np) exit
       nf = np
-      head = nf " file" (nf == 1 ? "" : "s") "  +" num(ta) " −" num(tm)
-      if (17 + ulen(head) <= w) printf "\n%sWHAT IT TOUCHES%s  %s%d file%s  %s+%s%s %s−%s%s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), g, num(ta), r, x, num(tm), r
+      cn = gk_added(ta) " " gk_removed(tm); head = nf " file" (nf == 1 ? "" : "s") "  " cn; gsub(/\033\[[0-9;]*m/, "", head)
+      if (17 + ulen(head) <= w) printf "\n%sWHAT IT TOUCHES%s  %s%d file%s  %s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), cn
       else printf "\n%sWHAT IT TOUCHES%s  %s%d file%s%s\n\n", c, r, c, nf, (nf == 1 ? "" : "s"), r
       # the top of each path, the files at the root together
       for (i = 1; i <= np; i++) { d = index(P[i], "/") ? substr(P[i], 1, index(P[i], "/")) : ""
@@ -179,13 +178,11 @@ if [ -n "$numstat" ]; then
         nm = nm substr("                                        ", 1, nw - ulen(nm))
         k = int((ga[d] + gd[d]) * bw / top + 0.5); if (k < 1) k = 1
         ka = int(k * ga[d] / (ga[d] + gd[d] > 0 ? ga[d] + gd[d] : 1) + 0.5); kd = k - ka
-        bar = g; for (j = 0; j < ka; j++) bar = bar "━"; bar = bar x; for (j = 0; j < kd; j++) bar = bar "━"
+        bar = g; for (j = 0; j < ka; j++) bar = bar "━"; bar = bar GK_REMOVED; for (j = 0; j < kd; j++) bar = bar "━"
         pad = ""; for (j = k; j < bw; j++) pad = pad " "
         printf "  %s%s%s  %s%s%s  ", t, nm, r, bar, r, pad
         if (fc) printf "%s%3d file%s%s  ", c, gf[d], (gf[d] == 1 ? " " : "s"), r
-        printf "%s+%s%s", g, num(ga[d]), r
-        if (gd[d]) printf " %s−%s%s", x, num(gd[d]), r
-        printf "\n" }
+        printf "%s\n", gk_counts(ga[d], gd[d]) }
       if (ng > 6) printf "  %s+ %d more%s\n", f, ng - 6, r }'
 fi
 

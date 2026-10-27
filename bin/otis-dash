@@ -76,7 +76,7 @@ typeset -a KEYS=(
   'g g  G' move   ''       'the top and the bottom'
   'h l'    move   ''       'fold a group or open it'
   '^d ^u'  move   ''       'scroll what the row says in full'
-  '?'      move   ''       'show these keys'
+  '?'      move   ''       'these keys'
   q        move   ''       'quit'
   V        change verify   'verify it in Cursor Cloud'
   c        change commits  'its commits'
@@ -98,7 +98,7 @@ typeset -a KEYS=(
   N        mr     ''       'a new pipeline'
   D        mr     ''       'Claude watches production'
   t        else   ''       'Claude works on it on the workspace'
-  u        else   ''       "ask $forge now"
+  u        else   ''       'refresh'
   'g b'    else   ''       'branches'
   'g c'    else   ''       'otis settings'
   F        else   files    'find a file in your editor'
@@ -1121,8 +1121,8 @@ draw() {
     for hk hg hf hl in "${KEYS[@]}"; do [[ -n $hf ]] && offers $hk && hint+=("${A}$hk$R$C $hf"); done
     # On a narrow screen the last of them go, never ?: it lists them all.
     # Two columns are kept at the right, as at the left.
-    while vw "$foot${(j:  :)hint}  ? all"; (( REPLY > W - 2 && $#hint > 0 )); do hint[-1]=(); done
-    foot+=${(j:  :)hint}${hint:+"  "}"$A?$R$C all$R"
+    while vw "$foot${(j:  :)hint}  ? keys"; (( REPLY > W - 2 && $#hint > 0 )); do hint[-1]=(); done
+    foot+=${(j:  :)hint}${hint:+"  "}"$A?$R$C keys$R"
   fi
   fr+=("$foot") fy+=($H)
   # No synchronized output (mode 2026) around it: a terminal under a

@@ -153,13 +153,15 @@ set -- "$f.wt"
 set -- "$@" "$f.remotes" "$f.up" "$f.refs"
 GK_OK="$merged_ok" awk -F'\t' -v OFS='\t' -v main="$main" -v current="$current" -v origin="$origin" \
   -v cache="$cache" -v wt="$f.wt" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+  # A label, ten columns, so every list that leads with one lines up: gb
+  # and gw, whose "detached" and "missing" are as wide (gk_padr there too).
+  function lab(c, s) { return c gk_padr(substr(s, 1, 10), 10) GK_R }
   BEGIN {
-    # Eight columns each, so every list that leads with one lines up: gb and
-    # gw. "detached" and "missing " in git-worktree-list are the same width.
-    label["main"] = GK_MAIN substr(main "        ", 1, 8) GK_R
-    label["open"] = GK_ATTENTION "open MR " GK_R; label["merged"] = GK_GOOD "merged  " GK_R; label["merged-diff"] = GK_BAD "new work" GK_R
-    label["closed"] = GK_GOOD "closed  " GK_R; label["closed-diff"] = GK_BAD "new work" GK_R; label["theirs"] = GK_GOOD "their MR" GK_R
-    label["pushed"] = GK_CONTEXT "no MR   " GK_R; label["local"] = GK_CONTEXT "unpushed" GK_R
+    # A branch with no copy on origin is "not pushed", as the board says it.
+    label["main"] = lab(GK_MAIN, main)
+    label["open"] = lab(GK_ATTENTION, "open MR"); label["merged"] = lab(GK_GOOD, "merged"); label["merged-diff"] = lab(GK_BAD, "new work")
+    label["closed"] = lab(GK_GOOD, "closed"); label["closed-diff"] = lab(GK_BAD, "new work"); label["theirs"] = lab(GK_GOOD, "their MR")
+    label["pushed"] = lab(GK_CONTEXT, "no MR"); label["local"] = lab(GK_CONTEXT, "not pushed")
     if (origin != "") print "ORIGIN", origin
     print "MAIN", main
     print "CURRENT", current

@@ -10,8 +10,9 @@
 #                    color of what it says, then its lines, indented two.
 #                    A proportion is a bar (pane_bar), never a number alone.
 #
-# The colors say one thing each: yours (it waits on you), bad (broken),
-# good (done), attention (going, and ids and keys). The glyphs likewise:
+# The colors say one thing each: yours (it waits on you), bad (a change of
+# yours broke), good (done), attention (going, and ids and keys). The glyphs
+# likewise:
 # ✓ done  ◐ going  ○ waiting  ✗ broken  ! yours to do  ● a thing  · nothing.
 # One thought a line, cut with … to the pane (pane_fit), never wrapped
 # mid-word; what matters first, so a short pane loses the tail, not the point.

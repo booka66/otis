@@ -8,16 +8,21 @@ def c(k; dflt): "\u001b[\($ENV["OTIS_T_" + k] // dflt)m";
 def r: "\u001b[0m";
 def attention: c("ATTENTION"; "33");  # look here: keys, ids, something waiting
 def good: c("GOOD"; "32");            # passed, approved, safe to remove
-def bad: c("BAD"; "31");              # failed, deleted, in the way
+def bad: c("BAD"; "31");              # broke: a change of yours that failed
 def elsewhere: c("ELSEWHERE"; "36");  # somewhere other than here: a worktree, a thread
 def yours: c("YOURS"; "35");          # waiting on you: drafts, fixes, unresolved
 def text: c("TEXT"; "39");            # what the row is about
 def context: c("CONTEXT"; "90");      # true, but not why you are looking
 def faint: c("FAINT"; "2");           # structure: rules, separators, empty slots
 def main: c("MAIN"; "34");            # main, and things that are not yours to move
+# What a change took away: lines, a file; context's in a shell older than it.
+def removed: c("REMOVED"; $ENV.OTIS_T_CONTEXT // "90");
 # An MR's number, its last three digits in $tail and the rest faint: those
 # three tell the MRs on a screen apart, and the rest is the same on all of them.
 def iid($tail): tostring | faint + "!" + .[:-3] + r + $tail + .[-3:] + r;
+
+# A count as every screen shows it, a comma every three digits: 1,354.
+def num: tostring | if length > 3 then (.[:-3] | num) + "," + .[-3:] else . end;
 
 # A GraphQL global id's number: "gid://gitlab/Ci::Pipeline/123" -> "123".
 def gid: . // "" | tostring | sub("^gid://gitlab/[A-Za-z:]+/"; "");
@@ -56,6 +61,9 @@ def cut($n): if length > $n then .[0:$n - 1] + "…" else . end;
 def span: if . < 60 then "\(.)s" elif . < 3600 then "\(. / 60 | floor)m"
   elif . < 86400 then "\(. / 3600 | floor)h" else "\(. / 86400 | floor)d" end;
 
+# The color an MR's failed pipeline is in: red for a change of yours on its
+# way out; a draft's, or one you were asked to review, broke nothing of yours.
+def broke($mine): if $mine and (.draft | not) then bad else context end;
 # A pipeline's status as it matters: one failing only on approval gates
 # (otis-config gateJobs) is waiting, not broken, and reads as APPROVAL.
 def effective($gates):

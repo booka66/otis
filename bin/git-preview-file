@@ -45,7 +45,7 @@ summary() {
     LC_ALL=C awk -v w="$PANE_W" -v st="$st" -v from="$from" -v flen="$lines" -v marks="$marks" \
       -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v G="$(printf "$GK_GOOD")" \
       -v X="$(printf "$GK_BAD")" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" -v E="$(printf "$GK_ELSEWHERE")" \
-      -v R="$(printf "$GK_R")" "$PANE_AWK$GK_HUNK_FN"'
+      -v R="$(printf "$GK_R")" "$PANE_AWK${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$GK_HUNK_FN"'
     function len(s) { gsub(/[\200-\277]/, "", s); return length(s) }
     function rep(c, n,   o) { o = ""; while (n-- > 0) o = o c; return o }
     /^\001/ { part = substr($0, 2); next }
@@ -86,7 +86,7 @@ summary() {
       if (binary) { print C "a binary file" R; print ""; exit }
       # A rename that changed nothing has no hunks to count.
       if (!nh) { print C (from != "" ? "the same lines, under a new name" : "no changes to its lines") R; print ""; exit }
-      m = G "+" (ta + 0) R X " \342\210\222" (td + 0) R C "  \302\267  " nh " hunk" (nh == 1 ? "" : "s")
+      m = gk_added(ta + 0) " " gk_removed(td + 0) C "  \302\267  " nh " hunk" (nh == 1 ? "" : "s")
       # The functions it touches are named in the hunk list below, one a line.
       print m R
       if (!nh) { print ""; exit }
@@ -100,7 +100,7 @@ summary() {
         }
         print ""; print C "WHERE IN THE FILE" R; print ""
         line = "  "
-        for (c = 1; c <= mw; c++) line = line (on[c] == "add" ? G "\342\226\210" : on[c] == "del" ? X "\342\226\204" : F "\342\226\201") R
+        for (c = 1; c <= mw; c++) line = line (on[c] == "add" ? G "\342\226\210" : on[c] == "del" ? GK_REMOVED "\342\226\204" : F "\342\226\201") R
         print line
         mid = int((flen + 1) / 2); lab = "1"; midc = int(mw / 2)
         axis = "  1" rep(" ", midc - 1 - length(mid "") / 2) mid; axis = axis rep(" ", mw - length(axis) + 2 - length(flen "")) flen
@@ -115,13 +115,12 @@ summary() {
         lw_ = 0; cw_ = 0
         for (i = 1; i <= nl && i <= 5; i++) {
           if (length(lstart[i]) > lw_) lw_ = length(lstart[i])
-          nc_[i] = (la[i] ? 1 + length(la[i]) : 0) + (la[i] && ld[i]) + (ld[i] ? 1 + length(ld[i]) : 0)
+          cn_[i] = gk_counts(la[i], ld[i]); t_ = cn_[i]; gsub(/\033\[[0-9;]*m/, "", t_); nc_[i] = ulen(t_)
           if (nc_[i] > cw_) cw_ = nc_[i]
         }
         for (i = 1; i <= nl && i <= 5; i++) {
           g = (ls_[i] == "STAGED") ? G "\342\227\217" : F "\342\227\213"
-          nums = (la[i] ? G "+" la[i] R : "") (la[i] && ld[i] ? " " : "") (ld[i] ? X "\342\210\222" ld[i] R : "")
-          print "  " g R "  " C ":" lstart[i] R rep(" ", lw_ - length(lstart[i])) "  " nums (lf[i] != "" ? rep(" ", cw_ - nc_[i]) "  " T lf[i] R : "")
+          print "  " g R "  " C ":" lstart[i] R rep(" ", lw_ - length(lstart[i])) "  " cn_[i] (lf[i] != "" ? rep(" ", cw_ - nc_[i]) "  " T lf[i] R : "")
         }
         if (nl > 5) print F "  + " nl - 5 " more" R
       }
@@ -134,7 +133,7 @@ summary() {
 case $st in
   *D*)
     # As the index has it (a deletion not yet staged), else as HEAD has it.
-    printf "${GK_BAD}deleted${GK_R}\n\n"
+    printf "${GK_REMOVED}deleted${GK_R}\n\n"
     { git show ":$p" 2>/dev/null || git show "HEAD:$p"; } | show --wrap=never --file-name "$p"
     ;;
   '??')
@@ -142,7 +141,7 @@ case $st in
       printf "${GK_ATTENTION}untracked directory${GK_R}\n\n"
       eza --icons --color=always -la --git-ignore -- "$p" 2>/dev/null || ls -la "$p"
     else
-      printf "${GK_BAD}untracked file${GK_R}\n\n"
+      printf "${GK_CONTEXT}untracked file${GK_R}\n\n"
       show --wrap=never -- "$p" < "$p"
     fi
     ;;

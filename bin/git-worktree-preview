@@ -87,7 +87,7 @@ pane_meta "${b:+on $b}" "$state"
 # then the names by the directory they are in, as many as a line holds.
 if [ "$nd" -gt 0 ]; then
   pane_section uncommitted "$nd" yours
-  printf '%s\n' "$dirty" | LC_ALL=C awk -v w="$PANE_W" -v y="$(printf "$GK_ATTENTION")" -v g="$(printf "$GK_GOOD")" -v x="$(printf "$GK_BAD")" \
+  printf '%s\n' "$dirty" | LC_ALL=C awk -v w="$PANE_W" -v y="$(printf "$GK_ATTENTION")" -v g="$(printf "$GK_GOOD")" -v rm="$(printf "$GK_REMOVED")" \
     -v yo="$(printf "$GK_YOURS")" -v c="$(printf "$GK_CONTEXT")" -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
     {
       xy = substr($0, 1, 2); path = substr($0, 4)
@@ -102,7 +102,7 @@ if [ "$nd" -gt 0 ]; then
     END {
       split("M A D U", order, " ")
       label["M"] = "changed"; label["A"] = "new"; label["D"] = "gone"; label["U"] = "in conflict"
-      col["M"] = y; col["A"] = g; col["D"] = x; col["U"] = yo
+      col["M"] = y; col["A"] = g; col["D"] = rm; col["U"] = yo
       top = 0; for (i = 1; i <= 4; i++) if (cnt[order[i]] > top) top = cnt[order[i]]
       bw = w - 22; if (bw > 28) bw = 28
       for (i = 1; i <= 4; i++) { k = order[i]; if (!cnt[k]) continue

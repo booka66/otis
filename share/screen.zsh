@@ -15,7 +15,7 @@ e=$'\e'
 R=$e'[0m' B=$e'[1m' UB=$e'[22m' IT=$e'[3m' UIT=$e'[23m'
 A=$e"[${OTIS_T_ATTENTION}m" G=$e"[${OTIS_T_GOOD}m" X=$e"[${OTIS_T_BAD}m"
 EL=$e"[${OTIS_T_ELSEWHERE}m" Y=$e"[${OTIS_T_YOURS}m" T=$e"[${OTIS_T_TEXT}m"
-C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m"
+C=$e"[${OTIS_T_CONTEXT}m" F=$e"[${OTIS_T_FAINT}m" RM=$e"[${OTIS_T_REMOVED:-$OTIS_T_CONTEXT}m"
 # A shell that loaded its theme before its newest color (type) has none: load it.
 (( ${+OTIS_T_TYPE} )) || eval "$(otis-theme --env)"
 RV=$e"[${OTIS_T_REVIEW}m"
@@ -835,6 +835,25 @@ spin_frame() { REPLY=${spin[$(( int(EPOCHREALTIME * 10) % $#spin + 1 ))]}; }
 spin_foot() { foot+=$A$spun$R" "$T$REPLY$R$C"…"$R; (( $#uq )) && foot+=$C"   then ${(j:, :)uq}"$R; }
 # spun_on: the spinner has a new frame to draw.
 spun_on() { local was=$spun; spinning && [[ $spun != $was ]]; }
+# foot_keys: the footer's keys after what foot holds, for a screen drawn
+# from a key=label list (otis-pick, otis-symbols): each key's label (hv, or
+# rkl's for this row), less enter and those only ? lists (hm), as many as fit
+# in room with used_ columns taken, then ? keys. An action every screen has
+# says its one word there, as on the board: w web, y link.
+foot_keys() {
+  local -A word=('open it in the browser' web 'copy its link' link)
+  local n k v
+  for (( n = 1; n <= $#hk; n++ )); do
+    [[ $hk[n] == enter ]] && continue
+    (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
+    v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
+    [[ -n $v ]] || continue
+    v=${word[$v]:-$v} k="$hk[n] $v"
+    (( used_ + ${(m)#k} + 2 > room )) && break
+    foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
+  done
+  foot+=$A"?"$R$C" keys"$R
+}
 # --- the key log ---------------------------------------------------------------------
 # Every key that does something, a line each, in ~/.cache/otis/keys.tsv
 # (OTIS_KEY_LOG, or off for none), for otis-usage: which keys you use, and

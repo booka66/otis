@@ -220,11 +220,12 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
       | if $fx then .mv = fixes_say($fixes[$fx].fixes) | .mc = yours | .w = ([.w, "\($fixes[$fx].fixes) \(plural($fixes[$fx].fixes; "fix"; "fixes")) ready"] | map(select(. != "")) | join(", ")) else . end
     end;
 
-  def pipeline_cell:
+  def pipeline_cell($mine):
+    broke($mine) as $broke | .headPipeline |
     (. | effective($gates)) as $e |
     if . == null or $e == null then off else
       {vk: "pipeline", extra: "", does: "see its jobs", m: "", fix: ""} +
-      (if $e == "FAILED" then {g: "✗", c: bad, rank: 5, st: "you", w: "pipeline broke"}
+      (if $e == "FAILED" then {g: "✗", c: $broke, rank: 5, st: "you", w: "pipeline broke"}
        elif $e == "RUNNING" then {g: "◐", c: attention, rank: 20, st: "moving", w: "pipeline running"}
        elif ($e | IN("PENDING", "CREATED")) then {g: "○", c: attention, rank: 20, st: "moving", w: "pipeline queued"}
        elif $e == "SUCCESS" then {g: "✓", c: good, rank: 99, st: "ok", w: "pipeline passed"}
@@ -312,7 +313,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   def mr_row($mrkind):
     (.diffRefs.headSha // "") as $head |
     (.headPipeline | effective($gates)) as $pipe |
-    ([local_cell(.sourceBranch), verify_cell(.iid; .sourceBranch; $head), (.headPipeline | pipeline_cell),
+    ([local_cell(.sourceBranch), verify_cell(.iid; .sourceBranch; $head), pipeline_cell($mrkind == "mine"),
       (if $mrkind == "review" then review_asked else beside(review_mine; thread_cell(.sourceBranch)) end), ship_cell($pipe; $mrkind == "mine")]
       | map(. + {kind: $mrkind})) as $lights |
     ($lights[1].st == "moving") as $verifying |
@@ -490,7 +491,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     ([local_cell($b.name), verify_cell(""; $b.name; ""), none, none, none] | map(. + {kind: "run"})) as $cells |
     blank + {lane: $fold, fold: $fold, key: "c-b-\($b.name)", type: "change", title: $b.name,
              mark: ($b.name == $current), source: $b.name, mrkind: "run", cells: $cells, tone: context,
-             move: (if $b.kind == "local" then (if $b.ahead > 0 then "\($b.ahead) not pushed" else "empty" end)
+             move: (if $b.kind == "local" then (if $b.ahead > 0 then "\($b.ahead) not pushed" else "not pushed" end)
                     elif $b.kind == "pushed" then "no MR yet"
                     elif $b.kind == "merged-diff" then "new since merge" else "new since close" end)};
   ($open | map(select(.lane == null))) as $quiet |

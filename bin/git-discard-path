@@ -14,8 +14,8 @@ from=$3
 
 
 case $st in
-  '??') printf "${GK_BAD}delete${GK_R} untracked %s\n" "$p" ;;
-  A?|?A) printf "${GK_BAD}delete${GK_R} new file %s, and any edits to it\n" "$p" ;;
+  '??') printf "${GK_ATTENTION}delete${GK_R} untracked %s\n" "$p" ;;
+  A?|?A) printf "${GK_ATTENTION}delete${GK_R} new file %s, and any edits to it\n" "$p" ;;
   R?)   printf "${GK_ATTENTION}undo${GK_R} the rename of %s to %s, losing every change to it\n" "$from" "$p" ;;
   *)    printf "${GK_ATTENTION}revert${GK_R} %s to HEAD, losing every change to it\n" "$p" ;;
 esac

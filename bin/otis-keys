@@ -5,8 +5,8 @@
 # leaves out. A key not named keeps the label the picker declared.
 #
 # The footer is the one place that says what a key does, so it says it for
-# the row you are on: on a branch, w needs an MR, and y copies the branch
-# name without one; on a file, space stages or unstages by how it stands.
+# the row you are on: on a branch, w needs an MR; on a file, space stages
+# or unstages by how it stands.
 # Only what the row and the picker's state already hold is read: this runs
 # on every move, behind the picker.
 st=$GIT_FZF_STATE
@@ -25,8 +25,7 @@ case $picker in
       main) none d C n ;;
       merged|merged-diff|closed|closed-diff) [ "$place" = here ] || k d "delete it: it is $kind" ;;
     esac
-    if [ -n "$mr" ]; then none n; k w "open !$mr"; k y "copy !$mr's link"
-    else none w l a; k y "copy the branch name"; fi ;;
+    if [ -n "$mr" ]; then none n; else none w l a; fi ;;
 
   # ga's file panel: path, status (XY, . for blank).
   file)

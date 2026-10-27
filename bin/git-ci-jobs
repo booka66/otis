@@ -105,7 +105,7 @@ fi
 
 id=$1 iid=$2
 [ -n "$id" ] || exit 0
-git-fzf "${iid:+!$iid }jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job,ctrl-x=cancel pipeline,w=web,y=copy job link,u=refresh' --ansi \
+git-fzf "${iid:+!$iid }jobs " 'enter=full log,r=retry job,P=play manual job,X=cancel job,ctrl-x=cancel pipeline,w=open it in the browser,y=copy its link,u=refresh' --ansi \
   --delimiter="$(printf '\t')" --with-nth=1 --track --id-nth=2 \
   --bind "every(5):transform(git-ci-jobs --tick preview $id {3})" \
   --bind "every(15):transform(git-ci-jobs --tick list $id)" \

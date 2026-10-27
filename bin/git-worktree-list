@@ -111,8 +111,8 @@ awk -F'\t' -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}
       # The heading is a row with no path, so enter and d on it do nothing.
       if (own[i] && !headed) { headed = 1; printf "%s── dedicated %s%s\t\t\t\t\t\t\t\n", GK_FAINT, gk_rep("─", 44), GK_R }
       k = (b == "") ? "detached" : kind[b]
-      lbl = (b == "") ? GK_CONTEXT "detached" GK_R : label[b]
-      if (op[p] == "missing") lbl = GK_BAD "missing " GK_R
+      lbl = (b == "") ? GK_CONTEXT gk_padr("detached", 10) GK_R : label[b]
+      if (op[p] == "missing") lbl = GK_BAD gk_padr("missing", 10) GK_R
 
       mark = (p == here) ? GK_ELSEWHERE "▶ " GK_R : "  "
       role = (p == main) ? "main checkout" : (p == review) ? "otis: MRs you review" : (p == mine) ? "otis: your MRs" \

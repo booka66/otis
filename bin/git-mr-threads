@@ -243,7 +243,7 @@ case $mode in
     ;;
   *)
     list="git-mr-threads --list $iid $range"
-    git-fzf "!$iid threads " 'c=reply,e=edit yours,d=delete yours,r=resolve or unresolve,|,enter=open in nvim,w=web,u=refresh' \
+    git-fzf "!$iid threads " 'c=reply,e=edit yours,d=delete yours,r=resolve or unresolve,|,enter=open in nvim,w=open it in the browser,u=refresh' \
       --ansi --delimiter='\t' --with-nth=1 --track --id-nth=2 \
       --bind "start:reload($list)" \
       --keys-from 'otis-keys threads {3} {4}' \

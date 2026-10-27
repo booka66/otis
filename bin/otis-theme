@@ -14,7 +14,8 @@
 # what delta, bat and glow need to match, and its ground, which the music's
 # rows fade toward (share/music.awk; the terminal themes have none). A symbol's name
 # in the review's list is in the color of what it is, a function, a value or
-# a type: main's, elsewhere's and attention's in a theme that names none.
+# a type: main's, elsewhere's and attention's in a theme that names none;
+# what a change removed, its context color in a theme that names no removed.
 # What a changed line changed is on plus_word and minus_word, else on halfway from the
 # theme's good and bad to its diff grounds, so a sentence rewritten in a long
 # line stands out from the rest of it. The theme is
@@ -30,7 +31,7 @@
 # strings rather than starting anything.
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir=$root/share/themes
-keys='attention good bad elsewhere yours text context faint main review function value type codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
+keys='attention good bad elsewhere yours text context faint main review removed function value type codebg errbg delta_syntax bat file rule minus plus minus_emph plus_emph plus_word minus_word light glow ground'
 
 case $1 in
   --env | --env-fish)
@@ -64,6 +65,7 @@ case $1 in
         if (syntax != "") v["delta_syntax"] = syntax
         if (v["minus"] != "" && v["plus_word"] == "") v["plus_word"] = half(v["good"], v["plus"])
         if (v["minus"] != "" && v["minus_word"] == "") v["minus_word"] = half(v["bad"], v["minus"])
+        if (v["removed"] == "") v["removed"] = v["context"]
         if (v["function"] == "") v["function"] = v["main"]
         if (v["value"] == "") v["value"] = v["elsewhere"]
         if (v["type"] == "") v["type"] = v["attention"]

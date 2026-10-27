@@ -14,7 +14,7 @@ if [ -z "$OTIS_T_NAME" ] || [ "$OTIS_THEME" != "$OTIS_T_WANT" ]; then
 fi
 GK_ATTENTION="\033[${OTIS_T_ATTENTION}m"  # look here: keys, ids, something waiting
 GK_GOOD="\033[${OTIS_T_GOOD}m"            # passed, approved, safe to remove
-GK_BAD="\033[${OTIS_T_BAD}m"              # failed, deleted, in the way
+GK_BAD="\033[${OTIS_T_BAD}m"              # broke: a change of yours that failed
 GK_ELSEWHERE="\033[${OTIS_T_ELSEWHERE}m"  # somewhere other than here: a worktree, a thread
 GK_YOURS="\033[${OTIS_T_YOURS}m"          # waiting on you: drafts, fixes, unresolved
 GK_TEXT="\033[${OTIS_T_TEXT}m"            # what the row is about
@@ -22,4 +22,6 @@ GK_CONTEXT="\033[${OTIS_T_CONTEXT}m"      # true, but not why you are looking
 GK_FAINT="\033[${OTIS_T_FAINT}m"          # structure: rules, separators, empty slots
 GK_MAIN="\033[${OTIS_T_MAIN}m"            # main, and things that are not yours to move
 GK_REVIEW="\033[${OTIS_T_REVIEW}m"        # yours, with its reviewers
+# what a change took away: lines, a file; context's in a shell older than it
+GK_REMOVED="\033[${OTIS_T_REMOVED:-$OTIS_T_CONTEXT}m"
 GK_R='\033[0m'

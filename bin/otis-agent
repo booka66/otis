@@ -32,7 +32,7 @@ mkdir $st/pv
 trace=${OTIS_AGENT_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/agent.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 . ${0:A:h:h}/share/screen.zsh
-keys_open run 'x=stop it,r=run it again,y=copy it for Claude,o=the tester in Cursor,a=artifacts,w=the report in the browser,p=link the report from the MR,?=keys'
+keys_open run 'x=stop it,r=run it again,y=copy it for Claude,o=the tester in Cursor,a=artifacts,w=open it in the browser,p=link the report from the MR,?=these keys'
 screen_start
 integer code=0
 at_quit() { exit $code; }
@@ -464,7 +464,7 @@ draw() {
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
     for k v in j/k "move" g/G "top; bottom, and follow the newest" x "stop it" r "run it again" y "copy it for Claude" \
-      o "the tester in Cursor" a "artifacts" w "the report in the browser" p "link the report from the MR" "?" "this, and back" q "back"; do
+      o "the tester in Cursor" a "artifacts" w "open it in the browser" p "link the report from the MR" "?" "these keys" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
     panewrap $(( W - 3 ))
@@ -488,7 +488,7 @@ draw() {
   else
     foot+=$A"x"$R$C" stop  "$A"r"$R$C" again  "
     [[ -s $d/agent-url ]] && foot+=$A"o"$R$C" Cursor  "$A"a"$R$C" artifacts  "$R
-    [[ -s $d/verdict.json ]] && foot+=$A"w"$R$C" report  "$R
+    [[ -s $d/verdict.json ]] && foot+=$A"w"$R$C" web  "$R
     foot+=$A"?"$R$C" keys"$R
   fi
   fr+=("$foot")
@@ -587,7 +587,7 @@ handle() {
     y) act "copy it for Claude" --copy $d ;;
     o) [[ -s $d/agent-url ]] && act "the tester in Cursor" --open "$(<$d/agent-url)" ;;
     a) act "artifacts" --artifacts $d ;;
-    w) act "the report" --html $d ;;
+    w) act "open it in the browser" --html $d ;;
     p) act "link the report from the MR" --attach $d ;;
     '?') help=$(( !help )) poff=0 ;;
     # With ? up, q and esc close it rather than the screen.

@@ -60,8 +60,11 @@ expect rowfmt/dir "$(awk_fn 'gk_dir("a/b/c")')" "a/b/"
 expect rowfmt/dir-bare "$(awk_fn 'gk_dir("c")')" ""
 expect rowfmt/bar-empty "$(awk_fn 'gk_bar(0, 0)')" "..."
 expect rowfmt/bar-all-add "$(awk_fn 'gk_bar(10, 0)')" "███"
-expect rowfmt/bar-keeps-a-block "$(awk "$(cat "$share/rowfmt.awk")"'BEGIN { print gk_bar(300, 1) }' </dev/null | grep -c '251;73;52')" "1"
-expect rowfmt/stat "$(awk_fn 'gk_stat(4, 12, 2, 2)')" "+ 4 -12"
+expect rowfmt/bar-keeps-a-block "$(awk "$(cat "$share/rowfmt.awk")"'BEGIN { print gk_bar(300, 1) }' </dev/null | grep -c '146;131;116m█')" "1"
+expect rowfmt/stat "$(awk_fn 'gk_stat(4, 12, 2, 2)')" " +4 −12"
+expect rowfmt/stat-thousands "$(awk_fn 'gk_stat(1354, 514, 5, 3)')" "+1,354 −514"
+# A deletion is no break: dim, never red.
+expect rowfmt/removed-is-dim "$(awk "$(cat "$share/rowfmt.awk")"'BEGIN { print gk_counts(0, 3) }' </dev/null | grep -c '146;131;116m−3')" "1"
 expect rowfmt/stat-blank "$(awk_fn 'gk_stat("", "", 2, 2)')" "       "
 expect rowfmt/numstat-rename "$(awk_fn 'gk_numstat_path("dir/{old => new}.ts")')" "dir/new.ts"
 expect rowfmt/numstat-plain "$(awk_fn 'gk_numstat_path("old.ts => new.ts")')" "new.ts"
@@ -1502,7 +1505,7 @@ expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or 
 # the row it opens on, so the footer has no enter, only the keys that act on
 # a branch with no MR (no w, with no MR to open) and the one that lists the
 # rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  c commits  y link  F files  ? all')" "0:1"
+expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  c commits  y link  F files  ? keys')" "0:1"
 # ? is every key there is, from the one table, on one screen in two
 # columns, and the footer says how to leave it.
 expect otis/help "$(printf '%s\n' "$dash" | grep -c 'MOVING *ON A CHANGE'):$(printf '%s\n' "$dash" | grep -c 'down and up *V *verify it in Cursor Cloud'):$(printf '%s\n' "$dash" | grep -c 'ON A MERGE REQUEST'):$(printf '%s\n' "$dash" | grep -c '? or q back to the board')" "1:1:1:1"
@@ -1793,6 +1796,9 @@ expect theme/default "$(env -u OTIS_THEME otis-theme --env | grep ATTENTION)" "e
 expect theme/switch-clears "$( (eval "$(otis-theme --env gruvbox)"; eval "$(otis-theme --env terminal)"; printf '%s' "$OTIS_T_MINUS") )" ""
 expect theme/awk-without "$(env -u OTIS_T_ATTENTION awk "$(cat "$share/rowfmt.awk")"'BEGIN { printf "%s", GK_ATTENTION }' </dev/null | cat -v)" "^[[33m"
 expect theme/jq-without "$(env -u OTIS_T_ATTENTION jq -nj -L "$share" 'include "otis"; attention' | cat -v)" "^[[33m"
+# A shell that loaded its theme before removed had a color of its own
+# draws removed lines in context's.
+expect theme/removed-falls-back "$(env -u OTIS_T_REMOVED awk "$(cat "$share/rowfmt.awk")"'BEGIN { printf "%s", GK_REMOVED }' </dev/null | cat -v):$(env -u OTIS_T_REMOVED jq -nj -L "$share" 'include "otis"; removed' | cat -v)" "^[[38;2;146;131;116m:^[[38;2;146;131;116m"
 
 # --- git-worktree-sweep: merged branches' worktrees go on their own
 cache=$(git rev-parse --git-common-dir)/branch-mrs.tsv

@@ -42,7 +42,7 @@ _g_cd() {
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link (no MR: the branch name),t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open it in the browser,y=copy its link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \

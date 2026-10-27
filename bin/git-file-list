@@ -121,9 +121,12 @@ awk -F'\t' -v cols="$cols" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
       x = substr($1,1,1); y = substr($1,2,1); p = $2
       staged   = (x != " " && x != "?")
       unstaged = (y != " ")
-      name = staged ? (unstaged ? GK_ATTENTION : GK_GOOD) : GK_BAD
+      # Waiting to be staged is yours, as the board says it; untracked is
+      # only so, nothing broken, and dim.
+      left = (y == "?") ? GK_CONTEXT : GK_YOURS
+      name = staged ? (unstaged ? GK_ATTENTION : GK_GOOD) : left
       sx = staged   ? GK_GOOD x GK_R : GK_FAINT "." GK_R
-      sy = unstaged ? (staged ? GK_ATTENTION y GK_R : GK_BAD y GK_R) : GK_FAINT "." GK_R
+      sy = unstaged ? (staged ? GK_ATTENTION : left) y GK_R : GK_FAINT "." GK_R
       rx = (x == " ") ? "." : x
       ry = (y == " ") ? "." : y
       from = ($3 == "") ? "" : GK_CONTEXT "  from " $3 GK_R

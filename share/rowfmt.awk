@@ -21,13 +21,15 @@ BEGIN {
   # without one, the terminal's own colors, which is the default theme.
   GK_ATTENTION = gk_sgr("ATTENTION", "33")   # look here: keys, ids, something waiting
   GK_GOOD      = gk_sgr("GOOD", "32")        # passed, approved, safe to remove
-  GK_BAD       = gk_sgr("BAD", "31")         # failed, deleted, in the way
+  GK_BAD       = gk_sgr("BAD", "31")         # broke: a change of yours that failed
   GK_ELSEWHERE = gk_sgr("ELSEWHERE", "36")   # somewhere other than here: a worktree, a thread
   GK_YOURS     = gk_sgr("YOURS", "35")       # waiting on you: drafts, fixes, unresolved
   GK_TEXT      = gk_sgr("TEXT", "39")        # what the row is about
   GK_CONTEXT   = gk_sgr("CONTEXT", "90")     # true, but not why you are looking
   GK_FAINT     = gk_sgr("FAINT", "2")        # structure: rules, separators, empty slots
   GK_MAIN      = gk_sgr("MAIN", "34")        # main, and things that are not yours to move
+  # what a change took away: lines, a file; context's in a shell older than it
+  GK_REMOVED   = gk_sgr("REMOVED", ("OTIS_T_CONTEXT" in ENVIRON) ? ENVIRON["OTIS_T_CONTEXT"] : "90")
   GK_FUNCTION  = gk_sgr("FUNCTION", "34")    # a symbol's name: a function
   GK_VALUE     = gk_sgr("VALUE", "36")       # a symbol's name: a value
   GK_TYPE      = gk_sgr("TYPE", "33")        # a symbol's name: a type
@@ -85,20 +87,35 @@ function gk_path(p, budget, namecol,   d) {
   return GK_CONTEXT d GK_R namecol substr(p, length(d) + 1) GK_R
 }
 
-# The digits a count needs, for sizing a column to the widest one in the list.
-function gk_digits(n) { n = n + 0; if (n <= 0) return 0; return length(n "") }
+# A count as every screen shows it, a comma every three digits: 1,354.
+function gk_num(n,   s, out) {
+  s = int(n) ""; out = ""
+  while (length(s) > 3) { out = "," substr(s, length(s) - 2) out; s = substr(s, 1, length(s) - 3) }
+  return s out
+}
+# The columns a count takes as shown, for sizing a column to the widest one
+# in the list.
+function gk_digits(n) { n = n + 0; if (n <= 0) return 0; return length(gk_num(n)) }
+# Lines added and removed, signed. Removing lines breaks nothing, and red
+# says only that something did, so the minus is in removed's color; it is
+# the real minus, a column wide like the plus.
+function gk_added(n) { return GK_GOOD "+" gk_num(n) GK_R }
+function gk_removed(n) { return GK_REMOVED "\342\210\222" gk_num(n) GK_R }
+# A file's: "+12 −4", a side with nothing left out.
+function gk_counts(add, del) {
+  return (add + 0 > 0 ? gk_added(add) : "") (add + 0 > 0 && del + 0 > 0 ? " " : "") (del + 0 > 0 ? gk_removed(del) : "")
+}
 
-# How big a change is, in wa+wd+3 columns: "+42  -8", blank where there is
-# nothing to say (an untracked file, a binary one). The widths are the widest
-# counts in the list, measured before anything is printed, so the column is
-# never ragged and never wider than it has to be: guessing three digits was
-# enough until a file lost 123 lines and pushed every column after it along.
-function gk_stat(add, del, wa, wd,   a, d) {
+# How big a change is, in wa+wd+3 columns: "+42  −8", each side right
+# in a column as wide as the widest count in the list (gk_digits), measured
+# before anything is printed, so the column is never ragged and never wider
+# than it has to be; blank where there is nothing to say (an untracked file,
+# a binary one).
+function gk_stat(add, del, wa, wd) {
   if (wa + 0 < 1) wa = 1
   if (wd + 0 < 1) wd = 1
-  a = (add != "" && add + 0 > 0) ? GK_GOOD "+" gk_padl(add, wa) GK_R : gk_rep(" ", wa + 1)
-  d = (del != "" && del + 0 > 0) ? GK_BAD "-" gk_padl(del, wd) GK_R : gk_rep(" ", wd + 1)
-  return a " " d
+  return (add != "" && add + 0 > 0 ? gk_rep(" ", wa - gk_digits(add)) gk_added(add) : gk_rep(" ", wa + 1)) " " \
+         (del != "" && del + 0 > 0 ? gk_rep(" ", wd - gk_digits(del)) gk_removed(del) : gk_rep(" ", wd + 1))
 }
 
 # Three blocks: how much of a change adds and how much it removes. Three, not
@@ -114,7 +131,7 @@ function gk_bar(add, del,   t, g, b) {
   if (add > 0 && g < 1) g = 1
   if (del > 0 && b < 1) b = 1
   while (g + b > 3) { if (g >= b) g--; else b-- }
-  return GK_GOOD gk_rep("\342\226\210", g) GK_BAD gk_rep("\342\226\210", b) \
+  return GK_GOOD gk_rep("\342\226\210", g) GK_REMOVED gk_rep("\342\226\210", b) \
          GK_FAINT gk_rep("\342\226\210", 3 - g - b) GK_R
 }
 

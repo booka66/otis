@@ -104,7 +104,7 @@ light() {
        (($mr.iid | iid(attention))
          + (if $mr.draft then dot + yours + "draft" + r else "" end)
          + (if ($m | not) and $mr.author then dot + context + $mr.author.username + r else "" end)
-         + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions)" + r + " " + bad + "−\(.deletions)" + r
+         + ($mr.diffStatsSummary | if . then dot + good + "+\(.additions | num)" + r + " " + removed + "−\(.deletions | num)" + r
               + dot + context + "\(.fileCount) \(plural(.fileCount; "file"; "files"))" + r else "" end)
          + (if $mr.targetBranch != $main then
               (($mine[0].data.currentUser.authoredMergeRequests.nodes // []) + ($asked[0].data.currentUser.reviewRequestedMergeRequests.nodes // [])
@@ -127,7 +127,8 @@ light() {
 
      def pipeline_part: (
        ($mr.headPipeline | if . then effective($gates) else null end) as $eff |
-       (if $eff == "SUCCESS" then good + "Passed" elif $eff == "FAILED" then bad + "Failed"
+       ($mr | broke($m != null)) as $broke |
+       (if $eff == "SUCCESS" then good + "Passed" elif $eff == "FAILED" then $broke + "Failed"
         elif $eff == "RUNNING" then attention + "Running" elif $eff == "APPROVAL" then elsewhere + "Waiting on approval gates"
         elif $eff == null then context + "No pipeline yet" else context + ($eff | ascii_downcase) end) as $state |
        $state + r
@@ -136,9 +137,9 @@ light() {
          + (if $mr.headPipeline.createdAt then dot + context + "started \($mr.headPipeline.createdAt | ago) ago" + r else "" end),
        # How far it has got, while it is going.
        (if ($jobs | length) > 0 and ($eff | IN("RUNNING", "PENDING", "CREATED")) then
-          bar([$w, 40] | min; ($jobs | length); [[$done, good], [($failed | length), bad], [($running | length), attention]]) else empty end),
+          bar([$w, 40] | min; ($jobs | length); [[$done, good], [($failed | length), $broke], [($running | length), attention]]) else empty end),
        (if ($failed | length) + ($running | length) > 0 then "" else empty end),
-       joblines($failed; bad; "✗"), joblines($running; attention; "◐")
+       joblines($failed; $broke; "✗"), joblines($running; attention; "◐")
      );
      def review_part: (
        (($mr.resolvableDiscussionsCount // 0) - ($mr.resolvedDiscussionsCount // 0)) as $th |
@@ -300,7 +301,7 @@ EOF
     [ -n "$iid" ] && printf "${GK_FAINT}!%s${GK_R}${GK_ATTENTION}%s${GK_R}${GK_CONTEXT}  its merge request${GK_R}\n\n" "${iid%???}" "${iid#"${iid%???}"}"
     if [ -n "$status" ]; then
       heading "uncommitted"
-      printf '%s\n' "$status" | awk -v g="$GK_GOOD" -v y="$GK_YOURS" -v x="$GK_BAD" -v c="$GK_CONTEXT" -v t="$GK_TEXT" -v R="$GK_R" '
+      printf '%s\n' "$status" | awk -v g="$GK_GOOD" -v y="$GK_YOURS" -v c="$GK_CONTEXT" -v t="$GK_TEXT" -v R="$GK_R" '
         { s = substr($0, 1, 2); p = substr($0, 4)
           if (s == "??") { u[++nu] = "? " p; next }
           if (substr(s, 1, 1) != " ") st[++ns] = substr(s, 1, 1) " " p
@@ -311,7 +312,7 @@ EOF
           for (i = 1; i <= n && i <= 15; i++) printf "    %s%s%s %s%s%s\n", col, substr(a[i], 1, 1), R, t, substr(a[i], 3), R
           if (n > 15) printf "    %s%d more%s\n", c, n - 15, R
         }
-        END { show("staged", st, ns, g); show("not staged", wt, nw, y); show("untracked", u, nu, x) }'
+        END { show("staged", st, ns, g); show("not staged", wt, nw, y); show("untracked", u, nu, c) }'
       printf '\n'
     fi
     # What it carries, as a branch's preview lists commits (pane_commits).

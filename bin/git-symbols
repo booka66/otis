@@ -1482,7 +1482,7 @@ if [ "$mode" = --rows ]; then
     {
       if [ -z "$head" ]; then
         printf "${GK_CONTEXT}two cells first, staged then unstaged${GK_R}\n"
-        printf "  ${GK_GOOD}M${GK_R}. staged   .${GK_BAD}M${GK_R} unstaged   ${GK_GOOD}M${GK_R}${GK_ATTENTION}M${GK_R} both, edited since staging   ${GK_GOOD}A${GK_R} added   ${GK_GOOD}D${GK_R} removed   ${GK_FAINT}.${GK_R} nothing   space stages the symbol, or unstages it\n\n"
+        printf "  ${GK_GOOD}M${GK_R}. staged   .${GK_YOURS}M${GK_R} unstaged   ${GK_GOOD}M${GK_R}${GK_ATTENTION}M${GK_R} both, edited since staging   ${GK_GOOD}A${GK_R} added   ${GK_GOOD}D${GK_R} removed   ${GK_FAINT}.${GK_R} nothing   space stages the symbol, or unstages it\n\n"
       fi
       if [ -n "$GMR_IID" ]; then
         printf "${GK_CONTEXT}threads on its lines${GK_R}\n"
@@ -1495,7 +1495,7 @@ if [ "$mode" = --rows ]; then
         printf "  read them top to bottom: the first is the main path, each after it builds on those before   ${GK_CONTEXT}on no route${GK_R} changed lines no case runs, read as a plain diff   l its symbols, v marks all of it viewed, tab the next tab, shift-tab the one before\n\n"
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
-      printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
+      printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+9${GK_R} ${GK_REMOVED}\342\210\2223${GK_R} lines it gained and lost   dim signature: removed\n"
       printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: nothing under it that is not drawn above already, so L leaves it closed; l opens it\n"
       printf "  ${GK_CONTEXT}\342\206\221${GK_R} a symbol drawn whole above: it shows once, where it first comes; its preview is its own, and l or enter goes to it\n"
       printf "  ${GK_GOOD}\342\234\223${GK_R} viewed, and the row dim: v marks a row and everything under it, and a symbol viewed under one row is viewed under every other; a mark lasts until the symbol's diff changes   ${GK_CONTEXT}3/5${GK_R} closed, three of the five symbols in it viewed\n"
@@ -1633,7 +1633,7 @@ if [ "$mode" = --rows ]; then
     # ga'"'"'s two status cells: staged, then unstaged, "." for nothing.
     function cells(ch, st, un,   x) {
       x = (ch == "added") ? "A" : (ch == "removed") ? "D" : "M"
-      return (st ? GK_GOOD x GK_R : GK_FAINT "." GK_R) (un ? (st ? GK_ATTENTION : GK_BAD) x GK_R : GK_FAINT "." GK_R) " "
+      return (st ? GK_GOOD x GK_R : GK_FAINT "." GK_R) (un ? (st ? GK_ATTENTION : GK_YOURS) x GK_R : GK_FAINT "." GK_R) " "
     }
     function base(p,   k, a) { k = split(p, a, "/"); return a[k] }
     BEGIN {
@@ -1803,7 +1803,7 @@ if [ "$mode" = --rows ]; then
           if (!i || ((n, i) in had)) continue
           had[n, i] = 1; placed[i] = 1; under[n, ++cnt] = i
           vt++; if (vkey(i) in vd) vdn++
-          c = (row[i, 6] == "added") ? GK_GOOD : (row[i, 6] == "removed") ? GK_BAD : GK_ATTENTION
+          c = (row[i, 6] == "added") ? GK_GOOD : (row[i, 6] == "removed") ? GK_REMOVED : GK_ATTENTION
           pips = pips c ((vkey(i) in vd) ? "\342\226\240" : "\342\226\241") GK_R
           if (mr && row[i, 2] == "file") { for (k = 1; k <= nmarks; k++) if (mp[k] == row[i, 1] && !(k in claimed)) hit[k] = 1 }
           else if (mr) hits(i)
@@ -1842,7 +1842,7 @@ if [ "$mode" = --rows ]; then
           if (!(rid in open)) continue
         } else {
         meta = ind (stests[n] ? GK_CONTEXT stests[n] (stests[n] == 1 ? " test" : " tests") " \302\267 " GK_R : "") \
-          (sadd[n] ? GK_GOOD "+" sadd[n] GK_R : "") (sadd[n] && sdel[n] ? " " : "") (sdel[n] ? GK_BAD "-" sdel[n] GK_R : "") \
+          gk_counts(sadd[n], sdel[n]) \
           (!cnt ? GK_FAINT "nothing in the change is under this" GK_R : dim ? "  " GK_GOOD "\342\234\223 viewed" GK_R : vdn ? "  " GK_CONTEXT vdn " of " vt " viewed" GK_R : "") \
           (to ? "  " GK_ELSEWHERE "\357\201\265 " to GK_R : "") (td ? "  " GK_YOURS "\342\234\216 " td GK_R : "")
         more(meta, "m", "")
