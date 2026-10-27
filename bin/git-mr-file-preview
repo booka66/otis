@@ -133,9 +133,10 @@ EOF
   working=$(git-mr-claude --footer "$iid" "$range"; git-mr-fix --footer "$iid")
   [ -n "$working" ] && note="$note · $working"
   [ "$mode" = --note ] && { printf '%s\n' "$note"; exit 0; }
-  footer=
-  read -r footer < "$GIT_FZF_STATE/footer" 2>/dev/null
-  printf '%s\n' "${footer:+$footer · }$note" > "$GIT_FZF_STATE/footer"
+  # Where git-test-files left it: the screen's place for this list (OTIS_SAID), else the picker's.
+  footer= said=${OTIS_SAID:-$GIT_FZF_STATE}
+  read -r footer < "$said/footer" 2>/dev/null
+  printf '%s\n' "${footer:+$footer · }$note" > "$said/footer"
   exit 0
 fi
 

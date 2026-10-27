@@ -34,7 +34,8 @@
 #
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 # tab [back]: the cases, then the symbols, then the files, then the cases again; back, the other way. A flag
-# each for the two after the cases (by-symbol, by-file), which the lists and previews read.
+# each for the two after the cases (by-symbol, by-file), which the lists read, and otis-symbols for which view a
+# list is (viewnow).
 if [ "$1" = --toggle ]; then
   on=cases; [ -e "$st/by-symbol" ] && on=symbols; [ -e "$st/by-file" ] && on=files
   case $on:$2 in cases:) to=symbols ;; symbols:) to=files ;; files:) to=cases ;; cases:back) to=files ;; files:back) to=symbols ;; symbols:back) to=cases ;; esac
@@ -45,7 +46,7 @@ fi
 if [ "$1" = --list ]; then
   iid=$2 range=$3
   if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then
-    git-mr-file-preview --files "$iid" "$range" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; print }'
+    git-mr-file-preview --files "$iid" "$range" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; if ($2 != "") $13 = "plain"; print }'
     exit 0
   fi
   # By symbol: the open threads and drafts on each symbol'"'"'s lines, then the
@@ -65,7 +66,7 @@ if [ "$1" = --list ]; then
   note=$(cat "$st/mr-note")
   footer=$(cat "$st/footer.$$" 2>/dev/null); rm -f "$st/footer.$$"
   [ -n "$note" ] && footer=${footer:+$footer · }$note
-  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "$st/footer"
+  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "${OTIS_SAID:-$st}/footer"
   exit 0
 fi
 # --viewed <add|toggle> <iid> <range> <path> <row id>: enter's mark and v,
@@ -88,15 +89,16 @@ if [ "$1" = --light ]; then
   note=$(cat "$st/mr-note" 2>/dev/null)
   footer=$(cat "$st/footer.$$" 2>/dev/null); rm -f "$st/footer.$$"
   [ -n "$note" ] && footer=${footer:+$footer · }$note
-  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "$st/footer"
+  printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "${OTIS_SAID:-$st}/footer"
   exit 0
 fi
 if [ "$1" = --preview ]; then
-  iid=$2 range=$3 path=$4 side=$5 s=$6 e=$7 rid=$8
-  # A file row of the by-file list is the file's whole diff. In the symbol
-  # view git-symbols cuts it to what no symbol claims, and a file it read no
-  # symbols from comes back whole from there too.
-  if [ -z "$s" ] && { [ -e "$st/by-file" ] || [ -e "$st/since" ]; }; then exec git-mr-file-preview "$iid" "$range" "$path"; fi
+  iid=$2 range=$3 path=$4 side=$5 s=$6 e=$7 rid=$8 kind=$9
+  # A file row of the by-file list (plain) is the file's whole diff. In the
+  # symbol view git-symbols cuts it to what no symbol claims, and a file it
+  # read no symbols from comes back whole from there too.
+  # A review opened before rows had a kind passes none, and says by file in the state.
+  if [ "$kind" = plain ] || { [ -z "$kind" ] && [ -z "$s" ] && [ -e "$st/by-file" ]; }; then exec git-mr-file-preview "$iid" "$range" "$path"; fi
   # The threads go under their lines there, so the preview is kept with them.
   GIT_SYMBOLS_MR=$iid exec git-symbols --preview "$range" "$path" "$side" "$s" "$e" "$rid"
 fi
@@ -165,7 +167,7 @@ out=$(otis-symbols "!$iid " "$keys" --header-from-state \
   --bind "r:execute-silent(git-symbols --again $range)+reload($list)" \
   --bind "w:transform(otis-open --fzf '$url')" \
   "$@" \
-  --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12}" </dev/null)
+  --preview "git-mr-files --preview $iid $range {2} {4} {5} {6} {12} {13}" </dev/null)
 # u found a push: the same review, at the MR's new head and base. print()
 # comes out ahead of the row accept prints.
 case $(printf '%s\n' "$out" | head -1) in

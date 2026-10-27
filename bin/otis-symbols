@@ -165,10 +165,31 @@ load() {
   # What / searches is worked out on the first search, not on every load:
   # it was a third of what a reload of a big change cost.
   hayok=0
-  [[ -s $st/layout ]] && read -r wa wd wt mr < $st/layout
+  # What this list said beside its rows, in a directory of its own
+  # (OTIS_SAID, reload): its widths, how much is viewed, Claude's sentence
+  # and its footer. A list that says none of one says nothing of it.
+  local d=$1.d
+  [[ -s $d/layout ]] && read -r wa wd wt mr < $d/layout
+  hdone=0 hall=0 hhead= hfoot=
+  [[ -s $d/progress ]] && read -r hdone hall < $d/progress
+  (( hdr )) && [[ -s $d/header ]] && hhead=$(<$d/header)
+  [[ -s $d/footer ]] && hfoot=$(<$d/footer)
   guides
   loaded=1 dirty=1 rlw=0
 }
+# The views: a change read by case (a review's first), by symbol or by file.
+# Which one a list is, is the state's (git-mr-files --toggle, git-symbols
+# --files), read as the list is asked for (viewnow, kept in rview by the
+# reload's number) and taken up with its rows (view). Each view keeps its
+# last list (view.<name>), which lands again at once on coming back to it,
+# and where you were in it (vat, vtop, vofs).
+typeset -A rview vat vtop vofs
+viewnow() {
+  if [[ -e $st/by-file ]]; then REPLY=files
+  elif [[ -n $GMR_IID && ! -e $st/by-symbol ]]; then REPLY=cases
+  else REPLY=symbols; fi
+}
+viewnow; view=$REPLY
 # The row's fields as fzf numbers them, for {n}.
 typeset -a fld
 fields() { fld=("${(@ps:\t:)raw[${1:-$cur}]}"); }
@@ -394,7 +415,7 @@ rowline() {
 # L: its lines, LI the row each is (0 for none); vis the rows the cursor
 # may land on, in order, the search applied.
 typeset -a L LI vis
-integer dirty=1 cur=0 top=0 rlw=0
+integer dirty=1 cur=0 top=0 rlw=0 npin=0
 query=
 integer hayok=0
 buildhay() {
@@ -427,13 +448,12 @@ headline() {
   # The MR, and how it is read: by symbol, or (a review's f) by file.
   t=$title
   if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
-  [[ -e $st/by-file || -e $st/since ]] && t="by file"
+  [[ $view == files ]] && t="by file"
   if [[ -n $GMR_IID ]]; then
     # A review's three tabs, the change's cases, its symbols and its files: the one shown lit, tab for the next.
-    local tb on=cases
-    [[ -e $st/by-symbol ]] && on=symbols; [[ -e $st/by-file ]] && on=files
+    local tb
     for tb in cases symbols files; do
-      [[ $tb == $on ]] && { put "$B$T" "$tb"; line+=$UB; } || put "$C" "$tb"
+      [[ $tb == $view ]] && { put "$B$T" "$tb"; line+=$UB; } || put "$C" "$tb"
       [[ $tb != files ]] && put "" "  "
     done
     # What tab does, beside them where it fits, else on the line under them.
@@ -442,14 +462,16 @@ headline() {
   else
     put "$B$T" "${t:-by symbol}"; line+=$UB
   fi
-  (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
+  (( rslow )) && { pad $(( w - 3 )); put "$F" "↻"; }
   L+=("$line") LI+=(0)
   [[ -n $hint ]] && L+=("  $F$hint$R") LI+=(0)
   L+=("") LI+=(0)
+  # The title and the line under it stay put while the list scrolls (draw).
+  npin=$#L
   if (( ! loaded )); then spin_frame; L+=("  $A$REPLY$R ${C}reading the change…$R") LI+=(0); return; fi
   # Claude's sentence, the list's header, wrapped to the list.
-  if (( hdr )) && [[ -s $st/header ]]; then
-    plain "$(<$st/header)"; words=(${=REPLY}); s=
+  if [[ -n $hhead ]]; then
+    plain "$hhead"; words=(${=REPLY}); s=
     for t in $words; do
       if [[ -n $s ]] && (( ${(m)#s} + 1 + ${(m)#t} > w - 4 )); then L+=("  $T$s$R") LI+=(0); s=; fi
       s+=${s:+ }$t
@@ -458,7 +480,7 @@ headline() {
     L+=("") LI+=(0)
   fi
   # Viewed, as a bar, when there is something to view.
-  [[ -s $st/progress ]] && read -r d n < $st/progress
+  d=$hdone n=$hall
   if (( n > 0 )); then
     (( bw = w / 3, bw > 30 ? (bw = 30) : 0, k = d * bw / n ))
     line="  "$G${(l:k::━:)}$F${(l:bw-k::─:)}$R"  "
@@ -467,8 +489,8 @@ headline() {
   fi
   # What the list said, a piece a line as they fit, a piece too long for a
   # line wrapped under itself.
-  if [[ -s $st/footer ]]; then
-    segs=("${(@s: · :)${(j: · :)${(f)$(<$st/footer)}}}") s=
+  if [[ -n $hfoot ]]; then
+    segs=("${(@s: · :)${(j: · :)${(f)hfoot}}}") s=
     segs+=("")
     for t in "${segs[@]}"; do
       vw "$s · $t"
@@ -482,7 +504,8 @@ headline() {
   fi
   local stale=($st/stale.*(N))
   (( $#stale )) && L+=("  ${X}could not refresh from GitLab: this is what it said last$R") LI+=(0)
-  L+=("") LI+=(0)
+  # One blank line before the rows, whatever the list had to say over them.
+  [[ -n $L[-1] ]] && L+=("") LI+=(0)
 }
 # A row drawn once is kept by all it is drawn from (the list's width and
 # columns, its guide, its line), so a reload that changed a few rows (v, l,
@@ -615,9 +638,11 @@ litline() {
 integer gen=0
 lastpv= pfile= crumbfor= crumbline=
 key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
-pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
+# pvname <row> <width>: where its preview is kept, by its id and what it is:
+# a file has the same id by symbol and by file, and a preview of each.
+pvname() { key "$rid[$1]"; REPLY=$st/pv/$typ[$1].${REPLY:-none}.$2; }
 shown() {
-  pvname "$rid[cur]" $pw
+  pvname $cur $pw
   # This gen's, when it is there, whatever landed after it: a render of an
   # older gen that finished later is newer on disk, and stale.
   [[ -e $REPLY.$gen ]] && { REPLY=$REPLY.$gen; return }
@@ -744,11 +769,23 @@ want() {
   local f
   (( cur && pw > 0 )) && [[ -n $preview && $typ[cur] != head ]] || return 1
   (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
-  pvname "$rid[cur]" $pw; f=$REPLY.$gen
+  pvname $cur $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
   : > $f.tmp
   render $pw $f $cur >/dev/null &!
   wpid=$!
+}
+# quick: how long work out may take before the screen says it is waiting
+# (↻ by the title), and a view that landed waits for its row's preview.
+float quick=0.3
+# holding: a view has just landed (hold, quick after it did) and its row's
+# preview is still being drawn. The view before stays up meanwhile, so a
+# tab goes from the one to the other whole, never by way of a pane that
+# says … while it draws; a preview slower than that is waited for no longer.
+float hold=0
+holding() {
+  (( EPOCHREALTIME < hold && ! help && ${vis[(Ie)$cur]} )) && [[ -n $preview ]] || return 1
+  shown; [[ -z $REPLY ]]
 }
 # warm: the rows around the cursor, a few either side, one after another,
 # so j and k find them drawn. It stops at a gen or a width that is not the
@@ -766,7 +803,7 @@ warm() {
     local i f g="$gen $pw"
     for i in $near; do
       [[ $(<$st/pv/gen) == $g ]] || break
-      pvname "$rid[i]" $pw; f=$REPLY.$gen
+      pvname $i $pw; f=$REPLY.$gen
       [[ -e $f || -e $f.tmp ]] && continue
       : > $f.tmp
       render $pw $f $i
@@ -926,12 +963,13 @@ draw() {
   # the panel's. A cliamp left stopped has nothing to draw there.
   mh=0
   (( side && ! chh && $#mlab && lh >= 24 )) && mh=9
-  # The cursor's row in view, the headline kept when it fits.
+  # The cursor's row in view, the headline kept when it fits. Its title
+  # (npin lines) stays put over the rows, which scroll under it by top.
   (( rows = lh, lrows = lh - chh - mh ))
   for (( y = 1; y <= $#LI; y++ )); do (( LI[y] == cur && cur )) && { lo=$y; hi=$y; break; }; done
   while (( hi && ${MP[$(( hi + 1 ))]:-0} == cur )); do (( hi++ )); done
   (( hi > top + lrows )) && (( top = hi - lrows ))
-  (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
+  (( lo > 0 && lo <= top + npin )) && (( top = lo - 1 - npin ))
   (( lo > 0 && hi <= lrows )) && top=0
   # The pane: the preview, or ? its keys.
   local head=
@@ -976,7 +1014,7 @@ draw() {
   local -a fr pr
   litrow
   for (( y = 1; y <= rows; y++ )); do
-    i=$(( y + top ))
+    i=$(( y > npin ? y + top : y ))
     s=
     if (( y > lrows )); then (( chh )) && s="  ${CF[y - lrows]}"
     elif (( i <= $#L )); then
@@ -1106,17 +1144,29 @@ draw() {
 # keys keep working on the rows there are meanwhile. lastlist is the last
 # one asked for, the list a resize and a landing reload with.
 typeset -a rpid
-integer rgen=0 rgot=0 gotogen=0
+integer rgen=0 rgot=0 gotogen=0 rslow=0
+float rt0=0
 lastlist= fulllist= goto=
 reload() {
   local cmd=$1
   lastlist=$cmd
-  (( rgen++ ))
+  # Another view, kept from when it last showed, lands at once as it was,
+  # and its list over it when that comes.
+  viewnow
+  if [[ $REPLY != $view && -e $st/view.$REPLY ]]; then
+    (( rgen++ )); rview[$rgen]=$REPLY
+    local -a said=($st/view.$REPLY.d/*(N))
+    mkdir $st/list.$rgen.d; (( $#said )) && ln -f $said $st/list.$rgen.d/
+    ln -f $st/view.$REPLY $st/list.$rgen
+  fi
+  (( rgen++ )); rview[$rgen]=$REPLY
+  mkdir $st/list.$rgen.d
+  (( $#rpid )) || rt0=$EPOCHREALTIME
   # l on a ↑ row (git-symbols --open) names the row its symbol is drawn whole
   # at, for this reload to land on: a list asked for before it has not opened
   # the rows above that one.
   if [[ -r $st/goto ]]; then goto=$(<$st/goto) gotogen=$rgen; rm -f $st/goto; fi
-  { OTIS_LIST_WRAPS=1 zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
+  { OTIS_SAID=$st/list.$rgen.d OTIS_LIST_WRAPS=1 zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
   rpid+=($!)
 }
 landed() {
@@ -1127,20 +1177,37 @@ landed() {
   for f in $got; do n=${f##*.}; (( n > newest )) && newest=n; done
   (( newest > rgot )) || return 1
   rgot=$newest
-  for f in $got; do (( ${f##*.} < newest )) && rm -f $f; done
-  local was=$rid[cur] old=${(j:\n:)raw} i
+  for f in $got; do (( ${f##*.} < newest )) && rm -rf $f $f.d; done
+  for n in ${(k)rview}; do (( n < newest )) && unset "rview[$n]"; done
+  local was=$rid[cur] old=${(j:\n:)raw} i infile=
+  integer fall=$pcur turn=0
+  # Another view: where you were in this one put aside, and where you were
+  # in that one taken up; the first time, the row of the file you are on,
+  # else its first row. Its frame waits for that row's preview (holding).
+  if [[ $rview[$newest] != $view ]]; then
+    turn=1 fall=1
+    if (( cur )); then offs[$was]=$poff; fields; infile=$fld[2]; fi
+    vat[$view]=$was vtop[$view]=$top vofs[$view]=${(pj:\0:)${(@kv)offs}}
+    view=$rview[$newest]
+    offs=(${(ps:\0:)vofs[$view]}) was=$vat[$view] top=${vtop[$view]:-0}
+    (( hold = EPOCHREALTIME + quick ))
+  fi
+  unset "rview[$newest]"
   load $st/list.$newest
-  rm -f $st/list.$newest
+  rm -rf $st/view.$view.d; mv $st/list.$newest.d $st/view.$view.d; mv -f $st/list.$newest $st/view.$view
   # The cursor stays on the row it was on, by its id (fzf's --track).
   cur=0
   if [[ -n $was ]]; then for (( i = 1; i <= $#rid; i++ )); do [[ $rid[i] == $was ]] && { cur=$i; break; }; done; fi
-  (( cur )) || cur=$pcur
+  if (( ! cur )) && [[ -n $infile ]]; then
+    for (( i = 1; i <= $#raw; i++ )); do [[ $typ[i] != head && ${raw[i]#*$'\t'} == $infile$'\t'* ]] && { cur=$i; break; }; done
+  fi
+  (( cur )) || cur=$fall
   (( cur > $#raw )) && cur=$#raw
   list; settle_cur
   # Still on the row it was on: its scroll as you left it a moment ago, not
   # as it was when you came onto it (offs is kept when you leave a row), or
   # every landing in the background sent the preview back to the top.
-  if (( cur )) && [[ $rid[cur] == $was ]]; then offs[$was]=$poff
+  if (( cur && ! turn )) && [[ $rid[cur] == $was ]]; then offs[$was]=$poff
   elif (( cur )); then poff=${offs[$rid[cur]]:-0}; fi
   # The previews again once the rows are not the rows they were drawn for.
   [[ ${(j:\n:)raw} != $old ]] && { (( gen++ )); warm; }
@@ -1378,7 +1445,7 @@ mouse() {
   fi
   # A click on the music under the rows (mh) is on no row.
   if (( b == 0 && ! up && y <= lh - mh )) && (( side ? x < lw : 1 )); then
-    local at=$(( y + top ))
+    local at=$(( y > npin ? y + top : y ))
     # A row's own line, or one it goes on to.
     (( at <= $#LI && LI[at] > 0 )) && go $LI[at]
     (( at <= $#LI && LI[at] == 0 && ${MP[$at]:-0} > 0 )) && go $MP[$at]
@@ -2030,13 +2097,14 @@ while :; do
   # hundredths). A key's command or a reload out is looked for as often: v is
   # one after the other, and at the resting tick each sat landed for 25ms on
   # average.
-  music_wait -t $(( lon || $#jobs || $#rpid || (box && bshow != btarget) ? 2 : tmo )) -r $tty ${winch:+-r} $winch
+  music_wait -t $(( lon || $#jobs || $#rpid || hold || (box && bshow != btarget) ? 2 : tmo )) -r $tty ${winch:+-r} $winch
   if [[ -n $winch ]] && (( ${reply[(I)$winch]} )); then
     sysread -s 64 -i $winch _
     resize
   fi
   if (( ${reply[(I)$tty]} )); then
-    kt=$EPOCHREALTIME nk=1
+    # A key is drawn at once, whatever a view landing waits for.
+    kt=$EPOCHREALTIME nk=1 hold=0
     readkey; handle $REPLY
     while zselect -t 0 -r $tty; do readkey; handle $REPLY; (( nk++ )); done
     landed_jobs
@@ -2062,11 +2130,14 @@ while :; do
     # Music started or stopped: the list's foot is the music's, or the list's again.
     (( ($#mlab > 0) != mwas )) && { (( mwas = $#mlab > 0 )); changed=1; }
     landed && changed=1
+    # ↻ by the title once a reload has been out longer than quick; a quicker
+    # one, as most are, says nothing, so a tab or an l never blinks it.
+    (( ($#rpid && EPOCHREALTIME - rt0 >= quick) != rslow )) && { (( rslow = ! rslow )); dirty=1 changed=1; }
     # The row's preview landing: one test for the file this gen and width
     # draw, and none once it shows. A glob of every kept preview, twenty
     # times a second, was the loop's whole cost at rest.
     if (( cur && ! help )) && [[ -n $preview ]]; then
-      pvname "$rid[cur]" $pw
+      pvname $cur $pw
       [[ $lastpv != $REPLY.$gen && -e $REPLY.$gen ]] && changed=1
     fi
     # The size has held: the rows cut to it, and the previews drawn at it.
@@ -2081,6 +2152,9 @@ while :; do
       (( wtick = int(EPOCHREALTIME * 2) + 1 ))
       # What landed is in the previews too, whether or not the rows change.
       watched && [[ -n $fulllist ]] && { reload "$fulllist"; (( gen++ )); changed=1; }
+    fi
+    if (( hold )); then
+      if holding; then changed=0; else hold=0 changed=1; fi
     fi
     (( changed )) && draw
     (( ! help && ! settle )) && want

@@ -778,7 +778,8 @@ spin=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
 spun=
 spinning() {
   busy && (( EPOCHREALTIME - bt >= 0.15 )) || return 1
-  spin_frame; spun=$REPLY
+  local what=$REPLY
+  spin_frame; spun=$REPLY REPLY=$what
 }
 # spin_frame: the spinner's frame now, in REPLY.
 spin_frame() { REPLY=${spin[$(( int(EPOCHREALTIME * 10) % $#spin + 1 ))]}; }

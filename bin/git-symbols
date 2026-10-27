@@ -1,7 +1,7 @@
 #!/bin/sh
 # git-symbols <rev>                          a change read by symbol, not by file
 # git-symbols --rows <rev>                   its list
-# git-symbols --preview <rev> <path> <side> <start> <end> [row id]   one symbol's diff
+# git-symbols --preview <rev> <path> <side> <start> <end> [row id] [kind]   one symbol's diff
 # git-symbols --open <id>                    show what a row uses; on a ↑ row, open the rows above
 #                                            where its symbol is drawn whole and send the cursor there
 # git-symbols --close <id> [<reload command...>]
@@ -10,6 +10,7 @@
 #                                            cursor on the row closed and reload
 # git-symbols --open-all <rev>, --close-all  L and H: everything, or nothing
 # git-symbols --flip                         b: bottom up, or back to top down
+# git-symbols --files                        tab: the change by file, or back by symbol
 # git-symbols --uses <id> <start> <side>     i: the row's preview between its diff and what it uses
 # git-symbols --peeks <rev> <path> <side> <start> <end> <row id>
 #                                            p: the notes under the names in the row's preview, or none
@@ -104,7 +105,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--files|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -235,6 +236,18 @@ case $mode in
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
   --flip) if [ -e "$st/up" ]; then rm -f "$st/up"; else : > "$st/up"; fi; rm -f "$st/open"; exit 0 ;;
+  # tab: the change by file, in the same screen, as a review's tab does
+  # (git-mr-files --toggle). The rows are then the file picker's
+  # (git-commit-open), the row's id last, where this list has it, and what
+  # a file row is, plain: its preview is its whole diff. otis-symbols reads
+  # the flag too, for which view a list is (viewnow).
+  --files) if [ -e "$st/by-file" ]; then rm -f "$st/by-file"; else : > "$st/by-file"; fi; exit 0 ;;
+  --rows)
+    if [ -e "$st/by-file" ]; then
+      git-commit-open --rows "$1" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; if ($2 != "") $13 = "plain"; print }'
+      exit 0
+    fi ;;
+  --preview) [ "$7" = plain ] && exec git-preview-commit "$1" "$2" ;;
   # Every row with something under it, at every depth: the render says which
   # as it walks, given OPEN_ALL, and writes them down where l would.
   --open-all) OPEN_ALL=1 git-symbols --rows "$1" > /dev/null; exit 0 ;;
@@ -1275,7 +1288,11 @@ if [ "$mode" = --rows ]; then
   # said the same note three times.
   # Only the filter is told it: a reload this starts in the background
   # writes a footer of its own.
-  foot=${OTIS_FOOTER:-${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}} tfoot=
+  # What the list says beside its rows goes where the screen that asked for
+  # it says (OTIS_SAID, otis-symbols), so two lists out at once never write
+  # over each other's: the footer, Claude's sentence, the widths, the bar.
+  said=${OTIS_SAID:-$st}
+  foot=${OTIS_FOOTER:-${GIT_FZF_STATE:+$said/footer}} tfoot=
   [ -n "$foot" ] && tfoot=$foot.$$
   unset OTIS_FOOTER
   # The table is kept for the picker's life, but a range can name a moving
@@ -1514,7 +1531,7 @@ if [ "$mode" = --rows ]; then
   # In a picker the spine is its header (git-fzf --header-from-state), not
   # rows: the cursor never lands on it, and enter has nothing to open.
   header=
-  [ -n "$GIT_FZF_STATE" ] && header=$st/header && : > "$header"
+  [ -n "$GIT_FZF_STATE" ] && header=$said/header && : > "$header"
   # Drawn by otis-symbols (OTIS_SYMBOLS_WIDTH, its list's width), each row
   # carries its parts after the twelve fzf reads, for it to lay out: 13
   # what the row is (sym, ref, callers, package, caller, file), 14 its depth,
@@ -1529,7 +1546,7 @@ if [ "$mode" = --rows ]; then
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
   FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
-    -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$st/layout" -v progress="$st/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+    -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$said/layout" -v progress="$said/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
@@ -2063,14 +2080,12 @@ list="git-symbols --rows $rev"
 # A fold key's reload: the worktree's skips the rebuild, and any keeps what
 # the last reload found of the callers and node_modules.
 fold="OTIS_SYMBOLS_FOLD=1 $list"
-# tab, and f in ga, switch to the files. Opened from the file picker, they go
-# back to it rather than opening another on top, or every trip back and forth
-# would be one more q on the way out.
-if [ "$OTIS_UNDER" = files ]; then files=abort
-elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $root/share/otis.zsh; _ga_files')+reload($list)+refresh-preview"
-else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker, by symbol, to stage one at a time; f is its file panel, with hunks and discards.
+  # Opened from that panel, f goes back to it rather than opening another on top, or every trip back and
+  # forth would be one more q on the way out.
+  files="execute(OTIS_UNDER=symbols zsh -fc 'source $root/share/otis.zsh; _ga_files')+reload($list)+refresh-preview"
+  [ "$OTIS_UNDER" = files ] && files=abort
   keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
@@ -2090,13 +2105,13 @@ if [ -z "$head" ]; then
     --bind "C:execute(git-split --wait $rev)" \
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 else
-  # A commit or a branch: its symbols, and tab its files (git-commit-open). nvim opens in the diff against the
-  # change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
-  keys='tab=by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
+  # A commit or a branch: its symbols, and tab its files, in place (--files). nvim opens in the diff against
+  # the change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
+  keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
-    --bind "tab:$files" \
-    --bind "btab:$files" \
+    --bind "tab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
+    --bind "btab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
@@ -2116,5 +2131,5 @@ otis-symbols "" "$keys" --header-from-state \
   --bind "y:transform(git-symbols --copy {12})" \
   --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)" \
   "$@" \
-  --preview "git-symbols --preview $rev {2} {4} {5} {6} {12}" </dev/null >/dev/null
+  --preview "git-symbols --preview $rev {2} {4} {5} {6} {12} {13}" </dev/null >/dev/null
 exit 0

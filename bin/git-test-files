@@ -31,6 +31,7 @@
 #   git-test-files excludes       git pathspecs that leave test files out
 #
 # filter writes the picker's footer (how many it hid) into $GIT_FZF_STATE,
+# or the directory otis-symbols gives the list that runs it (OTIS_SAID),
 # or OTIS_FOOTER for a caller that adds its own note to it,
 # which is why the pickers load their lists from inside fzf (start:reload)
 # rather than a pipe.
@@ -143,7 +144,7 @@ case $1 in
     fi
 
     awk -F'\t' -v field="$field" -v keepf="$keepf" -v keepv="$keepv" -v show="$show" -v section="$section" -v declared="$declared" -v state="$state" \
-        -v out="${OTIS_FOOTER:-${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$classify"'
+        -v out="${OTIS_FOOTER:-${GIT_FZF_STATE:+${OTIS_SAID:-$GIT_FZF_STATE}/footer}}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}$classify"'
       function rule(text,   s) {
         s = "\342\224\200\342\224\200 " text " "
         while (length(s) < 62) s = s "\342\224\200"
