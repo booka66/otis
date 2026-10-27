@@ -185,7 +185,7 @@ case $mode in
     # deleted and nothing is written to your branch; the patch stays where it
     # is and d takes it back, which is why only discarding asks. It is the only
     # way to be done with a proposal you do not want: without it a run says its
-    # fixes are waiting until you forget the whole of it in gag, and a run where
+    # fixes are waiting until you forget the whole of it, and a run where
     # you took two of five said three were waiting for good.
     n=$2
     if grep -qx "$n" "$d/declined" 2>/dev/null; then

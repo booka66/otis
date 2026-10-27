@@ -14,10 +14,10 @@
 # moving never waits on GitLab.
 #
 # Any other row hands over to the script that owns it, which says what wants
-# you itself (share/pane.sh): one of Claude's runs as gag showed it
-# (git-agent-preview), a deploy (git-deploy-preview), a merged MR
-# (git-ci-preview), a worktree (git-worktree-preview). A push to main, the
-# here row and the trash are this script's own, under a callout.
+# you itself (share/pane.sh): one of Claude's runs (git-agent-preview), a
+# deploy (git-deploy-preview), a merged MR (git-ci-preview), a worktree
+# (git-worktree-preview). A push to main, the here row and the trash are this
+# script's own, under a callout.
 kind=$1 iid=$2 row=$3 extra=$4 gate=$5
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)

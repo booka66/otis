@@ -634,8 +634,8 @@ memo_restore() {
 # What fzf listened on, kept: anything that reaches it can send actions, so
 # each screen has a key of its own that every request must carry (FZF_PORT
 # and FZF_API_KEY, exported for what the screen runs: git-fzf-bg reloads a
-# picker with rows built behind it, git-fzf-later hands it what GitLab
-# said, git-cached-json says what it is waiting on). otis-test names the
+# picker with rows built behind it, git-cached-json says what it is waiting
+# on). otis-test names the
 # port and the key (OTIS_FZF_LISTEN, OTIS_FZF_API_KEY); nothing else should.
 # port_open listens ($lfd, 0 when it could not); port_serve answers one
 # request, which fzf hung up after: GET with what port_state puts in REPLY,
@@ -712,7 +712,7 @@ unlisten() { (( lfd )) && ztcp -c $lfd 2>/dev/null; lfd=0; }
 # --- commands out ------------------------------------------------------------------
 # A screen that runs fzf's actions (otis-pick, otis-symbols) runs the ones
 # that wait on a command here, off its loop. It has run, act, offout and
-# offin, and sync_list <file> to take a reload-sync's rows.
+# offin.
 # spawn <action> <command> <row> <then...>: the command in the background,
 # what it answers taken up when it lands (landed_jobs), and then the actions
 # that came after it in its chain. One of each at a time: an every(N) or a
@@ -754,8 +754,6 @@ landed_jobs() {
     [[ $jname[$j] == (execute-silent|transform) && $rid[cur] == $jcur[$j] ]] && offin
     case $jname[$j] in
       transform) run "$(<$f)" $row "${then_[@]}" ;;
-      reload-sync) sync_list $f; (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
-      transform-header) header=$(<$f); (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
       *) (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}" ;;
     esac
     rm -f $f

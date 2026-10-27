@@ -6,17 +6,17 @@
 # git-fzf took: the keys as "key=label" pairs, fzf's --bind, --preview,
 # --multi, --delimiter, --with-nth, --id-nth, --header, --query, --search,
 # --disabled, --header-from-state and its own --preview-fill, and does what
-# the bindings say
-# (execute, execute-silent, transform, reload, refresh-preview, toggle,
-# select, pos, first, last, accept, print, abort, change-header,
-# change-preview-label and the rest), with a row's fields for {n}, {+n},
-# {}, {+}, {q} and {n}, and start, load, result, change, resize and
-# every(N) as events. So every picker works from the bindings it had, and
+# the bindings say (execute, execute-silent, transform, reload,
+# refresh-preview, pos, first, up, down, toggle, select, select-all,
+# clear-selection, clear-query, change-header, unbind, rebind, accept, print
+# and abort, and only those, which are the ones otis's pickers send), with a
+# row's fields for {n}, {+n}, {}, {+}, {q} and {n}, and start, load, result,
+# change, resize and every(N) as events. So every picker works from the bindings it had, and
 # each stays the one that says what its keys do.
 #
 # It listens on a port as fzf did (share/screen.zsh): git-fzf-bg reloads it
-# with rows built behind it, git-fzf-later hands it what GitLab said,
-# git-cached-json says what it is waiting on, and otis-test drives it. GET
+# with rows built behind it, git-cached-json says what it is waiting on, and
+# otis-test drives it. GET
 # answers fzf's state (the query, the rows, the cursor, the marks), POST
 # runs actions.
 #
@@ -466,7 +466,7 @@ pos() {
 # while its .tmp is there. gen goes up whenever what a preview is drawn from
 # may have changed (refresh-preview, rows landing); the pane shows the
 # newest there is for the row until this gen's lands.
-integer gen=0 pshow=1
+integer gen=0
 lastpv= pfile=
 key() { local k=${1//\//%}; (( ${#k} > 200 )) && k=${k[-200,-1]}; REPLY=$k; }
 pvname() { key "$1"; REPLY=$st/pv/${REPLY:-none}.$2; }
@@ -554,7 +554,7 @@ gfx_flush() {
 integer wpid=0
 want() {
   local f
-  (( cur && pw > 0 && pshow && ! early )) && [[ -n $preview ]] || return 1
+  (( cur && pw > 0 && ! early )) && [[ -n $preview ]] || return 1
   (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
   pvname "$rid[cur]" $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
@@ -567,7 +567,7 @@ want() {
 # so j and k find them drawn. It stops at a gen or a width that is not the
 # one it was started for.
 warm() {
-  (( pw > 0 && $#vis && pshow && ! early )) && [[ -n $preview ]] || return
+  (( pw > 0 && $#vis && ! early )) && [[ -n $preview ]] || return
   print -r -- "$gen $pw" > $st/pv/gen
   local -a near
   local at=${vis[(Ie)$cur]} j
@@ -665,7 +665,7 @@ draw() {
   (( top < 0 )) && top=0
   # The pane: the preview, or ? its keys.
   if (( help )); then helplines; pfile=
-  elif (( cur && pshow )) && [[ -n $preview ]]; then
+  elif (( cur )) && [[ -n $preview ]]; then
     shown; lastpv=$REPLY
     if [[ $REPLY != $pfile || -z $pfile ]]; then
       pfile=$REPLY
@@ -853,8 +853,8 @@ requery() { qdirty=0; dirty=1; list; settle_cur; fire change; fire result; }
 flushq() { (( qdirty )) && requery; }
 # run <actions> <row> [then...]: fzf's actions, as a binding or a transform
 # gives them; then, chains of actions to run after these, on the same row.
-# A command that answers the picker (transform, execute-silent, reload-sync,
-# transform-header) runs in the background (spawn), and what comes after it
+# A command that answers the picker (transform, execute-silent) runs in the
+# background (spawn), and what comes after it
 # waits for it there, so nothing a key runs holds up the screen.
 run() {
   local s=$1 name arg i c q depth open close out
@@ -881,39 +881,20 @@ run() {
         # The frame stays up while the command gets going: it says so.
         flash="${bykey:-…}${bykey:+…}"; draw
         offout; tell; run_tty "$arg"; offin; resize ;;
-      execute-silent|transform|transform-header)
+      execute-silent|transform)
         spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
-      become) offout; tell; quit_screen; exec zsh -fc "$arg" ;;
       reload) pcur=$cur; reload "$arg" ;;
-      reload-sync) pcur=$cur; spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       refresh-preview) (( gen++ )) ;;
       pos) pos $arg ;;
       first|top) (( $#vis )) && go $vis[1] ;;
-      last) (( $#vis )) && go $vis[-1] ;;
       up) step -1 ;;
       down) step 1 ;;
       toggle) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )) ;;
-      toggle-down) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1 ;;
-      toggle-up) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step -1 ;;
       select) (( multi && cur )) && marked[$cur]=1 ;;
-      deselect) (( cur )) && marked[$cur]=0 ;;
       select-all) (( multi )) && for i in $vis; do marked[$i]=1; done ;;
-      toggle-all) (( multi )) && for i in $vis; do marked[$i]=$(( ! ${marked[$i]:-0} )); done ;;
-      deselect-all|clear-selection|clear-multi) marked=() ;;
+      clear-selection|clear-multi) marked=() ;;
       clear-query) query=; requery ;;
-      change-query) query=$arg; requery ;;
-      change-prompt) title=${arg% } ;;
       change-header) header=$arg ;;
-      show-preview) pshow=1 ;;
-      hide-preview) pshow=0 ;;
-      toggle-preview) pshow=$(( ! pshow )) ;;
-      preview-top) poff=0 ;;
-      preview-down) scroll 1 ;;
-      preview-up) scroll -1 ;;
-      preview-page-down) scroll $(( ph - phd )) ;;
-      preview-page-up) scroll $(( - (ph - phd) )) ;;
-      preview-half-page-down) scroll $(( (ph - phd) / 2 )) ;;
-      preview-half-page-up) scroll $(( - (ph - phd) / 2 )) ;;
       unbind) for i in ${(s:,:)arg}; do off[$i]=1; done ;;
       rebind) for i in ${(s:,:)arg}; do off[$i]=0; done ;;
       abort) code=130; quit 130 ;;
@@ -933,8 +914,6 @@ accept() {
   (( n )) || { (( cur )) && outq+=("$raw[cur]"); }
   code=0; quit 0
 }
-quit_screen() { (( screen )) && screen_off; at_leave; rm -rf -- $st; }
-sync_list() { take $1; }
 # act <key>: its binding, for the row under the cursor. While another key's
 # command is still out, it waits its turn (uq), once however often it is
 # pressed.
@@ -1149,7 +1128,7 @@ while :; do
     (( ($#mlab > 0) != mwas )) && { (( mwas = $#mlab > 0 )); changed=1; }
     [[ -n $keysfrom ]] && (( cur )) && { wantkeys; keysfor; [[ -e $REPLY && $REPLY != $rkfor ]] && changed=1; }
     # This row's preview landing: one file test, not a look through pv/.
-    (( cur && ! help && pshow )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }
+    (( cur && ! help )) && [[ -n $preview ]] && { pvname "$rid[cur]" $pw; [[ $REPLY.$gen != $lastpv && -e $REPLY.$gen ]] && changed=1; }
     if (( settle && EPOCHREALTIME >= settle )); then
       settle=0
       (( gen++ )); warm

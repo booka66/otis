@@ -77,8 +77,8 @@ def pipe_glyph:
   else context + "?" end;
 # A production deploy (git-deploy-list) as one glyph: ✓ live, ✗ failed, ⊘
 # failed at once or canceled (a deploy that ran for no time was refused,
-# behind production), ◐ running, ○ queued, ↺ a rollback. gd's rows and its
-# footer, and the strip on gmr's merged heading, are all drawn from this.
+# behind production), ◐ running, ○ queued, ↺ a rollback. The strip in a
+# deploy's preview (git-deploy-preview) is drawn from this.
 def deploy_glyph:
   if .kind == "rollback" then bad + "↺" elif .status == "success" then good + "✓"
   elif .status == "failed" then (if .duration == 0 then context + "⊘" else bad + "✗" end)

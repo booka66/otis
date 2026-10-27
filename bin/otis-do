@@ -137,7 +137,7 @@ case $verb in
   run)
     # One of Claude's runs: its proposals if it is a fix run, else its steps.
     [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
-    # The dashboard's own rows on the way back, not gag's.
+    # The dashboard's own rows on the way back.
     exec git-agent-list --open "$extra" 'execute-silent(git-fzf-bg otis-list)' ;;
   mr)
     exec git-mr-do open "$kind" "$iid" "$target" "$url" "$source" "$head" "$base" "$pipeline" "$start" ;;

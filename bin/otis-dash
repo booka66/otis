@@ -21,9 +21,10 @@
 # which enter opens in place.
 #
 # What you do to a change is done here too, on its row: V verifies it, c
-# is its commits, m merges, b rebases, a asks reviewers, and so on. The keys are one table (KEYS): the footer, the ? help, the key log
-# and what a key is called while it runs all read it, so they cannot
-# disagree. The footer shows the same keys on every row.
+# is its commits, m merges, b rebases, a asks reviewers, and so on. The keys
+# are one table (KEYS): the footer, the ? help, the key log and what a key is
+# called while it runs all read it, so they cannot disagree. The footer
+# shows the same keys on every row.
 #
 # The row keys hand back fzf actions (execute(...), a footer note), since
 # they are shared with the pickers; run() below carries out the few that

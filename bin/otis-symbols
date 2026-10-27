@@ -693,16 +693,16 @@ render() {
   local w=$1 file=$2 i=$3
   subst "$preview" $i
   OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=$w zsh -fc "$REPLY" 2>/dev/null </dev/null > $file.raw
-  wrapin $w $file.raw $file $file.tmp
+  wrapin $w $file
   rm -f $file.raw
 }
-# wrapin <width> <raw> <file> <tmp>: a preview as it came, wrapped to the
-# pane, written through <tmp> into <file>, and where each line wrapped into
-# <file>.cont (for a selection's copy). A preview that says what its lines
+# wrapin <width> <file>: a preview as it came (<file>.raw), wrapped to the
+# pane, written through <file>.tmp into <file>, and where each line wrapped
+# into <file>.cont (for a selection's copy). A preview that says what its lines
 # are ("\036map N" and N lines: a case's, share/story-pane.mjs) has that
 # beside it as <file>.map, each numbered as the line of the pane it is.
 wrapin() {
-  local w=$1 raw=$2 file=$3 tmp=$4 first
+  local w=$1 file=$2 raw=$2.raw tmp=$2.tmp first
   IFS= read -r first < $raw
   rm -f $tmp.map
   if [[ $first == $'\036'map\ <-> ]]; then
@@ -714,14 +714,10 @@ wrapin() {
   if [[ $first == $'\036'pin\ <->* ]]; then
     # Pinned lines ("\036pin N" and N lines, draw): wrapped apart from the
     # rest, and the marker written after, with how many lines they wrapped
-    # to, since the wrap drops the control character that marks it, and
-    # whatever it says after the count (" at K", the row of the code the
-    # preview's line is on).
-    local rest=${first#*pin }
-    integer n=${rest%% *}
-    local suf=${rest#$n}
+    # to, since the wrap drops the control character that marks it.
+    integer n=${first#*pin }
     sed -n "2,$(( n + 1 ))p" $raw | LC_ALL=C awk -v w=$w -v cont=/dev/null "$wrap_awk" > $tmp.pin
-    { print -r -- $'\036'"pin ${$(wc -l < $tmp.pin)// /}$suf"
+    { print -r -- $'\036'"pin ${$(wc -l < $tmp.pin)// /}"
       cat $tmp.pin
       sed -n "$(( n + 2 )),\$p" $raw | LC_ALL=C awk -v w=$w -v cont=$tmp.cont "$wrap_awk"; } > $tmp
     rm -f $tmp.pin
@@ -955,27 +951,18 @@ draw() {
       # most, so there is always some code to scroll; what does not fit
       # scrolls.
       PH=() HB=() hoff=0 phd=2
-      integer pover=0
-      integer pat=0
-      if [[ $P[1] == (#b)$'\036'pin\ (<->)(\ at\ (<->))# ]]; then
+      if [[ $P[1] == (#b)$'\036'pin\ (<->) ]]; then
         integer np=$match[1]
-        pat=${match[3]:-0}
         headroom; hroom=$REPLY
         HB=("${(@)P[2,np+1]}")
         headview $hroom "${(@)HB}"
         PH=("${(@)reply}") P=("${(@)P[np+2,-1]}") phd=$(( 2 + $#reply ))
-        # A preview that says which row of its code is its line opens with
-        # that line a third of the way down, the code around it in sight.
-        if (( pat && ! ${+offs[$rid[cur]]} )); then
-          (( poff = pat + pover - 1 - (ph - phd) / 3, poff < 0 ? (poff = 0) : 0 ))
-          offs[$rid[cur]]=$poff
-        fi
       fi
       # A preview can say where it opens (off.<row>), which a row not
       # scrolled yet takes.
       if [[ -n $REPLY ]] && (( ! ${+offs[$rid[cur]]} && poff == 0 )); then
         key "$rid[cur]"
-        [[ -r $st/off.$REPLY ]] && { poff=$(( $(<$st/off.$REPLY) - 1 + pover )); (( poff < 0 )) && poff=0; offs[$rid[cur]]=$poff; }
+        [[ -r $st/off.$REPLY ]] && { poff=$(( $(<$st/off.$REPLY) - 1 )); (( poff < 0 )) && poff=0; offs[$rid[cur]]=$poff; }
       fi
     fi
     # The preview a key asked for has landed: its scroll with it.
@@ -1211,12 +1198,9 @@ run() {
       execute-silent|transform)
         spawn $name "$arg" $row "$s" "${then_[@]}"; return ;;
       reload) pcur=$cur; reload "$arg" ;;
-      # Landed before the next action runs, for one that moves on the rows.
-      reload-sync) pcur=$cur; lastlist=$arg; spawn $name "export OTIS_LIST_WRAPS=1; $arg" $row "$s" "${then_[@]}"; return ;;
       refresh-preview) (( gen++ )) ;;
       pos) (( arg > 0 && arg <= $#raw )) && go $arg ;;
       first|top) (( $#vis )) && go $vis[1] ;;
-      last) (( $#vis )) && go $vis[-1] ;;
       abort) quit 130 ;;
       accept) (( cur )) && outq+=("$raw[cur]"); quit 0 ;;
       print) outq+=("$arg") ;;
@@ -1225,7 +1209,6 @@ run() {
   done
   (( $#then_ )) && run "$then_[1]" $row "${then_[@]:1}"
 }
-sync_list() { mv -f $1 $st/list.$(( ++rgen )); landed; }
 # act <key>: its binding, for the row under the cursor, or, while another
 # key's command is out, once that lands (uq). A binding that
 # redraws the preview and moves its scroll (p keeps the line at the top
@@ -2031,8 +2014,8 @@ layout
 draw
 # The list's first rows, from the start binding (its reload is the list the
 # landings reload with).
-if [[ $startacts == (#b)(|*+)reload(|-sync)\((*) ]]; then
-  fulllist=$match[3]; [[ $fulllist == *\)+* ]] && fulllist=${fulllist%%\)+*} || fulllist=${fulllist%\)}
+if [[ $startacts == (#b)(|*+)reload\((*) ]]; then
+  fulllist=$match[2]; [[ $fulllist == *\)+* ]] && fulllist=${fulllist%%\)+*} || fulllist=${fulllist%\)}
 fi
 run "$startacts" 0
 [[ -n $OTIS_SYMBOLS_ASK && -n $ctpl ]] && chat_open ""

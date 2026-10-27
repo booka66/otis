@@ -1,7 +1,5 @@
 #!/bin/sh
-# git-worktree-list [--refresh]   gw's rows, one per worktree
-# git-worktree-list --safe        fzf actions marking the worktrees safe to remove
-# git-worktree-list --safe-after  the same, once a search M cleared is gone
+# git-worktree-list [--refresh]   the board's worktree rows, one per worktree
 # git-worktree-list --status      {path: {n, op, date}} for every worktree, the slow part
 #
 # A row is what you see, then tab-separated path, branch, kind, "safe" (or
@@ -19,9 +17,9 @@
 # and last, under a "dedicated" heading, the ones gmr and Claude keep for reuse.
 # Safe to remove: merged, closed or someone else's MR with nothing local, and
 # nothing uncommitted; never the main checkout, gmr's own (they are reused so a
-# review does not check out the repo again) or the one you are in. gw runs this
-# from the main checkout, so a removal can never pull the ground out from under
-# it, and passes where you are in GW_HERE.
+# review does not check out the repo again) or the one you are in. The board
+# runs this from the main checkout, so a removal can never pull the ground out
+# from under it, and passes where you are in GW_HERE.
 #
 # git status is the slow part, up to a second per worktree in a big checkout,
 # so --status runs them all at once and the picker reads the result through
@@ -57,18 +55,6 @@ if [ "$1" = --status ]; then
     done
     wait
   } | jq -Rn '[inputs | split("\t") | {(.[0]): {n: (.[1] | tonumber), op: .[2], date: .[3]}}] | add // {}'
-  exit 0
-fi
-
-# M after a search, as in gb (git-branch-list): clear it, then mark.
-case $1 in
-  --safe) if [ -n "$FZF_QUERY" ]; then : > "$st/mark-safe"; echo 'rebind(result)+clear-query'; exit 0; fi ;;
-  --safe-after) [ -e "$st/mark-safe" ] || exit 0; rm -f "$st/mark-safe"; set -- --safe ;;
-esac
-if [ "$1" = --safe ]; then
-  actions=$(awk -F'\t' '$5 == "safe" { printf "pos(%d)+select+", NR }' "$st/worktrees")
-  [ -n "$actions" ] || exec git-fzf-note "nothing to clean up: no merged or closed worktree without uncommitted changes"
-  printf '%spos(%d)\n' "$actions" "${FZF_POS:-1}"
   exit 0
 fi
 
@@ -155,7 +141,7 @@ awk -F'\t' -v main="$main" -v here="${GW_HERE:-$(git rev-parse --show-toplevel)}
       shown = (length(name[i]) > width) ? substr(name[i], 1, width - 1) "…" : name[i]
       printf "%s%s  %s%-" width "s%s%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", mark, lbl, GK_TEXT, shown, GK_R, extra, p, b, k, safe, iid[b], ahead[b], behind[b]
     }
-    if (nsafe) printf "%s%d safe to remove · M marks them%s\n", GK_CONTEXT, nsafe, GK_R > footer
+    if (nsafe) printf "%s%d safe to remove%s\n", GK_CONTEXT, nsafe, GK_R > footer
   }' "$st/wt.facts" "$st/wt.state" > "$st/worktrees"
 # The footer is the safe count, unless git-branch-facts had something to say.
 [ -s "$st/footer" ] || [ ! -e "$st/footer.new" ] || mv "$st/footer.new" "$st/footer"

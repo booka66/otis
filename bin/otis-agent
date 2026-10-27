@@ -1,7 +1,7 @@
 #!/usr/bin/env -S zsh -f
 # otis-agent <dir>: a background run of Claude's, drawn by hand: what C, V and
-# D open (git-claude-view, whose subcommands do the work here too), and gag's
-# enter. Exit 3 is r: the caller starts the run again.
+# D open (git-claude-view, whose subcommands do the work here too), and enter
+# on a run's row. Exit 3 is r: the caller starts the run again.
 #
 # The screen says what the run is doing, not only what it has done. The
 # header is what it is and how it stands (running for, done in, what it

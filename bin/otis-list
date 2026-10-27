@@ -93,8 +93,7 @@ git-verify --marks    > "$st/m.verify" 2>/dev/null &
 git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 # Verdicts and failed runs you have told the dashboard you have seen (d,
 # otis-do): the run's key and what you saw, so it comes back when that
-# changes. gmr and gag keep showing them either way; this is the dashboard's
-# own note, not the run's.
+# changes. This is the dashboard's own note, not the run's.
 {
   . "$share/claude-run.sh"
   for kind in $run_kinds; do

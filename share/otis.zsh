@@ -412,15 +412,6 @@ gunwip() {
 # and later output scrolls out of view.
 fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?1049l'; clear }
 
-# Everything Claude is doing, or has done, in this repo in the background, in
-# one list (git-agent-list): its reviews, fix runs, production watches and
-# verifications, running ones first, each with its state, what it is about,
-# when, and its last word. The preview is the run's own account of itself
-# and its verdict where it has one (git-agent-preview); enter is every step
-# (git-claude-view, whose x stops a run), d forgets a finished run. The
-# results themselves stay where they are used: drafts and fixes in gmr and
-# gb. Every 5s it reloads if a run has moved on (git-fzf-bg), keeping the
-# cursor and where the preview is scrolled to.
 # The board, and the one command named after the tool: every change a row
 # that says the one move it needs next, then what is moving without you and
 # where you are, and everything else there is in groups under them

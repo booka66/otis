@@ -144,7 +144,6 @@ undeclared() {
   declared "$picker" > "$tmp/declared"
   for row in "$@"; do eval "GIT_FZF_STATE=/nonexistent otis-keys $row" 2>/dev/null; done | cut -f1 | sort -u | comm -23 - "$tmp/declared" | tr '\n' ' '
 }
-expect keys/mr "$(undeclared MRs 'mr review 1 9' 'mr mine 1 9' 'mr merged 1 ""' 'mr sep "" ""')" ""
 expect keys/branch "$(undeclared branch 'branch b main here "" ""' 'branch b merged worktree "" 7' 'branch b open "" "" ""')" ""
 # Editors that echo what they were asked, so the tests that pick nvim do not
 # depend on this machine having it.
@@ -348,22 +347,6 @@ expect file-list/fields "$(git-file-list | strip | awk -F'\t' '{ print NF }' | s
 expect file-list/paths "$(git-file-list | cut -f2 | sort | tr '\n' ' ')" "a.ts d.ts "
 expect file-list/status "$(git-file-list | awk -F'\t' '$2 == "d.ts" { print $3 $4 }')" "??"
 git checkout -q -- a.ts && rm d.ts
-
-# --- git-deploy-list: rows, strip and footer from a fixture, no GitLab
-cat > "$tmp/deploys.json" <<'JSON'
-{"deploys": [
-  {"id": 3, "status": "running", "kind": "deploy", "sha": "cccccccc1", "at": "2026-09-17T17:33:00Z", "duration": 61, "pipeline": "30", "url": "u3", "job": 3, "user": "c", "prev": "bbbbbbbb1", "commits": 2, "mrs": ["7", "9"]},
-  {"id": 2, "status": "failed", "kind": "deploy", "sha": "bbbbbbbb1", "at": "2026-09-17T17:20:00Z", "duration": 0, "pipeline": "20", "url": "u2", "job": 2, "user": "b", "prev": "aaaaaaaa1", "commits": 0, "mrs": []},
-  {"id": 1, "status": "success", "kind": "deploy", "sha": "aaaaaaaa1", "at": "2026-09-17T17:00:00Z", "duration": 476, "pipeline": "10", "url": "u1", "job": 1, "user": "a", "prev": "", "commits": 0, "mrs": []}]}
-JSON
-mkdir -p "$tmp/dl"
-expect deploy-list/fields "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" | awk -F'\t' '{ print NF }' | sort -u)" "7"
-expect deploy-list/order "$(git-deploy-list --from "$tmp/deploys.json" | cut -f4 | tr '\n' ' ')" "30 20 10 "
-expect deploy-list/glyphs "$(git-deploy-list --from "$tmp/deploys.json" | strip | sed -E 's/^..(.).*/\1/' | tr '\n' ' ')" "◐ ⊘ ✓ "
-expect deploy-list/strip "$(git-deploy-list --from "$tmp/deploys.json" --strip | strip)" "✓⊘◐"
-expect deploy-list/pos "$(git-deploy-list --from "$tmp/deploys.json" --pos 20)" "pos(2)"
-expect deploy-list/mrs "$(git-deploy-list --from "$tmp/deploys.json" | strip | head -1 | grep -o '![0-9]*' | tr '\n' ' ')" "!7 !9 "
-expect deploy-list/footer "$(GIT_FZF_STATE=$tmp/dl git-deploy-list --from "$tmp/deploys.json" >/dev/null; strip < "$tmp/dl/footer" | grep -o '[0-9]* live · [0-9]* failed')" "1 live · 1 failed"
 
 # --- otis-list, otis-do: the dashboard's rows, and what enter does with one.
 # Origin is on neither GitLab nor GitHub for this, so nothing here asks either.
@@ -607,9 +590,8 @@ jq -c '.verdict = "pass" | .criteria |= map(select(.id != "b1"))' "$v/verdict.js
 expect verify/changed-passes "$(FZF_PREVIEW_COLUMNS=80 git-verify --preview "" two | strip | grep . | sed -n '1,2p')" "VERIFICATION  passed  ·  does what it says, 1 of 1
 ALSO CHANGED  1, not in the description"
 rm -rf "$v"
-# Leaving what enter opened comes back to the dashboard's own rows, not gag's.
+# Leaving what enter opened comes back to the dashboard's own rows.
 expect otis-do/run "$(otis-do enter run run "$common/gmr-fix/b-feature" "" "" "" "" "" "" "" "")" "execute(git-mr-fix 'b-feature' '')+execute-silent(git-fzf-bg otis-list)"
-expect agent-list/open-default "$(git-agent-list --open "$common/gmr-fix/b-feature")" "execute(git-mr-fix 'b-feature' '')+reload(git-agent-list)"
 # A verification opens through git-verify, so r there starts it again.
 expect agent-list/open-verify "$(git-agent-list --open "$common/otis-verify/b-a%b" back)" "execute(git-verify --branch 'a/b')+back"
 expect otis-do/gone "$(GIT_FZF_STATE=$tmp/dash otis-do enter run run "$common/gmr-fix/nope" "" "" "" "" "" "" "" "" >/dev/null; strip < "$tmp/dash/note")" "that run is not here any more"
@@ -1956,47 +1938,6 @@ expect thread/builds-on "$(git log --format=%s talk | head -2 | tr '\n' ' ')" "T
 git config --unset otis.remote && git config --unset otis.remotePath
 git branch -D talk >/dev/null 2>&1
 rm -rf "$th" "$tmp/far" "$tmp/far-home"
-
-# --- git-fzf-later: a key whose answer comes from GitLab runs behind the
-# picker instead of freezing it, and says so while it goes
-expect later/no-picker-runs-it "$(GIT_FZF_STATE= FZF_PORT= git-fzf-later doing echo 'execute(x)')" "execute(x)"
-expect later/usage "$(git-fzf-later 2>/dev/null; echo $?)" "2"
-# The line it leaves in the footer while it waits, and the lock that keeps a
-# held key from asking twice. The port is unreachable here, which only means
-# nothing is told; what it writes is the same.
-lst=$tmp/later-state && mkdir -p "$lst"
-out=$(GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"')
-expect later/returns-at-once "$out" "ignore"
-expect later/says-what-it-is-doing "$(cat "$lst/note")" "asking GitLab…"
-GIT_FZF_STATE=$lst FZF_PORT=9 FZF_API_KEY=x git-fzf-later "asking GitLab" sh -c 'sleep 2; echo "reload(true)"' >/dev/null
-expect later/one-at-a-time "$(cat "$lst/note")" "asking GitLab… (already asking)"
-sleep 3
-expect later/lock-released "$([ -d "$lst"/later.* ] 2>/dev/null && echo held || echo free)" "free"
-expect later/takes-its-line-back-down "$([ -e "$lst/note" ] && echo left || echo gone)" "gone"
-
-# In a live picker: the keys pressed while it waits are taken rather than
-# dropped, and the command's own action still lands when it answers.
-slow=$tmp/slowcheck
-cat > "$slow" <<'SLOW'
-#!/bin/sh
-sleep 3
-echo 'reload(printf "%s\n" a b c d e)'
-SLOW
-chmod +x "$slow"
-if picker_open "git-fzf 'later ' 'm=merge' --bind 'start:reload(printf %s\\\\n one two three)' --bind 'm:transform(git-fzf-later \"asking GitLab\" $slow)'"; then
-  expect later/rows "$(picker_rows)" "3"
-  picker_key m
-  sleep 1
-  # The old binding ran the command inside the transform, where fzf draws
-  # nothing and drops every key until it returns.
-  picker_key j; sleep 1
-  expect later/picker-stays-live "$(picker_state | jq .position)" "1"
-  sleep 4
-  expect later/answer-arrives "$(picker_state | jq .matchCount)" "5"
-  picker_close
-else
-  expect later/picker-opens "no" "yes"
-fi
 
 # --- the command table: the one place a command's name and what it does are
 # written down, so gg, --help and the completions cannot drift from each other

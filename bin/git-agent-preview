@@ -1,6 +1,6 @@
 #!/bin/sh
-# git-agent-preview <dir>: a background run of Claude's, as gag previews it,
-# in the preview's three parts (share/pane.sh). What wants you: a running
+# git-agent-preview <dir>: a background run of Claude's, as the board previews
+# it, in the preview's three parts (share/pane.sh). What wants you: a running
 # run says what it is doing now; a failed one why; a finished one its
 # verdict, or what it left you (drafts, fixes). What it is: the title, the
 # kind, when it started and ended, the commit it is at. How it stands: a
@@ -49,8 +49,9 @@ span() {
 took=
 [ -n "$started" ] && took=$(span $(( ${ended:-$now} - started )))
 
-# What it is doing now (as gag's row says it, git-agent-list): a tester's
-# newest command with the criterion it is on, else the run's own last word.
+# What it is doing now (as its row on the board says it, git-agent-list): a
+# tester's newest command with the criterion it is on, else the run's own
+# last word.
 doing() {
   tail -n 300 "$d/events.jsonl" 2>/dev/null | jq -rs --arg kind "$kind" '
     def crit: capture("(^|[^a-zA-Z0-9_])(?<c>c[0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c;

@@ -1,35 +1,27 @@
 #!/bin/sh
-# git-agent-list                 one row per background run of Claude's in this repo, for gag
-# git-agent-list --open <dir> [<back>]  the fzf actions that open a run, and what to do on the way back
-# git-agent-list --forget <dir>  a finished run's directory removed, after a confirm (gag's d)
-# git-agent-list --data          every run as raw fields, for otis-list
+# git-agent-list --open <dir> <back>  the fzf actions that open a run, and what to do on the way back
+# git-agent-list --forget <dir>       a finished run's directory removed, after a confirm (d on the board)
+# git-agent-list --data               every run of Claude's in this repo as raw fields, for otis-list
 #
 # Every run keeps its state in a directory (share/claude-run.sh, git-claude-view):
 # reviews under gmr-claude, fix runs under gmr-fix, production watches under
 # gmr-watch, verifications under otis-verify and threads under otis-thread,
-# each named by what it is about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
-# as a glyph, what kind of run, what it is about, when and how long, and its
-# last word to you; running ones first, then newest first. Then tab-separated
-# the run's directory, its kind, what it is about, and the row's identity for
-# --track. Runs the laptop killed are started again first (resume_all), as
-# gmr and gb do when they draw.
+# each named by what it is about, an MR's iid or b-<branch> with slashes as %.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/claude-run.sh"
 . "$share/repo.sh" || exit 1
 common=$OTIS_GITDIR
 
-# git-agent-list --open <dir> [<back>]: gag's enter, as fzf actions. Each run
-# opens through the command that starts its kind, as V, C and D do: a fix run
+# git-agent-list --open <dir> <back>: enter on a run's row, as fzf actions. Each
+# run opens through the command that starts its kind, as V, C and D do: a fix run
 # as its proposals (git-mr-fix, which shows the run itself while it is going),
 # the rest as their steps (git-claude-view), and r there starts it again, which
 # git-claude-view leaves to its caller (exit 3). Straight into git-claude-view,
 # r would do nothing. One with nothing to start it from opens as its steps.
 #
-# <back> is what the picker does once you leave what was opened, and defaults
-# to gag's own reload. A picker that is not gag passes its own, or it would
-# come back to somebody else's rows: otis does.
+# <back> is what the board does once you leave what was opened.
 if [ "$1" = --open ]; then
-  dir=$2 back=${3:-reload(git-agent-list)}
+  dir=$2 back=$3
   key=${dir##*/}
   case ${dir%/*} in
     */gmr-fix) echo "execute(git-mr-fix '$key' '$(cat "$dir/range" 2>/dev/null)')+$back" ;;
@@ -65,9 +57,8 @@ fi
 # criteria as glyphs (● verified, ✗ not, ◌ the tester on it, ● in, ○ to
 # come), for the dashboard's row; then what otis calls its kind (run_label),
 # and how many commits a thread's last turn brought back (otis-thread's
-# came). --data is this on its own, for otis-list,
-# which shows the running ones on the dashboard and has no business knowing
-# where a run keeps itself.
+# came). It is what --data prints, for otis-list, which shows the running
+# ones on the dashboard and has no business knowing where a run keeps itself.
 doing() {
   tail -n 300 "$1/events.jsonl" 2>/dev/null | jq -rs --arg kind "$2" '
     def crit: capture("(^|[^a-zA-Z0-9_])(?<c>c[0-9]+)([^a-zA-Z0-9_]|$)"; "g") | .c;
@@ -118,8 +109,8 @@ scan() {
       # (long) final result. A run over for more than a few seconds (finish
       # says its last line just after writing its status) has its kept in
       # last-word, so it is read once rather than on every draw; any other
-      # is read each time. Written aside and moved into place, as gag and
-      # the dashboard may scan at once.
+      # is read each time. Written aside and moved into place, as two boards
+      # may scan at once.
       final=; [ -n "$status" ] && [ "${ended:-$now}" -lt $((now - 5)) ] 2>/dev/null && final=1
       if [ -z "$final" ] || [ ! "$dir/last-word" -nt "$dir/events.jsonl" ]; then
         tail -n 300 "$dir/events.jsonl" 2>/dev/null | jq -r 'select(.type == "otis") | .text' 2>/dev/null | tail -1 > "$dir/last-word.$$"
@@ -134,58 +125,7 @@ scan() {
     done
   done
 }
-# A read, so it never starts anything: gag resumes killed runs below, and
-# otis-list does its own before it asks.
-[ "$1" = --data ] && { scan; exit 0; }
-
-resume_all
-scan |
-awk -F'\t' '{ print (($1 == "running") ? 0 : 1) "\t" $0 }' | sort -t'	' -k1,1n -k3,3nr | cut -f2- |
-awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
-  function ago(t,   s) {
-    s = GK_NOW - t
-    if (s < 60) return "just now"
-    if (s < 3600) return int(s / 60) "m ago"
-    if (s < 86400) return int(s / 3600) "h ago"
-    return int(s / 86400) "d ago"
-  }
-  function took(a, b,   s) {
-    s = b - a
-    if (s < 60) return s "s"
-    if (s < 3600) return int(s / 60) "m"
-    return int(s / 3600) "h " int((s % 3600) / 60) "m"
-  }
-  BEGIN {
-    cols = ENVIRON["FZF_COLUMNS"] + 0
-    if (cols <= 0) cols = 100
-  }
-  {
-    state = $1; started = $2; ended = $3; kind = $4; dir = $5; last = $6; label = $9
-    key = dir; sub(/.*\//, "", key)
-    what = key
-    retro = 0
-    if (what ~ /^v-/) { retro = 1; what = substr(what, 3) }
-    if (what ~ /^f-/) { retro = 2; what = substr(what, 3) }
-    if (what ~ /^b-/) { what = substr(what, 3); gsub(/%/, "/", what) } else what = "!" what
-    if (retro == 1) what = "retro " what
-    if (retro == 2) what = "fix " what
-    if (state == "running")      g = GK_YOURS "◌"
-    else if (state == "done")    g = GK_GOOD "✓"
-    else if (state == "stopped") g = GK_CONTEXT "■"
-    else                         g = GK_BAD "✗"
-    # A run that died has no end to date; it is placed by its start.
-    if (state == "running") when = "for " took(started, now)
-    else if (ended == "") when = ago(started)
-    else when = ago(ended) " · " took(started, ended)
-    if (state != "running" && state != "done") last = state (last == "" ? "" : ": " last)
-    left = 2 + 7 + 2 + 22 + 2 + 16 + 2
-    budget = gk_list_width(cols) - left
-    if (budget < 20) budget = 20
-    if (length(last) > budget) last = substr(last, 1, budget - 1) "…"
-    printf "%s%s %s%-7s%s  %s%s  %s%-16s%s  %s%s%s\t%s\t%s\t%s\t%s\n",
-      g, GK_R, GK_CONTEXT, label, GK_R,
-      gk_path(what, 22, (state == "running") ? GK_TEXT : GK_CONTEXT), gk_rep(" ", 22 - (length(what) > 22 ? 22 : length(what))),
-      GK_FAINT, when, GK_R,
-      (state == "running") ? GK_TEXT : GK_CONTEXT, last, GK_R,
-      dir, label, what, dir
-  }'
+# A read, so it never starts anything: otis-list resumes killed runs before
+# it asks.
+[ "$1" = --data ] || { echo "usage: git-agent-list --open <dir> <back> | --forget <dir> | --data" >&2; exit 2; }
+scan

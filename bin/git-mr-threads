@@ -2,7 +2,6 @@
 # git-mr-threads <iid> <range>                    picker of the threads no line shows
 # git-mr-threads --list <iid> <range>             its rows
 # git-mr-threads --show <id> [range]              one thread in full, its preview
-# git-mr-threads --overview <iid>                 unresolved threads on the MR, for gmr
 # git-mr-threads --open <id>                      reply in nvim, edit or delete there
 # git-mr-threads --resolve <iid> <range> <id> <resolvable> <resolved>
 # git-mr-threads --json <iid> <range> <reload>    every thread, placed, from the cache
@@ -223,20 +222,6 @@ case $mode in
         | .[:$end] | map(select(test("^\\s*\\*\\*") | not))) as $ps |
       "", yours + "WHY CLAUDE WROTE IT" + context + "  for you alone, never posted" + r,
       ($ps[] | "", "\u0002" + gsub("\n"; " "))' "$st/threads.json" | markdown
-    ;;
-  --overview)
-    # gmr's preview of an MR: its unresolved threads on the MR itself, which
-    # no file shows. A first look fetches them and redraws the preview.
-    json=$(git-cached-json --no-wait "mr-$iid-threads" 15 refresh-preview -- \
-      git-mr-pages "$api/discussions?per_page=100" 2>/dev/null) || exit 0
-    jq -r -L "$share" '
-      include "otis";
-      map(select(.resolvable and (.resolved | not) and .notes[0].position == null))
-      | select(length > 0)
-      | "", yours + " \(length) unresolved on the MR itself" + r,
-        (.[] | "", attention + .notes[0].author.username + r + context + " · " + .notes[0].created_at[0:10]
-            + (if (.notes | length) > 1 then " · \(.notes | length - 1) repl\(if (.notes | length) == 2 then "y" else "ies" end)" else "" end) + r,
-          (.notes[0].body | split("\n")[] | "\u0001" + .))' "$json" | wrap
     ;;
   --open)
     # nvim for its compose window: replying there is a draft or not the same as
