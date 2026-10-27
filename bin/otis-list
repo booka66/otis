@@ -17,6 +17,9 @@
 #                     4½ verify failed          one of Claude's runs broke, until
 #                                               you have seen it (d)
 #                     5  main build failed      a push of yours broke main
+#                     6  review its diff        a thread's turn is over: Claude
+#                        answer Claude          brought commits back, or only
+#                                               words (otis-thread)
 #                     8  fold in N fixes        Claude has left you work, on a
 #                                               branch with no MR
 #                    10  verified: passed       news, not a blockage
@@ -79,7 +82,8 @@ git-verify --marks    > "$st/m.verify" 2>/dev/null &
   if [ -n "$runs" ]; then
     printf '%s\n' "$runs" | jq -Rn '[inputs | split("\t") |
       {state: .[0], started: ((.[1] | tonumber?) // 0), ended: ((.[2] | tonumber?) // 0),
-       kind: .[3], dir: .[4], last: (.[5] // ""), doing: (.[6] // ""), dots: (.[7] // "")}]'
+       kind: .[3], dir: .[4], last: (.[5] // ""), doing: (.[6] // ""), dots: (.[7] // ""),
+       label: (.[8] // "run"), came: ((.[9] | tonumber?) // 0)}]'
   else
     echo '[]'
   fi
@@ -92,7 +96,8 @@ git-worktree-trash --list > "$st/trash.tsv" 2>/dev/null &
 # changes. gmr and gag keep showing them either way; this is the dashboard's
 # own note, not the run's.
 {
-  for kind in gmr-claude gmr-fix gmr-watch otis-verify otis-walk; do
+  . "$share/claude-run.sh"
+  for kind in $run_kinds; do
     for run in "$common/$kind"/*/; do
       [ -s "$run/seen" ] || continue
       run=${run%/}
@@ -330,7 +335,7 @@ out=$(jq -nr -L "$share" \
     . as $run | ($run.dir | split("/") | last) as $key |
     (if $run.ended > 0 then $run.ended else $run.started end) as $at |
     select(seen($run.kind; $key; "\($at)") | not) |
-    ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[$run.kind] // "run") as $label |
+    $run.label as $label |
     # Not red: what broke is the run, not your change, which a red row would say.
     { rank: 4.5, g: "✗", gc: yours, verb: "\($label) never finished", kind: "run", extra: $run.dir, verb_key: "run",
       id: "w-failed-\($run.kind)-\($key)",
@@ -342,6 +347,19 @@ out=$(jq -nr -L "$share" \
       title: $run.last, when: since($at),
       note: (if ($key | startswith("b-")) then $key[2:] | gsub("%"; "/") else "" end) };
 
+  # A thread whose turn is over (otis-thread): commits Claude brought back,
+  # to read, or only words, to answer, with the first of them; until you
+  # have seen it (x) or its next turn ends.
+  def thread_rows:
+    $runs[] | select(.kind == "otis-thread" and .state == "done") |
+    . as $run | ($run.dir | split("/") | last) as $key | ($key[2:] | gsub("%"; "/")) as $branch |
+    select(seen("otis-thread"; $key; "\($run.ended)") | not) |
+    (if $run.came > 0 then { verb: "review its diff", does: "read it" } else { verb: "answer Claude", does: "answer it" } end)
+    + { rank: 6, g: "✻", gc: yours, kind: "run", extra: $run.dir, verb_key: "run",
+        id: "w-thread-\($key)", mark: ($branch == $current), source: $branch,
+        tail: (context + $branch + r + (if $run.last == "" then "" else context + "  " + ($run.last | clean) + r end)),
+        title: $run.last, when: since($run.ended), note: $branch };
+
   # Claude'"'"'s background runs that are going now (git-agent-list --data).
   def run_row:
     . as $run | ($run.dir | split("/") | last) as $key |
@@ -349,6 +367,7 @@ out=$(jq -nr -L "$share" \
      elif $run.kind == "gmr-fix" then { verb: "proposing fixes", g: "◌" }
      elif $run.kind == "gmr-watch" then { verb: "watching production", g: "◌" }
      elif $run.kind == "otis-walk" then { verb: "walking", g: "◌" }
+     elif $run.kind == "otis-thread" then { verb: "Claude working", g: "◌" }
      else { verb: "verifying", g: "◎" } end)
     + { rank: (0 - $run.started), gc: attention, kind: "run", extra: $run.dir, verb_key: "run",
         id: "g-\($run.kind)-\($key)", mark: false,
@@ -443,7 +462,7 @@ out=$(jq -nr -L "$share" \
            ),
       title: ($mr.title // ""), note: ($bits | join(" · ")) };
 
-  ([ ($merged_mrs[] | merged_row), loose_fix_rows, branch_verify_rows, failed_rows, main_failed_rows ]
+  ([ ($merged_mrs[] | merged_row), loose_fix_rows, branch_verify_rows, thread_rows, failed_rows, main_failed_rows ]
     | sort_by(.rank)) as $waiting |
   # Worktrees otis moved to the trash and you have not emptied yet. Not
   # waiting on you and not going: it sits under here, with the rest of what

@@ -102,6 +102,7 @@ typeset -a KEYS=(
   r        mr     ''       'retry the failed jobs'
   N        mr     ''       'a new pipeline'
   D        mr     ''       'Claude watches production'
+  t        else   ''       'Claude works on it on the workspace'
   u        else   ''       "ask $forge now"
   'g b'    else   ''       'branches'
   'g c'    else   ''       'otis settings'
@@ -1133,6 +1134,7 @@ typeset -a BEHIND=(
   '(cd * && |)git-worktree-remove *'  removing
   'git-agent-list --forget *'         forgetting
   'otis-do confirm *'                 clearing
+  'otis-thread --start *'             starting
 )
 behindable() {
   local p w
@@ -1233,10 +1235,9 @@ outs_in() {
       any=0; rm -f $d/rc $d/busy
       said $n
       # What it did may have changed the rows, here and on the forge's side,
-      # which is asked again (again, in landed); and what it removed, the
-      # branches and the worktrees.
-      refresh; again=1
-      [[ $odo[$n] == removing ]] && relist --refresh
+      # which is asked again (again, in landed), and the branches and the
+      # worktrees: a merge, a push, a removal, a thread's new branch.
+      refresh; again=1; relist --refresh
       follow $n "$orest[$n]"
     else said $n
     fi
@@ -1598,6 +1599,11 @@ handle() {
     m|b|a|P|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
     M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
+    # A thread of Claude's on the workspace (otis-thread): on the branch of
+    # yours the row is, else on one of its own.
+    t) local tb=
+       [[ $type[cur] == change && -n $source[cur] && $mrkind[cur] != (review|merged) ]] && tb=$source[cur]
+       rbehind t "otis-thread --start ${(q)tb}" ;;
     # ctrl-c is a key here (-isig), since a signal's trap would never run.
     # With ? up, q and esc close it rather than the dashboard.
     q|$e) (( help )) && { help=0 poff=0; return; } ;|

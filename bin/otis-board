@@ -144,6 +144,37 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   def off: {g: "·", c: faint, vk: "", extra: "", does: "", m: "", fix: "", rank: 99, st: "off", w: ""};
   def fixes_say($n): "fold in \(if $n == 1 then "the fix" else "\($n) fixes" end)";
   def none: off + {g: ""};
+  # What a row of otis-list'"'"'s is about: an MR, or a run kept under an MR'"'"'s
+  # number or a branch'"'"'s name (b-, with v- or f- before it for a fix a
+  # verification asked for or made).
+  def about: .f[10] as $id |
+    (if ($id | startswith("w-verify-")) then {t: "verify", key: $id[9:]}
+     elif ($id | startswith("g-otis-verify-")) then {t: "verify", key: $id[14:]}
+     elif ($id | startswith("w-fix-")) then {t: "fix", key: $id[6:]}
+     elif ($id | startswith("g-gmr-claude-")) then {t: "mr", key: $id[13:]}
+     elif ($id | startswith("g-gmr-fix-")) then {t: "fix", key: $id[10:]}
+     elif ($id | startswith("w-thread-")) then {t: "thread", key: $id[9:]}
+     elif ($id | startswith("g-otis-thread-")) then {t: "thread", key: $id[14:]}
+     else {t: "other", key: ""} end) as $a |
+    ($a.key | sub("^[vf]-"; "")) as $base |
+    $a + {base: $base, vfix: ($a.key | test("^[vf]-")),
+          branch: (if ($base | startswith("b-")) then $base[2:] | gsub("%"; "/") else "" end)};
+  # A thread of Claude'"'"'s (otis-thread) as a light of its branch'"'"'s row, an
+  # open MR'"'"'s or one with none: its row of otis-list'"'"'s (Claude working, or
+  # what its turn left you), which wants you once the turn is over.
+  ($events | map(select(about.t == "thread")) | map({key: about.branch, value: .}) | from_entries) as $threads |
+  def thread_cell($branch): ($threads[$branch] // null) as $th |
+    if $th == null then none
+    else none + {g: $th.f[14], w: $th.f[16], vk: $th.f[13], extra: $th.f[12], does: $th.f[23]} +
+      (if $th.sec == "going" then {c: attention, rank: 20, st: "moving"} else {c: yours, rank: 6, st: "you"} end) end;
+  # beside($a; $b): two lights in one place: the one that wants you most,
+  # whose words are the move, the other said beside it, and a fix either
+  # holds still there for f.
+  def beside($a; $b): ([$a, $b] | sort_by(.rank)) as [$first, $then] |
+    $first + {mv: ($first.mv // $first.w),
+              m: ([$first.m, $then.m] | map(select(. != "")) | .[0] // ""),
+              fix: ([$first.fix, $then.fix] | map(select(. != "")) | .[0] // "")}
+    | .w = ([$first.w, $then.w] | map(select(. != "")) | join(", "));
 
   # local: where the branch is. Enter goes to it, which the otis function
   # does (the dashboard cannot move your shell); never pushed, its commits
@@ -282,7 +313,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     (.diffRefs.headSha // "") as $head |
     (.headPipeline | effective($gates)) as $pipe |
     ([local_cell(.sourceBranch), verify_cell(.iid; .sourceBranch; $head), (.headPipeline | pipeline_cell),
-      (if $mrkind == "review" then review_asked else review_mine end), ship_cell($pipe; $mrkind == "mine")]
+      (if $mrkind == "review" then review_asked else beside(review_mine; thread_cell(.sourceBranch)) end), ship_cell($pipe; $mrkind == "mine")]
       | map(. + {kind: $mrkind})) as $lights |
     ($lights[1].st == "moving") as $verifying |
     ($lights | .[1] |= (if $verifying then .rank = 99 | .st = "wait" else . end)) as $cells |
@@ -352,25 +383,12 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   ($changes | map(.iid)) as $on_iids | ($changes | map(.source)) as $on_branches |
   ($open | map(.source)) as $open_branches |
 
-  # What a row of otis-list'"'"'s is about: an MR, or a run kept under an MR'"'"'s
-  # number or a branch'"'"'s name (b-, with v- or f- before it for a fix a
-  # verification asked for or made).
-  def about: .f[10] as $id |
-    (if ($id | startswith("w-verify-")) then {t: "verify", key: $id[9:]}
-     elif ($id | startswith("g-otis-verify-")) then {t: "verify", key: $id[14:]}
-     elif ($id | startswith("w-fix-")) then {t: "fix", key: $id[6:]}
-     elif ($id | startswith("g-gmr-claude-")) then {t: "mr", key: $id[13:]}
-     elif ($id | startswith("g-gmr-fix-")) then {t: "fix", key: $id[10:]}
-     else {t: "other", key: ""} end) as $a |
-    ($a.key | sub("^[vf]-"; "")) as $base |
-    $a + {base: $base, vfix: ($a.key | test("^[vf]-")),
-          branch: (if ($base | startswith("b-")) then $base[2:] | gsub("%"; "/") else "" end)};
   # Said by a light of a change on the board already. A branch'"'"'s
-  # verification is the verify light of its open MR wherever that MR is,
-  # folded too: never a change of its own beside it.
+  # verification, or a thread of Claude'"'"'s on it, is a light of its open MR
+  # wherever that MR is, folded too: never a change of its own beside it.
   def lit: about as $a | $a.t != "other" and
     (if $a.branch == "" then ($a.base | IN($on_iids[]))
-     elif $a.t == "verify" then ($a.branch | IN($open_branches[]))
+     elif ($a.t | IN("verify", "thread")) then ($a.branch | IN($open_branches[]))
      else ($a.branch | IN($on_branches[])) end);
 
   # A run still going is the exception: it is a row of its own among what is
@@ -379,6 +397,9 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # for and is shown all the same.
   ($events | map(select(.f[5] | IN("here", "trash") | not) | . + {a: about, loud: (lit and .sec == "going")}
                  | select((lit | not) or .loud))) as $rest |
+  # A run that is a light of its branch'"'"'s own row, a branch with no MR: its
+  # verification, a fix for it, or a thread of Claude'"'"'s on it.
+  def onbranch: .a.branch != "" and (.a.t | IN("verify", "fix", "thread"));
 
   # A run kept under a branch'"'"'s name outlives the branch, and what it said of
   # a branch that is finished is history, not a move of yours: the branch'"'"'s
@@ -396,7 +417,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # A branch with no merge request: its verification, and a fix for it, as
   # the lights of a change of its own, unless the branch is finished and
   # none of its runs is still going.
-  ($rest | map(select((.loud | not) and .a.branch != "" and (.a.t | IN("verify", "fix")))) | group_by(.a.branch) | map(
+  ($rest | map(select((.loud | not) and onbranch)) | group_by(.a.branch) | map(
     . as $evs | $evs[0].a.branch as $branch |
     select(any($evs[]; .sec == "going")
            or ($branch | finished($evs | map($ended[.f[12] | split("/") | .[-2:] | join("/")] // 0) | max) | not)) |
@@ -417,7 +438,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
     (if $bf then {g: "·", c: yours, vk: $bf.f[13], extra: $bf.f[12], does: $bf.f[23], m: $bf.f[14], fix: $bf.f[12], rank: 8, st: "you",
                   w: fixes_say($bf.f[14] | ltrimstr("✎") | tonumber? // 1)}
      elif $fixing then none + {g: "◌", c: attention, vk: $fixing.f[13], extra: $fixing.f[12], does: $fixing.f[23], rank: 20, st: "moving", w: "Claude is \($fixing.f[16])"}
-     else none end) as $c3 |
+     else none end | beside(.; thread_cell($branch))) as $c3 |
     ([local_cell($branch), $c1, none, $c3, none] | map(. + {kind: "run"})) as $cells |
     {lane: (if any($cells[]; .st == "you") then "move" else "moving" end), key: "c-b-\($branch)", type: "change", fold: "",
      title: $branch, who: "", when: ($evs | map(.f[19]) | map(select(. != "")) | .[0] // ""),
@@ -440,7 +461,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # of its log and the command it is on now, which were a paragraph a run on
   # the board; how far it has got is said under the board, claim by claim.
   ($open | map({key: .iid, value: .title}) | from_entries) as $titles |
-  ($rest | map(select(.loud or ((.a.branch != "" and (.a.t | IN("verify", "fix"))) | not))
+  ($rest | map(select(.loud or (onbranch | not))
      | . as $e | kept(if .sec == "going" then "moving" elif .f[5] == "merged" then "prod" else "move" end)
      | if $e.sec == "going" and $e.f[5] == "run" then
          .sub = "" | .title = ($titles[$e.f[1]] // (if $e.f[20] != "" then "" else .title end))
@@ -535,7 +556,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   ($runs | map(select(.state != "running")) | map(. + {at: (if .ended > 0 then .ended else .started end)})
     | map(select(.at > $NOW - 7 * 86400 and ((.dir | split("/") | last) | here_still | not))) | sort_by(0 - .at) | map(
      (.dir | split("/") | last) as $key | ($key | sub("^[vf]-"; "")) as $base |
-     ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[.kind] // "run") as $what |
+     .label as $what |
      blank + {lane: "runs", fold: "runs", key: "r-\(.kind)-\($key)", type: "notice", title: .last, when: since(.at),
               move: (if .state == "done" then "\($what) done" else "\($what) never finished" end),
               tone: (if .state == "done" then context else yours end),
@@ -544,7 +565,7 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
               cells: [off + {g: (if .state == "done" then "✓" elif .state == "failed" then "✗" else "·" end),
                              c: (if .state == "failed" then bad else context end),
                              kind: "run", vk: "run", extra: .dir, does: "open the run"}, none, none, none, none],
-              verb: ({"gmr-claude": "review", "gmr-fix": "fixes", "gmr-watch": "watch", "otis-verify": "verify", "otis-walk": "walk"}[.kind] // "run")})) as $ran |
+              verb: $what})) as $ran |
   # deploys: the last to production, newest first, and what each carried.
   (($deploysf[0].deploys // []) | map(
      blank + {lane: "deploys", fold: "deploys", key: "y-\(.id)", type: "notice",

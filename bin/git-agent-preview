@@ -27,6 +27,7 @@ case ${d%/*} in
   */gmr-claude) kind=review verb=Reviewing ;;
   */gmr-fix) kind="fix run" verb=Fixing ;;
   */gmr-watch) kind="production watch" verb=Watching ;;
+  */otis-thread) kind="thread of Claude's" verb="Claude working" ;;
   *) kind=run verb=Running ;;
 esac
 # read, not cat: a process each was a good part of what a move cost.

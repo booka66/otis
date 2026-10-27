@@ -33,6 +33,7 @@
 # in that checkout stay there.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/remote.sh"
 host=$(git config --get otis.remote)
 path=$(git config --get otis.remotePath)
 [ -n "$host" ] && [ -n "$path" ] || {
@@ -51,12 +52,7 @@ tree=$(GIT_INDEX_FILE=$tmp/index git write-tree) || exit 1
 commit=$(git commit-tree "$tree" -p HEAD -m "otis remote run") || exit 1
 
 # A workspace that has not been given the token yet gets it now, once.
-if [ -r "$HOME/.claude/remote-env" ] && ! ssh "$host" '[ -r ~/.claude/env ]' 2>/dev/null; then
-  printf "${GK_CONTEXT}giving %s what it needs to run claude ...${GK_R}\n" "$host"
-  ssh "$host" 'umask 077; mkdir -p ~/.claude; cat > ~/.claude/env
-    grep -qs claude/env ~/.bashrc 2>/dev/null || echo "[ -r ~/.claude/env ] && . ~/.claude/env" >> ~/.bashrc' \
-    < "$HOME/.claude/remote-env" || printf 'git-remote-run: could not set up %s\n' "$host" >&2
-fi
+give_claude "$host"
 
 # Runs go side by side (fix runs, reviews, a fold's lint), so each sends its
 # own ref and gets its own patch back, and the far side takes turns.
@@ -74,7 +70,6 @@ fi
 # Everything the far side does, in one go: check the checkout is free, move it
 # to what was sent, run the command, and leave what changed in a patch. It all
 # goes over stdin, since anything on ssh's command line is parsed again there.
-quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 {
   printf 'OTIS_PATH=%s\n' "$(quote "$path")"
   printf 'OTIS_ID=%s\n' "$id"

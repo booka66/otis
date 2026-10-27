@@ -18,7 +18,9 @@
 # a commit's messages in gdm and gl.
 #
 # One conversation an MR, one a branch (gdm's base...HEAD is kept by the
-# branch's name, so it carries on as the branch grows), one a commit.
+# branch's name, so it carries on as the branch grows), one a commit. A
+# thread's change (otis-thread, which names its branch in OTIS_THREAD) is
+# the thread's own conversation, with the Claude working on it there.
 #
 # The view's a opens a panel over its preview (otis-symbols), and each
 # question typed there is a --send: Claude Code headless, in the background,
@@ -123,11 +125,9 @@ else
 fi
 key=$(printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '-')
 d=$top/$key ctx=$d/context chat=$d/chat
+thread=$OTIS_THREAD
+if [ -n "$thread" ] && t=$(otis-thread --dir "$thread"); then d=$t chat=$t/chat; else thread=; fi
 [ "$mode" = dir ] && { printf '%s\n' "$d"; exit 0; }
-mkdir -p "$ctx" || exit 1
-# A conversation about a change nobody has opened in a month is over.
-find "$top" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} + 2>/dev/null
-touch "$d"
 
 # The row: a symbol (its name, the last step of its id, as y copies it), a
 # caller elsewhere, a file, or nothing to name (a heading, the callers row).
@@ -163,6 +163,15 @@ fi
 
 if [ "$mode" = starters ]; then
   q() { printf '%s\n' "$1"; }
+  if [ -n "$thread" ]; then
+    # Claude wrote it, and can change it: what to have it do, more than ask.
+    if [ -n "$lines" ]; then q "Why did you write these lines this way?"; q "Make these lines simpler."
+    elif [ -n "$name" ]; then q "Why does $name look like this?"; q "Write a test for $name."; fi
+    q "Run the tests this touches, and fix what fails."
+    q "Walk me through what you changed, in the order to read it."
+    q "Write the MR description for this branch."
+    exit 0
+  fi
   if [ -n "$lines" ]; then
     q "What do these lines do, and why did the change make them this way?"
     q "What could go wrong in these lines?$([ "$kind" = review ] && printf ' Draft a comment if something does.')"
@@ -223,21 +232,25 @@ gather() {
 }
 stale() { [ "$(cat "$d/context.head" 2>/dev/null)" != "$head" ] || [ -z "$(find "$ctx/diff.patch" -mmin -3 2>/dev/null)" ]; }
 
-# The chat file the panel draws: Claude's words as they come, and lines of
-# its own that start with \001 and a letter: U a question, O where it was
-# asked from, T what Claude is doing (reading a file, drafting), E what went
-# wrong, S a note. note is jq's, for a tool Claude uses, the files it reads
-# named as the view shows them rather than as paths.
-notes='def note: "\n\u0001T " + (
-    if .name == "Read" then "reading " + (.input.file_path // "" | ltrimstr($ctx + "/")
-      | {"about.md": "what it says of itself", "diff.patch": "the diff", "symbols.md": "the symbols",
-         "shape.md": "the shape", "callers.md": "the callers", "threads.md": "the threads",
-         "review.md": "the review"}[.] // ltrimstr($root + "/"))
-    elif .name == "Grep" then "searching for " + (.input.pattern // "")
-    elif .name == "Glob" then "looking for " + (.input.pattern // "")
-    elif .name == "Bash" and (.input.command // "" | startswith("git-symbols-ask --draft")) then "drafting a comment"
-    elif .name == "Bash" then "running " + (.input.command // "" | split("\n")[0] | split($ctx + "/") | join("") | split($root + "/") | join("") | .[0:80])
-    else .name end) + "\n";'
+# A question says which row it was asked from, in the transcript too, since
+# the cursor moves on between questions.
+within=
+[ -n "$name" ] && within=", in $name"
+where=
+if [ -n "$lines" ]; then where="$lines$within"
+elif [ -n "$name" ]; then where="$name, $at"
+elif [ -n "$path" ]; then where=$path; fi
+if [ -n "$thread" ]; then
+  [ "$mode" = send ] && exec otis-thread --send "$thread" "$OTIS_ASK_QUESTION" "$where"
+  exec otis-thread --code "$thread"
+fi
+
+mkdir -p "$ctx" || exit 1
+# A conversation about a change nobody has opened in a month is over.
+find "$top" -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {} + 2>/dev/null
+touch "$d"
+
+# The chat file the panel draws is written through share/chat.jq.
 root=$(git rev-parse --show-toplevel)
 
 session=$(cat "$d/session" 2>/dev/null)
@@ -252,14 +265,6 @@ else
   set -- --resume "$session"
 fi
 
-# A question says which row it was asked from, in the transcript too, since
-# the cursor moves on between questions.
-within=
-[ -n "$name" ] && within=", in $name"
-where=
-if [ -n "$lines" ]; then where="$lines$within"
-elif [ -n "$name" ]; then where="$name, $at"
-elif [ -n "$path" ]; then where=$path; fi
 question=$OTIS_ASK_QUESTION
 if [ -n "$question" ] && [ -n "$lines" ]; then question="$question
 
@@ -351,12 +356,7 @@ if [ "$mode" = send ]; then
     printf '%s\n' $! > "$d/busy"
     wait $!
     printf '%s\n' $? > "$d/status"
-  } | jq -R --unbuffered -j --arg ctx "$ctx" --arg root "$root" "$notes"'
-    fromjson? |
-    if .type == "stream_event" and .event.type == "content_block_delta" and .event.delta.type == "text_delta" then .event.delta.text
-    elif .type == "assistant" then .message.content[]? | select(.type == "tool_use") | note
-    elif .type == "result" then if .is_error or .subtype != "success" then "\n\u0001E " + (.result // .subtype | tostring) + "\n" else "\n" end
-    else empty end' >> "$chat"
+  } | jq -R --unbuffered -j -L "$share" --arg ctx "$ctx" --arg root "$root" 'include "chat"; stream($ctx; $root)' >> "$chat"
   s=$(cat "$d/status" 2>/dev/null)
   case $s in
     0) ;;
@@ -379,11 +379,5 @@ case $t in
 esac
 # What was said here, into the chat file, so the panel carries on from it.
 tr=$(transcript "$session")
-[ -n "$tr" ] && tail -n +$((n + 1)) "$tr" | jq -R -j --arg ctx "$ctx" --arg root "$root" "$notes"'
-  fromjson? | select(.isSidechain != true and .isMeta != true) |
-  if .type == "user" then
-    [.message.content | if type == "string" then . else (.[]? | select(.type == "text") | .text) end | select(startswith("<") | not)]
-    | if length > 0 then "\n\u0001U " + (join(" ") | split("\n\n(I")[0] | gsub("\n"; " ")) + "\n" else empty end
-  elif .type == "assistant" then .message.content[]? | if .type == "text" then .text + "\n" elif .type == "tool_use" then note else empty end
-  else empty end' >> "$chat"
+[ -n "$tr" ] && tail -n +$((n + 1)) "$tr" | jq -R -j -L "$share" --arg ctx "$ctx" --arg root "$root" 'include "chat"; transcript($ctx; $root)' >> "$chat"
 exit 0

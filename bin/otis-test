@@ -410,6 +410,39 @@ expect otis-board/cleanup "$(printf '%s\n' "$board" | awk -F'\t' '$65 == "cleanu
 expect otis-board/places "$(printf '%s\n' "$board" | awk -F'\t' '$65 == "places" { printf "%s %s %s %s: %s|", $4, $23, $24, $60, $61 }')" "keep cd /w/keep clean: detached|busy cd /w/busy dirty: feature  ·  3 uncommitted|"
 expect otis-board/places-say "$(printf '%s\n' "$board" | awk -F'\t' '$2 == "g-places" { print $67 }')" "1 with nothing uncommitted  ·  1 with work in it"
 rm -f "$tmp/dash/branches.tsv" "$tmp/dash/worktrees.tsv"
+# A thread of Claude's (otis-thread) on a branch with no MR is that branch's
+# change, Claude its review light: commits its turn brought back to read, or
+# only words to answer, with its first line, until x; while a turn goes, it
+# is moving.
+git branch talk
+th=$common/otis-thread/b-talk
+mkdir -p "$th" && echo "make it talk" > "$th/title" && echo 100 > "$th/started" && echo 200 > "$th/ended" && echo done > "$th/status" && echo 1 > "$th/came"
+printf '{"type":"otis","text":"It talks now.; 1 commit came back"}\n' > "$th/events.jsonl"
+thread_board() { rows=$(GIT_FZF_STATE=$tmp/dash otis-list); printf '%s\n' "$rows" > "$tmp/dash/rows"
+  GIT_FZF_STATE=$tmp/dash otis-board | strip | awk -F'\t' '$2 == "c-b-talk" { print $1, "light " $8, $44, $70, ($48 == "'"$th"'"), $49 }'; }
+expect otis-list/thread "$(GIT_FZF_STATE=$tmp/dash otis-list | strip | awk -F'\t' '$11 == "w-thread-b-talk" { print $1 }' | tr -s ' ')" \
+  " ✻ review its diff talk It talks now.; 1 commit came back"
+expect otis-board/thread-done "$(thread_board)" "move light 4 ✻ review its diff 1 read it"
+echo 0 > "$th/came"
+expect otis-board/thread-asked "$(thread_board)" "move light 4 ✻ answer Claude 1 answer it"
+# With a fix of Claude's for the branch too, the light is the thread's, which
+# wants you sooner, the fix said beside it, and f still folds it in.
+mkdir -p "$common/gmr-fix/b-talk" && printf 'patch\n' > "$common/gmr-fix/b-talk/01.patch"
+expect otis-board/thread-and-fix "$(thread_board)" "move light 4 ✻ answer Claude 1 answer it"
+expect otis-board/thread-and-fix-says "$(GIT_FZF_STATE=$tmp/dash otis-board | strip | awk -F'\t' '$2 == "c-b-talk" { print $75, ($51 == "'"$common"'/gmr-fix/b-talk") }')" "answer Claude, fold in the fix 1"
+rm -rf "$common/gmr-fix/b-talk"
+cp "$th/ended" "$th/seen"
+expect otis-board/thread-seen "$(thread_board)" ""
+rm "$th/seen" "$th/status" "$th/ended" "$th/came"
+sleep 30 & echo $! > "$th/pid"
+expect otis-board/thread-going "$(thread_board)" "moving light 4 ◌ Claude working 1 open the run"
+kill $! 2>/dev/null; wait $! 2>/dev/null
+expect otis-do/thread "$(otis-do enter run run "$th" "" "" "" "" "" "" "" "")" "execute(otis-thread 'talk')+execute-silent(git-fzf-bg otis-list)"
+# The symbol view's panel talks to the thread about its branch's change.
+expect ask/thread-dir "$(OTIS_THREAD=talk git-symbols-ask --dir "main...talk" "" "" "" "" "")" "$th"
+expect ask/not-a-thread "$(git-symbols-ask --dir "main...talk" "" "" "" "" "" | grep -c otis-thread)" "0"
+rm -rf "$th"
+git branch -D talk >/dev/null 2>&1
 git branch -D feature >/dev/null 2>&1
 # What gd listed is a group too: a deploy a row, enter its jobs and logs.
 cp "$tmp/dash/deploys.json" "$tmp/dash/deploys.was"
@@ -439,6 +472,13 @@ board_says() { GIT_FZF_STATE=$tmp/board otis-board | strip | awk -F'\t' '$2 ~ /^
 expect otis-board/says-its-move "$(board_says)" "merge it [|older verify broke|pipeline passed|approved|ready to merge]|"
 # Kept for the dashboard's own test below (otis/row-says-its-move).
 GIT_FZF_STATE=$tmp/board otis-board > "$tmp/board7.tsv"
+# A thread of Claude's on its branch is its review light, and wants you
+# sooner than the merge: what Claude left you, the review beside it.
+cp "$tmp/board/rows" "$tmp/board/rows.kept"
+printf 't\t\t\t\tfeat\trun\t\t\t\t\tw-thread-b-feat\t\t/t/b-feat\trun\t✻\t\tanswer Claude\tfeat\t\t\tfeat\t\t\tanswer it\t\t\n' >> "$tmp/board/rows"
+expect otis-board/thread-on-mr "$(board_lights)" "move c-7 Ship it light 4 ·✗✓✻! merge|"
+expect otis-board/thread-on-mr-says "$(board_says)" "answer Claude [|older verify broke|pipeline passed|answer Claude, approved|ready to merge]|"
+mv "$tmp/board/rows.kept" "$tmp/board/rows"
 board_mr DISCUSSIONS_NOT_RESOLVED
 expect otis-board/verify-of-folded "$(board_lights)" "sent c-7 Ship it light 4 ·✗✓✓· |"
 expect otis-board/says-how-it-stands "$(board_says)" "approved [|older verify broke|pipeline passed|approved|]|"
@@ -2156,6 +2196,57 @@ t=$(date +%s); picks_up "$slow" | cat
 expect resume/leaves-the-pipe "$(( $(date +%s) - t < 3 ))" "1"
 expect resume/pid-is-the-run "$(ps -o command= -p "$(cat "$slow/pid")" | grep -c 'sleep 5$')" "1"
 kill "$(cat "$slow/pid")" 2>/dev/null
+
+# --- otis-thread: a turn of Claude's on the workspace. The workspace is
+# here: an ssh that runs the command from a home of its own, GNU tail's
+# --pid, and a claude that edits, commits and says so.
+mkdir -p "$tmp/far-bin" "$tmp/far-home"
+cat > "$tmp/far-bin/ssh" <<'SSH'
+#!/bin/sh
+while [ $# -gt 0 ]; do case $1 in -o|-p|-l) shift 2 ;; -*) shift ;; *) break ;; esac; done
+shift
+cd "$FAR_HOME" && HOME=$FAR_HOME exec sh -c "$*"
+SSH
+cat > "$tmp/far-bin/tail" <<'TAIL'
+#!/usr/bin/perl
+my ($from, $pid, $file);
+for (@ARGV) { if (/^\+(\d+)$/) { $from = $1 } elsif (/^--pid=(\d+)$/) { $pid = $1 } elsif (!/^-/) { $file = $_ } }
+exec "/usr/bin/tail", @ARGV unless defined $pid;
+$| = 1; open(my $f, "<", $file) or exit 1; seek($f, $from - 1, 0);
+while (1) { my $n = read($f, my $buf, 65536); if ($n) { print $buf; next } last unless kill 0, $pid; select undef, undef, undef, 0.05 }
+my $buf; while (read($f, $buf, 65536)) { print $buf }
+TAIL
+cat > "$tmp/far-bin/claude" <<'CLAUDE'
+#!/bin/sh
+printf '%s\n' "$@" >> "$HOME/claude-args"
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"On it. "}}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"'"$PWD"'/talk.txt"}}]}}'
+echo hello >> talk.txt && git add talk.txt && git commit -qm "Talk"
+echo '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"It talks now."}}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"It talks now."}'
+CLAUDE
+cp "$tmp/stub/otis-notify" "$tmp/far-bin/"
+chmod +x "$tmp/far-bin/"*
+git clone -q "$tmp/repo" "$tmp/far" && git -C "$tmp/far" config user.email t@t && git -C "$tmp/far" config user.name t
+git config otis.remote far && git config otis.remotePath "$tmp/far"
+git branch talk
+th=$tmp/repo/.git/otis-thread/b-talk && mkdir -p "$th" && echo "make it talk" > "$th/title"
+far() { PATH=$tmp/far-bin:$PATH FAR_HOME=$tmp/far-home "$@"; }
+far otis-thread --send talk "make it talk" "talk.txt" >/dev/null 2>&1
+expect thread/status "$(cat "$th/status") $(cat "$th/came")" "done 1"
+expect thread/home "$(git log -1 --format=%s talk)" "Talk"
+expect thread/said "$(jq -r 'select(.type == "otis") | .text' "$th/events.jsonl" | tail -1)" "It talks now.; 1 commit came back"
+expect thread/chat "$(tr '\001' '^' < "$th/chat" | grep . | tr '\n' '|')" "^U make it talk|^O on talk.txt|On it. |^T editing talk.txt|It talks now.|^S 1 commit came back|"
+expect thread/asked-where "$(grep -c "(I'm on talk.txt.)" "$tmp/far-home/claude-args")" "1"
+expect thread/first-turn "$(grep -c -e --session-id "$tmp/far-home/claude-args")" "1"
+# The next turn goes on with the same conversation, from the branch as it is
+# here, with what came back last time.
+far otis-thread --send talk "again" >/dev/null 2>&1
+expect thread/resumes "$(grep -A1 -e --resume "$tmp/far-home/claude-args" | tail -1)" "$(cat "$th/session")"
+expect thread/builds-on "$(git log --format=%s talk | head -2 | tr '\n' ' ')" "Talk Talk "
+git config --unset otis.remote && git config --unset otis.remotePath
+git branch -D talk >/dev/null 2>&1
+rm -rf "$th" "$tmp/far" "$tmp/far-home"
 
 # --- git-fzf-later: a key whose answer comes from GitLab runs behind the
 # picker instead of freezing it, and says so while it goes

@@ -92,7 +92,7 @@ if [ "$what" = dismiss ]; then
     case $(cat "$extra/status" 2>/dev/null) in failed|'') echo "$confirm"; exit 0 ;; esac
   fi
   case $extra in
-    */gmr-fix/*|*/otis-verify/*|*/gmr-watch/*|*/otis-walk/*)
+    */gmr-fix/*|*/otis-verify/*|*/gmr-watch/*|*/otis-walk/*|*/otis-thread/*)
       [ -d "$extra" ] || exec git-fzf-note "that run is not here any more"
       echo "$confirm"; exit 0 ;;
     *)
@@ -123,6 +123,11 @@ if [ "$what" = confirm ]; then
   case $extra in
     */gmr-fix/*)
       exec git-mr-fix --discard-rest "${extra##*/}" ;;
+    */otis-thread/*)
+      # Until its next turn ends: what you saw is when this one did.
+      git-confirm "stop the board showing this thread until Claude's next turn? the conversation is kept" || exit 0
+      cp "$extra/ended" "$extra/seen"
+      exit 0 ;;
     */otis-verify/*|*/gmr-watch/*)
       # What you saw, so the row comes back if it changes its mind: a
       # verification is about a commit, a production watch about a verdict.

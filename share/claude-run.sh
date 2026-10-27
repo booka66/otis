@@ -5,6 +5,16 @@
 # defines its own finish <state> <summary>, since what to reload and whom to
 # alert differ.
 
+# run_kinds: every kind of run, each a folder of them under .git; run_label
+# <kind>: what otis calls one.
+run_kinds='gmr-claude gmr-fix gmr-watch otis-verify otis-walk otis-thread'
+run_label() {
+  case $1 in
+    gmr-claude) echo review ;; gmr-fix) echo fixes ;; gmr-watch) echo watch ;;
+    otis-verify) echo verify ;; otis-walk) echo walk ;; otis-thread) echo thread ;; *) echo run ;;
+  esac
+}
+
 # pin_agent: the run keeps to the coding agent it started with, resumed or
 # not: start() leaves otis-config agent in $d/agent-cli, and a run from before
 # there was a choice is Claude's. $who is what its lines call it.
@@ -159,8 +169,10 @@ resume() {
 resume_all() {
   . "$share/repo.sh" || return 0
   c=$OTIS_GITDIR
-  for r in "$c"/gmr-claude/*/ "$c"/gmr-fix/*/ "$c"/otis-verify/*/ "$c"/otis-walk/*/; do
-    [ -d "$r" ] && orphaned "${r%/}" && resume "${r%/}"
+  for kind in $run_kinds; do
+    for r in "$c/$kind"/*/; do
+      [ -d "$r" ] && orphaned "${r%/}" && resume "${r%/}"
+    done
   done
   return 0
 }

@@ -45,7 +45,11 @@
 # Where the picker's a asks Claude (git-symbols-ask), a opens a panel over
 # the lower part of the list rather than leaving the screen: the row you are
 # on and the diff stay in sight, and Claude's answers stream into the panel
-# as they come.
+# as they come. With OTIS_SYMBOLS_ASK set, the screen opens with the panel
+# up and typing in it: a thread's change (otis-thread), where what you came
+# to do is answer Claude. OTIS_SYMBOLS_WATCH names a file whose change
+# means the change itself moved (a thread's turn that ended, its commits
+# home), and the list is read again, as for --watch.
 setopt extendedglob no_nomatch
 
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
@@ -2792,6 +2796,9 @@ opened=1
 # A walk's steps and a tour's panes are asked for now, beside the rows.
 [[ -n $stepscmd ]] && steps_load
 [[ -n $panescmd ]] && panes_load
+[[ -n $OTIS_SYMBOLS_ASK && -n $ctpl ]] && chat_open ""
+[[ -n $OTIS_SYMBOLS_WATCH ]] && watchfiles+=($OTIS_SYMBOLS_WATCH)
+unset OTIS_SYMBOLS_ASK OTIS_SYMBOLS_WATCH
 integer tmo=5 stick=0 wtick=0 rewidth=0 mh=0 mwas=0
 lspun=
 while :; do

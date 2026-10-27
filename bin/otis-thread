@@ -1,0 +1,299 @@
+#!/bin/sh
+# otis-thread --start [<branch>]  t on the board: what Claude should do, asked
+#                                 in a box, and Claude starting on it, on
+#                                 <branch> or on a new one off the base
+# otis-thread <branch>            its change by symbol, the conversation up
+# otis-thread --send <branch> <message> [<where>]
+#                                 one turn: what the symbol view's panel sends,
+#                                 from <where> in the change
+# otis-thread --code <branch>     the conversation in Claude Code itself, there
+# otis-thread --dir <branch>      where it keeps itself; exit 1 for a branch
+#                                 with no thread
+# otis-thread --follow <branch>   a turn this laptop stopped reading, read on
+#                                 (what resume runs)
+#
+# A thread is a branch Claude works on, on otis.remote (a Coder workspace,
+# say) in a worktree of otis.remotePath's checkout kept for it, on your
+# subscription there (share/remote.sh gives it the login). It edits, runs
+# what Claude Code's auto mode allows (what it blocks is skipped, and Claude
+# is told why) and commits as it goes; your checkout is never touched. Each
+# turn sends the branch as it is here, starts claude -p there under nohup,
+# so a laptop that sleeps or loses the connection does not end it, and reads
+# its stream back over ssh into the conversation. When the turn ends, what
+# Claude left uncommitted is committed and its commits come back onto the
+# branch here, so the board, the symbol view and p see its work. Between
+# turns nothing runs there, and the workspace stops on its own.
+#
+# It keeps itself as one of Claude's runs (share/claude-run.sh) in
+# .git/otis-thread/b-<branch, / as %>, a life a turn. The thread's own:
+# title, session (Claude's conversation), chat (the conversation as the panel
+# draws it, share/chat.jq) and events.jsonl (every turn's steps). The last
+# turn's, made afresh as each begins (turn): started, ended, status as any
+# run's (done, stopped or failed), came (how many commits it brought back:
+# the board says review its diff for some, answer Claude for none),
+# turn.jsonl (its stream as it came), far.pid (claude's pid there) and
+# chat.at (where in chat it began).
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+. "$share/claude-run.sh"
+. "$share/remote.sh"
+. "$share/repo.sh" || exit 1
+host=$(git config --get otis.remote)
+path=$(git config --get otis.remotePath)
+
+mode=open
+case $1 in --start|--send|--code|--dir|--follow) mode=${1#--}; shift ;; esac
+branch=$1
+key=b-$(printf '%s' "$branch" | tr / %)
+d=$OTIS_GITDIR/otis-thread/$key
+
+if [ "$mode" = dir ]; then
+  [ -n "$branch" ] && [ -s "$d/title" ] || exit 1
+  printf '%s\n' "$d"
+  exit 0
+fi
+
+if [ "$mode" = start ]; then
+  [ -n "$host" ] && [ -n "$path" ] || {
+    otis-popup say "Claude's threads run on a workspace: git config otis.remote <its ssh host>, and otis.remotePath <its checkout of this repo>"
+    exit 0
+  }
+  if [ -n "$branch" ]; then
+    # Its commits come back into the branch, which git will not move under
+    # a checkout.
+    [ -z "$(git-worktree-path of "$branch")" ] || {
+      otis-popup say "$branch is checked out, and Claude's commits come back into it: switch off it first"
+      exit 0
+    }
+    running "$d" && { otis-popup say "Claude is still on its turn on $branch"; exit 0; }
+    ask=$(otis-popup text "what should Claude do on $branch?") || exit 0
+  else
+    ask=$(otis-popup text "what should Claude do? it gets a branch of its own") || exit 0
+  fi
+  [ -n "$ask" ] || exit 0
+  if [ -z "$branch" ]; then
+    # A branch named from the ask's first words, under your prefix, off the base.
+    prefix=$(git config --get otis.branchPrefix)
+    slug=$(printf '%s' "$ask" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | sed 's/^-//' | cut -d- -f1-5 | sed 's/-$//')
+    branch=${prefix:+$prefix/}${slug:-thread} n=1
+    while git show-ref --verify --quiet "refs/heads/$branch"; do
+      n=$((n + 1)) branch=${prefix:+$prefix/}${slug:-thread}-$n
+    done
+    git branch --no-track "$branch" "$(otis-config base)" || exit 1
+    key=b-$(printf '%s' "$branch" | tr / %) d=$OTIS_GITDIR/otis-thread/$key
+  fi
+  mkdir -p "$d" || exit 1
+  [ -s "$d/title" ] || printf '%s\n' "$ask" | head -1 | cut -c1-100 > "$d/title"
+  otis-detach otis-thread --send "$branch" "$ask" </dev/null >> "$d/log" 2>&1 &
+  exit 0
+fi
+
+[ -s "$d/title" ] || { printf 'otis-thread: %s has no thread (t on the board starts one)\n' "$branch" >&2; exit 2; }
+read -r title < "$d/title"
+# Claude's conversation; the panel's /new takes it away, and the next turn
+# starts another.
+[ -s "$d/session" ] || uuidgen | tr 'A-Z' 'a-z' > "$d/session"
+read -r session < "$d/session"
+# Where it works there, under that workspace's home, which a stopped
+# workspace keeps. Claude finds its session by the folder it runs in, so this
+# never moves.
+far=otis-threads/$(basename "$path")/$key
+url=ssh://$host/$path
+
+# home: what Claude did there, onto the branch here. What it left uncommitted
+# is committed first. Its commits come home only when they go on from the
+# branch here: one you committed to meanwhile is left alone, theirs kept
+# under refs/otis/thread/<branch>, and that is said. Prints how many came.
+home() {
+  printf 'cd %s 2>/dev/null || exit 0\n%s\n' "$(quote "$far")" \
+    '[ -z "$(git status --porcelain)" ] || { git add -A && git commit --quiet -m "What Claude left uncommitted"; }' |
+    ssh "$host" sh -s >&2 || return 1
+  git fetch --quiet "$url" "+refs/heads/$branch:refs/otis/thread/$branch" 2>/dev/null || { echo 0; return 0; }
+  here=$(git rev-parse "refs/heads/$branch") there=$(git rev-parse "refs/otis/thread/$branch")
+  if git merge-base --is-ancestor "$there" "$here"; then echo 0
+  elif git merge-base --is-ancestor "$here" "$there"; then
+    git update-ref "refs/heads/$branch" "$there" "$here" || return 1
+    git rev-list --count "$here..$there"
+  else
+    say "your branch and Claude's have both moved on; Claude's is at refs/otis/thread/$branch"
+    echo 0
+  fi
+}
+
+# render: claude's stream as the conversation shows it.
+render() { jq -R --unbuffered -j -L "$share" --arg root "$(cat "$d/far.root" 2>/dev/null)" 'include "chat"; stream($root; $root)'; }
+
+# turn: a new turn's own files, the last one's gone.
+turn() {
+  rm -f "$d/far.pid" "$d/came"
+  : > "$d/turn.jsonl"
+  wc -c < "$d/chat" | tr -d ' ' > "$d/chat.at"
+  date +%s > "$d/started"
+}
+
+# begin: this process is the turn now: the pid the panel's ctrl-c stops and
+# the board shows going, and resume's command to read it on if it dies.
+begin() {
+  rm -f "$d/status" "$d/ended" "$d/stopping"
+  echo $$ > "$d/pid"
+  echo $$ > "$d/busy"
+  printf '%s\n' otis-thread --follow "$branch" > "$d/cmd"
+  git rev-parse --show-toplevel > "$d/cwd"
+  trap 'stop' TERM INT HUP
+}
+
+# finish <state> <last word>: the turn over, its work brought home, and the
+# board told (status) how it ended.
+finish() {
+  trap - TERM INT HUP
+  git-claude-view --events < "$d/turn.jsonl" >> "$d/events.jsonl" 2>/dev/null
+  n=$(home) || n=0
+  word=$2
+  if [ "$n" -gt 0 ]; then
+    came="$n $([ "$n" = 1 ] && echo commit || echo commits) came back"
+    word="$word; $came"
+    printf '\001S %s\n' "$came" >> "$d/chat"
+  fi
+  say "$word"
+  echo "$n" > "$d/came"
+  date +%s > "$d/ended"
+  echo "$1" > "$d/status"
+  alert "$title" "$word" "$1"
+  exit 0
+}
+stop() {
+  read -r pid 2>/dev/null < "$d/far.pid" && ssh "$host" "kill $pid" 2>/dev/null
+  printf '\n\001S stopped\n' >> "$d/chat"
+  finish stopped "stopped"
+}
+
+# follow: the turn's stream read back as claude writes it there, from the
+# last whole line here, until claude has ended and every line is here. The
+# conversation is drawn again from where the turn began, so a life that
+# picks up adds nothing twice. A connection that drops (the laptop slept)
+# is opened again.
+follow() {
+  read -r pid 2>/dev/null < "$d/far.pid" || finish failed "Claude never started on $host"
+  at=$(cat "$d/chat.at" 2>/dev/null || echo 0)
+  { head -c "$at" "$d/chat"; render < "$d/turn.jsonl"; } > "$d/chat.$$" 2>/dev/null
+  mv "$d/chat.$$" "$d/chat"
+  lost=0
+  while :; do
+    got=$(wc -c < "$d/turn.jsonl" | tr -d ' ')
+    # In the background, as wait is what a signal (the panel's ctrl-c) can
+    # interrupt: a pipeline in the foreground would hold stop off until the
+    # turn was over.
+    ssh "$host" "tail -c +$((got + 1)) -f --pid=$pid $(quote "$far.turn.jsonl")" 2>/dev/null |
+      perl -ne 'BEGIN { $| = 1 } print if /\n\z/' | tee -a "$d/turn.jsonl" | render >> "$d/chat" &
+    wait $!
+    if there=$(ssh "$host" "kill -0 $pid 2>/dev/null && echo going || wc -c < $(quote "$far.turn.jsonl")" 2>/dev/null); then
+      lost=0
+      [ "$there" = going ] && continue
+      [ "$(wc -c < "$d/turn.jsonl" | tr -d ' ')" -ge "$there" ] && return 0
+    else
+      lost=$((lost + 1))
+      [ "$lost" -gt 30 ] && return 1
+      sleep 10
+    fi
+  done
+}
+
+# ended: how the turn's stream says it went, as finish takes it.
+ended() {
+  r=$(jq -c 'select(.type == "result")' "$d/turn.jsonl" 2>/dev/null | tail -1)
+  if [ -z "$r" ]; then finish failed "the turn ended before Claude said it was done (the workspace stopped?)"
+  elif printf '%s' "$r" | jq -e '.is_error or .subtype != "success"' >/dev/null; then
+    finish failed "$(printf '%s' "$r" | jq -r '.result // .subtype' | head -1 | cut -c1-200)"
+  else finish done "$(printf '%s' "$r" | jq -r '.result // ""' | grep -m1 . || echo "Claude's turn is over")"; fi
+}
+
+if [ "$mode" = follow ]; then
+  begin
+  follow || finish failed "lost the workspace for five minutes"
+  ended
+fi
+
+# ready: the workspace's worktree at the branch as it is here: whatever
+# Claude did there last brought home first, then this branch sent and
+# checked out there. Prints the worktree's whole path.
+ready() {
+  home >/dev/null || return 1
+  # To the workspace, never to origin, so none of the repo's pre-push hooks
+  # (a lint that fixes what it pushes) are for it.
+  git push --quiet --force --no-verify "$url" "refs/heads/$branch:refs/otis/thread/$branch" || return 1
+  {
+    printf 'OTIS_PATH=%s OTIS_FAR=%s OTIS_BRANCH=%s\n' "$(quote "$path")" "$(quote "$far")" "$(quote "$branch")"
+    cat <<'REMOTE'
+set -e
+wt=$HOME/$OTIS_FAR
+if [ -e "$wt/.git" ]; then
+  git -C "$wt" checkout --quiet -B "$OTIS_BRANCH" "refs/otis/thread/$OTIS_BRANCH"
+else
+  cd "$OTIS_PATH"
+  git worktree prune
+  mkdir -p "$(dirname "$wt")"
+  git worktree add --quiet -B "$OTIS_BRANCH" "$wt" "refs/otis/thread/$OTIS_BRANCH"
+fi
+printf '%s\n' "$wt"
+REMOTE
+  } | ssh "$host" sh -s
+}
+
+if [ "$mode" = code ]; then
+  give_claude "$host"
+  root=$(ready) || { printf 'otis-thread: could not get %s ready on %s\n' "$branch" "$host" >&2; exit 1; }
+  printf '%s\n' "$root" > "$d/far.root"
+  transcript="ls ~/.claude/projects/*/$session.jsonl 2>/dev/null | head -1"
+  n=$(ssh "$host" "f=\$($transcript); [ -n \"\$f\" ] && wc -l < \"\$f\" || echo 0" | tr -d ' ')
+  ssh -t "$host" "cd $(quote "$root") && { [ -r ~/.claude/env ] && . ~/.claude/env; claude --resume $session; }"
+  # What was said there, into the conversation, and what it did, home.
+  ssh "$host" "f=\$($transcript); [ -n \"\$f\" ] && tail -n +$((n + 1)) \"\$f\"" |
+    jq -R -j -L "$share" --arg root "$root" 'include "chat"; transcript($root; $root)' >> "$d/chat"
+  n=$(home) || n=0
+  [ "$n" -gt 0 ] && say "$n $([ "$n" = 1 ] && echo commit || echo commits) came back from Claude Code"
+  exit 0
+fi
+
+if [ "$mode" = send ]; then
+  message=$2 where=$3
+  printf '\n\001U %s\n' "$message" >> "$d/chat"
+  [ -n "$where" ] && printf '\001O on %s\n' "$where" >> "$d/chat" && message="$message
+
+(I'm on $where.)"
+  turn
+  begin
+  if [ -s "$d/far.root" ]; then printf '\001T sending the branch to %s\n' "$host"
+  else printf '\001T checking the repo out on %s for this thread, which takes a minute the first time\n' "$host"; fi >> "$d/chat"
+  give_claude "$host" >/dev/null
+  root=$(ready) || finish failed "could not get $branch ready on $host"
+  printf '%s\n' "$root" > "$d/far.root"
+  # The session is made by the first turn of it that starts, and every
+  # turn after goes on with it.
+  resume=--session-id
+  [ "$(cat "$d/talked" 2>/dev/null)" = "$session" ] && resume=--resume
+  system="You are working on the branch $branch, in a worktree of its repository on a workspace. The person you work for talks to you from otis on their laptop: your commits come back to them there, where they read the change by symbol, and what they say to you comes from a narrow panel beside it. Do what they ask here. Commit as you go, on this branch, each commit saying what changed and why. Never push, switch branches or rewrite a commit already made: otis brings your commits home when your turn ends, and they push. End each turn with a few short sentences on what you did, or the one thing you need from them. No headings or tables: the panel is a few dozen columns wide."
+  {
+    printf 'OTIS_ROOT=%s OTIS_SESSION=%s OTIS_RESUME=%s\n' "$(quote "$root")" "$session" "$resume"
+    printf 'OTIS_TITLE=%s\n' "$(quote "$title")"
+    printf 'OTIS_SYSTEM=%s\n' "$(quote "$system")"
+    printf 'OTIS_MESSAGE=%s\n' "$(quote "$message")"
+    cat <<'REMOTE'
+cd "$OTIS_ROOT" || exit 1
+[ -r "$HOME/.claude/env" ] && . "$HOME/.claude/env"
+nohup claude -p --output-format stream-json --verbose --include-partial-messages \
+  --permission-mode auto --permission-prompts none -n "$OTIS_TITLE" \
+  --append-system-prompt "$OTIS_SYSTEM" "$OTIS_RESUME" "$OTIS_SESSION" -- "$OTIS_MESSAGE" \
+  > "$OTIS_ROOT.turn.jsonl" 2> "$OTIS_ROOT.turn.err" < /dev/null &
+echo $!
+REMOTE
+  } | ssh "$host" sh -s > "$d/far.pid" && [ -s "$d/far.pid" ] || finish failed "could not start Claude on $host"
+  printf '%s\n' "$session" > "$d/talked"
+  say "Claude is on it, on $host"
+  follow || finish failed "lost the workspace for five minutes"
+  ended
+fi
+
+# Enter on its row: the change by symbol, the conversation open beside it,
+# and the thread's (OTIS_THREAD) rather than one that only reads; read
+# again each time a turn ends, with what Claude did.
+OTIS_THREAD=$branch OTIS_SYMBOLS_ASK=1 OTIS_SYMBOLS_WATCH=$d/ended exec git-symbols "$(otis-config base)...$branch"

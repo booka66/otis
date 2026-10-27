@@ -6,8 +6,8 @@
 #
 # Every run keeps its state in a directory (share/claude-run.sh, git-claude-view):
 # reviews under gmr-claude, fix runs under gmr-fix, production watches under
-# gmr-watch, verifications under otis-verify and walks under otis-walk, each named by what it is
-# about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
+# gmr-watch, verifications under otis-verify, walks under otis-walk and threads under otis-thread,
+# each named by what it is about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
 # as a glyph, what kind of run, what it is about, when and how long, and its
 # last word to you; running ones first, then newest first. Then tab-separated
 # the run's directory, its kind, what it is about, and the row's identity for
@@ -40,6 +40,7 @@ if [ "$1" = --open ]; then
       esac ;;
     */gmr-watch) echo "execute(git-mr-watch '$key')+$back" ;;
     */otis-walk) echo "execute(git-walk '$key')+$back" ;;
+    */otis-thread) echo "execute(otis-thread '$(printf '%s' "${key#b-}" | tr '%' '/')')+$back" ;;
     */gmr-claude)
       # The range it reviewed, from what resume would run: git-mr-claude --run <iid> <range>.
       range=$(sed -n 4p "$dir/cmd" 2>/dev/null)
@@ -63,7 +64,9 @@ fi
 # runs what it is doing now (Claude's last words to itself; a verification's
 # tester's last command, with the criterion it is for) and a verification's
 # criteria as glyphs (● verified, ✗ not, ◌ the tester on it, ● in, ○ to
-# come), for the dashboard's row. --data is this on its own, for otis-list,
+# come), for the dashboard's row; then what otis calls its kind (run_label),
+# and how many commits a thread's last turn brought back (otis-thread's
+# came). --data is this on its own, for otis-list,
 # which shows the running ones on the dashboard and has no business knowing
 # where a run keeps itself.
 doing() {
@@ -95,15 +98,17 @@ dots() {
 }
 scan() {
   now=$(date +%s)
-  for kind in gmr-claude gmr-fix gmr-watch otis-verify otis-walk; do
+  for kind in $run_kinds; do
+    label=$(run_label "$kind")
     for dir in "$common/$kind"/*/; do
       [ -d "$dir" ] || continue
       dir=${dir%/}
       [ -s "$dir/started" ] || continue
       # read, not cat: this runs for every run on every dashboard draw, and
       # a process a file a run was most of what the dashboard waited on.
-      status= started= ended= last=
+      status= started= ended= last= came=
       read -r status 2>/dev/null < "$dir/status"
+      read -r came 2>/dev/null < "$dir/came"
       read -r started 2>/dev/null < "$dir/started"
       read -r ended 2>/dev/null < "$dir/ended"
       state=$status
@@ -126,7 +131,7 @@ scan() {
       fi
       sub= dot=
       [ "$state" = running ] && { sub=$(doing "$dir" "$kind"); dot=$(dots "$dir"); }
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$started" "$ended" "$kind" "$dir" "$last" "$sub" "$dot"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$started" "$ended" "$kind" "$dir" "$last" "$sub" "$dot" "$label" "$came"
     done
   done
 }
@@ -152,12 +157,11 @@ awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     return int(s / 3600) "h " int((s % 3600) / 60) "m"
   }
   BEGIN {
-    label["gmr-claude"] = "review"; label["gmr-fix"] = "fixes"; label["gmr-watch"] = "watch"; label["otis-verify"] = "verify"; label["otis-walk"] = "walk"
     cols = ENVIRON["FZF_COLUMNS"] + 0
     if (cols <= 0) cols = 100
   }
   {
-    state = $1; started = $2; ended = $3; kind = $4; dir = $5; last = $6
+    state = $1; started = $2; ended = $3; kind = $4; dir = $5; last = $6; label = $9
     key = dir; sub(/.*\//, "", key)
     what = key
     retro = 0
@@ -180,9 +184,9 @@ awk -F'\t' "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     if (budget < 20) budget = 20
     if (length(last) > budget) last = substr(last, 1, budget - 1) "…"
     printf "%s%s %s%-7s%s  %s%s  %s%-16s%s  %s%s%s\t%s\t%s\t%s\t%s\n",
-      g, GK_R, GK_CONTEXT, label[kind], GK_R,
+      g, GK_R, GK_CONTEXT, label, GK_R,
       gk_path(what, 22, (state == "running") ? GK_TEXT : GK_CONTEXT), gk_rep(" ", 22 - (length(what) > 22 ? 22 : length(what))),
       GK_FAINT, when, GK_R,
       (state == "running") ? GK_TEXT : GK_CONTEXT, last, GK_R,
-      dir, label[kind], what, dir
+      dir, label, what, dir
   }'
