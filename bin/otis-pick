@@ -4,7 +4,7 @@
 # drawn by hand rather than by fzf, like the dashboard (otis-dash), a change
 # by symbol (otis-symbols) and a run of Claude's (otis-agent). It takes what
 # git-fzf took: the keys as "key=label" pairs, fzf's --bind, --preview,
-# --multi, --delimiter, --with-nth, --id-nth, --header, --query, --search,
+# --multi, --delimiter, --with-nth, --nth, --id-nth, --header, --query, --search,
 # --disabled, --header-from-state and its own --preview-fill, and does what
 # the bindings say (execute, execute-silent, transform, reload,
 # refresh-preview, pos, first, up, down, toggle, select, select-all,
@@ -69,7 +69,7 @@ done
 integer fill=0
 preview= startacts= header= query= delim= idnth=0 keysfrom=
 integer hdr=0 searching=0 multi=0 disabled=0 lent=0
-typeset -a withnth ticks
+typeset -a withnth searchnth ticks
 typeset -A tevery tnext
 # --bind takes "key:actions" and "key1,key2:actions"; an event is bound like
 # a key.
@@ -109,6 +109,8 @@ while (( $# )); do
     --delimiter=*) delim=${1#--delimiter=}; shift ;;
     --with-nth) withnth=(${(s:,:)2}); shift 2 ;;
     --with-nth=*) withnth=(${(s:,:)${1#--with-nth=}}); shift ;;
+    --nth) searchnth=(${(s:,:)2}); shift 2 ;;
+    --nth=*) searchnth=(${(s:,:)${1#--nth=}}); shift ;;
     --id-nth) idnth=$2; shift 2 ;;
     --id-nth=*) idnth=${1#--id-nth=}; shift ;;
     --keys-from) keysfrom=$2; shift 2 ;;
@@ -214,7 +216,9 @@ resize() {
 # --- the rows --------------------------------------------------------------------
 # raw: each row as the list printed it; rid its id (the --id-nth field, or
 # the row itself); shw what --with-nth shows of it; head whether it is a
-# section's heading (drawn by the list as "── name ──"); hay what / searches.
+# section's heading (drawn by the list as "── name ──"); hay what / searches:
+# what is shown, or with --nth those fields (gl's whole subject, where its
+# row says less).
 typeset -a raw rid shw head hay PL HIDX
 integer loaded=0
 # fields <row>: its fields in fld, as fzf numbered them.
@@ -259,7 +263,15 @@ load() {
   fi
   pl=("${(@S)shw//$e\[[0-9;:?]#[a-zA-Z]/}")
   PL=("${(@S)pl//$e\][^$'\a'$e]#($'\a'|$e\\)/}")
-  hay=("${(@L)PL}")
+  if (( ! $#searchnth )); then hay=("${(@L)PL}")
+  else
+    hay=()
+    for (( i = 1; i <= $#raw; i++ )); do
+      fields $i; parts=()
+      for p in $searchnth; do nth $p; parts+=("${(@)reply}"); done
+      plain "${(j: :)parts}"; hay[i]=${(L)REPLY}
+    done
+  fi
   # The headings, found by the shell's own search of the list, a heading at
   # a time, rather than a test a row.
   head=("${(@)PL/*/0}") HIDX=()

@@ -49,7 +49,8 @@ function ufit(s, w,   i, n, L) {
 # most): the text as a preview may say it in about that many lines, and
 # never cut: of one that takes more, the sentences from its start that fit,
 # whole; the first whole whatever it takes, since a sentence that stops
-# halfway says nothing.
+# halfway says nothing. A clause ending in a colon is one too: what it leads
+# into is the detail ("Code nothing reached is gone: does.mjs, ...").
 function lines_of(s, w,   n, ws, i, line, k) {
   n = split(s, ws, " "); line = ""; k = 0
   for (i = 1; i <= n; i++) {
@@ -62,7 +63,7 @@ function kept(s, w, most,   n, ws, i, acc, best) {
   n = split(s, ws, " "); acc = ""; best = ""
   for (i = 1; i <= n; i++) {
     acc = acc (acc == "" ? "" : " ") ws[i]
-    if (ws[i] ~ /[.?!]["\047)\]]*$/ || i == n) {
+    if (ws[i] ~ /[.?!:]["\047)\]]*$/ || i == n) {
       if (best == "" || lines_of(acc, w) <= most) best = acc; else break
     }
   }

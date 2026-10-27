@@ -155,7 +155,7 @@ gl() {
   local args
   (( $# )) && args="${(q)@}"
   git-fzf 'log ' 'enter=read it by symbol,o=its files,t=tests,y=copy sha,f=fold staged in,r=reword' --ansi --no-sort \
-      --delimiter=$'\t' --with-nth=1 --id-nth=2 \
+      --delimiter=$'\t' --with-nth=1 --nth=1,3 --id-nth=2 \
       --bind "start:reload(git-log-list $args)" \
       --bind "resize:reload(git-log-list $args)" \
       --preview 'git-preview-commit --tests-toggle {2}' \
