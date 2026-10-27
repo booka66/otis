@@ -2,7 +2,8 @@
 # git-symbols <rev>                          a change read by symbol, not by file
 # git-symbols --rows <rev>                   its list
 # git-symbols --preview <rev> <path> <side> <start> <end> [row id]   one symbol's diff
-# git-symbols --open <id>                    show what a row uses
+# git-symbols --open <id>                    show what a row uses; on a ↑ row, open the rows above
+#                                            where its symbol is drawn whole and send the cursor there
 # git-symbols --close <id> [<reload command...>]
 #                                            hide it, from the row or from anything under it; with the
 #                                            reload command, h's transform: the fzf actions that put the
@@ -106,6 +107,17 @@ mode=
 case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
+
+# above <row id>: the row it is under, in $above, or nothing for a root. A
+# row's id is its parent's with ">symbol" or "+member" after it, so the parent
+# is the cut at whichever comes last; a member's + comes after the #, and one
+# before it is the path's (SvelteKit's +page.ts).
+above() {
+  a=${1%>*} b=
+  case $1 in *#*+*) case ${1##*#} in *+*) b=${1%+*} ;; esac ;; esac
+  [ "$a" = "$1" ] && a=
+  if [ ${#a} -gt ${#b} ]; then above=$a; else above=$b; fi
+}
 
 case $mode in
   --close-all) rm -f "$st/open"; exit 0 ;;
@@ -257,27 +269,34 @@ case $mode in
     esac
     printf '%s' "$text" | otis-copy && exec git-fzf-note "copied $text"
     exec git-fzf-note "no clipboard tool (pbcopy, wl-copy, xclip or xsel): $text" ;;
+  # On a ↑ row, l goes to where its symbol is drawn whole (its last field,
+  # in the last rows shown): every row above that opened, and the screen
+  # told to put the cursor there ($st/goto, otis-symbols).
   --open)
     [ -n "$1" ] || exit 0
+    home=$(awk -F'\t' -v id="$1" '$12 == id && $13 == "ref" { print $28; exit }' "$st/rows.last" 2>/dev/null)
+    if [ -n "$home" ]; then
+      above "$home"
+      while [ -n "$above" ]; do
+        grep -qxF -- "$above" "$st/open" 2>/dev/null || printf '%s\n' "$above" >> "$st/open"
+        above "$above"
+      done
+      printf '%s\n' "$home" > "$st/goto"
+      exit 0
+    fi
     grep -qxF -- "$1" "$st/open" 2>/dev/null || printf '%s\n' "$1" >> "$st/open"
     exit 0 ;;
   --close)
     # h on an open row closes it; on anything else, closes the row it is
-    # under: a row's id is its parent's with ">symbol" or "+member" after it,
-    # so the parent is the cut at whichever of the two comes last. Given the
-    # reload command, this is h's transform, and prints the actions: the
-    # cursor onto the row that closes, found in the last rows shown, then
-    # the reload; the row keeps its place, since only what was under it goes.
+    # under. Given the reload command, this is h's transform, and prints the
+    # actions: the cursor onto the row that closes, found in the last rows
+    # shown, then the reload; the row keeps its place, since only what was
+    # under it goes.
     row=$1; shift
     [ -n "$row" ] && [ -e "$st/open" ] || { [ $# -gt 0 ] && printf 'reload(%s)\n' "$*"; exit 0; }
     id=$row
     if ! grep -qxF -- "$id" "$st/open"; then
-      # A member's + comes after the #; one before it is the path's
-      # (SvelteKit's +page.ts).
-      a=${id%>*} b=
-      case $id in *#*+*) case ${id##*#} in *+*) b=${id%+*} ;; esac ;; esac
-      [ "$a" = "$id" ] && a=
-      if [ ${#a} -gt ${#b} ]; then id=$a; else id=$b; fi
+      above "$id"; id=$above
       # Under a sentence a member's class is no row: up again, to the nearest row that is open.
       case $id in sentence:*) while ! grep -qxF -- "$id" "$st/open" && [ "${id%>*}" != "$id" ]; do id=${id%>*}; done ;; esac
     fi
@@ -1443,7 +1462,8 @@ if [ "$mode" = --rows ]; then
       fi
       printf "${GK_CONTEXT}a row${GK_R}\n"
       printf "  ${GK_ATTENTION}~${GK_R} its signature changed, not only its body  ${GK_GOOD}+ 9${GK_R} ${GK_BAD}- 3${GK_R} lines it gained and lost   dim signature: removed\n"
-      printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: open above already, so L leaves it closed; l opens it here too\n"
+      printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: nothing under it that is not drawn above already, so L leaves it closed; l opens it\n"
+      printf "  ${GK_CONTEXT}\342\206\221${GK_R} a symbol drawn whole above: it shows once, where it first comes; its preview is its own, and l or enter goes to it\n"
       printf "  ${GK_GOOD}\342\234\223${GK_R} viewed, and the row dim: v marks a row and everything under it, and a symbol viewed under one row is viewed under every other; a mark lasts until the symbol's diff changes   ${GK_CONTEXT}3/5${GK_R} closed, three of the five symbols in it viewed\n"
       printf "  ${GK_ATTENTION}\342\207\242${GK_R} a call new to this change: top down the row above newly uses it, bottom up it newly uses the row above\n"
       [ -n "$GMR_IID" ] && printf "  the dim sentence at the top is Claude's one line on the change; under a root, its preview says why to read it first\n"
@@ -1498,14 +1518,15 @@ if [ "$mode" = --rows ]; then
   [ -n "$GIT_FZF_STATE" ] && header=$st/header && : > "$header"
   # Drawn by otis-symbols (OTIS_SYMBOLS_WIDTH, its list's width), each row
   # carries its parts after the twelve fzf reads, for it to lay out: 13
-  # what the row is (sym, callers, package, caller, file), 14 its depth,
-  # 15 its fold (open, closed, quiet: closed and dim, for a row open above
-  # or all viewed), 16 how many are under it, 17 what the change did, 18
+  # what the row is (sym, ref, callers, package, caller, file), 14 its depth,
+  # 15 its fold (open, closed, quiet: closed and dim, for a row with nothing
+  # under it that is not drawn above already, or all viewed), 16 how many are under it, 17 what the change did, 18
   # and 19 the lines it gained and lost, 20 viewed (all, or n/m of what is
   # under a closed row), 21 and 22 its open threads and drafts, 23 a call
   # new to the change, 24 dim, 25 its label (the signature cut to the width
   # left it, marked for highlight), 26 a caller's type errors (x, or fixed),
-  # 27 in a review what Claude's review did with it (read, grep).
+  # 27 in a review what Claude's review did with it (read, grep), 28 on a
+  # ref (a ↑ row) the id of the row its symbol is drawn whole at.
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
   FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
@@ -1671,19 +1692,22 @@ if [ "$mode" = --rows ]; then
           pick = 0
           for (i = 1; i <= m; i++) if ((i in sink) && !(i in placed) && (!pick || skey[i] < skey[pick])) pick = i
           if (!pick) break
-          placed[pick] = 1; roots++
-          show(pick, 0, row[pick, 1] "#" row[pick, 3], "|" row[pick, 1] "#" row[pick, 3] "|")
+          placed[pick] = 1; rootrow[++roots] = pick
         }
       }
-      # The tree: each root, opened where you have opened it. A symbol used by
-      # two roots shows under both; one that uses itself, up the tree, does not
-      # show again below. Roots come in Claude'"'"'s reading order once it has
-      # given one, then any it left out, by file and line.
+      # Top down, the roots come in Claude'"'"'s reading order once it has given
+      # one, then any it left out, by file and line.
       for (x = 1; x <= norder && !up; x++) if ((order[x] in at_id) && row[at_id[order[x]], 19] == 1 && !(order[x] in shown)) {
-        i = at_id[order[x]]; shown[order[x]] = 1; roots++
-        show(i, 0, order[x], "|" order[x] "|")
+        shown[order[x]] = 1; rootrow[++roots] = at_id[order[x]]
       }
-      for (i = 1; i <= m && !up; i++) if (row[i, 2] != "file" && row[i, 4] == "" && row[i, 19] == 1 && !((row[i, 1] "#" row[i, 3]) in shown)) { roots++; show(i, 0, row[i, 1] "#" row[i, 3], "|" row[i, 1] "#" row[i, 3] "|") }
+      for (i = 1; i <= m && !up; i++) if (row[i, 2] != "file" && row[i, 4] == "" && row[i, 19] == 1 && !((row[i, 1] "#" row[i, 3]) in shown)) rootrow[++roots] = i
+      # The tree: each root, opened where you have opened it. A symbol is drawn
+      # whole once, where it first comes with every row open, so it stays put
+      # as rows open and close; under any other row it is a ↑ line. One that
+      # uses itself, up the tree, does not show again below.
+      for (x = 1; x <= roots; x++) { id = row[rootrow[x], 1] "#" row[rootrow[x], 3]; home[id] = id }
+      for (x = 1; x <= roots; x++) { id = row[rootrow[x], 1] "#" row[rootrow[x], 3]; settle(rootrow[x], id, "|" id "|") }
+      for (x = 1; x <= roots; x++) { id = row[rootrow[x], 1] "#" row[rootrow[x], 3]; show(rootrow[x], 0, id, "|" id "|") }
       # What the change breaks without its calling anything changed: a type
       # it changed reached them through something else. A row of its own.
       if ("-" in ncall) callers("-", 0, "->callers")
@@ -1807,9 +1831,50 @@ if [ "$mode" = --rows ]; then
         else { id = row[i, 1] "#" row[i, 3]; show(i, 0, id, "|" id "|", 0) }
       }
     }
-    # show: one row, then, if it is open, its members and what it uses, a
-    # level in. The row'"'"'s id is its place in the tree, so the same symbol
-    # under two roots opens on its own.
+    # beneath: the rows under row i in the order the tree shows them, a class'"'"'s
+    # members then the changed symbols it mentions (turned over, what uses
+    # it), less any on the way down to it (anc): each as its row in kid, the
+    # step its id adds in step (+member or >symbol), and the way down to it in
+    # kanc. Returns how many. settle and show both walk the tree by it, so a
+    # home is always a row show draws.
+    function beneath(i, anc, kid, step, kanc,   p, name, nm, ms, nc, cs, x, n) {
+      p = row[i, 1]; name = row[i, 3]
+      nm = split(members[p "#" name], ms, " ")
+      for (x = 1; x <= nm; x++) if (ms[x] != "") { kid[++n] = ms[x]; step[n] = "+" row[ms[x], 3]; kanc[n] = anc }
+      nc = split(up ? users[p "#" name] : row[i, 18], cs, "|")
+      for (x = 1; x <= nc; x++) if (cs[x] != "" && (cs[x] in at_id) && !index(anc, "|" cs[x] "|")) { kid[++n] = at_id[cs[x]]; step[n] = ">" cs[x]; kanc[n] = anc "|" cs[x] "|" }
+      return n
+    }
+    # settle: home, the row each symbol under row i is drawn whole at: the
+    # first it comes to with every row open, top to bottom.
+    function settle(i, rid, anc,   n, kid, step, kanc, x, id) {
+      n = beneath(i, anc, kid, step, kanc)
+      for (x = 1; x <= n; x++) {
+        if (step[x] ~ /^>/) { id = substr(step[x], 2); if (id in home) continue; home[id] = rid step[x] }
+        settle(kid[x], rid step[x], kanc[x])
+      }
+    }
+    # elsewhere: whether the symbol a step from rid goes to is drawn whole at
+    # another row. A member is always under its class; the cases tab settles
+    # no homes, so there every row is whole.
+    function elsewhere(step, rid,   id) {
+      if (step !~ /^>/) return 0
+      id = substr(step, 2)
+      return (id in home) && home[id] != rid step
+    }
+    # fzfrow: the fields fzf reads after a symbol row'"'"'s display, its id last.
+    function fzfrow(i, rid) {
+      return "\t" row[i, 1] "\t" row[i, 10] "\t" row[i, 7] "\t" row[i, 8] "\t" row[i, 9] "\t" row[i, 14] "\t" row[i, 15] "\t" row[i, 16] "\t" row[i, 17] "\t" row[i, 2] "\t" rid
+    }
+    # gutter: three columns a level, and a new call ⇢ right before the fold,
+    # where the eye is; the right end of a row is where a signature gets cut.
+    function gutter(i, depth, parent,   s, x) {
+      s = ""; for (x = 0; x < depth; x++) s = s "   "
+      if (newedge(parent, i)) s = substr(s, 1, length(s) - 3) GK_ATTENTION "\342\207\242" GK_R "  "
+      return s
+    }
+    # show: one row, then, if it is open, what is under it, a level in. The
+    # row'"'"'s id is its place in the tree.
     # new edge: whether the row under a parent is there by a mention new to
     # the change: top down the parent newly uses the child, bottom up the
     # child newly uses the parent.
@@ -1818,25 +1883,17 @@ if [ "$mode" = --rows ]; then
       if (up) return index("|" row[child, 20] "|", "|" row[parent, 1] "#" row[parent, 3] "|") > 0
       return index("|" row[parent, 20] "|", "|" row[child, 1] "#" row[child, 3] "|") > 0
     }
-    function show(i, depth, rid, anc, parent,   p, kind, name, par, ex, ch, side, s, e, at, add, del, head, os, oe, stg, un, \
-                  kids, nm, ms, x, cid, nc, cs, indent, room, fold, th, again, done, dim, vc, stat) {
+    function show(i, depth, rid, anc, parent,   p, kind, name, par, ex, ch, add, del, head, stg, un, \
+                  kids, n, kid, step, kanc, refs, x, room, fold, th, again, done, dim, vc, stat) {
       p = row[i, 1]; kind = row[i, 2]; name = row[i, 3]; par = row[i, 4]; ex = row[i, 5]; ch = row[i, 6]
-      side = row[i, 7]; s = row[i, 8]; e = row[i, 9]; at = row[i, 10]; add = row[i, 11]; del = row[i, 12]; head = row[i, 13]
-      os = row[i, 14]; oe = row[i, 15]; stg = row[i, 16]; un = row[i, 17]
-      nm = split(members[p "#" name], ms, " ")
-      nc = split(up ? users[p "#" name] : row[i, 18], cs, "|")
-      kids = 0
-      for (x = 1; x <= nm; x++) if (ms[x] != "") kids++
-      for (x = 1; x <= nc; x++) if (cs[x] != "" && (cs[x] in at_id) && index(anc, "|" cs[x] "|") == 0) kids++
+      add = row[i, 11]; del = row[i, 12]; head = row[i, 13]; stg = row[i, 16]; un = row[i, 17]
+      kids = n = beneath(i, anc, kid, step, kanc)
+      for (x = 1; x <= n; x++) if (elsewhere(step[x], rid)) refs++
       if (par == "" && ((p "#" name) in ncall)) kids++
-      indent = ""; for (x = 0; x < depth; x++) indent = indent "   "
-      # A new call sits in the gutter, ⇢ right before the fold, where the
-      # eye is; the right end of a row is where a signature gets cut.
-      if (newedge(parent, i)) indent = substr(indent, 1, length(indent) - 3) GK_ATTENTION "\342\207\242" GK_R "  "
-      # A symbol under two parents opens once: open-all opens its first
-      # occurrence, and a later one stays closed, its fold dim to say what
-      # is under it is above already. l on it still opens it.
-      again = kids && ((p "#" name) in opened)
+      # Nothing under it to read here: in the tree, every row under it is a
+      # ↑; in a case, the symbol is open above already. L leaves it closed,
+      # its fold dim; l on it still opens it.
+      again = kids && (refs == kids || ((p "#" name) in opened))
       # Viewed: the row ✓ and dim once it is, and, closed, all under it is
       # too; a closed row with some of it viewed says how much. What is
       # all viewed L leaves closed, as it does a row open above already.
@@ -1868,18 +1925,22 @@ if [ "$mode" = --rows ]; then
         th = threads(to, td)
       }
       stat = glyph(ch) gk_stat(add, del, wa, wd); if (dim) stat = dimmed(stat)
-      print (wt ? cells(ch, stg, un) : "") stat "  " th vc indent fold head \
-        "\t" p "\t" at "\t" side "\t" s "\t" e "\t" os "\t" oe "\t" stg "\t" un "\t" kind "\t" rid \
+      print (wt ? cells(ch, stg, un) : "") stat "  " th vc gutter(i, depth, parent) fold head fzfrow(i, rid) \
         (draw ? "\tsym\t" depth "\t" (kids ? ((rid in open) ? "open" : (again || done) ? "quiet" : "closed") : "") "\t" kids "\t" ch "\t" add "\t" del \
           "\t" (dim ? "all" : (kids && !(rid in open) && vdone) ? vdone "/" vtot : "") "\t" to "\t" td "\t" (newedge(parent, i) ? 1 : "") "\t" (dim ? 1 : "") "\t" lab "\t\t" cm[p "#" (par != "" ? par : name)] : "")
       if (!(rid in open)) return
-      for (x = 1; x <= nm; x++) if (ms[x] != "") show(ms[x], depth + 1, rid "+" row[ms[x], 3], anc, i)
-      for (x = 1; x <= nc; x++) {
-        cid = cs[x]
-        if (cid == "" || !(cid in at_id) || index(anc, "|" cid "|")) continue
-        show(at_id[cid], depth + 1, rid ">" cid, anc "|" cid "|", i)
+      for (x = 1; x <= n; x++) {
+        if (elsewhere(step[x], rid)) ref(kid[x], depth + 1, rid step[x], i)
+        else show(kid[x], depth + 1, rid step[x], kanc[x], i)
       }
       if (par == "" && ((p "#" name) in ncall)) callers(p "#" name, depth + 1, rid ">callers")
+    }
+    # ref: a symbol drawn whole at another row (its home), as one dim line, ↑
+    # and its name, that l and enter go to (--open). Its fields are the
+    # symbol'"'"'s, so its preview is the symbol'"'"'s.
+    function ref(i, depth, rid, parent) {
+      print (wt ? "      " : "") "  " gk_stat("", "", wa, wd) "  " (mr ? "      " : "") "     " gutter(i, depth, parent) "    " GK_CONTEXT "\342\206\221 " row[i, 3] GK_R fzfrow(i, rid) \
+        (draw ? "\tref\t" depth "\t\t\t" row[i, 6] "\t\t\t\t\t\t" (newedge(parent, i) ? 1 : "") "\t1\t" row[i, 3] "\t\t\t" home[row[i, 1] "#" row[i, 3]] : "")
     }
     # callers: the dim row under a symbol for its callers elsewhere, and,
     # open, the callers themselves by package, a dim row naming each package
@@ -1927,6 +1988,8 @@ if [ "$mode" = --rows ]; then
     }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" "$flagf" | highlight |
     if [ "$sentf" != /dev/null ]; then cat; else OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package; fi | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
+  # Whose order the roots are in, for the heading over them (otis-symbols).
+  if [ -n "$GIT_FZF_STATE" ]; then if [ -s "$order" ]; then : > "$st/by-claude"; else rm -f "$st/by-claude"; fi; fi
   rm -f "$counts" "$order" "$vw"
   [ -n "$GIT_FZF_STATE" ] || exit 0
   if [ "${syms:-0}" -gt 0 ]; then

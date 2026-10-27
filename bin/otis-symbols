@@ -356,7 +356,7 @@ rowline() {
       esac
       # What the change did to it, a glyph; a caller, whether it breaks.
       case $typ[i]:$chg[i]:$err[i] in
-        caller:*:x) put "$X" "✗ " ;; caller:*:fixed) put "$G" "✓ " ;;
+        caller:*:x) put "$X" "✗ " ;; caller:*:fixed) put "$G" "✓ " ;; ref:*) put "$C" "↑ " ;;
         *:signature:*) put "$B$A" "~ "; line+=$UB ;; *:added:*) put "$G" "+ " ;; *:removed:*) put "$X" "- " ;;
         sym:*|file:*) put "$F" "· " ;; *) put "" "  " ;;
       esac
@@ -380,7 +380,7 @@ rowline() {
           lcs=$C$dir$R${${dim[i]:+$C}:-$T}$nm ;;
         callers) lcs=$lc ;;
         package) lcs=$EL$lc ;;
-        caller) lcs=$C$lc ;;
+        caller|ref) lcs=$C$lc ;;
       esac
       # Whole, on as many lines as it takes, each under where it starts, the
       # tree's lines carried down beside it; the right's cells are on the
@@ -543,7 +543,8 @@ list() {
     [[ $typ[i] == sent ]] && sentrow=$i first=0
     if (( first )) && [[ $typ[i] != (head|plain|file) ]]; then
       if [[ -e $st/up ]]; then L+=("  ${C}SINKS FIRST$R  ${F}what uses them under each · b turns it back$R")
-      else L+=("  ${C}START HERE$R  ${F}in reading order · b for the sinks first$R"); fi
+      elif [[ -e $st/by-claude ]]; then L+=("  ${C}START HERE$R  ${F}in Claude's order · b for the sinks first$R")
+      else L+=("  ${C}START HERE$R  ${F}by file and line · b for the sinks first$R"); fi
       LI+=(0); first=0
     fi
     if [[ $typ[i] == head ]]; then
@@ -1508,17 +1509,17 @@ crumb() {
   fields $i
   line= used=0
   case $typ[i] in
-    sym|caller|file|plain)
+    sym|ref|caller|file|plain)
       p=$fld[2]
       if [[ -n $p ]]; then
         [[ $p == */* ]] && put "$C" "${p:h}/"
-        put "$T" "${p:t}"; [[ -n $fld[3] && $fld[3] != 1 || $typ[i] == sym ]] && put "$C" ":$fld[3]"
+        put "$T" "${p:t}"; [[ -n $fld[3] && $fld[3] != 1 || $typ[i] == (sym|ref) ]] && put "$C" ":$fld[3]"
       fi
       case $chg[i] in
         signature) put "$C" "  ·  "; put "$A" "signature changed" ;;
         added) put "$C" "  ·  "; put "$G" "added" ;;
         removed) put "$C" "  ·  "; put "$X" "removed" ;;
-        body) [[ $typ[i] == sym ]] && { put "$C" "  ·  "; put "$C" "body changed"; } ;;
+        body) [[ $typ[i] == (sym|ref) ]] && { put "$C" "  ·  "; put "$C" "body changed"; } ;;
       esac
       [[ $typ[i] == caller ]] && { put "$C" "  ·  "; put "$C" "not in the change"; }
       ;;
@@ -1533,8 +1534,11 @@ crumb() {
         *) (( bycase )) && put "$T" "changed lines no case runs" || put "$T" "in the change, in no part" ;;
       esac ;;
   esac
-  # The way down to it: each step's name, a member's with its class.
-  steps=("${(@s:>:)rid[i]}")
+  # The way down to it: each step's name, a member's with its class. A ↑
+  # row's is the way down to where its symbol is drawn whole.
+  local under="under "
+  if [[ $typ[i] == ref ]]; then steps=("${(@s:>:)fld[28]}") under="drawn whole under "
+  else steps=("${(@s:>:)rid[i]}"); fi
   if (( $#steps > 1 )); then
     for s in $steps[1,-2]; do
       [[ $s == callers ]] && { names+=("callers"); continue; }
@@ -1542,7 +1546,7 @@ crumb() {
       n=${s#*\#}; n=${n#type }; n=${n//+/.}
       names+=("$n")
     done
-    put "$C" "  ·  under "; put "$T" "${(j: › :)names}"
+    put "$C" "  ·  $under"; put "$T" "${(j: › :)names}"
   fi
   cut "$line" $(( pw - 1 )); REPLY=$REPLY
 }
@@ -1565,6 +1569,9 @@ symkeys() {
       else rkl[h]="" rkl[l]="its symbols: ${kids[i]}" rkl[enter]="its symbols: ${kids[i]}"; fi
       if [[ $vwd[i] == all ]]; then rkl[v]="mark all under it not viewed"; else rkl[v]="mark all under it viewed"; fi
       return ;;
+    # A ↑ row points at its symbol, drawn whole above: going there is what it
+    # does, and a key left with no label here does nothing on it (handle).
+    ref) rkl=(l "go to it" enter "go to it" v "" i "" F "" space ""); [[ -n $GMR_IID ]] && rkl[c]=""; return ;;
   esac
   case $fold[i] in
     closed|quiet) if (( kids[i] > 0 )); then rkl[l]="open it: ${kids[i]} under it"; else rkl[l]="open it"; fi; rkl[h]="" ;;
@@ -1622,8 +1629,8 @@ helplines() {
   done
   P+=("" "  ${B}${T}a row$R" ""
     "  ${B}${A}~$R$C its signature changed   $G+$R$C added   $X-$R$C removed   $F·$R$C its body alone$R"
-    "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: open above already, or all viewed$R"
-    "  ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
+    "  ${A}▸$R$C closed, the count after its name what is under it   ${A}▾$R$C open   $C▸ dim: nothing under it not drawn above already, or all viewed$R"
+    "  $C↑$R$C drawn whole above: l goes to it   ${A}⇢$R$C a call new to this change   $G✓$R$C viewed   ${C}3/5$R$C of what is under it   ${X}✗$R$C a caller the change breaks$R"
     "  ${G}●$R$C in a review, the agent's review opened it in the file   ${EL}◐$R$C searched for it   neither: read in the diff alone$R")
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
   panewrap $(( pw - 2 ))
@@ -1850,12 +1857,16 @@ draw() {
 # keys keep working on the rows there are meanwhile. lastlist is the last
 # one asked for, the list a resize and a landing reload with.
 typeset -a rpid
-integer rgen=0 rgot=0
-lastlist= fulllist=
+integer rgen=0 rgot=0 gotogen=0
+lastlist= fulllist= goto=
 reload() {
   local cmd=$1
   lastlist=$cmd
   (( rgen++ ))
+  # l on a ↑ row (git-symbols --open) names the row its symbol is drawn whole
+  # at, for this reload to land on: a list asked for before it has not opened
+  # the rows above that one.
+  if [[ -r $st/goto ]]; then goto=$(<$st/goto) gotogen=$rgen; rm -f $st/goto; fi
   { OTIS_LIST_WRAPS=1 zsh -fc "$cmd" > $st/list.$rgen.tmp 2>/dev/null </dev/null; mv -f $st/list.$rgen.tmp $st/list.$rgen } >/dev/null &!
   rpid+=($!)
 }
@@ -1887,6 +1898,10 @@ landed() {
   elif (( cur )); then poff=${offs[$rid[cur]]:-0}; fi
   # The previews again once the rows are not the rows they were drawn for.
   [[ ${(j:\n:)raw} != $old ]] && { (( gen++ )); warm; }
+  if (( gotogen && rgot >= gotogen )); then
+    for (( i = 1; i <= $#rid; i++ )); do [[ $rid[i] == $goto ]] && { go $i; break; }; done
+    gotogen=0
+  fi
   return 0
 }
 integer pcur=1
@@ -2699,8 +2714,14 @@ handle() {
   # picker says are cheap (--repeat) act on every repeat. A repeat is the
   # same key again with no other between: v, j, v quickly is two files
   # marked, and the second v was dropped as if v were held.
-  # A sentence has no file to open: enter opens it, or closes it.
+  # A sentence has no file to open: enter opens it, or closes it. A ↑ row's
+  # enter goes where its l does, to its symbol drawn whole.
   [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == sent ]] && { [[ $fold[cur] == open ]] && n=h || n=l; }
+  [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == ref ]] && n=l
+  if (( cur )) && [[ $typ[cur] == ref ]]; then
+    symkeys
+    (( ${+rkl[$n]} )) && [[ -z $rkl[$n] ]] && { flash="a ↑ row: l goes to its symbol, drawn whole above"; return; }
+  fi
   if [[ -n $bind[$n] ]]; then
     if [[ -z $repeat[$n] && $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
     used $n

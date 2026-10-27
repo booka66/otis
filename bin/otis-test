@@ -1050,9 +1050,9 @@ EOF
   unset OTIS_WORDS
   expect symbols/close-from-child "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts')" "0"
   # run used Opts before the change and fresh is new, so only under fresh is
-  # the mention a new call.
+  # the mention a new call: there Opts is a ↑, drawn whole under run.
   GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#run'; GIT_FZF_STATE=$tmp/symst git-symbols --open 'lib.ts#fresh'
-  expect symbols/new-call "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'type Opts' | grep -c '⇢')" "1"
+  expect symbols/new-call "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'type Opts\|↑ Opts' | grep -c '⇢')" "1"
   expect symbols/new-call-under-fresh "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -A1 'const fresh' | tail -1 | grep -c '⇢  ')" "1"
   # Bottom up: the sinks first, Opts opening to run and fresh, its callers.
   GIT_FZF_STATE=$tmp/symst git-symbols --flip
@@ -1412,12 +1412,20 @@ EOF
   expect gloss/member-header "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 7 9 'lib.ts#Box+grow' | strip | grep -c 'grows by two')" "1"
   rm -f "$gdir/$base-$head.json"
   GIT_FZF_STATE=$tmp/symst git-symbols --open-all "$base..$head"
-  expect symbols/open-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "4"
-  # type Pair sits under usePairToo and under tpl's usePair; open-all opens it once.
+  # Opts is drawn whole once, under run; fresh and Wide use nothing else, so
+  # open-all leaves them closed.
+  expect symbols/open-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "2"
+  # type Pair sits under usePairToo and under tpl's usePair: whole under the
+  # first, a ↑ under usePair, which open-all leaves closed and dim.
+  sym() { GIT_FZF_STATE=$tmp/symst OTIS_SYMBOLS_WIDTH=100 git-symbols --rows "$base..$head" | awk -F'\t' -v id="$1" -v f="$2" '$12 == id { print $f }'; }
   expect symbols/open-once "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'const Pair')" "1"
-  expect symbols/open-once-marked "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'type Pair')" "2"
+  expect symbols/open-once-quiet "$(sym 'pair.ts#tpl>pair.ts#usePair' 15)" "quiet"
+  GIT_FZF_STATE=$tmp/symst git-symbols --open 'pair.ts#tpl>pair.ts#usePair'
+  expect symbols/ref-home "$(sym 'pair.ts#tpl>pair.ts#usePair>pair.ts#type Pair' 13):$(sym 'pair.ts#tpl>pair.ts#usePair>pair.ts#type Pair' 28)" "ref:pair.ts#usePairToo>pair.ts#type Pair"
+  # l on the ↑ goes home: what is above it opened, and the screen sent there.
+  GIT_FZF_STATE=$tmp/symst git-symbols --close 'pair.ts#usePairToo'
   GIT_FZF_STATE=$tmp/symst git-symbols --open 'pair.ts#tpl>pair.ts#usePair>pair.ts#type Pair'
-  expect symbols/open-again "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | cut -f1 | grep -c 'const Pair')" "2"
+  expect symbols/ref-goes-home "$(grep -cx 'pair.ts#usePairToo' "$tmp/symst/open"):$(cat "$tmp/symst/goto")" "1:pair.ts#usePairToo>pair.ts#type Pair"
   GIT_FZF_STATE=$tmp/symst git-symbols --close-all
   expect symbols/close-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "0"
   expect symbols/preview "$(git-symbols --preview "$base..$head" lib.ts new 2 4 | strip | grep -c 'twice\|return o.a')" "2"

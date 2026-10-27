@@ -1877,10 +1877,11 @@ function pageCss(font) {
 // (--draw), for the page's other screen: every row the tree opens to, each
 // drawn open and closed, and each one's preview, wrapped as the pane wraps
 // it. A row's closed line is the first of these runs to show it closed:
-// nothing open (the screen as it opens), L's (a symbol open above stays
-// closed, dim), then the tree a level deeper each run until all of it is
-// open. None of your v marks or a review's threads: the page is the
-// change's, not your reading of it. Null when git-symbols reads nothing.
+// nothing open (the screen as it opens), L's (a row with nothing under
+// it not drawn above stays closed, dim), then the tree a level deeper each
+// run until all of it is open. None of your v marks or a review's
+// threads: the page is the change's, not your reading of it. Null when
+// git-symbols reads nothing.
 // up: the tree turned over, sinks first (b's, $st/up).
 const SYM_ROWS = 1500;
 const drawnPreviews = new Map();
