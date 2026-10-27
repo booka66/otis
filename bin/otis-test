@@ -69,6 +69,21 @@ expect rowfmt/width-narrow "$(awk_fn 'gk_list_width(110)')" "107"
 expect rowfmt/width-side-by-side "$(awk_fn 'gk_list_width(120)')" "57"
 expect rowfmt/width-wide "$(awk_fn 'gk_list_width(220)')" "125"
 
+# --- share/row-wrap.awk: a picker's row too long for its list goes on under
+# its text, whole, its colors carried; one that fits is as it is.
+rw() { printf '%b\n' "$2" | LC_ALL=C awk -v w="$1" -f "$share/row-wrap.awk" | tr '\036' '\n' | strip; }
+expect row-wrap/under-its-text "$(rw 40 'abc1234   2d  \033[33mThe screen keeps the plan after a fuse, because seam hands it over\033[0m' | tr '\n' '|')" \
+  "abc1234   2d  The screen keeps the plan |              after a fuse, because seam|              hands it over|"
+expect row-wrap/colors-carried "$(printf 'abc1234   2d  \033[33mThe screen keeps the plan after a fuse\033[0m\n' | LC_ALL=C awk -v w=30 -f "$share/row-wrap.awk" | tr '\036' '\n' | sed -n 2p | grep -c '33m')" "1"
+expect row-wrap/fits "$(rw 40 'abc1234   2d  Short')" "abc1234   2d  Short"
+expect row-wrap/path-at-a-slash "$(rw 40 '.M  +2 ███  packages/billing/src/handlers/refund.ts' | tr '\n' '|')" ".M  +2 ███  packages/billing/src/|            handlers/refund.ts|"
+# The few lines a screen wraps itself (screen.zsh's wrapc) break where a
+# list's rows do.
+for t in 'The screen keeps the plan after a fuse, because seam hands it over' 'abcde fghi jklm nop' \
+  'see path/to/somewhere/deep/in/the/tree.ts and more' 'a replyModelTestCaseHandlerFactory goes_on_and_on_further'; do
+  expect "row-wrap/as-wrapc-${t%% *}" "$(rw 20 "$t")" "$(st=/nonexistent zsh -fc '. "$1/screen.zsh"; wrapc "$2" 20 2; print -rl -- "${reply[@]}"' - "$share" "$t" 2>/dev/null | strip)"
+done
+
 # --- share/otis.jq
 expect jq/gid "$(jq_fn '"gid://gitlab/Ci::Pipeline/123" | gid')" "123"
 expect jq/gid-null "$(jq_fn 'null | gid')" ""
@@ -103,6 +118,19 @@ git diff --no-index -U9 "$tmp/delta/a.ts" "$tmp/delta/b.ts" > "$tmp/delta/d"
 drawn() { (. "$share/delta.sh"; OTIS_C_ROOT=1; OTIS_C_sideBySide=$1; FZF_PREVIEW_COLUMNS=100; gk_delta --file-style omit < "$tmp/delta/d"); }
 expect delta/each-side-colored-as-its-file "$(drawn | grep -c 'return [ab0];\|export function\|if (')|$(drawn | strip | grep -c 'return [ab0];')" "0|3"
 expect delta/side-by-side-too "$(drawn always | grep -c 'return [ab0];\|export function\|if (')|$(drawn always | strip | grep -c '│ *6 *│  return a; *│ *7 *│    return 0;')" "0|1"
+# A hunk is headed by the function it is in, and by nothing where git's line
+# over it names none (a heredoc's EOF, a sentence of prose); a note in
+# quotes, the symbol view's, stays.
+printf '%s\n' '--- a/x.sh' '+++ b/x.sh' '@@ -3 +3 @@ dots() {' '-a' '+b' '@@ -9 +9 @@ EOF' '-c' '+d' '@@ -20 +20 @@ "grows by two"' '-e' '+f' > "$tmp/delta/h"
+heads=$( (. "$share/delta.sh"; OTIS_C_ROOT=1; FZF_PREVIEW_COLUMNS=60; gk_delta --file-style omit < "$tmp/delta/h") | strip)
+expect delta/hunk-names-its-function "$(printf '%s\n' "$heads" | grep -c 'dots() │\|"grows by two" │'):$(printf '%s\n' "$heads" | grep -c 'EOF')" "2:0"
+# The pane wraps a long line of a diff under its code, reading the line
+# numbers as delta.sh has delta draw them.
+printf 'one\n' > "$tmp/delta/l1"; printf 'one\nRun it: a menu of short guided tours, most of them hands-on\n' > "$tmp/delta/l2"
+git diff --no-index "$tmp/delta/l1" "$tmp/delta/l2" > "$tmp/delta/l"
+expect pane-wrap/diff-under-code "$( (. "$share/delta.sh"; OTIS_C_ROOT=1; FZF_PREVIEW_COLUMNS=40; gk_delta --file-style omit < "$tmp/delta/l") |
+  LC_ALL=C awk -v w=40 -v cont=/dev/null -f "$share/pane-wrap.awk" | strip | sed -n '/Run it/,$p' | tr '\n' '|')" \
+  "    ⋮  2 │Run it: a menu of short |    ⋮    │guided tours, most of them |    ⋮    │hands-on|"
 rm -rf "$tmp/delta"
 
 # --- share/story-pane.mjs: in a case's route, a line the change removed and
@@ -328,6 +356,10 @@ git-stack --sweep > /dev/null
 expect stack/sweep-keeps-live "$(ls "$st" | tr '\n' ' ')" "kept "
 expect stack/sweep-keeps-current "$(git config --get glab.currentstack)" "kept"
 rm -rf "$st"; git config --unset glab.currentstack; git branch -D alive-layer >/dev/null 2>&1
+
+# --- otis-config: what a setting does is one paragraph, for the pane to wrap
+# at its own width, not the lines this file's list is broken in.
+expect config/about-one-paragraph "$(otis-config --about forge | sed -n 1p | grep -c 'github when origin is on github.com, else gitlab')" "1"
 
 # --- git-log-list, git-file-list: the row shape the pickers rely on
 expect log-list/fields "$(git-log-list | strip | awk -F'\t' '{ print NF }' | sort -u)" "2"

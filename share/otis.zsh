@@ -146,7 +146,8 @@ _g_free_branch() {
 # The log, newest first; bare gl shows the newest 500 and says so in the
 # footer (git-log-list). f folds what is staged into the commit under the
 # cursor, as gfx does, and r rewords it; either only takes this branch's own
-# commits (git-log-do), and the list reloads with the rewritten ones.
+# commits (git-log-do), and the list reloads with the rewritten ones. It
+# reloads at a new width too, where a row has room for its author or not.
 gl() {
   _g_repo || return 1
   # Not "${(q)@}": with no positional args that expands to a literal '', and
@@ -156,6 +157,7 @@ gl() {
   git-fzf 'log ' 'enter=read it by symbol,o=its files,t=tests,y=copy sha,f=fold staged in,r=reword' --ansi --no-sort \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 \
       --bind "start:reload(git-log-list $args)" \
+      --bind "resize:reload(git-log-list $args)" \
       --preview 'git-preview-commit --tests-toggle {2}' \
       --bind 't:execute-silent(git-test-files toggle)+refresh-preview' \
       --preview-window '<66(down,75%,border-top,wrap)' \

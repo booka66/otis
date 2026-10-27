@@ -2,7 +2,8 @@
 # otis-symbols): each line cut to the pane (w). A long line breaks at its last
 # space that fits (mid-word only when there is none), and each piece after the
 # first starts with the line's own lead, its indent and any bar it opens with
-# (│ ┃ ▌), in the line's colors, so a thread or a callout stays one block. The
+# (│ ┃ ▌), in the line's colors, so a thread or a callout stays one block,
+# and a line of a diff goes on under its code, not its line numbers. The
 # colors in force at the break carry on into the next piece. Which lines are
 # such pieces, and how wide their lead is, goes to cont, so text selected in
 # the pane copies as the lines it was rather than as the pane broke them.
@@ -42,14 +43,20 @@ function out(s, piece) { print s; on++; if (piece) print on, lw > cont }
     while (j <= L && substr($0, j, 1) ~ /[\200-\277]/) j++
     u[++n] = substr($0, i, j - i); vis[n] = 1; i = j
   }
-  # The lead: spaces and bars before the text.
-  lead = ""; lw = 0
+  # The lead: spaces and bars before the text, and on a diff's line delta's
+  # numbers (" 29 ⋮ 29 │"), blanked, so what runs on goes under the code.
+  p = $0; gsub(/\033\[[0-9;:]*m/, "", p)
+  gw = 0
+  if (match(p, /^ *[0-9]* *\342\213\256 *[0-9]* *\342\224\202/)) { q = substr(p, 1, RLENGTH); gsub(/[\200-\277]/, "", q); gw = length(q) }
+  lead = ""; lw = 0; glead = ""
   for (k = 1; k <= n; k++) {
     if (!vis[k]) { lead = lead u[k]; continue }
+    if (lw < gw) { lead = lead (u[k] ~ /^[0-9]$/ ? " " : u[k]); if (++lw == gw) glead = lead; continue }
     if (u[k] == " " || u[k] == "\342\224\202" || u[k] == "\342\224\203" || u[k] == "\342\226\214") { lead = lead u[k]; lw++; continue }
     break
   }
-  if (lw > w / 2) { lead = ""; lw = 0 }
+  # Code indented past half the pane goes on under its line numbers alone.
+  if (lw > w / 2) { lead = glead; lw = gw }
   # Ended by a reset: a color that opens the text after it (a sha's) is the
   # text's, and a piece after the first takes the colors in force at its break.
   lead = lead "\033[0m"

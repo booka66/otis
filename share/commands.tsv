@@ -9,10 +9,10 @@
 # a column and the rest run on after it; group is the first one's name.
 look	otis	otis			the board: every change a row that says its next move, and enter does it; everything else in groups under them	? lists its keys
 look	gs	gs			status	
-look	gl	gl		[range]	log; enter opens a file, f folds staged changes in, r rewords	gl origin/main..
+look	gl	gl		[range]	log; enter reads a commit by symbol, o opens its files, f folds staged changes in, r rewords	gl origin/main..
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
-look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens its MR, d deletes (M marks the safe ones)	
-change	ga	ga			stage panel; space stages, p hunks, c commits, d discards, P parks in a stash, enter opens your editor	ga <path>
+look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens an MR for it, d deletes (M marks the safe ones)	
+change	ga	ga			what you changed, by symbol: space stages one, c commits, enter opens your editor; f opens the files, where p stages hunks, d discards, P parks in a stash	ga <path>
 change	gcm	gcm			commit in your editor with the diff below	gcm "subject" for a one-liner
 change	gam	gam			fold staged changes into the last commit, restacking branches above	gam "subject", gam -e to rewrite it
 change	gwip	gwip	gunwip		set work aside as a commit, and bring it back	

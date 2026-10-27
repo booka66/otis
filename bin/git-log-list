@@ -1,11 +1,14 @@
 #!/bin/sh
 # Rows for gl: what you see, then tab-separated the commit's sha.
 #
-# The fixed zone is the sha and how long ago the commit landed, and is never
-# cut. Then the subject, which is what you are reading the log for. Then the
-# refs and the author, which a narrow pane can drop: refs used to sit *before*
-# the subject, so a single commit carrying "(HEAD -> main, origin/main, tag:
-# v2.1)" pushed every subject on the screen forty columns to the right.
+# The fixed zone is the sha and how long ago the commit landed. Then the
+# subject, which is what you are reading the log for, whole: a long one goes
+# on under itself (otis-pick). Then the refs, and the author where the list
+# has room for one after a subject of 72 columns (git-commit-check's
+# longest), its name kept to one line; a narrow list leaves the author to
+# the preview. Refs used to sit *before* the subject, so a single commit
+# carrying "(HEAD -> main, origin/main, tag: v2.1)" pushed every subject on
+# the screen forty columns to the right.
 #
 # The age is relative rather than a date, as gb and gw show it: four columns
 # instead of ten, and "3h" answers the question a log is usually asked.
@@ -64,8 +67,10 @@ git log --format=%h '@{upstream}..HEAD' > "$tmp.held" 2>/dev/null || echo none >
 git log ${cap:+-n $((cap + 1))} --format='%h%x1f%ct%x1f%d%x1f%s%x1f%an' "$@" > "$tmp.rows"
 wait
 awk -F'\037' -v minef="$tmp.mine" -v heldf="$tmp.held" -v cap="$cap" -v out="${GIT_FZF_STATE:+$GIT_FZF_STATE/footer}" \
-    "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
+    -v cols="${FZF_COLUMNS:-0}" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {
+    # The sha and age take 14 columns, a subject up to 72, the author 14.
+    authors = gk_list_width(cols) >= 100
     while ((getline l < minef) > 0) mine[l] = 1
     close(minef)
     while ((getline l < heldf) > 0) {
@@ -88,11 +93,13 @@ awk -F'\037' -v minef="$tmp.mine" -v heldf="$tmp.held" -v cap="$cap" -v out="${G
     yours = (sha in mine)
     unpushed = (sha in held)
     sub(/^ *\(/, "", refs); sub(/\)$/, "", refs)
+    # A no-break space between its names, so a row that wraps never parts them.
+    gsub(/ /, "\302\240", who)
     print (unpushed ? GK_YOURS : yours ? GK_ATTENTION : GK_FAINT) sha GK_R " " \
       GK_CONTEXT gk_padl(ago($2), 4) GK_R "  " \
       (yours ? GK_TEXT : GK_CONTEXT) subj GK_R \
       (refs != "" ? "  " GK_MAIN refs GK_R : "") \
-      "  " GK_CONTEXT who GK_R "\t" sha
+      (authors ? "  " GK_CONTEXT who GK_R : "") "\t" sha
   }
   END {
     if (out == "") exit

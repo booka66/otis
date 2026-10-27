@@ -11,6 +11,10 @@
 # picker's own "key=label" list, read out of the source of the command that
 # opens it -- the same list that already drives the footer and the ? help, so a
 # key added there shows up here without being told.
+#
+# To a terminal each line is broken at spaces to its width, what runs on
+# under the line's text (wrapped), and what is taller than the terminal
+# opens in a pager, which leaves when it fits; into a pipe it is as written.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 table=$share/commands.tsv
@@ -18,10 +22,10 @@ table=$share/commands.tsv
 cmd=$1
 [ -n "$cmd" ] || { echo "usage: otis-help <command> | otis-help --all" >&2; exit 2; }
 
-# --all is the cheat sheet gg prints: every row, grouped as the table groups
+# all: the cheat sheet gg prints: every row, grouped as the table groups
 # them, the first command of a group padded to a column and the rest running on
-# after it.
-if [ "$cmd" = --all ]; then
+# after it. The first column as wide as its widest name.
+all() {
   c=$(printf "${GK_ATTENTION}") d=$(printf "${GK_ELSEWHERE}") m=$(printf "${GK_CONTEXT}") r=$(printf "${GK_R}")
   printf "%sin every picker%s\n" "$c" "$r"
   printf "  %sj k%s  move   %sg G%s  top, bottom   %s/%s  search   %sesc%s  stop searching, then clear, then quit   %sq%s  quit\n" \
@@ -29,92 +33,108 @@ if [ "$cmd" = --all ]; then
   printf "  %sctrl-d ctrl-u%s  scroll the preview   %sctrl-e ctrl-y%s  by a line   %s?%s  every key this picker has\n" \
     "$d" "$r" "$d" "$r" "$d" "$r"
   printf "  %sany command%s --help   what it does and every key it has\n" "$d" "$r"
-  # Each line broken at spaces to the terminal's width, what runs on under
-  # the summaries, rather than the terminal breaking it mid-word; not at all
-  # into a pipe. The first column as wide as its widest name.
-  cols=0; [ -t 1 ] && cols=$(tput cols 2>/dev/null || echo 0)
-  LC_ALL=C awk -F'\t' -v c="$c" -v d="$d" -v m="$m" -v r="$r" -v cols="$cols" '
-    function vis(s) { gsub(/\033\[[0-9;]*m/, "", s); gsub(/[\200-\277]/, "", s); return length(s) }
-    function emit(s,   n, i, a, out, w, pw) {
-      if (cols < 40 || vis(s) <= cols) { print s; return }
-      n = split(s, a, / /); out = ""; w = 0
-      for (i = 1; i <= n; i++) {
-        pw = vis(a[i])
-        if (a[i] != "" && w > col && w + 1 + pw > cols) { print out r; out = sprintf("%*s", col, "") a[i]; w = col + pw; continue }
-        out = out (i > 1 ? " " : "") a[i]; w += (i > 1) + pw
-      }
-      print out
-    }
+  awk -F'\t' -v c="$c" -v d="$d" -v m="$m" -v r="$r" '
     /^#/ { next }
     NR == FNR { cell = $3 ($4 != "" ? " " $4 : "") ($5 != "" ? " " $5 : ""); if ($2 == $3 && length(cell) + 4 > col) col = length(cell) + 4; next }
     # A group is one line, however many commands share it, so the line stays
     # open until the next group or section closes it.
     {
       if ($1 != section) {
-        if (open) emit(ln)
+        if (open) print ln
         open = 0; section = $1; group = ""
         printf "\n%s%s%s\n", c, section, r
       }
       cell = $3 ($4 != "" ? " " $4 : "") ($5 != "" ? " " $5 : "")
       if ($2 != group) {
-        if (open) emit(ln)
+        if (open) print ln
         group = $2; open = 1
         ln = sprintf("  %s%s%s%*s%s", d, cell, r, col - 2 - length(cell), "", $6)
       } else ln = ln sprintf("   %s%s%s  %s", d, cell, r, $6)
       if ($7 != "") ln = ln sprintf("   %s%s%s", m, $7, r)
     }
-    END { if (open) emit(ln) }' "$table" "$table"
-  exit 0
+    END { if (open) print ln }' "$table" "$table"
+}
+
+# one: this command's row, by its own name or as the one it shares a line
+# with (gwip carries gunwip), and, for a picker, its keys.
+one() {
+  name=$(printf '%s' "$row" | cut -f3)
+  also=$(printf '%s' "$row" | cut -f4)
+  args=$(printf '%s' "$row" | cut -f5)
+  summary=$(printf '%s' "$row" | cut -f6)
+  extra=$(printf '%s' "$row" | cut -f7)
+
+  # A color is printf's escape form, so it belongs in the format and never in an
+  # argument, where it would print as its own backslashes (share/palette.sh).
+  printf "${GK_ATTENTION}%s${GK_R}" "$name"
+  [ -n "$also" ] && printf " ${GK_ATTENTION}%s${GK_R}" "$also"
+  [ -n "$args" ] && printf " ${GK_CONTEXT}%s${GK_R}" "$args"
+  printf "\n  %s\n" "$summary"
+  [ -n "$extra" ] && printf "  ${GK_CONTEXT}%s${GK_R}\n" "$extra"
+
+  # The picker's keys, from the source of whichever command opens it: a shell
+  # function in share/otis.zsh, or a script of its own in bin/. One line each,
+  # the key and what it does, widest key first so the labels line up.
+  src=
+  if grep -q "^$name()" "$share/otis.zsh" 2>/dev/null; then
+    src=$(awk -v n="$name" '$0 ~ "^" n "\\(\\)" { on = 1 } on { print } on && /^}/ { exit }' "$share/otis.zsh")
+  elif [ -f "$(dirname "$0")/$name" ]; then
+    src=$(cat "$(dirname "$0")/$name")
+  fi
+  spec=$(printf '%s\n' "$src" | sed -n "s/.*git-fzf '[^']*' '\\([^']*\\)'.*/\\1/p" | head -1)
+  # The board is no picker: its keys are a table of its own, which it prints.
+  [ "$name" = otis ] && spec=$(otis-dash --keys 2>/dev/null | tr ',' '\n' | grep -v '^?=' | paste -sd, -)
+  if [ -n "$spec" ]; then
+    # The colors as their bytes, since awk writes these lines rather than printf.
+    key=$(printf "${GK_ELSEWHERE}") dim=$(printf "${GK_CONTEXT}") off=$(printf "${GK_R}")
+    printf "\n${GK_CONTEXT}keys${GK_R}\n"
+    printf '%s' "$spec" | tr ',' '\n' |
+      awk -F'=' -v key="$key" -v dim="$dim" -v off="$off" '
+        $2 != "" { k[++n] = $1; v[n] = substr($0, index($0, "=") + 1); if (length($1) > w) w = length($1) }
+        END {
+          for (i = 1; i <= n; i++) printf "  %s%-*s%s  %s\n", key, w, k[i], off, v[i]
+          printf "  %s%-*s%s  %severy key, in the picker itself%s\n", key, w, "?", off, dim, off
+        }'
+  fi
+
+  printf "\n${GK_CONTEXT}gg${GK_R} lists every command\n"
+}
+
+# wrapped <columns>: each line broken at spaces to that width rather than
+# where the terminal's edge falls, what runs on under the line's text: after
+# its first gap of two spaces (a command's summary, a key's words), else
+# under its own indent, in the colors in force where it broke.
+wrapped() {
+  LC_ALL=C awk -v cols="$1" '
+    function vis(s) { gsub(/\033\[[0-9;]*m/, "", s); gsub(/[\200-\277]/, "", s); return length(s) }
+    {
+      if (cols < 40 || vis($0) <= cols) { print; next }
+      p = $0; gsub(/\033\[[0-9;]*m/, "", p)
+      ind = match(p, /[^ ]/) ? RSTART - 1 : 0
+      if (match(p, /^ *[^ ]+( [^ ]+)*  +[^ ]/) && vis(substr(p, 1, RLENGTH - 1)) <= cols / 2) ind = vis(substr(p, 1, RLENGTH - 1))
+      n = split($0, a, / /); out = ""; w = 0; st = ""
+      for (i = 1; i <= n; i++) {
+        pw = vis(a[i])
+        if (a[i] != "" && w > ind && w + 1 + pw > cols) { print out "\033[0m"; out = sprintf("%*s", ind, "") st a[i]; w = ind + pw }
+        else { out = out (i > 1 ? " " : "") a[i]; w += (i > 1) + pw }
+        t = a[i]
+        while (match(t, /\033\[[0-9;]*m/)) { e = substr(t, RSTART, RLENGTH); st = (e == "\033[0m" || e == "\033[m") ? "" : st e; t = substr(t, RSTART + RLENGTH) }
+      }
+      print out
+    }'
+}
+
+if [ "$cmd" = --all ]; then show=all
+else
+  row=$(awk -F'\t' -v c="$cmd" '
+    /^#/ { next }
+    $3 == c || $4 == c { print; exit }' "$table")
+  if [ -z "$row" ]; then
+    printf "${GK_BAD}otis-help: no command called %s${GK_R}\n" "$cmd" >&2
+    printf "${GK_CONTEXT}gg lists every command there is${GK_R}\n" >&2
+    exit 2
+  fi
+  show=one
 fi
-
-# The row for this command, by its own name or as the one it shares a line with
-# (gwip carries gunwip).
-row=$(awk -F'\t' -v c="$cmd" '
-  /^#/ { next }
-  $3 == c || $4 == c { print; exit }' "$table")
-if [ -z "$row" ]; then
-  printf "${GK_BAD}otis-help: no command called %s${GK_R}\n" "$cmd" >&2
-  printf "${GK_CONTEXT}gg lists every command there is${GK_R}\n" >&2
-  exit 2
-fi
-
-name=$(printf '%s' "$row" | cut -f3)
-also=$(printf '%s' "$row" | cut -f4)
-args=$(printf '%s' "$row" | cut -f5)
-summary=$(printf '%s' "$row" | cut -f6)
-extra=$(printf '%s' "$row" | cut -f7)
-
-# A color is printf's escape form, so it belongs in the format and never in an
-# argument, where it would print as its own backslashes (share/palette.sh).
-printf "${GK_ATTENTION}%s${GK_R}" "$name"
-[ -n "$also" ] && printf " ${GK_ATTENTION}%s${GK_R}" "$also"
-[ -n "$args" ] && printf " ${GK_CONTEXT}%s${GK_R}" "$args"
-printf "\n  %s\n" "$summary"
-[ -n "$extra" ] && printf "  ${GK_CONTEXT}%s${GK_R}\n" "$extra"
-
-# The picker's keys, from the source of whichever command opens it: a shell
-# function in share/otis.zsh, or a script of its own in bin/. One line each,
-# the key and what it does, widest key first so the labels line up.
-src=
-if grep -q "^$name()" "$share/otis.zsh" 2>/dev/null; then
-  src=$(awk -v n="$name" '$0 ~ "^" n "\\(\\)" { on = 1 } on { print } on && /^}/ { exit }' "$share/otis.zsh")
-elif [ -f "$(dirname "$0")/$name" ]; then
-  src=$(cat "$(dirname "$0")/$name")
-fi
-spec=$(printf '%s\n' "$src" | sed -n "s/.*git-fzf '[^']*' '\\([^']*\\)'.*/\\1/p" | head -1)
-# The board is no picker: its keys are a table of its own, which it prints.
-[ "$name" = otis ] && spec=$(otis-dash --keys 2>/dev/null | tr ',' '\n' | grep -v '^?=' | paste -sd, -)
-if [ -n "$spec" ]; then
-  # The colors as their bytes, since awk writes these lines rather than printf.
-  key=$(printf "${GK_ELSEWHERE}") dim=$(printf "${GK_CONTEXT}") off=$(printf "${GK_R}")
-  printf "\n${GK_CONTEXT}keys${GK_R}\n"
-  printf '%s' "$spec" | tr ',' '\n' |
-    awk -F'=' -v key="$key" -v dim="$dim" -v off="$off" '
-      $2 != "" { k[++n] = $1; v[n] = substr($0, index($0, "=") + 1); if (length($1) > w) w = length($1) }
-      END {
-        for (i = 1; i <= n; i++) printf "  %s%-*s%s  %s\n", key, w, k[i], off, v[i]
-        printf "  %s%-*s%s  %severy key, in the picker itself%s\n", key, w, "?", off, dim, off
-      }'
-fi
-
-printf "\n${GK_CONTEXT}gg${GK_R} lists every command\n"
+if [ -t 1 ]; then $show | wrapped "$(tput cols 2>/dev/null || echo 0)" | LESSSECURE=1 less -RFX
+else $show; fi

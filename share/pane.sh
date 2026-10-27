@@ -34,7 +34,7 @@ pane_color() {
 
 # PANE_AWK: ulen(s), the columns plain text takes, and ufit(s, w), it cut to
 # w columns with an ellipsis (for a column of a table, never for a sentence:
-# see kept), a character at a time: an awk that counts
+# see kept, nor a path: see pathlines), a character at a time: an awk that counts
 # bytes (macOS's, or any under LC_ALL=C) split a character in two and cut
 # the line short. For an awk run LC_ALL=C, so every awk counts the same.
 PANE_AWK='
@@ -96,7 +96,20 @@ function ubytes(s, n,   i, L, k) {
 # 6w, 4mo.
 function ago(ts, now,   s) { s = now - ts
   if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
-  if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }'
+  if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }
+# pathlines(p, w, out): a path whole in lines of w columns, in out[1..n],
+# broken after a /, a name longer than a line where the line ends; n back.
+function pathlines(p, w, out,   n, k, i, line, part, parts, j) {
+  k = split(p, parts, "/"); n = 0; line = ""
+  for (i = 1; i <= k; i++) {
+    part = parts[i] (i < k ? "/" : "")
+    if (line != "" && ulen(line part) > w) { out[++n] = line; line = "" }
+    while (ulen(part) > w) { j = ubytes(part, w); out[++n] = substr(part, 1, j); part = substr(part, j + 1) }
+    line = line part
+  }
+  if (line != "" || !n) out[++n] = line
+  return n
+}'
 
 # pane_fit <text> [width]: the text, whole. It once cut what was too long
 # for a line with an ellipsis; nothing a preview says is cut now, and the

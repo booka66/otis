@@ -9,12 +9,27 @@
 # without diff grounds (the terminal's) keeps delta's own, for a light ground
 # where it says light.
 #
-# One column, with each hunk headed by the line number and the function it is
-# in, boxed, so a diff deep in a file says where you are. Side by side instead
+# One column, with each hunk headed, boxed, by the function it is in, so a
+# diff deep in a file says where you are. Side by side instead
 # with otis.sideBySide always (or auto, which does it from 120 columns, where
 # two columns are still readable). The setting comes from the environment
 # under a picker (otis-config --env, loaded by git-fzf); the lookup is for a
 # run from anywhere else.
+#
+# GK_HUNK_FN: hunk_fn(ctx), the function a hunk is in from what git wrote
+# after its @@: the name before a "(", or nothing. git writes the last line
+# above the hunk that starts with a letter, which in prose or a shell script
+# is a sentence cut at 80 bytes or a heredoc's EOF, and a box around that
+# said nothing; the line numbers beside the code already say where it is.
+# A note in quotes (share/cut.awk's, the symbol view's) stays whole: git's
+# line never starts with one.
+GK_HUNK_FN='
+function hunk_fn(ctx,   m) {
+  sub(/^[ \t]+/, "", ctx)
+  if (ctx ~ /^"/) return ctx
+  if (!match(ctx, /[A-Za-z_$][A-Za-z0-9_$.]*[ \t]*\(/)) return ""
+  m = substr(ctx, RSTART, RLENGTH); sub(/[ \t]*\($/, "", m); return m "()"
+}'
 gk_delta() {
   w=${FZF_PREVIEW_COLUMNS:-100}
   sides=
@@ -29,15 +44,26 @@ gk_delta() {
     *" --file-style"*) ;;
     *) set -- --file-style "${OTIS_T_FILE:-6}" --file-decoration-style "${OTIS_T_RULE:-8} ul" "$@" ;;
   esac
-  [ -n "$sides" ] && set -- --side-by-side "$@"
+  # One column's line numbers as delta draws them by default, said here since
+  # the pane's wrap reads them to put what runs on under the code
+  # (share/pane-wrap.awk). Side by side delta wraps its own lines.
+  gk_rf='{np:^4}│'
+  if [ -n "$sides" ]; then set -- --side-by-side "$@"
+  else set -- --line-numbers-left-format '{nm:^4}⋮' "$@"; fi
   [ -n "$OTIS_T_LIGHT" ] && set -- --light "$@"
   set -- --no-gitconfig --paging=never --width="$w" \
     --syntax-theme="${OTIS_T_DELTA_SYNTAX:-ansi}" \
-    --hunk-header-style 'line-number syntax' \
+    --hunk-header-style syntax \
     --hunk-header-decoration-style "${OTIS_T_RULE:-8} box" \
     --line-numbers "$@"
+  # Each hunk's @@ line says only the function it is in, so delta boxes that
+  # or, with none, leaves a blank line between hunks.
+  gk_in=$(awk "$GK_HUNK_FN"'
+    /^@@/ && match($0, /^@+ [^@]* @+/) { n = RLENGTH; f = hunk_fn(substr($0, n + 1)); $0 = substr($0, 1, n) (f != "" ? " " f : "") }
+    { print }')
+  [ -n "$gk_in" ] || return 0
   # No grounds of the theme's: delta's own, which leave removed lines uncolored.
-  [ -n "$OTIS_T_MINUS" ] || { delta "$@"; return; }
+  [ -n "$OTIS_T_MINUS" ] || { printf '%s\n' "$gk_in" | delta --line-numbers-right-format "$gk_rf" "$@"; return; }
   # What a changed line changed (delta pairs it with the line it took the
   # place of) is on the theme's plus_word or minus_word. A shell that loaded
   # its theme before themes had those loads it again.
@@ -52,9 +78,8 @@ gk_delta() {
   # and the rest from the other. Side by side a row is both, so each pass
   # draws the bar that starts its right half as a mark, and a row is cut
   # there. In the bar's place, since delta counts a mark beside it as a column.
-  gk_in=$(cat)
-  [ -n "$gk_in" ] || return 0
-  [ -n "$sides" ] && set -- --line-numbers-right-format "$(printf '\037'){np:^4}│" "$@"
+  [ -n "$sides" ] && gk_rf=$(printf '\037')$gk_rf
+  set -- --line-numbers-right-format "$gk_rf" "$@"
   printf '%s\n' "$gk_in" | delta --minus-style "normal $OTIS_T_MINUS" --minus-emph-style "normal $OTIS_T_MINUS_WORD" \
     --plus-style "syntax $OTIS_T_PLUS" --plus-emph-style "syntax $OTIS_T_PLUS_WORD" "$@" | {
     exec 3<&0

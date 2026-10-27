@@ -1,6 +1,6 @@
 # screen.zsh: what the screens drawn by hand share (otis-dash, otis-symbols,
 # otis-agent): the terminal taken and given back, keys read, text measured
-# and cut, a selection in a pane copied, and the bars of what cliamp is
+# and wrapped, a selection in a pane copied, and the bars of what cliamp is
 # playing along the rule over the footer. Sourced by a zsh -f script
 # after it has made its state directory ($st) and loaded the theme; it
 # calls screen_start once, then screen_on.
@@ -508,6 +508,52 @@ whole() {
   done
   [[ -n $s ]] && reply+=("$s")
   (( $#reply )) || reply=("")
+}
+# wrapc <text> <width> <indent>: colored text in lines of that width, each
+# after the first that many columns in, broken after the last space, / or
+# comma that fits, so a word goes down whole; a word longer than the line
+# after its last _ or - that fits, or before a capital that starts a word in
+# a name (replyModel|Test), else where the line ends. Each line opens with
+# the colors in force where it starts. In reply. It costs a millisecond a
+# line, so a whole list wraps through share/row-wrap.awk, which breaks the
+# same way (otis-test holds them to it).
+wrapc() {
+  local s=$1 tok st= bst= bst2= pv= pre= ind=${(l:$3:: :)}
+  integer lim=$2 w=0 cw bk=0 bkw=0 bk2=0 bkw2=0
+  local -a lt rest
+  reply=()
+  while [[ -n $s ]]; do
+    if [[ $s == $e\[* && $s == (#b)($e\[[0-9\;:?]#[a-zA-Z])* ]]; then tok=$match[1]
+    else tok=${s[1]}; fi
+    s=${s[$#tok+1,-1]}
+    if [[ $tok == $e* ]]; then
+      lt+=("$tok")
+      if [[ $tok == $e\[(0|)m ]]; then st=; else st+=$tok; fi
+      continue
+    fi
+    cw=${(m)#tok}
+    (( w )) && [[ $tok == [[:upper:]] && $pv == [[:lower:][:digit:]] ]] && bk2=$#lt bkw2=$w bst2=$st
+    if (( w + cw > lim )); then
+      (( lim = $2 - $3 ))
+      # A space past the end: the line is full as it is.
+      if [[ $tok == ' ' ]]; then reply+=("$pre${(j::)lt}$R"); pre=$ind lt=("$st"); w=0 bk=0 bk2=0; continue; fi
+      (( ! bk && bk2 )) && bk=$bk2 bkw=$bkw2 bst=$bst2
+      if (( bk )); then
+        reply+=("$pre${(j::)lt[1,bk]}$R"); pre=$ind
+        rest=("${(@)lt[bk+1,-1]}"); lt=("$bst" "${(@)rest}"); (( w -= bkw ))
+        # A break in what goes down after the one taken is still there to take.
+        if (( bk2 > bk )); then (( bk2 -= bk - 1, bkw2 -= bkw )); else bk2=0; fi
+        bk=0
+      else
+        reply+=("$pre${(j::)lt}$R"); pre=$ind lt=("$st"); w=0 bk2=0
+        [[ $tok == ' ' ]] && continue
+      fi
+    fi
+    lt+=("$tok"); (( w += cw )); pv=$tok
+    [[ $tok == [\ /,] ]] && bk=$#lt bkw=$w bst=$st
+    [[ $tok == [_-] ]] && bk2=$#lt bkw2=$w bst2=$st
+  done
+  reply+=("$pre${(j::)lt}")
 }
 
 # --- a selection in a pane --------------------------------------------------------------

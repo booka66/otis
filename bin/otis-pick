@@ -20,11 +20,13 @@
 # answers fzf's state (the query, the rows, the cursor, the marks), POST
 # runs actions.
 #
-# The screen: the picker's name, the header its list gave it, what the list
-# said (its footer line, and a warning when GitLab could not be reached),
-# then the rows, a section's heading ("── to review ──") drawn as one the
-# cursor passes over, the row under the cursor lit, marked rows with a bar,
-# and the words a search found underlined. On a wide terminal the row's
+# The screen: the picker's name, with what / is searching for after it,
+# which stay at the top; then, scrolling with the rows, the header its list
+# gave it and what the list said (its footer line, and a warning when GitLab
+# could not be reached); then the rows, a section's heading ("── to review
+# ──") drawn as one the cursor passes over, the row under the cursor lit,
+# marked rows with a bar, and the words a search found underlined. A row too
+# long for the list goes on under its own text, never cut. On a wide terminal the row's
 # preview sits to the right, under a line saying what it is; on a narrow one,
 # under the rows. Previews are drawn in the background, the cursor's first
 # and the rows around it, and kept per row and width, so moving onto a row
@@ -44,6 +46,7 @@ setopt extendedglob no_nomatch
 in_root || eval "$(otis-config --env)"
 export OTIS_ROWFMT=$(<${0:A:h:h}/share/rowfmt.awk)
 wrap_awk=$(<${0:A:h:h}/share/pane-wrap.awk)
+rowwrap_awk=$(<${0:A:h:h}/share/row-wrap.awk)
 export GIT_FZF_STATE=${TMPDIR:-/tmp}/git-fzf.$$.$RANDOM$RANDOM
 mkdir -m 700 $GIT_FZF_STATE || exit 1
 st=$GIT_FZF_STATE
@@ -178,7 +181,7 @@ layout() {
   if (( W >= 120 )); then
     # The pane is sized first, 42% clamped to 56..88 columns, and the rows
     # take the rest: a preview wider than that was empty space while rows
-    # were cut. Rows are cut to lw - 3 = W - pw - 7 (rowlines), which
+    # wrapped. Rows wrap at lw - 3 = W - pw - 7 (rowlines), which
     # share/rowfmt.awk's gk_list_width matches.
     side=1; (( pw = W * 42 / 100, pw < 56 ? (pw = 56) : 0, pw > 88 ? (pw = 88) : 0 ))
     # --preview-fill (a list of pictures): the rows take what the longest
@@ -202,10 +205,10 @@ resize() {
   (( H != oh || W != ow )) || return 1
   print -r -- "$EPOCHREALTIME resize ${ow}x$oh -> ${W}x$H" >> $trace
   layout; shown_rows=(); draw
-  # The previews at the new width once it has held for 0.3s: a drag draws
-  # them once, not at every width it passes through.
+  # The previews at the new width, and the resize binding (gl's rows, which
+  # say more on a wider list), once it has held for 0.3s: a drag draws them
+  # once, not at every width it passes through.
   (( settle = EPOCHREALTIME + 0.3 ))
-  fire resize
 }
 
 # --- the rows --------------------------------------------------------------------
@@ -269,45 +272,51 @@ load() {
 
 # --- a row ---------------------------------------------------------------------
 # RL: each row's line as drawn without the cursor and the mark, for the
-# list's width; built once a load (or a resize), since a frame is then the
-# lines in view and the cursor's lit.
-typeset -a RL
-rowline() {
+# list's width. A row too long for it goes on to RN more lines, RX[row,1]
+# on. Built once a load (or a resize), since a frame is then the lines in
+# view and the cursor's lit.
+typeset -a RL RN
+typeset -A RX
+# heading <row>: a section's heading as drawn, in REPLY: its words, the rule
+# dropped, and what the list put after it (gd's strip of deploys) as it is.
+heading() {
   local i=$1 t rest
-  integer w=$(( lw - 3 ))
   line= used=0
-  if (( head[i] )); then
-    # A section's heading: its words, the rule dropped, and what the list
-    # put after it (gd's strip of deploys) as it is.
-    plain "$shw[i]"; t=${${REPLY//─/}## #}; t=${t%% #}
-    [[ $t == *'  '* ]] && t=${t%%  *}
-    put "$C" "${(U)t}"
-    rest=${shw[i]##*─}; rest=${rest#$R}; rest=${rest## #}
-    [[ -n $rest ]] && { put "" "  "; line+=$rest; }
-    vw "$line"; (( REPLY > w )) && { cut "$line" $w; line=$REPLY; }
-    RL[i]=$line$R
-    return
-  fi
-  cut "$shw[i]" $w; line=$REPLY; vw "$line"; used=$REPLY
-  RL[i]=$line$R
+  plain "$shw[i]"; t=${${REPLY//─/}## #}; t=${t%% #}
+  [[ $t == *'  '* ]] && t=${t%%  *}
+  put "$C" "${(U)t}"
+  rest=${shw[i]##*─}; rest=${rest#$R}; rest=${rest## #}
+  [[ -n $rest ]] && { put "" "  "; line+=$rest; }
+  REPLY=$line
 }
-# rowlines: every row's line for the list's width. Most fit as they are;
-# only one too wide is cut, a character at a time.
+# rowlines: every row's lines for the list's width. Most fit as they are;
+# the ones too wide, headings too, wrap in one awk for the lot
+# (share/row-wrap.awk).
 rowlines() {
   local i
-  integer w=$(( lw - 3 ))
-  RL=()
+  integer w=$(( lw - 3 )) j k
+  local -a long text parts
+  RL=() RN=() RX=()
   for (( i = 1; i <= $#raw; i++ )); do
-    if (( head[i] )); then rowline $i
+    if (( head[i] )); then heading $i; vw "$REPLY"
+      (( REPLY <= w )) && { RL[i]=$line$R; continue; }
+      long+=($i) text+=("$line")
     elif (( ${(m)#PL[i]} <= w )); then RL[i]=$shw[i]$R
-    else cut "$shw[i]" $w; RL[i]=$REPLY$R; fi
+    else long+=($i) text+=("$shw[i]"); fi
+  done
+  (( $#long )) || { rlw=$lw; return; }
+  text=("${(@f)$(print -rl -- "${text[@]}" | LC_ALL=C awk -v w=$w "$rowwrap_awk")}")
+  for (( j = 1; j <= $#long; j++ )); do
+    i=$long[j] parts=("${(@ps:\036:)text[j]}")
+    RL[i]=$parts[1]$R RN[i]=$(( $#parts - 1 ))
+    for (( k = 1; k <= RN[i]; k++ )); do RX[$i,$k]=$parts[k+1]; done
   done
   rlw=$lw
 }
-# lit <row>: the row's line with the words the search found underlined,
+# lit <line>: a row's line with the words the search found underlined,
 # a character at a time, so its colors stay.
 lit() {
-  local s=$RL[$1] out= c w t
+  local s=$1 out= c w t
   integer n=0 on=0 i
   local -a at
   plain "$s"; t=${(L)REPLY}
@@ -331,26 +340,36 @@ lit() {
 }
 
 # --- the list --------------------------------------------------------------------
-# Two parts. The headline (HL): the picker's name, its header, what the list
-# said and the search, built every frame, since what it reads changes under
-# it (the footer file a command writes) and it is a few lines. Then the rows
-# (ROWL, and ROWI the row each line is, 0 for a heading's), built only when
-# the rows, the search or the width change (dirty): at a few thousand rows
-# that is the costly part. RY is each row's line in it; vis the rows the
-# cursor may land on, in order; marked the rows marked (--multi).
-typeset -a HL ROWL ROWI RY vis
+# Three parts. The head (HF), which stays put: the picker's name and what /
+# is searching for. The headline (HL), which scrolls with the rows: its
+# header and what the list said. Both built every frame, since what they
+# read changes under them (the footer file a command writes) and they are a
+# few lines. Then the rows (ROWL, and ROWI the row each line is, 0 for a
+# heading's, ROWC which of the row's lines it is, 0 for its first), built
+# only when the rows, the search or the width change (dirty): at a few
+# thousand rows that is the costly part. RY is each row's first line in it;
+# vis the rows the cursor may land on, in order; marked the rows marked
+# (--multi).
+typeset -a HF HL ROWL ROWI ROWC RY vis
 typeset -A marked
 integer dirty=1 cur=0 top=0 rlw=0 qdirty=0
 headline() {
   local w=$1 t s l
-  local -a words segs
-  HL=("")
+  local -a words segs hl
+  HF=("") HL=("")
   line= used=0; put "" "  "
   t=$title
   if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
   put "$B$T" "$t"; line+=$UB
+  # What / is searching for, after the name, so it shows however far down
+  # the list the cursor is.
+  if (( loaded )) && { [[ -n $query ]] || (( searching )); }; then
+    put "" "   "; put "$A" "/"; put "" " "; put "$T" "$query"
+    (( searching )) && put "$A" "▏"
+  fi
   (( $#rpid )) && { pad $(( w - 3 )); put "$F" "↻"; }
-  HL+=("$line" "")
+  if (( used > w - 1 )); then wrapc "$line" $(( w - 1 )) 2; HF+=("${reply[@]}")
+  else HF+=("$line"); fi
   if [[ -n $header ]]; then
     for t in ${(f)header}; do
       plain "$t"; words=(${=REPLY}); s=
@@ -368,45 +387,58 @@ headline() {
     segs=("${(@s: · :)${(j: · :)${(f)"$(<$foot)"}}}") s=
     for t in $segs; do
       vw "$s · $t"
-      if [[ -n $s ]] && (( REPLY > w - 4 )); then cut "$s" $(( w - 4 )); HL+=("  $REPLY$R"); s=; fi
+      if [[ -n $s ]] && (( REPLY > w - 4 )); then HL+=("  $s$R"); s=; fi
       s+=${s:+$C · $R}$t
     done
-    [[ -n $s ]] && { cut "$s" $(( w - 4 )); HL+=("  $REPLY$R"); }
+    [[ -n $s ]] && HL+=("  $s$R")
   fi
   local stale=($st/stale.*(N))
-  (( $#stale )) && HL+=("  ${X}could not refresh from GitLab: this is what it said last · ? shows why$R")
+  (( $#stale )) && HL+=("  ${A}could not refresh from GitLab: this is what it said last · ? shows why$R")
   [[ -s $foot || $#stale -gt 0 ]] && HL+=("")
   (( loaded )) || { spin_frame; HL+=("  $A$REPLY$R ${C}loading…$R"); }
-  if (( loaded )) && { [[ -n $query ]] || (( searching )); }; then
-    l="  "$A"/"$R" "$T$query$R
-    (( searching )) && l+=$A"▏"$R
-    HL+=("$l" "")
-  fi
-  # Nothing here may run past the list into the pane beside it.
-  for (( l = 1; l <= $#HL; l++ )); do
-    vw "$HL[l]"; (( REPLY > w - 1 )) && { cut "$HL[l]" $(( w - 1 )); HL[l]=$REPLY; }
+  # Nothing here may run past the list into the pane beside it: a line too
+  # wide for it (a piece of the footer, the warning beside a narrow list)
+  # goes on under itself.
+  for l in "${HL[@]}"; do
+    vw "$l"
+    if (( REPLY > w - 1 )); then wrapc "$l" $(( w - 1 )) 2; hl+=("${reply[@]}")
+    else hl+=("$l"); fi
   done
+  HL=("${hl[@]}")
+}
+# rowin <row>: the row onto the list's lines (list's n), its first and those
+# it goes on to.
+rowin() {
+  local k
+  (( n++ )); ROWI[n]=$1 RY[$1]=$n; vis+=($1)
+  for (( k = 1; k <= RN[$1]; k++ )); do (( n++ )); ROWI[n]=$1 ROWC[n]=$k; done
 }
 list() {
   local i w h
   local -a words
-  integer n=0 a=1 b
+  integer n=0 a=1 b k
   (( rlw != lw )) && rowlines
-  ROWL=() ROWI=() RY=() vis=()
+  ROWL=() ROWI=() ROWC=() RY=() vis=()
   (( loaded )) || { dirty=0; return }
   (( disabled )) || words=(${=${(L)query}})
   if (( ! $#words )); then
-    # Every row: the runs between headings a run at a time.
+    # Every row: the runs between headings a run at a time while none goes
+    # on to more lines, else a row at a time.
     for h in $HIDX $(( $#raw + 1 )); do
       if (( h > a )); then
         (( b = h - 1 ))
-        ROWI[n+1,n+h-a]=({$a..$b}); RY[a,b]=({$((n + 1))..$((n + h - a))}); vis+=({$a..$b})
-        (( n += h - a ))
+        if (( ! $#RX )); then
+          ROWI[n+1,n+h-a]=({$a..$b}); RY[a,b]=({$((n + 1))..$((n + h - a))}); vis+=({$a..$b})
+          (( n += h - a ))
+        else
+          for (( i = a; i <= b; i++ )); do rowin $i; done
+        fi
       fi
       (( h > $#raw )) && break
       if [[ -z $query ]]; then
         (( n && (ROWI[n] || $#ROWL[n]) )) && { (( n++ )); ROWL[n]= ROWI[n]=0; }
         (( n++ )); ROWL[n]="  ${RL[h]}" ROWI[n]=0
+        for (( k = 1; k <= RN[h]; k++ )); do (( n++ )); ROWL[n]="  $RX[$h,$k]" ROWI[n]=0; done
       fi
       (( a = h + 1 ))
     done
@@ -414,7 +446,7 @@ list() {
     for (( i = 1; i <= $#raw; i++ )); do
       (( head[i] )) && continue
       for w in $words; do [[ $hay[i] == *"$w"* ]] || continue 2; done
-      (( n++ )); ROWI[n]=$i RY[i]=$n; vis+=($i)
+      rowin $i
     done
   fi
   if (( ! $#vis )); then
@@ -437,6 +469,15 @@ step() {
   (( $#vis )) || return
   (( at += $1, at < 1 ? (at = 1) : 0, at > $#vis ? (at = $#vis) : 0 ))
   go $vis[at]
+}
+# page <1|-1>: the cursor a screen of the list's lines on, or back: to the
+# farthest row that far, and at least the next one.
+page() {
+  local at=${vis[(Ie)$cur]}
+  integer to=$at
+  (( $#vis )) || return
+  while (( to + $1 >= 1 && to + $1 <= $#vis )) && (( to == at || ($1 * (RY[vis[to + $1]] - RY[cur])) <= lh - 2 )); do (( to += $1 )); done
+  go $vis[to]
 }
 # go <row>: the cursor there, the preview's scroll put aside for the row it
 # leaves and taken up for the one it lands on.
@@ -641,13 +682,13 @@ helplines() {
   done
   (( multi )) && P+=("  ${A}${(r:9:: :)${:-space/tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
   [[ -s $st/legend ]] && P+=("" "${(@f)$(<$st/legend)}")
-  [[ -s $st/last-error ]] && { P+=("" "  ${X}last error$R"); wrap "$(<$st/last-error)" $(( pw - 4 )); P+=("  "${^reply}); }
+  [[ -s $st/last-error ]] && { P+=("" "  ${A}last error$R"); wrap "$(<$st/last-error)" $(( pw - 4 )); P+=("  "${^reply}); }
   panewrap $pw
 }
 draw() {
   local t0=$EPOCHREALTIME
-  local y i f s lo=0 hi=0 body rows m foot
-  integer nh total
+  local y i f s t lo=0 hi=0 body rows m foot
+  integer nh nf total sr c
   (( dirty || rlw != lw )) && list
   settle_cur
   headline $lw
@@ -656,13 +697,17 @@ draw() {
   # stopped has nothing to draw there.
   mh=0
   (( side && $#mlab && lh >= 24 )) && mh=9
-  (( nh = $#HL, total = nh + $#ROWI, rows = lh - mh ))
-  (( cur && RY[cur] )) && (( lo = hi = nh + RY[cur] ))
-  (( hi > top + rows )) && (( top = hi - rows ))
+  # The head (nf lines) stays put; under it the headline and the rows
+  # scroll (sr lines), all of the cursor's row's lines kept in view.
+  (( nf = $#HF, nh = $#HL, total = nh + $#ROWI, rows = lh - mh, sr = rows - nf ))
+  (( cur && RY[cur] )) && (( lo = nh + RY[cur], hi = lo + RN[cur] ))
+  (( hi > top + sr )) && (( top = hi - sr ))
   (( lo > 0 && lo <= top )) && (( top = lo - 1 ))
-  (( lo > 0 && hi <= rows )) && top=0
-  (( top > total - rows )) && (( top = total - rows ))
+  (( lo > 0 && hi <= sr )) && top=0
+  (( top > total - sr )) && (( top = total - sr ))
   (( top < 0 )) && top=0
+  # The view opens on a row's first line, not on the rest of one above it.
+  while (( top + 1 > nh && top + 1 < lo )) && (( ROWC[top + 1 - nh] )); do (( top++ )); done
   # The pane: the preview, or ? its keys.
   if (( help )); then helplines; pfile=
   elif (( cur )) && [[ -n $preview ]]; then
@@ -682,13 +727,16 @@ draw() {
   plen=$#P
   local -a fr pr
   for (( y = 1; y <= rows; y++ )); do
-    i=$(( y + top ))
+    i=$(( y - nf + top ))
     s=
-    if (( i <= nh )); then s=$HL[i]$R
+    if (( y <= nf )); then s=$HF[y]$R
+    elif (( i <= nh )); then s=$HL[i]$R
     elif (( i <= total )); then
       if (( ROWI[i - nh] )); then
-        f=${ROWI[i-nh]}
-        if [[ -n $query ]]; then lit $f; else REPLY=$RL[f]; fi
+        # A row's lines, each lit and marked as the row is.
+        f=${ROWI[i-nh]} c=${ROWC[i-nh]}
+        if (( c )); then t=$RX[$f,$c]; else t=$RL[f]; fi
+        if [[ -n $query ]]; then lit "$t"; else REPLY=$t; fi
         if (( multi && ${marked[$f]:-0} )); then m=$G"▎"$R; else m=" "; fi
         if (( f == cur )); then s=$A"▌"$R$BG$m${REPLY//$R/$R$BG}$R
         else s=" "$m$REPLY; fi
@@ -709,7 +757,7 @@ draw() {
   # The blank rows under the rows, beside the pane, and under the pane: where
   # the music's background may move.
   local -a sp
-  integer lb=$(( rows - total + top ))
+  integer lb=$(( sr - total + top ))
   (( lb < 0 )) && lb=0
   (( side && lb + mh > 0 )) && sp+=("1 $lw $(( rows + mh )) $(( lb + mh ))")
   (( ph > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - plen + poff ))")
@@ -723,28 +771,33 @@ draw() {
   if [[ -s $st/note ]]; then foot+=$A$(<$st/note)$R; rm -f $st/note
   elif [[ -n $flash ]]; then foot+=$A$flash$R; flash=
   elif spinning; then spin_foot
-  elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   else
-    local n k v used_=2 room
+    local n k v= used_=2 room
     (( room = W - 14 ))
     # What each key means on this row, where the picker says (--keys-from).
     rowkeys
-    (( nm )) && { foot+=$G"$nm marked"$R$C"   ·   "$R; (( used_ += 12 )); }
-    for (( n = 1; n <= $#hk; n++ )); do
-      [[ $hk[n] == enter ]] || continue
-      v=$hv[n]; (( ${+rkl[enter]} )) && v=$rkl[enter]
+    (( ${hk[(Ie)enter]} )) && { v=$hv[${hk[(ie)enter]}]; (( ${+rkl[enter]} )) && v=$rkl[enter]; }
+    if (( searching )); then
+      # enter does what it does on the row, the search kept, as under fzf.
+      foot+=$A"/"$R$T" type to search"$R
+      [[ -n $v ]] && foot+=$C" · "$R$B$A"⏎ "$v$UB$R
+      foot+=$C" · "$R$A"esc"$R$C" stops, again shows every row"$R
+    else
+      (( nm )) && { foot+=$G"$nm marked"$R$C"   ·   "$R; (( used_ += 12 )); }
       [[ -n $v ]] && { foot+=$B$A"⏎ "$v$UB$R$C"   ·   "$R; (( used_ += ${(m)#v} + 8 )); }
-    done
-    for (( n = 1; n <= $#hk; n++ )); do
-      [[ $hk[n] == enter ]] && continue
-      (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
-      v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
-      [[ -n $v ]] || continue
-      k="$hk[n] $v"
-      (( used_ + ${(m)#k} + 2 > room )) && break
-      foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
-    done
-    foot+=$A"?"$R$C" keys"$R
+      # A search kept after esc: the rows it left, and how to have them all.
+      [[ -n $query ]] && { foot+=$A"esc"$R$C" shows every row  "$R; (( used_ += 21 )); }
+      for (( n = 1; n <= $#hk; n++ )); do
+        [[ $hk[n] == enter ]] && continue
+        (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
+        v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
+        [[ -n $v ]] || continue
+        k="$hk[n] $v"
+        (( used_ + ${(m)#k} + 2 > room )) && break
+        foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
+      done
+      foot+=$A"?"$R$C" keys"$R
+    fi
   fi
   fr+=("$foot")
   # Only the rows that changed go out, the list's and the pane's apart.
@@ -952,9 +1005,10 @@ mouse() {
     (( sel )) && ends
     return
   fi
-  # A click on the music under the rows (mh) is on no row.
-  if (( b == 0 && ! up && y <= lh - mh )) && (( side ? x < lw : 1 )); then
-    local at=$(( y + top - $#HL ))
+  # A click on the music under the rows (mh) is on no row, nor one on the
+  # head; one on any of a row's lines is on the row.
+  if (( b == 0 && ! up && y > $#HF && y <= lh - mh )) && (( side ? x < lw : 1 )); then
+    local at=$(( y - $#HF + top - $#HL ))
     (( at > 0 && at <= $#ROWI && ROWI[at] > 0 )) && go $ROWI[at]
   fi
 }
@@ -1046,8 +1100,8 @@ handle() {
     k|up) step -1 ;;
     g|home) (( $#vis )) && go $vis[1] ;;
     G|end) (( $#vis )) && go $vis[-1] ;;
-    page-down) step $(( lh - 2 )) ;;
-    page-up) step $(( - (lh - 2) )) ;;
+    page-down) page 1 ;;
+    page-up) page -1 ;;
     enter) accept ;;
     tab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1 ;;
     # space marks, as it does on every screen that marks; tab marks and moves on.
@@ -1132,6 +1186,7 @@ while :; do
     if (( settle && EPOCHREALTIME >= settle )); then
       settle=0
       (( gen++ )); warm
+      fire resize
     fi
     for i in $ticks; do
       (( EPOCHREALTIME >= tnext[$i] )) || continue

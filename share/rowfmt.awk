@@ -11,9 +11,10 @@
 # (otis-theme), as git-delta's are.
 #
 # The rule these helpers exist to keep: a row has a FIXED ZONE of state you act
-# on, which is never cut, and a TAIL of context, which is cut from the right
-# when the pane is narrow. Keeping the fixed zone genuinely fixed is why the
-# widths here are counted rather than left to the content.
+# on, in columns the same width down the list, and a TAIL of context, which a
+# row too long for the list carries on under itself (otis-pick, otis-symbols)
+# rather than cut. Keeping the fixed zone genuinely fixed is why the widths
+# here are counted rather than left to the content.
 
 BEGIN {
   # The theme's hues (otis-theme), from the environment the picker set up;
@@ -75,13 +76,13 @@ function gk_dir(p,   i) {
   return ""
 }
 
-# A fitted path with its directory dimmed, so the eye lands on the name rather
-# than on the twelve rows that all start "packages/billing/src/".
-function gk_path(p, budget, namecol,   s, d) {
-  # A list that wraps (otis-symbols, OTIS_LIST_WRAPS) has it whole.
-  s = ENVIRON["OTIS_LIST_WRAPS"] != "" ? p : gk_fit(p, budget)
-  d = gk_dir(s)
-  return GK_CONTEXT d GK_R namecol substr(s, length(d) + 1) GK_R
+# A path whole with its directory dimmed, so the eye lands on the name rather
+# than on the twelve rows that all start "packages/billing/src/". Every list
+# is drawn by a screen that wraps a long row (otis-pick, otis-symbols), so
+# the budget its callers still pass goes unused.
+function gk_path(p, budget, namecol,   d) {
+  d = gk_dir(p)
+  return GK_CONTEXT d GK_R namecol substr(p, length(d) + 1) GK_R
 }
 
 # The digits a count needs, for sizing a column to the widest one in the list.

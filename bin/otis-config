@@ -471,6 +471,11 @@ case $1 in
   # Every key, its source and its value, a row a key with the key after a tab.
   --rows)
     . "$(dirname "$0")/../share/palette.sh"
+    # The names as wide as the widest of them and two more, so none runs
+    # into where its value comes from (OTIS_EDITOR, the longest of those).
+    nw=0
+    for key in $keys; do [ ${#key} -gt $nw ] && nw=${#key}; done
+    nw=$((nw + 2))
     for key in $keys; do
       case $key in
         verifyRetro | verifyFix | verifyBreak | terminalBrowser | lessons | gitlab) (one "$key") && v=yes || v=no ;;
@@ -478,18 +483,22 @@ case $1 in
       esac
       s=$(source_of "$key")
       if [ "$s" = default ]; then
-        printf "${GK_TEXT}%-15s${GK_R} ${GK_FAINT}%-12s${GK_R} ${GK_CONTEXT}%s${GK_R}\t%s\n" "$key" "$s" "${v:-(unset)}" "$key"
+        printf "${GK_TEXT}%-${nw}s${GK_R}${GK_FAINT}%-13s${GK_R}${GK_CONTEXT}%s${GK_R}\t%s\n" "$key" "$s" "${v:-(unset)}" "$key"
       else
-        printf "${GK_TEXT}%-15s${GK_R} ${GK_ELSEWHERE}%-12s${GK_R} ${GK_ATTENTION}%s${GK_R}\t%s\n" "$key" "$s" "$v" "$key"
+        printf "${GK_TEXT}%-${nw}s${GK_R}${GK_ELSEWHERE}%-13s${GK_R}${GK_ATTENTION}%s${GK_R}\t%s\n" "$key" "$s" "$v" "$key"
       fi
     done
     exit 0 ;;
   --about)
+    # What it does, from the list at the top of this file, as one paragraph
+    # the pane wraps to its width: the list's own line breaks are for
+    # reading this file.
     awk -v k="$2" '
-      /^#   [A-Za-z]/ { on = ($2 == k); if (on) { sub(/^#   [A-Za-z]+ +/, ""); print }; next }
-      /^#     / && on { sub(/^# +/, ""); print; next }
+      /^#   [A-Za-z]/ { if (on) exit; on = ($2 == k); if (on) { sub(/^#   [A-Za-z]+ +/, ""); s = $0 }; next }
+      /^#     / && on { sub(/^# +/, ""); s = s " " $0; next }
       /^[^#]/ { exit }
-      { on = 0 }' "$0"
+      on { exit }
+      END { if (s != "") print s }' "$0"
     n=$(gitname "$2")
     echo
     if [ -z "$n" ]; then

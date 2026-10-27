@@ -74,15 +74,9 @@ summary() {
     LC_ALL=C awk -v w="$PANE_W" -v pushed="$pushed" -v hidden="$hidden" -v meta="${TMPDIR:-/tmp}/otis-commit.$$" \
       -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v G="$(printf "$GK_GOOD")" \
       -v X="$(printf "$GK_BAD")" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" -v E="$(printf "$GK_ELSEWHERE")" \
-      -v R="$(printf "$GK_R")" '
+      -v R="$(printf "$GK_R")" "$PANE_AWK"'
     # Characters, not bytes, for a width (LC_ALL=C counts bytes).
     function len(s) { gsub(/[\200-\277]/, "", s); return length(s) }
-    function fit(s, n,   out, i, c) {
-      if (len(s) <= n) return s
-      out = ""; for (i = 1; len(out) < n - 1 && i <= length(s); i++) { c = substr(s, i, 1); out = out c
-        while (i < length(s) && substr(s, i + 1, 1) ~ /[\200-\277]/) { i++; out = out substr(s, i, 1) } }
-      return out "\342\200\246"
-    }
     function num(n,   s) { s = n ""; if (n >= 1000) s = substr(s, 1, length(s) - 3) " " substr(s, length(s) - 2); return s }
     function rep(c, n,   o) { o = ""; while (n-- > 0) o = o c; return o }
     function base(p) { sub(/.*\//, "", p); return p }
@@ -97,21 +91,26 @@ summary() {
     $1 == "create" && $2 == "mode" { p = $4; for (i = 5; i <= NF; i++) p = p " " $i; made[p] = 1; next }
     $1 == "delete" && $2 == "mode" { p = $4; for (i = 5; i <= NF; i++) p = p " " $i; gone[p] = 1; next }
     END {
-      print T "\033[1m" fit(subj, w) R
+      # The subject, the sentences of it that fit in two lines, whole (the
+      # pane wraps them): its row says all of it.
+      print T "\033[1m" kept(subj, w, 2) R
       # Who goes first when the pane is narrow, then when.
       dot = "  \302\267  "; mg = (split(parents, ps, " ") > 1) ? dot "merge" : ""; np_ = pushed ? "" : dot "not pushed"
       if (len(h dot an dot ago mg np_) > w) an = ""
       if (len(h (an != "" ? dot an : "") dot ago mg np_) > w) ago = ""
       m = E h R C (an != "" ? dot an : "") (ago != "" ? dot ago : "") mg R (pushed ? "" : C dot R Y "not pushed")
       print m R
-      # The start of the message: its first paragraph, three lines at most.
+      # The start of the message: the sentences of its first paragraph that
+      # fit in three lines, whole (kept), and how much more there is.
       np = split(body, paras, /\n[ \t]*\n/)
       if (np > 0 && paras[1] != "") {
         print ""
-        nl = split(paras[1], ls, "\n"); shown = 0
-        for (i = 1; i <= nl && shown < 3; i++) { if (ls[i] == "") continue; print C fit(ls[i], w) R; shown++ }
-        if (np > 1) print F "+" (np - 1) " paragraph" (np > 2 ? "s" : "") R
-        else if (nl > 3) print F "+" (nl - 3) " lines" R
+        para = paras[1]; gsub(/[ \t]*\n[ \t]*/, " ", para)
+        said = kept(para, w, 3)
+        print C said R
+        more = (np > 1) ? (np - 1) " more paragraph" (np > 2 ? "s" : "") : ""
+        if (said != para) more = "the rest of this paragraph" (more != "" ? " and " more : "")
+        if (more != "") print F "+ " more R
       }
       if (!n) { print ""; print C "SHAPE" R "  " C "no changes" (hidden != "" ? "  \302\267  " hidden : "") R; print ""; exit }
       print ""
@@ -159,15 +158,16 @@ summary() {
         bw = w - nw - 18; if (bw < 6) bw = 6
         print ""; print C "BIGGEST" R; print ""
         for (i = 1; i <= top; i++) {
-          k = idx[i]; t = add[k] + del[k]; p = path[k]
-          # Its last characters, whole ones: a cut by bytes split an é.
-          if (len(p) > nw) { q_ = 0; for (j = length(p); j > 0; j--) if (substr(p, j, 1) !~ /[\200-\277]/ && ++q_ >= nw - 1) break; p = "\342\200\246" substr(p, j) }
+          k = idx[i]; t = add[k] + del[k]
+          # The path whole, a long one on down its own column.
+          pn = pathlines(path[k], nw, pl); p = pl[1]
           ln = int(t * bw / (big ? big : 1) + 0.5); if (t && !ln) ln = 1
           g = t ? int(add[k] * ln / t + 0.5) : 0
           nums = (add[k] ? G "+" num(add[k]) R : "") (add[k] && del[k] ? " " : "") (del[k] ? X "\342\210\222" num(del[k]) R : "")
           if (isbin[k]) nums = C "binary" R
           # Padded by characters, not bytes, so a name with an é lines up.
           printf "  %s%s%s %s%s%s%s  %s%s%s%s%s  %s\n", col[kind[k]], glyph[kind[k]], R, T, p, R, rep(" ", nw - len(p)), G, rep("\342\224\201", g), X, rep("\342\224\201", ln - g), rep(" ", bw - ln), nums
+          for (j = 2; j <= pn; j++) printf "    %s%s%s\n", T, pl[j], R
         }
       }
       print ""
@@ -175,6 +175,10 @@ summary() {
       print ""
     }'
 }
+# One file's diff has no header of its own: what shows it names it, a
+# file's row in a picker or the symbol view's line over its pane.
+named=
+[ $# -eq 1 ] && named=--file-style=omit
 if [ $# -eq 1 ] && [ $diff -eq 0 ]; then
   case $as in added) as=A ;; deleted) as=D ;; changed) as=M ;; '') as=$(status "$1") ;; esac
   case $as in
@@ -218,7 +222,7 @@ else
   # delta would read a note as part of the last hunk, so it goes after.
   changes "$sha" "$@" | awk -v cut="${TMPDIR:-/tmp}/otis-cut.$$" 'NR > 2000 { printf "" > cut; exit } 1'
 fi 2>/dev/null |
-  gk_delta
+  gk_delta $named
 cut=${TMPDIR:-/tmp}/otis-cut.$$
 if [ -e "$cut" ]; then
   rm -f "$cut"
