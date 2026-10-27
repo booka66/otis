@@ -21,11 +21,11 @@
 # unless git config otis.symbolsModel names another; off turns it off.
 #
 # Lazy: the picker never waits for it. git-symbols starts this on every
-# list: a commit, a branch or an MR never changes, so their gloss is cached
-# by their shas for good; the worktree's is keyed by its symbols, so an edit
-# glosses again and staging does not. A run that fails is not started again
-# until r asks (git-symbols --again). It goes into the
-# picker when it lands: the picker waits on the run (git-symbols --rows).
+# list of a review's (git-mr-files), and git-mr-prefetch ahead of one: a
+# review's range never changes, so its gloss is cached by its shas for good.
+# A run that fails is not started again until r asks (git-symbols --again).
+# It goes into the picker when it lands: the picker waits on the run
+# (git-symbols --rows).
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
 mode=
@@ -36,16 +36,8 @@ rev=$1 table=$2
 # The key and the cache root come from git-symbols when it is the caller,
 # which has them already; worked out here otherwise.
 dir="${OTIS_CACHE_ROOT:-$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache}/symbols-gloss"
-if [ -n "$OTIS_SYMBOLS_KEY" ]; then key=$OTIS_SYMBOLS_KEY; else
-  case $rev in
-    # The worktree'"'"'s key is what the symbols are, not what of them is staged:
-    # space must not start a run.
-    worktree) key=$(cut -f1-13 "$table" | git hash-object --stdin) ;;
-    *...*) key=$(git merge-base "${rev%%...*}" "${rev##*...}")-$(git rev-parse "${rev##*...}") ;;
-    *..*)  key=$(git rev-parse "${rev%%..*}")-$(git rev-parse "${rev##*..}") ;;
-    *)     key=$(git rev-parse "$rev") ;;
-  esac
-fi
+if [ -n "$OTIS_SYMBOLS_KEY" ]; then key=$OTIS_SYMBOLS_KEY
+else key=$(git rev-parse "${rev%%..*}")-$(git rev-parse "${rev##*..}"); fi
 file=$dir/$key.json
 running=$dir/$key.running
 failed=$dir/$key.failed

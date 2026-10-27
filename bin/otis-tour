@@ -13,8 +13,7 @@
 # about what needs GitLab, Claude or Cursor Cloud, and offer to open the real
 # thing in the repo you ran the tour from. The one thing that leaves your
 # machine is what otis always sends: with Claude Code installed, the symbol
-# view has Haiku gloss the made-up change and Sonnet propose a fix for the
-# caller it breaks.
+# view has Sonnet propose a fix for the caller the made-up change breaks.
 root=${0:A:h:h}
 path=($root/bin $path)
 # What you press in a tour is practice, not use: kept out of the key log (otis-usage).
@@ -580,11 +579,7 @@ part_reading() {
   look 4 "${k}⇢${r} before a row: the mention is new in this change. That is rewiring, as against behavior, and worth knowing apart."
   look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow; ${k}p${r} adds a dim ↳ line under the changed line that first uses each, saying what it is. ${k}i${r} shows all of those whole instead. ${k}]${r} and ${k}[${r} jump the preview from change to change."
   look 6 "${k}enter${r} opens your editor on the symbol, on the hunk in view; nvim opens it in a diff against the base. Quitting comes back."
-  if (( $+commands[claude] )); then
-    look 7 "Meanwhile Claude Haiku glosses it: a few words on what each symbol does, the change aside, heading its preview, and a few on what the change does to it, on the diff's header. Nothing moves under you, so the rest shows the next time it opens: the entry points in the order to read them, with why, and one line at the top on what the change introduces. It sees only the symbol table and each symbol's diff, has no tools, and posts nothing."
-  else
-    look 7 "With Claude Code installed, Haiku also glosses each row in a few words and says which entry point to read first. It is not installed here, so the rows stay bare."
-  fi
+  look 7 "No cases and no gloss here. An MR opened from the board with ${k}o${r} adds Claude's reading: the change told as cases, and Haiku's few words on each symbol, with the entry point to read first."
   say "${k}?${r} in the picker lists every key it has."
   demo_reset
   launch gdm

@@ -911,7 +911,7 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   git config otis.sentencesModel off
   git-sentences "$base..$head" >/dev/null 2>&1
   mkdir -p "$tmp/sentst"
-  srows() { GIT_FZF_STATE=$tmp/sentst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
+  srows() { GMR_IID=7 GIT_FZF_STATE=$tmp/sentst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
   expect sentences/first-row "$(srows | awk -F'\t' '$13 == "sent" { print $12 ":" $13 ":" $15 ":" $25 }')" "sentence:1:sent:closed:Head"
   # Told by an older otis, the cases still show while they are told again (otis.symbolsModel off here, so
   # nothing is told again behind the tests that follow).
@@ -957,7 +957,7 @@ EOF
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"
   mkdir -p "$tmp/tabst"
   # (otis.symbolsModel off, so no build starts behind the tests that follow.)
-  expect sentences/tabs-none "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GIT_FZF_STATE=$tmp/tabst OTIS_TABS=1 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head" | strip | awk -F'\t' '$13 == "sym" { n++ } /cases need Claude/ { w++ } END { print n + 0 ":" w + 0 }')" "0:1"
+  expect sentences/tabs-none "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GMR_IID=7 GIT_FZF_STATE=$tmp/tabst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head" | strip | awk -F'\t' '$13 == "sym" { n++ } /cases need Claude/ { w++ } END { print n + 0 ":" w + 0 }')" "0:1"
   rm -rf "$tmp/tabst"
   # Claude failing (its usage limit, say) tells no cases and glosses nothing: the screen says why, and nothing
   # asks again but r. A stand-in for Claude at its limit counts the times it is asked.
@@ -970,12 +970,16 @@ EOF
   chmod +x "$tmp/limit/claude"
   cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
   lrows() { SEAM_CLAUDE=$tmp/limit/claude GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub \
-    GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub OTIS_TABS=1 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols "$@" | strip; }
+    GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub GMR_IID=7 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols "$@" | strip; }
   # settle <n>: Claude asked n times, and the runs that asked it ended (a run's pid file goes last).
   settle() {
     for _ in $(seq 100); do [ "$(cat "$tmp/limit/calls" 2>/dev/null | wc -l)" -ge "$1" ] && break; sleep 0.1; done
     for _ in $(seq 100); do ls "$cache"/symbols-sentences/*.running "$cache"/symbols-gloss/*.running >/dev/null 2>&1 || break; sleep 0.1; done
   }
+  # gl, gdm and ga ask Claude for nothing, though it is there to ask: cases and a gloss are a review's (GMR_IID).
+  mkdir -p "$tmp/plainst"
+  expect symbols/no-claude-outside-review "$(SEAM_CLAUDE=$tmp/limit/claude GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub \
+    GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub GIT_FZF_STATE=$tmp/plainst git-symbols --rows "$base..$head" | grep -c 'cases'):$(ls "$tmp/plainst"/sentences-asked.* "$cache/symbols-gloss/$base-$head".* 2>/dev/null | wc -l | tr -d ' ')" "0:0"
   GIT_FZF_STATE=$tmp/failst lrows --rows "$base..$head" >/dev/null; settle 2
   expect sentences/failed-kept "$(cat "$cache/symbols-sentences/$base-$head.failed"):$(ls "$cache/symbols-sentences" | grep -c '\.tsv$')" \
     "Claude could not tell its cases: You have hit your limit · resets 5pm:0"
@@ -1052,14 +1056,18 @@ EOF
   # order for the roots, and the preview's head.
   printf '{"symbols":[{"id":"lib.ts#run","does":"runs the options once","gloss":"takes a twice flag"},{"id":"lib.ts#Box.grow","does":"enlarges the box","gloss":"grows by two"},{"id":"lib.ts#Opts","does":"options for one run","gloss":"gains a b flag"}],"edges":[{"from":"lib.ts#fresh","to":"lib.ts#Opts","gloss":"reads b off the options"}],"order":[{"id":"lib.ts#fresh","why":"the new entry point"},{"id":"lib.ts#run","why":"then the changed one"}],"spine":"Adds a b option and a fresh reader of it."}' > "$gdir/$base-$head.json"
   expect gloss/state "$(git-symbols-gloss --state "$base..$head" "$tmp/symst/symbols.tsv")" "done"
-  # A gloss landing while the picker is open goes in with the next list.
-  expect gloss/order "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 != "" && $12 !~ /^gk-/ { print $12 }' | head -3 | tr '\n' ' ')" "lib.ts#fresh lib.ts#run lib.ts#Box "
-  expect gloss/not-in-row "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'takes a twice flag')" "0"
+  # Outside a review not even a gloss already cached shows.
+  mkdir -p "$tmp/plainst2"
+  expect gloss/review-only "$(GIT_FZF_STATE=$tmp/plainst2 git-symbols --rows "$base..$head" >/dev/null; GIT_FZF_STATE=$tmp/plainst2 git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c 'runs the options once\|takes a twice flag'):$(grep -c . "$tmp/plainst2/header" 2>/dev/null)" "0:0"
+  # A gloss landing while the picker is open goes in with the next list, on a review's symbols tab.
+  : > "$tmp/symst/by-symbol"
+  expect gloss/order "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$12 != "" && $12 !~ /^gk-/ { print $12 }' | head -3 | tr '\n' ' ')" "lib.ts#fresh lib.ts#run lib.ts#Box "
+  expect gloss/not-in-row "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'takes a twice flag')" "0"
   # The spine heads the picker, where the cursor never lands; no row is it.
-  expect gloss/spine-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'gk-spine'):$(strip < "$tmp/symst/header")" "0:Adds a b option and a fresh reader of it."
+  expect gloss/spine-header "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'gk-spine'):$(strip < "$tmp/symst/header")" "0:Adds a b option and a fresh reader of it."
   expect symbols/legend "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" >/dev/null; strip < "$tmp/symst/legend" | grep -c '⇢ a call new')" "1"
-  expect gloss/preview-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#fresh>lib.ts#Opts' | strip | sed -n 3p)" "new call from fresh: reads b off the options"
-  expect gloss/preview-no-edge "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#run>lib.ts#Opts' | strip | grep -c 'new call')" "0"
+  expect gloss/preview-edge "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#fresh>lib.ts#Opts' | strip | sed -n 3p)" "new call from fresh: reads b off the options"
+  expect gloss/preview-no-edge "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 1 1 'lib.ts#run>lib.ts#Opts' | strip | grep -c 'new call')" "0"
   # Claude's walk (git-symbols-walk) on its own screen (git-walk --view): its
   # list and previews over a walk written by hand, and > and < through it.
   wdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-walk
@@ -1355,13 +1363,13 @@ EOF
   s1=$(git-walk --ahead-since); sleep 1
   expect trace/ahead-since "$(git-walk --ahead-since):$(git config otis.walkAheadSince)" "$s1:$s1"
   git config --unset otis.walkRunner; rm -rf "$wr"
-  expect gloss/preview-why "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 3p)" "then the changed one"
-  expect gloss/preview-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c 'takes a twice flag')" "1"
-  expect gloss/preview-does "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 1p)" "runs the options once"
+  expect gloss/preview-why "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 3p)" "then the changed one"
+  expect gloss/preview-header "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -c 'takes a twice flag')" "1"
+  expect gloss/preview-does "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | sed -n 1p)" "runs the options once"
   # Under run's mention of Opts, what Opts does and then what the change does to it.
   peek
-  expect gloss/note-does "$(FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -A2 '↳' | sed 's/^[ │]*//; s/ *$//' | sed -n '2,3p' | tr '\n' '|')" "options for one run|gains a b flag|"
-  expect gloss/member-header "$(GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 7 9 'lib.ts#Box+grow' | strip | grep -c 'grows by two')" "1"
+  expect gloss/note-does "$(FZF_PREVIEW_COLUMNS=100 GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | strip | grep -A2 '↳' | sed 's/^[ │]*//; s/ *$//' | sed -n '2,3p' | tr '\n' '|')" "options for one run|gains a b flag|"
+  expect gloss/member-header "$(GMR_IID=7 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 7 9 'lib.ts#Box+grow' | strip | grep -c 'grows by two')" "1"
   rm -f "$gdir/$base-$head.json"
   GIT_FZF_STATE=$tmp/symst git-symbols --open-all "$base..$head"
   expect symbols/open-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "4"

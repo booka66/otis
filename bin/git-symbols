@@ -25,7 +25,7 @@
 #                                            there (git-mr-prefetch, ahead of a review)
 # git-symbols --copy <row id>               y: "<symbol> in <path>" on the clipboard, a file row its path;
 #                                            prints the footer note's fzf actions
-# git-symbols --again <rev>                  r: Claude asked again for the gloss and the cases, where it failed
+# git-symbols --again <rev>                  a review's r: Claude asked again for the gloss and the cases, where it failed
 # git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
 #                                            the file line the row's preview is scrolled to, else <line>:
 #                                            enter opens there, where you are
@@ -86,6 +86,10 @@
 # picker's life ($GIT_FZF_STATE), so opening a class is a re-render, not a
 # re-parse; the worktree's is rebuilt on every reload, since that is what a
 # reload is for.
+#
+# Claude's readings of the change, its gloss (git-symbols-gloss) and its cases
+# (git-sentences), are a review's alone (GMR_IID: the board's o). gl, gdm and
+# ga read the change as seam does: no cases, no gloss.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$share/palette.sh"
@@ -99,27 +103,12 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--tab|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
 case $mode in
   --close-all) rm -f "$st/open"; exit 0 ;;
-  # tab [back]: a change's cases, then its symbols, then its files, then its cases again; back, the other way.
-  # A flag each for the two after the cases (by-symbol, by-file), which the lists and previews read. With a
-  # command, the files are a picker of their own (a branch's, git-commit-open): the command runs it, and
-  # the flags are set for the tab that comes after the files that way, for when it is left.
-  --tab)
-    back=; [ "$1" = back ] && { back=1; shift; }
-    on=cases; [ -e "$st/by-symbol" ] && on=symbols; [ -e "$st/by-file" ] && on=files
-    case $on:$back in cases:) to=symbols ;; symbols:) to=files ;; files:) to=cases ;; cases:1) to=files ;; files:1) to=symbols ;; symbols:1) to=cases ;; esac
-    rm -f "$st/by-symbol" "$st/by-file"
-    if [ "$to" = files ] && [ $# -gt 0 ]; then
-      [ -n "$back" ] && : > "$st/by-symbol"
-      printf '%s\n' "$*"; exit 0
-    fi
-    case $to in symbols) : > "$st/by-symbol" ;; files) : > "$st/by-file" ;; esac
-    exit 0 ;;
   # S: how seam would split the change, in the preview, where ? puts the
   # help. A flag rather than a pager, so it sits beside the rows it is about
   # and the next keypress takes it away again.
@@ -643,7 +632,7 @@ if [ "$mode" = --preview ]; then
     fi
     trap 'exec >&3; [ -z "$ann" ] || wait "$ann"; mv -f "$pv.$$" "$pv" 2>/dev/null; cat "$pv" 2>/dev/null; [ -z "$once" ] || rm -f "$pv"; [ -n "$once" ] || ahead' EXIT
   fi
-  # Claude's gloss goes on the diff's hunk header, where delta draws it in
+  # In a review, Claude's gloss goes on the diff's hunk header, where delta draws it in
   # the header line above the symbol; what the symbol does, the change
   # aside, goes above the diff, and for a root why to read it first under
   # that (git-symbols-gloss). GIT_SYMBOLS_PLAIN is the gloss asking
@@ -654,14 +643,14 @@ if [ "$mode" = --preview ]; then
   # has not reached yet holds its place (a line where what it does goes)
   # rather than pushing the diff down when it lands.
   gloss_coming() {
-    [ -n "$key" ] && [ -n "$croot" ] && read -r gpid 2>/dev/null < "$croot/symbols-gloss/$key.running" && kill -0 "$gpid" 2>/dev/null
+    [ -n "$GMR_IID" ] && [ -n "$key" ] && [ -n "$croot" ] && read -r gpid 2>/dev/null < "$croot/symbols-gloss/$key.running" && kill -0 "$gpid" 2>/dev/null
   }
   # The gloss's cache is where git-symbols-gloss would say it is, for the key
   # --rows left in the state: asked of the script, it resolved the change
   # again, two git processes for a file test. Without a state (no picker,
   # or none of --rows yet), the script says.
   gf=
-  if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ]; then
+  if [ -n "$GMR_IID" ] && [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ]; then
     if [ -n "$key" ] && [ -n "$croot" ]; then gf=$croot/symbols-gloss/$key.json; [ -s "$gf" ] || gf=
     else gf=$(git-symbols-gloss --file "$rev" "$st/symbols.tsv"); fi
   fi
@@ -1321,12 +1310,12 @@ if [ "$mode" = --rows ]; then
   case $rev in worktree) OTIS_CALLERS_KEY=$(cut -f1-7,13 "$table" | git hash-object --stdin) ;; *) OTIS_CALLERS_KEY=$OTIS_SYMBOLS_KEY ;; esac
   [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_SYMBOLS_KEY" > "$st/key" && printf '%s\n' "$OTIS_CALLERS_KEY" > "$st/callers-key"
   export OTIS_SYMBOLS_KEY OTIS_CALLERS_KEY OTIS_CACHE_ROOT
-  # By case, once git-sentences has put the change under them: asked for here, once a head, and never where
-  # otis.symbolsModel off keeps Claude out of it; the symbols tab (by-symbol) is the tree. A screen with tabs
-  # (OTIS_TABS) lists only cases on its cases tab, and says so while they are on their way, or why none will come.
+  # A review by case, once git-sentences has put the change under them: asked for here, once a head, and never where
+  # otis.symbolsModel off keeps Claude out of it; the symbols tab (by-symbol) is the tree. The cases tab lists
+  # only cases, and says so while they are on their way, or why none will come.
   sentf=/dev/null sentwait= casesoff= failed=
   [ -n "$GIT_FZF_STATE" ] && rm -f "$st/sentences"
-  if [ -n "$head" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
+  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
     sentf=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.tsv
     if [ -s "$sentf" ] && [ ! "$root/share/sentences.mjs" -nt "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"
     else
@@ -1346,8 +1335,6 @@ if [ "$mode" = --rows ]; then
       fi
     fi
   fi
-  # The screen says so beside its title, since the list is about to become another.
-  if [ -n "$GIT_FZF_STATE" ]; then if [ -n "$sentwait" ]; then : > "$st/sentences-wait"; else rm -f "$st/sentences-wait"; fi; fi
   # Its design red flags (share/flags.mjs), found behind the screen once its cases are told, a case's on its row
   # and in its pane when they land; flags.mjs leaves at once when they are found already. flagf is the list's.
   flagf=/dev/null
@@ -1355,15 +1342,17 @@ if [ "$mode" = --rows ]; then
     [ -s "${sentf%.tsv}.flags.tsv" ] && flagf=${sentf%.tsv}.flags.tsv
     [ -s "${sentf%.tsv}.json" ] && { otis-detach node "$root/share/flags.mjs" "${sentf%.tsv}.json" --now </dev/null >/dev/null 2>&1 & }
   fi
-  # Claude's glosses, once they have landed (git-symbols-gloss), started
-  # here; g asks again for the worktree. The cache is looked for here, a
-  # file test, and the script is asked only when there is none to start it.
+  # A review's glosses from Claude, once they have landed (git-symbols-gloss),
+  # started here. The cache is looked for here, a file test, and the script
+  # is asked only when there is none to start it.
   gf=; glossing= glossfailed=
-  if [ -s "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json" ] && grep -q '"does"' "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json"; then
-    gf=$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json
-  else
-    glossed=$(git-symbols-gloss "$rev" "$table")
-    case $glossed in running) glossing=1 ;; failed\ *) glossfailed=${glossed#failed } ;; /*) gf=$glossed ;; esac
+  if [ -n "$GMR_IID" ]; then
+    if [ -s "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json" ] && grep -q '"does"' "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json"; then
+      gf=$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.json
+    else
+      glossed=$(git-symbols-gloss "$rev" "$table")
+      case $glossed in running) glossing=1 ;; failed\ *) glossfailed=${glossed#failed } ;; /*) gf=$glossed ;; esac
+    fi
   fi
   # Where the changed code broke before (git-symbols-past), for the
   # previews: started here; the screen draws it when it lands (otis-symbols
@@ -1426,8 +1415,7 @@ if [ "$mode" = --rows ]; then
       read -r gpid 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-gloss/$OTIS_SYMBOLS_KEY.running"
       while [ -n "$gpid" ] && kill -0 "$gpid" 2>/dev/null; do sleep 1; done
       rmdir "$st/gloss-wait.$OTIS_SYMBOLS_KEY"
-      if [ -n "$GMR_IID" ]; then git-fzf-bg --then refresh-preview git-mr-files --list "$GMR_IID" "$rev"
-      else git-fzf-bg --then refresh-preview git-symbols --rows "$rev"; fi
+      git-fzf-bg --then refresh-preview git-mr-files --list "$GMR_IID" "$rev"
     ) </dev/null >/dev/null 2>&1 &
   fi
   if [ -n "$gf" ]; then
@@ -1458,8 +1446,8 @@ if [ "$mode" = --rows ]; then
       printf "  ${GK_ATTENTION}\342\226\270${GK_R} 3 closed, with three under it; ${GK_ATTENTION}\342\226\276${GK_R} open   ${GK_CONTEXT}\342\226\270${GK_R} dim: open above already, so L leaves it closed; l opens it here too\n"
       printf "  ${GK_GOOD}\342\234\223${GK_R} viewed, and the row dim: v marks a row and everything under it, and a symbol viewed under one row is viewed under every other; a mark lasts until the symbol's diff changes   ${GK_CONTEXT}3/5${GK_R} closed, three of the five symbols in it viewed\n"
       printf "  ${GK_ATTENTION}\342\207\242${GK_R} a call new to this change: top down the row above newly uses it, bottom up it newly uses the row above\n"
-      printf "  the dim sentence at the top is Claude's one line on the change; under a root, its preview says why to read it first\n\n"
-      printf "${GK_CONTEXT}under a row${GK_R}\n"
+      [ -n "$GMR_IID" ] && printf "  the dim sentence at the top is Claude's one line on the change; under a root, its preview says why to read it first\n"
+      printf "\n${GK_CONTEXT}under a row${GK_R}\n"
       printf "  top down what it uses that changed, in the order it mentions them, and a class its changed members; bottom up (b) what uses it\n"
       printf "  in its preview what it uses is ${GK_ATTENTION}marked${GK_R}, and ${GK_ATTENTION}\342\206\263${GK_R} under the first mention says what that is; i shows them whole\n"
       printf "  ${GK_CONTEXT}callers elsewhere${GK_R}: what uses the symbol that this change did not touch, from tsgo, by package; l opens it, enter opens one\n"
@@ -1520,7 +1508,7 @@ if [ "$mode" = --rows ]; then
   # 27 in a review what Claude's review did with it (read, grep).
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
-  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$OTIS_TABS" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
+  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
     -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$st/layout" -v progress="$st/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
@@ -1531,6 +1519,7 @@ if [ "$mode" = --rows ]; then
       if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "M") msummary = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
+      else if ($1 == "E") away[$2 == "file" ? $3 : $3 SUBSEP $4 SUBSEP $5] = 1
       next
     }
     # design red flags (share/flags.mjs): the words of a case, its flag
@@ -1633,7 +1622,7 @@ if [ "$mode" = --rows ]; then
       # list: the picker'"'"'s header, or first rows with no picker to head.
       # Listed by case: the whole change in a sentence or two is the header, read before the cases.
       if (nsent) { if (header != "" && msummary != "") { print msummary > header; close(header) } bysentence(); print syms + 0, length(files), nsent > counts; exit }
-      # The cases tab of a screen with tabs: until the cases come, it says why there are none.
+      # The cases tab, in a review: until the cases come, it says why there are none.
       if (tabs) {
         heading("cases", "gk-cases-heading")
         tw = (draw ? draw : gk_list_width(cols)) - 6; if (tw < 20) tw = 20
@@ -1743,7 +1732,7 @@ if [ "$mode" = --rows ]; then
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
-    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen, nc, cs, reached) {
+    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
       numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
       ind = sprintf("%" (numw + 2) "s", "")
       w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
@@ -1808,11 +1797,10 @@ if [ "$mode" = --rows ]; then
           else { id = row[i, 1] "#" row[i, 3]; show(i, 1, rid ">" id, "|" id "|", 0) }
         }
       }
-      # A row of the table no sentence took: shown, so nothing in the change is out of sight. One a row under a
-      # sentence uses is not loose: it opens under that row.
-      for (i in placed) { nc = split(row[i, 18], cs, "|"); for (x = 1; x <= nc; x++) if (cs[x] != "") reached[cs[x]] = 1 }
+      # A row of the table no sentence took: shown, so nothing in the change is out of sight, unless the cases say
+      # it is read elsewhere (a test, or what a row under a case uses, which opens under it).
       for (i = 1; i <= m; i++) {
-        if ((i in placed) || ((row[i, 1] "#" row[i, 3]) in reached) || (row[i, 2] != "file" && row[i, 4] == "" && members[row[i, 1] "#" row[i, 3]] != "")) continue
+        if ((i in placed) || ((row[i, 2] == "file" ? row[i, 1] : row[i, 1] SUBSEP row[i, 7] SUBSEP row[i, 8]) in away) || (row[i, 2] != "file" && row[i, 4] == "" && members[row[i, 1] "#" row[i, 3]] != "")) continue
         if (!loose++) { more("", "m", ""); heading("in the change, under no sentence", "gk-loose-heading") }
         if (row[i, 2] == "file") filerow(i, 0, row[i, 1])
         else if (row[i, 4] != "") show(i, 0, row[i, 1] "#" row[i, 4] "+" row[i, 3], "|", 0)
@@ -2006,7 +1994,9 @@ fi
 
 # The picker. Nested in a file picker's execute, so q returns there. Row
 # fields after the display: path, line, side, start, end, base start, base
-# end, staged, unstaged, kind, id.
+# end, staged, unstaged, kind, id. Never a review's, though a review's m opens gl in one:
+# what it inherits of the review (git-mr-files) would put the MR's cases and threads on a commit.
+unset GMR_IID GMR_RANGE GMR_KIND GMR_MOVING
 list="git-symbols --rows $rev"
 # A fold key's reload: the worktree's skips the rebuild, and any keeps what
 # the last reload found of the callers and node_modules.
@@ -2016,17 +2006,16 @@ fold="OTIS_SYMBOLS_FOLD=1 $list"
 # would be one more q on the way out.
 if [ "$OTIS_UNDER" = files ]; then files=abort
 elif [ -z "$head" ]; then files="execute(OTIS_UNDER=symbols zsh -fc 'source $root/share/otis.zsh; _ga_files')+reload($list)+refresh-preview"
-else files="execute(OTIS_UNDER=symbols OTIS_TABS_STATE=\$GIT_FZF_STATE git-commit-open $rev)+reload($list)+refresh-preview"; fi
+else files="execute(OTIS_UNDER=symbols git-commit-open $rev)+reload($list)+refresh-preview"; fi
 if [ -z "$head" ]; then
   # ga: this is the picker, by symbol, to stage one at a time; f is its file panel, with hunks and discards.
-  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,r=ask Claude again,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
+  keys='enter=open in editor,space=stage it,v=viewed (and all under it),f=by file,c=commit,a=stage all,U=unstage all,l=open it,h=close it,i=what it uses,F=make the proposed fix,L=open all,H=close all,b=bottom up / top down,S=how to split it,G=seam'"'"'s page in the browser,C=cut it into a stack,p=peeks on/off,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --track \
     --bind "f:$files" \
     --bind "c:transform:git diff --cached --quiet && git-fzf-note 'nothing staged to commit' || echo 'execute(git-commit-edit || { echo press enter; read -r _; })+reload($list)'" \
     --bind "a:execute-silent(git add -A)+reload($list)+refresh-preview" \
     --bind "U:execute-silent(git reset -q)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
-    --bind "r:execute-silent(git-symbols --again $rev)+reload($list)" \
     --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
@@ -2039,20 +2028,17 @@ if [ -z "$head" ]; then
     --bind "C:execute(git-split --wait $rev)" \
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 else
-  # A commit or a branch: its cases, its symbols, and tab on from there its files (git-commit-open). nvim opens in the diff against the
+  # A commit or a branch: its symbols, and tab its files (git-commit-open). nvim opens in the diff against the
   # change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
-  export OTIS_TABS=1
-  keys='tab=cases / symbols / files,shift-tab=the tab before,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=the cases as a page in the browser,'"${GMR_IID:+P=link the page first in the description of !$GMR_IID,}"'y=copy its name,t=tests/config/generated,r=ask Claude again,u=refresh'
+  keys='tab=by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
-    --bind "r:execute-silent(git-symbols --again $rev)+reload($list)" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
-    --bind "tab:transform(git-symbols --tab '$files')+reload($list)+refresh-preview" \
-    --bind "btab:transform(git-symbols --tab back '$files')+reload($list)+refresh-preview" \
+    --bind "tab:$files" \
+    --bind "btab:$files" \
     --bind "u:reload($list)+refresh-preview" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
     --bind "G:transform(git-symbols --page $rev {12})" \
-    --bind "P:transform(git-symbols --publish)" \
     --bind "b:execute-silent(git-symbols --flip)+reload($fold)" \
     --bind "i:execute-silent(git-symbols --uses {12} {5} {4})+refresh-preview" \
     --bind "F:transform:git-callers-fix --apply {12} 'reload($list)+refresh-preview'" \

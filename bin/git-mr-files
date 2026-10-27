@@ -33,8 +33,13 @@
 # reopens there.
 #
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
+# tab [back]: the cases, then the symbols, then the files, then the cases again; back, the other way. A flag
+# each for the two after the cases (by-symbol, by-file), which the lists and previews read.
 if [ "$1" = --toggle ]; then
-  shift; exec git-symbols --tab "$@"
+  on=cases; [ -e "$st/by-symbol" ] && on=symbols; [ -e "$st/by-file" ] && on=files
+  case $on:$2 in cases:) to=symbols ;; symbols:) to=files ;; files:) to=cases ;; cases:back) to=files ;; files:back) to=symbols ;; symbols:back) to=cases ;; esac
+  rm -f "$st/by-symbol" "$st/by-file"
+  case $to in symbols) : > "$st/by-symbol" ;; files) : > "$st/by-file" ;; esac
   exit 0
 fi
 if [ "$1" = --list ]; then
@@ -114,7 +119,7 @@ if [ "$1" = --moved ]; then
   exit 0
 fi
 iid=$1 range=$2 url=$3 kind=$4
-export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind OTIS_TABS=1
+export NVIM_DIFF_BASE=${range%%..*} GMR_IID=$iid GMR_RANGE=$range GMR_KIND=$kind
 list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
 refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
 

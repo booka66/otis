@@ -201,20 +201,17 @@ if [ "$(printf '%s\n' "$files" | wc -l)" -eq 1 ]; then
   exec "$0" "$rev" "$files"
 fi
 
-# tab goes on to the change's cases (git-symbols) and shift-tab back to its
-# symbols: opened from them, back to that picker (whose tabs are kept in
-# OTIS_TABS_STATE) rather than stacking another.
-symbols="execute(OTIS_UNDER=files git-symbols $rev)" before=$symbols
-if [ "$OTIS_UNDER" = symbols ]; then
-  symbols="execute-silent(rm -f '$OTIS_TABS_STATE/by-symbol')+abort" before="execute-silent(: > '$OTIS_TABS_STATE/by-symbol')+abort"
-fi
-git-fzf "open from $rev " 'tab=cases,shift-tab=symbols,enter=open in editor,t=tests/config/generated,y=copy path' \
+# tab goes to the change by symbol (git-symbols): opened from there, back to
+# that picker rather than stacking another.
+symbols="execute(OTIS_UNDER=files git-symbols $rev)"
+[ "$OTIS_UNDER" = symbols ] && symbols=abort
+git-fzf "open from $rev " 'tab=by symbol,enter=open in editor,t=tests/config/generated,y=copy path' \
   --ansi --delimiter='\t' --with-nth=1 --id-nth=4 \
   --bind 'y:execute-silent(printf %s {2} | otis-copy)+transform(git-fzf-note copied {2})' \
   --bind "start:reload(git-commit-open --rows $rev)" \
   --bind "t:execute-silent(git-test-files toggle)+reload(git-commit-open --rows $rev)" \
   --bind "enter:execute(git-commit-open $rev {2})" \
   --bind "tab:$symbols" \
-  --bind "btab:$before" \
+  --bind "btab:$symbols" \
   --preview "git-preview-commit --as {3} $rev {2}" </dev/null >/dev/null
 exit 0
