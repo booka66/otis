@@ -794,23 +794,30 @@ spun_on() { local was=$spun; spinning && [[ $spun != $was ]]; }
 # (keys_open), with the keys it offers as its key=label list, so a key never
 # pressed still shows, as a nought.
 typeset -g _klog=${OTIS_KEY_LOG:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/keys.tsv} _kname=
-# keys_open <name> <keys>: this screen, and the keys it offers.
+typeset -gA _koff
+# keys_open <name> <keys>: this screen, and the keys it offers. A key is
+# written as it is pressed (btab, which a list may offer as shift-tab), so
+# what it offers and what it logs name the same key.
 keys_open() {
   [[ $_klog == off ]] && return
   _kname=$1
+  local keys=${2//shift-tab=/btab=} pair
+  _koff=()
+  for pair in ${(s:,:)keys}; do [[ $pair == ?*=* ]] && _koff[${pair%%=*}]=${pair#*=}; done
   [[ -d ${_klog:h} ]] || mkdir -p ${_klog:h} 2>/dev/null
-  { print -r -- "$EPOCHSECONDS"$'\t'"$1"$'\t:open\t'"$2" >> $_klog; } 2>/dev/null
+  { print -r -- "$EPOCHSECONDS"$'\t'"$1"$'\t:open\t'"$keys" >> $_klog; } 2>/dev/null
 }
-# keys_used <key> [label]: one of them pressed, and what it is for there.
-# A key held down is one press: its repeats, each within 0.3s of the last,
-# are not lines of their own.
+# keys_used <key> [label]: one of them pressed, and what it is for there,
+# which is what the screen offered it as unless it says otherwise. A key
+# held down is one press: its repeats, each within 0.3s of the last, are not
+# lines of their own.
 typeset -gF _kat=0
 typeset -g _klast=
 keys_used() {
   [[ $_klog == off || -z $_kname ]] && return
   if [[ $1 == $_klast ]] && (( EPOCHREALTIME - _kat < 0.3 )); then _kat=$EPOCHREALTIME; return; fi
   _klast=$1 _kat=$EPOCHREALTIME
-  { print -r -- "$EPOCHSECONDS"$'\t'"$_kname"$'\t'"$1"$'\t'"$2" >> $_klog; } 2>/dev/null
+  { print -r -- "$EPOCHSECONDS"$'\t'"$_kname"$'\t'"$1"$'\t'"${2:-$_koff[$1]}" >> $_klog; } 2>/dev/null
 }
 # keys_caller: the otis command that opened this picker, by name (gb,
 # git-mr-lines), from the process that started it: the title a picker shows

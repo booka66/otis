@@ -1628,6 +1628,12 @@ expect ga/U-unstages "$(cat "$tmp/ga.unstaged")" ""
 # says it is for; the keys it offers, as it opened.
 expect keys/logged "$(awk -F'\t' '$3 == "space" || $3 == "U" { print $3 "=" $4 }' "$OTIS_KEY_LOG" | LC_ALL=C sort -u | tr '\n' ' ')" "U=unstage all space=stage it "
 expect keys/opened "$(awk -F'\t' '$3 == ":open" && $4 ~ /space=stage it/' "$OTIS_KEY_LOG" | wc -l | tr -d ' ')" "1"
+# otis-usage asks about the keys a screen offered when it last opened: a key
+# renamed since is one row under its new name, and one taken out is gone.
+now=$(date +%s)
+printf '%s\tscr\t:open\ta=old name,z=gone\n%s\tscr\ta\t\n%s\tscr\t:open\ta=new name,b=never pressed\n%s\tscr\ta\tnew name\n' \
+  $((now - 30)) $((now - 20)) $((now - 10)) "$now" > "$tmp/usage.tsv"
+expect usage/newest-keys "$(OTIS_KEY_LOG=$tmp/usage.tsv COLUMNS=100 otis-usage 1 | strip | sed -n '/^scr/,/^$/p' | sed -E 's/^ +[█░]+ +//; s/ +/ /g' | tr '\n' '|')" "scr opened 2×|2 0m a new name| never b never pressed||"
 git checkout -q -- a.ts && rm -f d.ts
 
 # --- gb's n: an MR in one key, drafted from the branch's commits as gp's

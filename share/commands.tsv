@@ -23,7 +23,7 @@ other	gg	gg			every command there is, on one screen
 other	otis-config	otis-config			otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default	
 other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
 other	otis-music	otis-music			what cliamp is playing, its bars big: space pauses, n and p skip, / searches YouTube and plays what you pick	M on the board
-other	otis-usage	otis-usage		[days]	what you use: each screen's keys as a heat bar by how often you press them, the ones you never do, and the commands you never run	
+other	otis-usage	otis-usage		[days]	what you use: each screen's keys by how often and how lately you press them, the ones you never do, what came before each refresh, and the commands you don't run	
 other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
 other	otis-update	otis-update			bring otis, and seam, up to their newest releases (the curl install)	
 other	otis-tour	otis-tour			guided tours of what otis does, from a menu: reviewing by symbol, the agent, V, deploys, history	

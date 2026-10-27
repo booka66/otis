@@ -1817,11 +1817,12 @@ box_tick() {
   return 1
 }
 
+# What this screen's own keys are for, as the key log says it (keys_used);
+# the keys a caller offers say so themselves.
+typeset -A own=(']' 'next change' '[' 'previous change' . 'next one not viewed' , 'previous one not viewed'
+  / 'search the rows' '?' 'keys' ctrl-a "Claude's panel")
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
-# used <key>: a line in the key log (keys_used), with what this picker says
-# the key is for.
-used() { keys_used $1 "${hv[${hk[(ie)$1]}]}"; }
 handle() {
   [[ $1 == $e'[<'* ]] && { mouse "$1"; return; }
   (( bfocus )) && { box_key "$1"; return; }
@@ -1856,7 +1857,7 @@ handle() {
   # change (watched).
   local cs=${rid[cur]%%>*} json=
   if (( sel == 1 )) && [[ -n $seltxt && $seltxt != *$'\n'* ]] && (( ${#seltxt} <= 80 )) && [[ $n == (y|n) || ( $n == a && $cs == sentence:* ) ]]; then
-    used $n
+    keys_used $n
     local w=$seltxt
     sel=0 selr= seltxt=
     # On a case, or under one: that case is told again for you.
@@ -1878,12 +1879,12 @@ handle() {
     case $n in
       c)
         [[ $tdraft == true ]] && { flash="a draft has no thread to reply to yet: e edits it"; dirty=1; return; }
-        used c
+        keys_used c
         box_open $s2 "in the thread above" "--reply $GMR_IID $GMR_RANGE $tid" "" "$keep"
         dirty=1; return ;;
       e)
         # The box under the thread at once, your comment read into it behind the screen (box_tick).
-        used e
+        keys_used e
         local args="--edit $GMR_IID $GMR_RANGE $tid" whose="your comment above"
         [[ $tdraft == true ]] && whose="your draft above"
         box_open $s2 "$whose" "$args" "" "$keep"
@@ -1895,12 +1896,12 @@ handle() {
         fi
         dirty=1; return ;;
       d)
-        used d
+        keys_used d
         sel=0 selthread=
         run "execute($keep; git-mr-say --delete $GMR_IID $GMR_RANGE $tid)+execute-silent(git-mr-file-preview --refresh $GMR_IID $GMR_RANGE)+reload($fulllist)+refresh-preview" $cur
         dirty=1; return ;;
       r)
-        used r
+        keys_used r
         sel=0 selthread=
         run "execute-silent(git-mr-threads --resolve $GMR_IID $GMR_RANGE $tid $tres $tdone)+reload($fulllist)+refresh-preview" $cur
         dirty=1; return ;;
@@ -1913,14 +1914,14 @@ handle() {
   if (( sel == 1 )) && [[ -n $selr ]]; then
     case $n in
       a) if [[ -n $ctpl && -z $selpath ]]; then
-           used a
+           keys_used a
            local l=$selr
            sel=0 selr= selgut=0
            chat_open "$l"
            return
          fi ;;
       c) if [[ -n $GMR_IID ]] && (( selgut )); then
-           used c
+           keys_used c
            local side first last cfile=$selpath on
            read -r side first last <<< $selr
            [[ -n $cfile ]] || { fields $cur; cfile=$fld[2]; }
@@ -1932,9 +1933,9 @@ handle() {
     esac
   fi
   sel=0 selr= selpath= selthread= selgut=0
-  [[ $n == a && -n $ctpl ]] && { used a; chat_open ""; return; }
+  [[ $n == a && -n $ctpl ]] && { keys_used a; chat_open ""; return; }
   # ctrl-a shows or hides it, the conversation kept either way.
-  [[ $k == $'\x01' && -n $ctpl ]] && { used ctrl-a; if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }
+  [[ $k == $'\x01' && -n $ctpl ]] && { keys_used ctrl-a "$own[ctrl-a]"; if (( chat )); then chat=0 cfocus=0; else chat_open ""; fi; return; }
   [[ $n == esc ]] && (( chat )) && { chat=0; return; }
   # A picker's key held down is one press: its repeats, arriving while it
   # runs or within 0.3s of the last of them, are dropped. p held ran the
@@ -1951,11 +1952,11 @@ handle() {
   fi
   if [[ -n $bind[$n] ]]; then
     if [[ $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
-    used $n
+    keys_used $n
     act $n; held[$n]=$EPOCHREALTIME
     return
   fi
-  [[ $n == (/|\?|\]|\[|.|,) ]] && used $n
+  [[ $n == (/|\?|\]|\[|.|,) ]] && keys_used $n "$own[$n]"
   case $n in
     j|down) step 1 ;;
     k|up) step -1 ;;

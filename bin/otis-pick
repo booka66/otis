@@ -988,9 +988,9 @@ kname() {
     *) keyname "$1" ;;
   esac
 }
-# used <key>: a line in the key log (keys_used), with what this picker says
-# the key is for.
-used() { keys_used $1 "${hv[${hk[(ie)$1]}]}"; }
+# What this screen's own keys are for, as the key log says it (keys_used);
+# the keys a caller offers say so themselves.
+typeset -A own=(']' 'next change' '[' 'previous change' / 'search the rows' '?' 'keys')
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
 handle() {
@@ -1012,10 +1012,10 @@ handle() {
     # picker, which opens searching, toggles with tab.
     if [[ $n != esc && -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
       [[ $n == enter ]] && searching=0
-      used $n; act $n; return
+      keys_used $n; act $n; return
     fi
     case $n in
-      enter) searching=0; used enter; accept; return ;;
+      enter) searching=0; keys_used enter; accept; return ;;
       esc) searching=0; return ;;
       tab) (( multi && cur )) && marked[$cur]=$(( ! ${marked[$cur]:-0} )); step 1; return ;;
       up|ctrl-k|ctrl-p) step -1; return ;;
@@ -1033,14 +1033,14 @@ handle() {
   if [[ -n $bind[$n] ]] && (( ! ${off[$n]:-0} )); then
     if [[ $bind[$n] == *[\(:]* ]]; then
       if [[ $n == $was ]] && (( EPOCHREALTIME - ${held[$n]:-0} < 0.3 )); then held[$n]=$EPOCHREALTIME; return; fi
-      used $n; act $n; held[$n]=$EPOCHREALTIME
+      keys_used $n; act $n; held[$n]=$EPOCHREALTIME
     else
-      [[ $n == (j|k|down|up|g|G|home|end|page-down|page-up|shift-down|shift-up) ]] || used $n
+      [[ $n == (j|k|down|up|g|G|home|end|page-down|page-up|shift-down|shift-up) ]] || keys_used $n
       run "$bind[$n]" $cur
     fi
     return
   fi
-  [[ $n == (enter|tab|btab|space|/|\?|\]|\[) ]] && used $n
+  [[ $n == (enter|tab|btab|space|/|\?|\]|\[) ]] && keys_used $n "$own[$n]"
   case $n in
     j|down) step 1 ;;
     k|up) step -1 ;;
