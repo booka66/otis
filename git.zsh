@@ -34,8 +34,8 @@ otis-theme() {
   [[ $1 == -* ]] || eval "$(command otis-theme --env)"
 }
 
-# The commands that move you (gb switching into a worktree, gwn, and otis
-# going to a branch or a worktree) are programs, and a program cannot change its
+# The commands that move you (gb switching into a worktree, and otis going
+# to a branch or a worktree) are programs, and a program cannot change its
 # shell's directory. It writes where it went to the file named in OTIS_CD,
 # and the shell goes there once it exits.
 _otis_cd() {
@@ -48,7 +48,6 @@ _otis_cd() {
   return rc
 }
 gb()   { _otis_cd gb "$@" }
-gwn()  { _otis_cd gwn "$@" }
 otis() { _otis_cd otis "$@" }
 
 # Background fetch, like lazygit's, so the prompt's ahead/behind stays honest.

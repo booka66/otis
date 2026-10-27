@@ -85,8 +85,8 @@ tabout=(
   verify     "V finds out whether a change actually works: $who writes the claims that would prove it, a Cursor Cloud agent uses the app in a VM and records a video per claim, and $who judges the evidence, claim by claim. With what you need set up to run one."
   ship       "From an open MR to production without the browser: CI jobs and logs, merge when the pipeline passes, rebase, whether your merged MR is live yet, the deploys, and D, where Claude watches Datadog after your deploy and tells you whether a problem is yours."
   dashboard  "otis, where a morning starts: a board of your changes, each row saying the one move its change needs next, and enter does it. Everything else there is sits in groups under them."
-  commits    "ga, gcm, gam, gl, gundo and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and undo any of it."
-  branches   "gb with each branch's MR and drift, worktrees for what runs beside your checkout (gwn, and the board lists them), gup, and glab stacks (gstack)."
+  commits    "ga, gcm, gam, gl and gwip on a made-up branch: stage one function, fold a fix into the commit it belongs in, reword, and set work aside."
+  branches   "gb with each branch's MR and drift, worktrees for what runs beside your checkout (W in gb, and the board lists them), and gup."
   settings   "What is set in your repo now, and the settings that change the most: lint before folding fixes and a remote workspace to run it in, the agent's lessons, your editor and theme."
   cheatsheet "Every key worth knowing, on one page."
 )
@@ -107,7 +107,7 @@ ptitle=(
   ship_merge "Pipelines and merging"  ship_prod "Deploys and production"
   dashboard "The board"
   commits "Committing and fixing history"
-  branches_gb "Branches"  branches_more "Worktrees, rebasing and stacks"
+  branches_gb "Branches"  branches_more "Worktrees and rebasing"
   settings "Settings worth turning on"
   cheatsheet "Cheat sheet"
 )
@@ -1020,8 +1020,7 @@ EOF
   look 1 "${k}ga${r}, then ${k}space${r} on feeWaived only, and ${k}q${r}. ${k}gam${r} folds what is staged into the last commit (on a stack, it restacks the branches above)."
   look 2 "${k}ga${r} again, stage daysSince, ${k}q${r}. ${k}gl${r} is the log: ${k}f${r} on \"Charge a restocking fee\" folds what is staged into it. The edit goes into the commit that made daysSince, and the one above it is replayed on top."
   look 3 "${k}gl${r} again: ${k}r${r} rewords the commit under the cursor. Try a subject like \"feat: stuff\" to meet the message rules: no type prefix, 72 characters, no em dash."
-  look 4 "${k}gundo${r} lists every state HEAD has been in. Pick one from before the folds and it is all taken back."
-  look 5 "${k}gwip${r} sets everything aside as a commit, not a stash, which every worktree shares; ${k}gunwip${r} brings it back."
+  look 4 "${k}gwip${r} sets everything aside as a commit, not a stash, which every worktree shares; ${k}gunwip${r} brings it back."
   say "Also: ${k}gcm${r} commits in your editor with the diff below, in ${k}ga${r}'s file panel (${k}f${r}) ${k}d${r} discards a file (asks first) and ${k}P${r} parks it in a stash instead, which ${k}gst${r} brings back, ${k}gp${r} pushes, refusing to overwrite commits you have not seen."
   shell
   demo_reset
@@ -1048,17 +1047,12 @@ part_branches_more() {
   heading $1
   demo_reset
   say "A worktree is a second checkout of the same repo, for what runs beside yours: a review, $who's runs, a branch you are waiting on. otis keeps its own under .claude/worktrees."
-  key "gwn <name>" "a new branch, <prefix>/<name> off origin/main, in a worktree of its own, and takes you there"
+  key "W in gb" "the branch in a worktree of its own, and takes you there"
   key otis "the board lists your worktrees in a group, and the ones safe to remove under clean up: enter goes there, d removes (to the Trash, ignored files and all)"
-  key "gbn <name>" "a new branch here"
   key gup "rebase onto a fresh origin/main, and print how to undo it"
-  key grb "interactive rebase from a commit you pick"
-  key gstack "the branch's commits as a glab stack: one branch and MR a commit, pushed bottom first, synced"
   print
   say "Worktrees on merged or closed branches go by themselves once an hour, unless a shell has been in one in the last half hour or anything there is uncommitted, and each sends an alert with the line that brings it back."
-  [[ -n $(git config --get otis.branchPrefix) ]] ||
-    say "${a}gwn and gbn need a branch prefix:${r} git config --global otis.branchPrefix <your name>."
-  say "Try ${k}gwn receipts${r} in the demo. gwn changes your shell's directory only where otis is sourced in it, as otis-setup does."
+  say "Try ${k}W${r} on a branch in ${k}gb${r} in the demo. It changes your shell's directory only where otis is sourced in it, as otis-setup does."
   shell
   demo_reset
 }
@@ -1081,7 +1075,7 @@ part_settings() {
   setting terminalBrowser "true: w and p open in terminal-browser where it is installed, in this pane; ctrl-c comes back"
   setting theme "otis-theme shows each theme on otis's own rows and keeps the one you pick"
   setting sideBySide "always, or auto from 120 columns: diffs side by side"
-  setting branchPrefix "the <prefix>/ that gbn and gwn put on a branch"
+  setting branchPrefix "the <prefix>/ on the branches otis makes for a thread or a fix"
   print
   say "${k}otis-setup --check${r} says what is installed and what is missing, and which optional features are set up in the repo you run it in."
   ask "Pick a theme now?" && otis-theme
@@ -1122,7 +1116,7 @@ part_cheatsheet() {
   print
   print -r -- "  ${m}history${r}"
   key "gam" "fold staged into the last commit (gl's f: into an earlier one)"
-  key "gundo gwip" "undo from the reflog; set work aside"
+  key "gwip gunwip" "set work aside as a commit; bring it back"
 }
 
 # --- run

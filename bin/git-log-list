@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rows for gl and grb: what you see, then tab-separated the commit's sha.
+# Rows for gl: what you see, then tab-separated the commit's sha.
 #
 # The fixed zone is the sha and how long ago the commit landed, and is never
 # cut. Then the subject, which is what you are reading the log for. Then the

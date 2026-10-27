@@ -1,20 +1,21 @@
 #!/bin/sh
-# git-stack [name]            gstack: this branch's commits as a glab stack, synced
+# git-stack                   gb's n: this branch's commits as a glab stack, synced
+# git-stack --sync <name>     gb's n on a layer with no MR: push every layer and open the MRs
 # git-stack --update <name>   gmr's b on a glab stack: rebase it onto origin/main
 # git-stack --of <branch>     the name of the glab stack <branch> is a layer of
 # git-stack --sweep           forget glab stacks whose branches are all gone
 #
 # glab stack (experimental) makes one branch and one MR per commit, and keeps
 # each layer's branch, sha and MR in .git/stacked/<name>, shared by every
-# worktree. gstack runs the three steps that turn a branch into one:
+# worktree. git-stack runs the three steps that turn a branch into one:
 #   1. bring local main up to origin/main, since infer takes main..HEAD and a
 #      stale main hands it commits that are already on origin/main as layers
 #      of yours. Only the main ref moves: fetch main:main when no checkout has
 #      main, else a fast-forward in the one that does. Never a merge into
 #      whatever branch the main checkout happens to be on.
-#   2. glab stack infer --name <name> main..HEAD. The name defaults to the
-#      branch's last path part (cahoon/retry-webhooks is retry-webhooks). On a branch
-#      that is already a layer of a stack there is nothing to infer.
+#   2. glab stack infer --name <name> main..HEAD. The name is the branch's
+#      last path part (me/retry-webhooks is retry-webhooks). On a branch that
+#      is already a layer of a stack there is nothing to infer.
 #   3. push the layers (below), then glab stack sync, which opens MRs for new
 #      layers and drops merged ones; with nothing left to push, its own push
 #      is a no-op.
@@ -42,7 +43,7 @@
 # With no checkout holding any, it runs in mine, switched to the top layer.
 # Nothing moves before you say yes, and a checkout with uncommitted changes is
 # never used or moved (sync would carry them from layer to layer). Both ask
-# first: they push, and gstack opens MRs.
+# first: they push, and sync opens MRs.
 pause() { otis-popup say "$1"; exit "${2:-1}"; }
 common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
 stacked=$common/stacked
@@ -66,7 +67,7 @@ sweep_stacks() {
     done
     [ -n "$alive" ] && continue
     rm -rf "$dir"
-    echo "gstack: forgot the glab stack $name, whose branches are all gone from here"
+    echo "git-stack: forgot the glab stack $name, whose branches are all gone from here"
   done
   cur=$(git config --get glab.currentstack 2>/dev/null) || return 0
   [ -z "$cur" ] || [ -d "$stacked/$cur" ] || git config --unset glab.currentstack
@@ -180,6 +181,24 @@ if [ "$1" = --of ]; then
   exit 0
 fi
 
+# --sync: an existing stack's layers pushed and its MRs opened, from the
+# checkout plan picks (one holding a layer, else mine), after a confirm.
+if [ "$1" = --sync ]; then
+  name=$2
+  [ -d "$stacked/$name" ] || { echo "git-stack: no glab stack named $name" >&2; exit 1; }
+  p=$(plan "$name") || exit 1
+  echo "glab stack $name:"
+  layers "$name" | sed 's/^/  /'
+  show_plan "$p"
+  # Exit 1 when told no: whoever asked says it is synced only on 0.
+  git-confirm "sync it, pushing every layer?" || exit 1
+  do_plan "$p" || exit 1
+  wt=$(printf '%s\n' "$p" | awk '$1 == "home" { print $2 }')
+  push_layers "$name" "$wt" || { echo "git-stack: a push failed; n on a layer of it in gb picks up from there" >&2; exit 1; }
+  sync "$wt"
+  exit
+fi
+
 if [ "$1" = --update ]; then
   name=$2
   [ -d "$stacked/$name" ] || pause "no glab stack named $name"
@@ -203,47 +222,37 @@ rebase the whole stack onto origin/$main and force-push every layer?" || exit 0
   pause "done" 0
 fi
 
-name=$1
 b=$(git branch --show-current)
-[ -n "$b" ] || { echo "gstack: not on a branch (detached HEAD)" >&2; exit 1; }
-[ "$b" != "$main" ] || { echo "gstack: you are on $main; a stack is built from a branch" >&2; exit 1; }
+[ -n "$b" ] || { echo "git-stack: not on a branch (detached HEAD)" >&2; exit 1; }
+[ "$b" != "$main" ] || { echo "git-stack: you are on $main; a stack is built from a branch" >&2; exit 1; }
 if dirty .; then
-  echo "gstack: uncommitted changes, which sync would carry from layer to layer. commit them, or gwip" >&2
+  echo "git-stack: uncommitted changes, which sync would carry from layer to layer. commit them, or gwip" >&2
   exit 1
 fi
 
 sweep_stacks
-existing=$("$0" --of "$b")
-if [ -n "$existing" ]; then
-  name=$existing
-  p=$(plan "$name") || exit 1
-  echo "$b is a layer of glab stack $name:"
-  show_plan "$p"
-  git-confirm "sync it, pushing every layer?" || exit 0
-  do_plan "$p" || exit 1
+existing=$("$0" --of "$b") && exec "$0" --sync "$existing"
+name=${b##*/}
+[ ! -d "$stacked/$name" ] || { echo "git-stack: a glab stack named $name already exists" >&2; exit 1; }
+
+git fetch --quiet origin "$main" || { echo "git-stack: could not fetch origin/$main" >&2; exit 1; }
+holder=$(checked_out | awk -F'\t' -v b="$main" '$1 == b { print $2 }')
+if [ -n "$holder" ]; then
+  git -C "$holder" merge --quiet --ff-only "origin/$main" ||
+    { echo "git-stack: $main in $holder does not fast-forward to origin/$main" >&2; exit 1; }
 else
-  [ -n "$name" ] || name=${b##*/}
-  [ ! -d "$stacked/$name" ] || { echo "gstack: a glab stack named $name already exists; gstack <another name>" >&2; exit 1; }
-
-  git fetch --quiet origin "$main" || { echo "gstack: could not fetch origin/$main" >&2; exit 1; }
-  holder=$(checked_out | awk -F'\t' -v b="$main" '$1 == b { print $2 }')
-  if [ -n "$holder" ]; then
-    git -C "$holder" merge --quiet --ff-only "origin/$main" ||
-      { echo "gstack: $main in $holder does not fast-forward to origin/$main" >&2; exit 1; }
-  else
-    git fetch --quiet origin "$main:$main" ||
-      { echo "gstack: local $main does not fast-forward to origin/$main" >&2; exit 1; }
-  fi
-
-  n=$(git rev-list --count "$main..HEAD")
-  [ "$n" -gt 0 ] || { echo "gstack: $b has nothing past $main" >&2; exit 1; }
-  echo "glab stack $name from $b: $n commit(s), one branch and MR each"
-  git log --reverse --format='  %h %s' "$main..HEAD"
-  git-confirm "make the stack, push it and open its MRs?" || exit 0
-  glab stack infer --name "$name" "$main..HEAD" || exit 1
+  git fetch --quiet origin "$main:$main" ||
+    { echo "git-stack: local $main does not fast-forward to origin/$main" >&2; exit 1; }
 fi
 
-# A new stack's layers are branches only this checkout has seen, so it is home.
-[ -n "$existing" ] && wt=$(printf '%s\n' "$p" | awk '$1 == "home" { print $2 }') || wt=$(git rev-parse --show-toplevel)
-push_layers "$name" "$wt" || { echo "gstack: a push failed; gstack again picks up from there" >&2; exit 1; }
+n=$(git rev-list --count "$main..HEAD")
+[ "$n" -gt 0 ] || { echo "git-stack: $b has nothing past $main" >&2; exit 1; }
+echo "glab stack $name from $b: $n commit(s), one branch and MR each"
+git log --reverse --format='  %h %s' "$main..HEAD"
+git-confirm "make the stack, push it and open its MRs?" || exit 0
+glab stack infer --name "$name" "$main..HEAD" || exit 1
+
+# Its layers are branches only this checkout has seen, so it is home.
+wt=$(git rev-parse --show-toplevel)
+push_layers "$name" "$wt" || { echo "git-stack: a push failed; n on a layer of it in gb picks up from there" >&2; exit 1; }
 sync "$wt"

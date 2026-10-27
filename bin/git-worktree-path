@@ -2,7 +2,7 @@
 # git-worktree-path main          the main checkout; every other worktree lives under it
 # git-worktree-path of <branch>   where <branch> is checked out, if anywhere
 # git-worktree-path named <name>  where the worktree called <name> goes: <otis-config worktrees>/<name>
-#                                 under the main checkout (gwn, and gmr's review and mine)
+#                                 under the main checkout (W in gb, and gmr's review and mine)
 # git-worktree-path roots         the main checkout, then review, then mine, a line each: the
 #                                 three every worktree list and preview wants, in one run
 #                                 rather than three, each of which asks git where the

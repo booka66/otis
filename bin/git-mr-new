@@ -6,7 +6,7 @@
 # An MR for a branch that has none, asked first: into the branch below it on
 # a stack, else main, titled and described from its commits the way gp's
 # first push offers one, with the project's defaults. A branch of several
-# commits can go up as a glab stack instead (gstack), one MR a commit
+# commits can go up as a glab stack instead (git-stack), one MR a commit
 # (_g_mr_new in share/otis.zsh).
 root=$(cd "$(dirname "$0")/.." && pwd)
 how=${1#--}; shift

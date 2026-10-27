@@ -24,14 +24,11 @@ refs() {
 
 case $cmd in
   # A range or a ref to start from.
-  gl | grb | gdm | gstack) refs ;;
+  gl | gdm) refs ;;
   # Paths, and the branch names that gb's own switch takes.
   ga) echo '@files' ;;
   otis-config) sed -n 's/^keys=.//p' "$(dirname "$0")/otis-config" | tr -d "'" | tr ' ' '\n' ;;
   otis-theme) otis-theme --list | cut -f1 ;;
-  # The gitignore tags, from the list gi fetched last time it was asked for
-  # one; never fetched here.
-  gi) cat "${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/gitignore-tags" 2>/dev/null ;;
 esac
 
 # Every command answers --help (bin/otis-help), so every command offers it.

@@ -331,12 +331,12 @@ fi
 printf '\nsettings\n'
 prefix=$(git config --global --get otis.branchPrefix)
 if [ -n "$prefix" ]; then
-  pass "branch prefix" "$prefix (gbn and gwn make $prefix/<name>)"
+  pass "branch prefix" "$prefix (the branches otis makes for a thread or a fix are $prefix/<name>)"
 elif [ -n "$check_only" ]; then
-  fail "branch prefix" "unset; gbn and gwn need it: git config --global otis.branchPrefix <your name>"
+  fail "branch prefix" "unset; a fix put on a branch needs it: git config --global otis.branchPrefix <your name>"
 else
   guess=$(git config --get user.email | sed -E 's/@.*//; s/[^A-Za-z0-9._-].*//; s/\..*//')
-  printf '  gbn and gwn name new branches <prefix>/<name>. Your prefix'
+  printf '  The branches otis makes for a thread or a fix are <prefix>/<name>. Your prefix'
   [ -n "$guess" ] && printf ' [%s]' "$guess"
   printf ': '
   read -r prefix </dev/tty

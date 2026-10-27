@@ -304,8 +304,7 @@ git-test-files toggle
 expect test-files/shown-again "$(git-test-files hidden; echo $?)" "1"
 
 # --- gg lists every command there is. A command nobody can find is a command
-# nobody uses: gstack and gag were both missing, so a session that needed a
-# glab stack wrote the whole sequence out by hand instead of running it.
+# nobody uses.
 gg_out=$(gg 2>/dev/null | strip)
 unlisted=
 for fn in $(cd "$root/bin" && for f in *; do [ -L "$f" ] && [ "$f" != gg ] && echo "$f"; done); do
@@ -322,7 +321,7 @@ printf '{"branch":"alive-layer","sha":"y","prev":"","next":""}' > "$st/kept/1.js
 git config glab.currentstack gone
 git-stack --sweep > "$tmp/sweep.out"
 expect stack/sweep-forgets "$(ls "$st" | tr '\n' ' ')" "kept "
-expect stack/sweep-says-so "$(strip < "$tmp/sweep.out")" "gstack: forgot the glab stack gone, whose branches are all gone from here"
+expect stack/sweep-says-so "$(strip < "$tmp/sweep.out")" "git-stack: forgot the glab stack gone, whose branches are all gone from here"
 expect stack/sweep-unsets "$(git config --get glab.currentstack; echo "rc=$?")" "rc=1"
 # One whose layers are still here is left alone, currentstack included.
 git config glab.currentstack kept
@@ -1683,19 +1682,19 @@ expect goto/main-checkout-is-home "$(cd "$tmp/repo/.claude/worktrees/mine" && go
 git worktree remove --force "$tmp/repo/.claude/worktrees/mine" && git branch -qD away
 
 # --- a command that moves you hands the directory to the shell that ran it:
-# each shell's wrapper follows it, and with none it says where to go
-git config otis.branchPrefix t
-wt=$tmp/repo/.claude/worktrees
-expect cd/zsh "$(zsh -fc "source '$root/git.zsh'; gwn zhop >/dev/null 2>&1; pwd")" "$wt/zhop"
-expect cd/bash "$(bash --norc --noprofile -c "source '$root/otis.bash'; gwn bhop >/dev/null 2>&1; pwd")" "$wt/bhop"
+# each shell's wrapper follows it, and with none it says where to go. The
+# board, stubbed, leaving for a worktree as enter on one does.
+hop=$tmp/repo/.claude/worktrees/hop
+mkdir -p "$tmp/cdstub" "$hop"
+printf '#!/bin/sh\nprintf "cd\\t%%s\\n" "%s"\n' "$hop" > "$tmp/cdstub/otis-dash"; chmod +x "$tmp/cdstub/otis-dash"
+expect cd/zsh "$(PATH=$tmp/cdstub:$PATH zsh -fc "source '$root/git.zsh'; otis >/dev/null 2>&1; pwd")" "$hop"
+expect cd/bash "$(PATH=$tmp/cdstub:$PATH bash --norc --noprofile -c "source '$root/otis.bash'; otis >/dev/null 2>&1; pwd")" "$hop"
 if command -v fish >/dev/null 2>&1; then
-  expect cd/fish "$(fish --no-config -c "source '$root/otis.fish'; gwn fhop >/dev/null 2>&1; pwd")" "$wt/fhop"
-  git worktree remove "$wt/fhop" && git branch -qD t/fhop
+  expect cd/fish "$(PATH=$tmp/cdstub:$PATH fish --no-config -c "source '$root/otis.fish'; otis >/dev/null 2>&1; pwd")" "$hop"
 fi
-expect cd/no-wrapper "$(gwn nhop 2>&1 >/dev/null | tail -1; pwd)" "now: cd ~/repo/.claude/worktrees/nhop
+expect cd/no-wrapper "$(PATH=$tmp/cdstub:$PATH otis 2>&1 >/dev/null | tail -1; pwd)" "now: cd ~/repo/.claude/worktrees/hop
 $tmp/repo"
-for n in zhop bhop nhop; do git worktree remove "$wt/$n" && git branch -qD "t/$n"; done
-git config --unset otis.branchPrefix
+rm -rf "$tmp/cdstub" "$hop"
 # An alias or function of the same name (oh-my-zsh's gb, gst) would win over
 # the command, so sourcing takes it away.
 expect shell/zsh-clash "$(zsh -fc "alias gst='git stash'; gl() { echo mine; }; source '$root/git.zsh'; whence -w gst gl gb")" "gst: command
@@ -1790,9 +1789,6 @@ expect gam/one-commit "$(git rev-list --count main..low)" "1"
 expect gam/middle-follows "$(git rev-list --count low..high) $(git show high:l.ts)" "1 l2"
 expect gam/top-follows "$(git rev-list --count high..higher) $(git show higher:l.ts)" "1 l2"
 expect gam/worktree-back "$(git -C "$tmp/wt" branch --show-current) $(cat "$tmp/wt/l.ts")" "higher l2"
-stack-push >/dev/null 2>&1
-expect stack-push/whole-stack "$(git -C "$tmp/origin" rev-parse low high higher 2>&1 | tr '\n' ' ')" "$(git rev-parse low high higher | tr '\n' ' ')"
-expect stack-push/back-where-it-was "$(git branch --show-current)" "low"
 git worktree remove "$tmp/wt"
 git switch -q -c side low && git commit -q --allow-empty -m "Side" && git switch -q low
 printf 'l3\n' > l.ts && git add l.ts

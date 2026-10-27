@@ -24,86 +24,6 @@ _g_cd() {
   fi
 }
 
-# Bare gi lists the tags there are; gi <tags> fetches those rules. The list is
-# kept as it goes by, so completing a tag never has to fetch anything
-# (bin/otis-complete).
-gi() {
-  local cache=${XDG_CACHE_HOME:-$HOME/.cache}/git-alias/gitignore-tags
-  if (( ! $# )); then
-    local tags
-    tags=$(curl -fsSL "https://www.toptal.com/developers/gitignore/api/list") || return 1
-    mkdir -p ${cache:h} && print -r -- ${tags//,/$'\n'} > $cache
-    # COLUMNS is 0 rather than unset where there is no terminal, which fold refuses.
-    print -r -- ${tags//,/ } | fold -s -w $(( COLUMNS > 20 ? COLUMNS : 80 ))
-    print
-    return
-  fi
-  curl -fsSL "https://www.toptal.com/developers/gitignore/api/${(j:,:)@}"
-}
-
-# Push a stack of branches with gp's safety checks. With no branches named, the
-# whole stack this branch is on: it, every branch below it past origin/main (the
-# ones gup here moves) and every branch stacked above it (the ones gam here
-# restacks); never main, whose commits past origin/main are not a stack to
-# force-push.
-#
-# One push per branch, bottom first, each switched to here: a pre-push hook
-# that lints what is pushed and may commit fixes refuses several branches in
-# one push and any branch that is not checked out. A branch another worktree
-# has checked out is pushed from that worktree instead. This checkout goes back
-# where it was at the end. A push that fails, the hook stopping to add a lint fix
-# included, stops the rest, since the branches above were built on what that
-# branch had.
-stack-push() {
-  _g_repo || return 1
-  local base=$(otis-config base) main=$(otis-config main)
-  local -a branches=("$@")
-  if (( ! $# )); then
-    branches=(${(f)"$(git for-each-ref --format='%(refname:short)' --merged HEAD --no-merged $base refs/heads | grep -vx $main)"})
-    (( $#branches )) || { print -u2 "stack-push: no branches here past $base to push"; return 1 }
-    branches+=(${(f)"$(git for-each-ref --format='%(refname:short)' --contains HEAD --no-merged $base refs/heads | grep -vx $main)"})
-    branches=(${(u)branches})
-  fi
-  # Bottom first: the fewest commits past the base.
-  local b
-  branches=(${${(f)"$(for b in $branches; do print -r -- "$(git rev-list --count $base..$b) $b"; done | sort -n)"}#* })
-
-  if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
-    print -u2 "stack-push: uncommitted changes, and pushing switches branches; commit them or set them aside with gwip"
-    return 1
-  fi
-  local -A held
-  local line
-  for line in ${(f)"$(_g_held_elsewhere $branches)"}; do
-    held[${line%%$'\t'*}]=${line#*$'\t'}
-    if [[ -n $(git -C "${line#*$'\t'}" status --porcelain --untracked-files=no) ]]; then
-      print -u2 "stack-push: ${line%%$'\t'*} is checked out in ${line#*$'\t'}, which has uncommitted changes the hook's lint commit would take; commit or set them aside first"
-      return 1
-    fi
-  done
-  local here=$(git symbolic-ref -q --short HEAD) at=$(git rev-parse HEAD) tip rc=0
-  for b in $branches; do
-    print "pushing $b${held[$b]:+ from ${held[$b]}}"
-    tip=$(git rev-parse "$b")
-    if [[ -n ${held[$b]} ]]; then
-      git -C "${held[$b]}" push origin HEAD --force-with-lease --force-if-includes || { rc=1; break }
-    else
-      git switch -q "$b" && git push origin HEAD --force-with-lease --force-if-includes || { rc=1; break }
-    fi
-  done
-  if [[ $(git rev-parse HEAD) != $at || $(git symbolic-ref -q --short HEAD) != $here ]]; then
-    if [[ -n $here ]]; then git switch -q "$here"; else git switch -q --detach "$at"; fi
-  fi
-  if (( rc )) && [[ $(git rev-parse "$b") != $tip && $b != $branches[-1] ]]; then
-    # The hook committed lint fixes onto $b, which the branches above lack.
-    print -u2 "stack-push: the hook added lint fixes to $b; put the branches above on it, then push again:"
-    print -u2 "  git switch $branches[-1] && git rebase --update-refs $b && stack-push"
-  elif (( rc )); then
-    print -u2 "stack-push: stopped at $b"
-  fi
-  return $rc
-}
-
 # ---------------------------------------------------------- git, picker-driven
 # gs is a plain alias in git.zsh. These are the ones that replace reaching
 # for lazygit: each one is a picker, so you never load a TUI.
@@ -155,7 +75,7 @@ gb() {
 # missing locally is fetched from origin and tracked. One checked out in
 # another worktree is brought here, since git allows a branch one place: that
 # worktree is detached if it is one otis reuses (gmr's review and mine), or
-# removed if it was made for the branch (gwn, W, B in the proposals), and the
+# removed if it was made for the branch (W, B in the proposals), and the
 # branch keeps every commit either way. Uncommitted changes there are yours
 # to settle first; W goes there. A branch checked out in the main checkout is
 # never taken from it: that is home, so you go there. With "worktree" (W in
@@ -221,62 +141,6 @@ _g_free_branch() {
     git-worktree-trash "$wt" || return 1
     print "$b was in ${wt/#$HOME/~}, now in the Trash"
   fi
-}
-
-# Your branch prefix, from git config otis.branchPrefix (otis-setup
-# asks for it); unset, gbn and gwn say how to set it rather than guess.
-_gprefix() {
-  local p=$(git config --get otis.branchPrefix)
-  if [[ -z $p ]]; then
-    print -u2 "${1:-gbn}: no branch prefix set; new branches are named <prefix>/<name>"
-    print -u2 "  run otis-setup, or: git config --global otis.branchPrefix <your name>"
-    return 1
-  fi
-  print -r -- $p
-}
-
-# Shared by gbn and gwn: checks <name> and prints <prefix>/<name>, or explains
-# what to do instead. Spaces become dashes, so a name can be typed as a phrase,
-# and a name typed with the prefix already on it is not doubled.
-_gbranch() {
-  local cmd=$1 prefix b
-  git rev-parse --git-dir >/dev/null 2>&1 || { print -u2 "$cmd: not inside a git repo"; return 1 }
-  prefix=$(_gprefix $cmd) || return 1
-  local name=${2#$prefix/}
-  local -a words=(${=name})
-  name=${(j:-:)words}
-  b="$prefix/$name"
-  if ! git check-ref-format --branch "$b" >/dev/null 2>&1; then
-    print -u2 "$cmd: '$name' can't be a branch name"
-    print -ru2 "  use letters, digits and - _ / .   no spaces, '..', ~ ^ : ? * [ \\ or a trailing .lock"
-    return 2
-  fi
-  if git show-ref --verify --quiet "refs/heads/$b"; then
-    local wt=$(git-worktree-path of "$b")
-    print -u2 "$cmd: $b already exists"
-    if [[ -n $wt ]]; then
-      print -u2 "  it's checked out at $wt   the board goes there, under worktrees"
-    else
-      print -u2 "  switch to it with gb, or: git switch $b"
-    fi
-    return 1
-  fi
-  print -r -- "$b"
-}
-
-gwn() {
-  if [[ -z $1 ]] || (( $# > 2 )); then
-    print -u2 "usage: gwn <name> [base]   new worktree on <prefix>/<name>, from $(otis-config base) unless base is given"
-    print -u2 "  quote a name with spaces; they become dashes"
-    print -u2 "  e.g. gwn billing-dupes"
-    return 2
-  fi
-  local b dir
-  b=$(_gbranch gwn "$1") || return
-  local name=${b#$(_gprefix gwn)/}
-  dir=$(git-worktree-path named "$name")
-  [[ -e $dir ]] && { print -u2 "gwn: $dir already exists   the board goes there or removes it, under worktrees"; return 1 }
-  git-worktree-add "$name" -b "$b" "${2:-$(otis-config base)}" && _g_cd "$dir"
 }
 
 # The log, newest first; bare gl shows the newest 500 and says so in the
@@ -489,7 +353,7 @@ gam() {
       git -C "${line#*$'\t'}" switch -q "${line%%$'\t'*}" ||
         print -u2 "gam: could not put ${line#*$'\t'} back on ${line%%$'\t'*}; it is detached at the old commit"
     done
-    print "done. push the stack with stack-push"
+    print "done. the branches above want pushing too: p on each in gb"
   else
     print -u2 ""
     print -u2 "conflict restacking $top. fix the files, git add them, git rebase --continue, then git switch $here"
@@ -551,51 +415,6 @@ gunwip() {
 # and later output scrolls out of view.
 fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?1049l'; clear }
 
-# The two things lazygit still does better, as pickers.
-
-# Interactive rebase starting just below the commit you pick, so that commit is
-# the first one you can reword, edit, squash or drop. --update-refs keeps the
-# branches stacked above it pointing at the right commits.
-grb() {
-  _g_repo || return 1
-  local sha args
-  (( $# )) && args="${(q)@}"
-  sha=$(git-fzf 'rebase from ' 'enter=edit this and later' --ansi --no-sort \
-      --delimiter=$'\t' --with-nth=1 --id-nth=2 \
-      --bind "start:reload(git-log-list $args)" \
-      --preview 'git-preview-commit {2}' </dev/null | cut -f2) || return
-  [[ -z $sha ]] && return
-  if git rev-parse -q --verify "$sha~1" >/dev/null 2>&1; then
-    git rebase -i --autosquash --update-refs "$sha~1"
-  else
-    git rebase -i --autosquash --update-refs --root
-  fi
-}
-
-# The reflog as an undo list: every state HEAD has been in, newest first.
-# This is what gets you back after a rebase or reset went wrong. The age is
-# when HEAD moved there, which %gd names under --date ("HEAD@{2 minutes ago}");
-# %ar would be the commit's own date, months back for a reset onto main.
-gundo() {
-  _g_repo || return 1
-  local sel sha
-  sel=$(git reflog --date=relative --format='%h%x09%gd%x09%gs%x09%gd' -60 |
-    awk -F'\t' -v OFS='\t' '{ sub(/^[^{]*[{]/, "", $4); sub(/[}]$/, "", $4); print }' |
-    git-fzf 'undo to ' 'enter=restore this state' --ansi \
-      --delimiter=$'\t' --with-nth='1,3,4' \
-      --preview 'git-preview-commit {1}; echo; echo "--- history from there ---"; git log --oneline --color=always -8 {1}') || return
-  [[ -z $sel ]] && return
-  sha=$(print -r -- "$sel" | cut -f1)
-
-  print "restore the tree and HEAD to:"
-  git log -1 --format='  %h %s' "$sha"
-  print "  ($(print -r -- "$sel" | cut -f3))"
-  print -n "this discards uncommitted changes. proceed? [y/N] "
-  if ! read -q; then print; print "aborted"; return 1; fi
-  print
-  git reset --hard "$sha" && git log --oneline -3
-}
-
 # Everything Claude is doing, or has done, in this repo in the background, in
 # one list (git-agent-list): its reviews, fix runs, production watches and
 # verifications, running ones first, each with its state, what it is about,
@@ -652,14 +471,6 @@ otis() {
   }
 }
 
-# This branch's commits as a glab stack, one branch and MR a commit, then
-# synced (git-stack). b on the board rebases a glab stack onto origin/main.
-gstack() {
-  _g_repo || return 1
-  git-forge can stack || { print -u2 "gstack: stacks are glab's, and this repo is on GitHub; a branch on a branch still stacks (gp offers each its PR)"; return 1 }
-  git-stack "$@"
-}
-
 # Bring this branch up to date with main: fetch origin/main and replay the
 # branch's commits on top. --update-refs carries any stacked branches along.
 # A dirty tree is refused rather than auto-stashed, since the stash list is
@@ -682,7 +493,7 @@ gup() {
   fi
   # Note where everything the rebase will move points now, for a one-paste undo.
   # --update-refs moves the local branches on commits being replayed, except any
-  # checked out in another worktree; gundo alone would only reset this one.
+  # checked out in another worktree; a reset alone would only put this one back.
   local replayed=$'\n'"$(git rev-list origin/$main..HEAD)"$'\n' line ref sha
   local undo="git reset --hard $(git rev-parse --short=10 HEAD)"
   for line in ${(f)"$(git for-each-ref --format='%(refname:short) %(objectname)' refs/heads)"}; do
@@ -727,8 +538,8 @@ gp() {
 }
 
 # The branch an MR from $1 goes into: the nearest branch below it on a stack
-# (in its history but not yet in origin/main, the one furthest past it, as
-# stack-push counts), else main.
+# (in its history but not yet in origin/main, the one furthest past it),
+# else main.
 _g_mr_target() {
   local base=$(otis-config base) main=$(otis-config main) b most=0 n tip=$(git rev-parse "$1")
   local best=$main
@@ -748,7 +559,7 @@ _g_mr_draft() {
   local b=$1
   typeset -g mr_target=$(_g_mr_target "$b") mr_title= mr_desc= mr_why=
   if ! git show-ref --verify --quiet "refs/remotes/origin/$mr_target"; then
-    mr_why="$b sits on $mr_target, which is not on origin yet, so no MR for it; stack-push pushes both"
+    mr_why="$b sits on $mr_target, which is not on origin yet, so no MR for it; p on $mr_target in gb pushes it"
     return 1
   fi
   local -a subjects=(${(f)"$(git log --reverse --format=%s "origin/$mr_target..$b")"})
@@ -790,16 +601,15 @@ _g_offer_mr() {
 # rest runs in the terminal (ask), and what it did is the footer after
 # (said). A branch on others of yours brings the ones below it with no MR
 # along, all asked at once. A branch off main of several commits, none of
-# them a merge, can go up as a glab stack instead, one MR a commit (gstack),
-# from the checkout it is in.
+# them a merge, can go up as a glab stack instead, one MR a commit
+# (git-stack), from the checkout it is in; a layer of one with no MR yet
+# (its first push failed, say) has its stack synced, which opens them.
 _g_mr_new() {
   local how=$1 b=$2 iid=$3 said=$GIT_FZF_STATE/mr-new.said
   case $how in
     check)
       [[ -n $iid ]] && { git-fzf-note "$b already has !$iid; w opens it"; return }
       { otis-config gitlab || [[ $(otis-config forge) == github ]] } || { git-fzf-note "origin is on neither GitLab nor GitHub"; return }
-      local stack=$(git-stack --of "$b" 2>/dev/null)
-      [[ -n $stack ]] && { git-fzf-note "$b is a layer of the stack $stack; gstack on it opens the stack's MRs"; return }
       print -r -- "execute(git-mr-new --ask ${(q)b})+transform(git-mr-new --said)+execute-silent(git-fzf-bg git-branch-list --switch --refresh)"
       ;;
     said)
@@ -807,10 +617,14 @@ _g_mr_new() {
       ;;
     ask)
       rm -f $said
-      local base=$(otis-config base) out wt
+      local base=$(otis-config base) out wt stack=$(git-stack --of "$b" 2>/dev/null)
+      if [[ -n $stack ]]; then
+        git-stack --sync "$stack" && print -r -- "the stack $stack is synced; the board has its MRs" > $said
+        return
+      fi
       local -i n=$(git rev-list --count "$base..$b" 2>/dev/null)
       (( n )) || { print -r -- "$b has nothing past $base" > $said; return }
-      # The stack is offered only where gstack can make it: off main (glab
+      # The stack is offered only where git-stack can make it: off main (glab
       # infers main..HEAD, so a branch on another of yours would take that
       # one's commits as layers too; it goes into it instead, one MR), and
       # from a checkout of it, since infer reads HEAD. Without one it says
@@ -821,8 +635,8 @@ _g_mr_new() {
         print
         wt=$(git-worktree-path of "$b")
         if [[ -z $wt ]]; then
-          print -r -- "not checked out anywhere, so no stack from here (enter switches to it, then gstack); one MR for all of them instead:"
-        elif git-confirm "make them a stack, one MR a commit (gstack)?"; then
+          print -r -- "not checked out anywhere, so no stack from here (enter switches to it, then n again); one MR for all of them instead:"
+        elif git-confirm "make them a stack, one MR a commit?"; then
           (cd "$wt" && git-stack) && print -r -- "$b is a stack now; the board has its MRs" > $said
           return
         fi
@@ -841,7 +655,7 @@ _g_mr_new() {
       done
       for x in $chain; do
         git show-ref --verify --quiet "refs/remotes/origin/$x" && continue
-        print -r -- "$x is not pushed yet; ${${chain:#$b}:+stack-push pushes the chain, }gp pushes it and offers the MR" > $said
+        print -r -- "$x is not pushed yet; gp pushes it and offers the MR" > $said
         return
       done
       for x in $chain; do
@@ -877,14 +691,4 @@ _g_review_link() {
     gitlab.com) print -r -- $'\n'"${c}open an MR:${r} https://gitlab.com/$repo/-/merge_requests/new?merge_request%5Bsource_branch%5D=${1//\//%2F}" ;;
     github.com) print -r -- $'\n'"${c}open a PR:${r} https://github.com/$repo/pull/new/$1" ;;
   esac
-}
-gbn() {
-  if [[ -z $1 ]]; then
-    print -u2 "usage: gbn <name>   new branch <prefix>/<name> off the current HEAD ($(git branch --show-current 2>/dev/null)); spaces become dashes"
-    print -u2 "  e.g. gbn billing-dupes     for a fresh branch off origin/main in its own worktree, use gwn"
-    return 2
-  fi
-  local b
-  b=$(_gbranch gbn "$*") || return
-  git switch -c "$b"
 }
