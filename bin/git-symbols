@@ -2098,7 +2098,11 @@ list="git-symbols --rows $rev"
 # A fold key's reload: the worktree's skips the rebuild, and any keeps what
 # the last reload found of the callers and node_modules.
 fold="OTIS_SYMBOLS_FOLD=1 $list"
+# What enter opens, and, in a frame (otis-frame), what the row you settle on
+# shows beside the list (--show), enter then taking you into it.
+where="\$(git-symbols --at $rev {2} {4} {5} {6} {12} {3})"
 if [ -z "$head" ]; then
+  open="git-symbols --edit $rev {2} $where"
   # ga: this is the picker, by symbol, to stage one at a time; f is its file panel, with hunks and discards.
   # Opened from that panel, f goes back to it rather than opening another on top, or every trip back and
   # forth would be one more q on the way out.
@@ -2111,7 +2115,7 @@ if [ -z "$head" ]; then
     --bind "a:execute-silent(git add -A)+reload($list)+refresh-preview" \
     --bind "U:execute-silent(git reset -q)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
-    --bind "enter:execute(git-symbols --edit $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)" \
+    --bind "enter:execute($open; otis-frame --focus)+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
@@ -2127,9 +2131,10 @@ else
   # NVIM_DIFF_BASE naming the change's base, as from a review, for an nvim config's own diff to read:
   # exported, so the frame's nvim (otis-frame), up before any enter, has it too.
   export NVIM_DIFF_BASE=$base
+  open="git-commit-open $rev {2} $where"
   keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
-    --bind "enter:execute(git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \
+    --bind "enter:execute($open; otis-frame --focus)+reload($list)+refresh-preview" \
     --bind "tab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "btab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
@@ -2151,6 +2156,7 @@ otis-frame otis-symbols "" "$keys" --header-from-state \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
   --bind "y:transform(git-symbols --copy {12})" \
   --bind "v:execute-silent(git-symbols --viewed $rev toggle {12})+reload($fold)" \
+  --show "$open" \
   "$@" \
   --preview "git-symbols --preview $rev {2} {4} {5} {6} {12} {13}" </dev/null >/dev/null
 exit 0

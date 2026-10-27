@@ -163,11 +163,10 @@ if [ -n "$2" ]; then
   # in your editor like anywhere else, and c in the picker comments.
   command -v nvim >/dev/null 2>&1 && nvim=1 || nvim=
   if [ -n "$nvim" ] && [ ! -e "$2" ] && [ -n "$GMR_IID" ] && [ -n "$NVIM_DIFF_BASE" ] && git cat-file -e "$NVIM_DIFF_BASE:$2" 2>/dev/null; then
-    if [ -n "$OTIS_FRAME" ]; then
+    if [ -n "$OTIS_NVIM_FRAME" ]; then
       # The frame's nvim has the comments loaded (otis-frame -S): the same
-      # panes, in its code window.
-      p=$(printf '%s' "$2" | sed "s/'/''/g")
-      nvim --server "$NVIM" --remote-expr "luaeval('dofile(_A[1]).code() and vim.cmd({ cmd = \"GmrDeleted\", args = { _A[2] } })', ['$share/frame.lua', '$p'])" >/dev/null
+      # panes, in its code window, the keys left with the list.
+      otis-frame --run GmrDeleted "$2"
       exit 0
     fi
     # An empty placeholder only so nvim starts on a file, not a dashboard; the
@@ -196,7 +195,7 @@ if [ -n "$2" ]; then
   # From gmr's review picker: the MR's comments inline, and keys to add more,
   # at the line and column as otis-edit puts nvim there. In the review's
   # frame, which has them loaded (otis-frame -S), otis-edit opens it.
-  if [ -n "$GMR_IID" ] && [ -n "$nvim" ] && [ -z "$OTIS_FRAME" ]; then
+  if [ -n "$GMR_IID" ] && [ -n "$nvim" ] && [ -z "$OTIS_NVIM_FRAME" ]; then
     case $line in *:*) at="+call cursor(${line%%:*}, ${line#*:})" ;; *) at=+${line:-1} ;; esac
     exec nvim "$at" -c "luafile $share/mr-comments.lua" -- "$2"
   fi

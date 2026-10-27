@@ -1,23 +1,42 @@
 #!/bin/sh
-# otis-frame [-S <file>] <command...>: run a picker inside nvim, so the code
-# it opens shows beside it (share/frame.lua). The picker fills the window
-# until it opens a file, which otis-edit opens in this nvim rather than a
-# new one; from then on the list keeps the left 40% and the code the rest.
-# Enter puts the code on the symbol and you in it, ctrl-h comes back to the
-# list and ctrl-l from the list goes to the code. q in the list quits nvim
-# with it, unless a file has changes to save. -S has nvim source <file> as it
-# starts: a review's comments (share/mr-comments.lua) for every file it opens.
-# The command's output and exit status are its own, as if it had run alone.
+# otis-frame [-S <file>] <command...>: run a picker inside nvim, its list on
+# the left and nvim where its preview was (share/frame.lua). The row you
+# settle on shows there, a symbol's file at the symbol (the picker's --show,
+# the open enter runs) and any other row its preview; enter opens it and
+# takes you into it (--focus), ctrl-h back to the list and ctrl-l from the
+# list to the code. q in the list quits nvim with it,
+# unless a file has changes to save. -S has nvim source <file> as it starts:
+# a review's comments (share/mr-comments.lua) for every file it shows. The
+# command's output and exit status are its own, as if it had run alone.
 #
 # The command runs as it is where the editor is not nvim, or inside a frame
-# already (a picker opened from a framed one), whose nvim opens its files.
-# OTIS_FRAME says so to everything the picker runs.
+# already (a picker opened from a framed one). OTIS_NVIM_FRAME, the frame's own
+# directory, says to everything the picker runs that it is in one.
+#
+# otis-frame --open <path> <line> <col> <true|false>  the file on the right
+#                                                     (otis-edit), read only
+# otis-frame --text <file>                            a preview on the right
+# otis-frame --run <ex command> <arg>                 a command on the right
+#                                                     (a review's :GmrDeleted)
+# otis-frame --focus                                  into the code (enter)
+# Each does nothing outside a frame, and the keys stay with the list.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+vs() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
+remote() {
+  [ -n "$OTIS_NVIM_FRAME" ] || exit 0
+  exec nvim --server "$NVIM" --remote-expr "luaeval('dofile(_A[1]).$1', [$(vs "$share/frame.lua")$2])" >/dev/null
+}
+case $1 in
+  --open) remote "open(_A[2], _A[3], _A[4], _A[5])" ", $(vs "$2"), $3, $4, v:$5" ;;
+  --text) remote "text(_A[2])" ", $(vs "$2")" ;;
+  --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
+  --focus) remote "focus()" ;;
+esac
 src=
 [ "$1" = -S ] && { src=$2; shift 2; }
 ed=$(otis-config editor)
 name=${ed%% *}
-[ "${name##*/}" = nvim ] && [ -z "$OTIS_FRAME" ] || exec "$@"
-share=$(cd "$(dirname "$0")/../share" && pwd)
+[ "${name##*/}" = nvim ] && [ -z "$OTIS_NVIM_FRAME" ] || exec "$@"
 d=$(mktemp -d) || exec "$@"
 trap 'rm -rf "$d"' EXIT
 # The command as a script for the terminal to run: its words quoted, and
@@ -30,6 +49,6 @@ trap 'rm -rf "$d"' EXIT
 set -- -c "lua dofile('$share/frame.lua').start()"
 [ -n "$src" ] && set -- -c "source $src" "$@"
 set -f
-OTIS_FRAME=1 OTIS_FRAME_RUN=$d/run OTIS_FRAME_STATUS=$d/status $ed "$@" </dev/tty >/dev/tty
+OTIS_NVIM_FRAME=$d OTIS_NVIM_FRAME_RUN=$d/run OTIS_NVIM_FRAME_STATUS=$d/status $ed "$@" </dev/tty >/dev/tty
 cat "$d/out" 2>/dev/null
 exit "$(cat "$d/status" 2>/dev/null || echo 1)"

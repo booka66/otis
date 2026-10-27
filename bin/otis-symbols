@@ -79,13 +79,15 @@ for pair in ${(s:,:)spec}; do
   [[ $pair == '|' ]] && { more=1; continue }
   [[ -n ${pair#*=} ]] && { hk+=("${pair%%=*}"); hv+=("${pair#*=}"); hm+=($more); }
 done
-preview= startacts= hdr=0 searching=0 watchfiles=()
+preview= show= startacts= hdr=0 searching=0 watchfiles=()
 # Your note on a selected word (a in a case's pane): typed in the footer, then saved with it (otis-words).
 noting=0 nword= ntext= njson= ncase=
 while (( $# )); do
   case $1 in
     --bind) if [[ $2 == start:* ]]; then startacts+=${startacts:++}${2#start:}; else bind[${2%%:*}]=${2#*:}; fi; shift 2 ;;
     --preview) preview=$2; shift 2 ;;
+    # In a frame (otis-frame), what shows a row with a file beside the list.
+    --show) show=$2; shift 2 ;;
     --header-from-state) hdr=1; shift ;;
     # A file whose change reloads the rows and previews, as the cache's do.
     --watch) watchfiles+=($2); shift 2 ;;
@@ -107,13 +109,22 @@ at_quit() { (( $#outq )) && print -rl -- $outq; }
 # the list's width, lh its height; the pane at column px, row py, pw wide
 # and ph high, its first two rows where the row is (phd).
 integer lw lh px py pw ph side phd=2
+# In otis-frame's nvim, whose window beside this terminal is the pane.
+integer framed=0
+[[ -n $OTIS_NVIM_FRAME ]] && framed=1
 typeset -a PH HB
 # The pinned head whole (HB) when it is taller than its share of the pane
 # (hroom rows), and how far it is scrolled (hoff): J and K, or the wheel
 # over it, scroll it; the code under it keeps the rest of the pane.
 integer hoff=0 hroom=0
 layout() {
-  if (( W >= 120 )); then
+  if (( framed )); then
+    # In a frame the list is this whole terminal, and the pane is nvim's
+    # window beside it (otis-frame), as wide as the frame says.
+    side=1 lw=$(( W - 1 )) lh=$(( H - 2 )) px=$(( W + 2 )) py=1 ph=$(( H - 2 )) pw=0
+    [[ -r $OTIS_NVIM_FRAME/cols ]] && pw=$(<$OTIS_NVIM_FRAME/cols)
+    (( pw > 0 )) || pw=80
+  elif (( W >= 120 )); then
     side=1; (( lw = W * 30 / 100, lw < 44 ? (lw = 44) : 0 ))
     (( lh = H - 2, px = lw + 6, py = 1, pw = W - px, ph = H - 2 ))
   else
@@ -661,8 +672,11 @@ shown() {
 integer PBr=29 PBg=32 PBb=33 LBr=60 LBg=56 LBb=54
 [[ $OTIS_T_CODEBG == (#b)*48\;2\;([0-9]##)\;([0-9]##)\;([0-9]##)* ]] && LBr=$match[1] LBg=$match[2] LBb=$match[3]
 # pbask: the terminal's background (OSC 11), for fading into; kept as it
-# was when the terminal does not say within a moment.
+# was when the terminal does not say within a moment. Not asked in a frame:
+# nvim's terminal answers late, and an answer after the moment came in as
+# keys (its / opened a search with 0000/0000 typed in it).
 pbask() {
+  (( framed )) && return
   local r= c
   print -rnu $tty -- $'\e]11;?\e\\'
   while sysread -t 0.08 -s 1 -i $tty c; do
@@ -772,6 +786,7 @@ integer wpid=0
 want() {
   local f
   (( cur && pw > 0 )) && [[ -n $preview && $typ[cur] != head ]] || return 1
+  (( framed )) && coderow $cur && return 1
   (( wpid )) && kill -0 $wpid 2>/dev/null && return 1
   pvname $cur $pw; f=$REPLY.$gen
   [[ -e $f || -e $f.tmp ]] && return 1
@@ -795,7 +810,7 @@ holding() {
 # so j and k find them drawn. It stops at a gen or a width that is not the
 # one it was started for.
 warm() {
-  (( pw > 0 && $#vis )) && [[ -n $preview ]] || return
+  (( pw > 0 && $#vis && ! framed )) && [[ -n $preview ]] || return
   print -r -- "$gen $pw" > $st/pv/gen
   local -a near
   local at=${vis[(Ie)$cur]} j
@@ -949,6 +964,33 @@ helplines() {
   [[ -s $st/legend ]] && P+=("" "  ${B}${T}in full$R" "" "${(@f)$(<$st/legend)}")
   panewrap $(( pw - 2 ))
 }
+# --- the frame ---------------------------------------------------------------------
+# In a frame (otis-frame) the pane is nvim: the row the cursor settles on
+# shows there, a row with a file by --show (the open enter runs, which in a
+# frame shows it beside the list) and any other its preview, or ? the keys.
+# One at a time: a row passed while one is out is skipped, and the newest
+# shows once it lands.
+integer fpid=0
+fshown=
+coderow() { [[ -n $show ]] && fields $1 && [[ -n $fld[2] ]]; }
+framepush() {
+  (( framed && cur )) || return
+  (( fpid )) && kill -0 $fpid 2>/dev/null && return
+  local what cmd
+  if (( help )); then what="text $st/help.txt"
+  elif coderow $cur; then what="row $rid[cur]"
+  else shown; [[ -n $REPLY ]] || return; what="text $REPLY"; fi
+  [[ $what == $fshown ]] && return
+  fshown=$what
+  if [[ $what == row\ * ]]; then subst "$show" $cur; cmd=$REPLY
+  else
+    (( help )) && print -rl -- "${(@)P}" > $st/help.txt
+    cmd="otis-frame --text ${(qq)${what#text }}"
+  fi
+  { unlisten; zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
+  fpid=$!
+  print -r -- "$EPOCHREALTIME frame $what" >> $trace
+}
 draw() {
   local t0=$EPOCHREALTIME
   local y i f s lo=0 hi=0 body foot rows lrows
@@ -1033,13 +1075,13 @@ draw() {
     fi
     # Beside the pane, the list's side cleared first (ECH, which leaves the
     # pane be), then the rule between them.
-    (( side )) && s=$e"[${lw}X"$s$e"[$(( lw + 1 ))G"$R"  "$F"│"$R
+    (( side )) && { s=$e"[${lw}X"$s; (( framed )) || s+=$e"[$(( lw + 1 ))G"$R"  "$F"│"$R; }
     fr+=("$s")
   done
   if (( ! side )); then
     fr+=("$F${(l:W::─:)}$R")
   fi
-  for (( y = 1; y <= ph; y++ )); do
+  for (( y = 1; y <= ph && ! framed; y++ )); do
     if (( y == 1 )); then pr+=("$head")
     elif (( y < phd + 1 )); then pr+=("${PH[y-2]}")
     else
@@ -1060,7 +1102,7 @@ draw() {
   integer lb=$(( lrows - $#L + top ))
   (( lb < 0 )) && lb=0
   (( side && ! chh && lb + mh > 0 )) && sp+=("1 $lw $(( lrows + mh )) $(( lb + mh ))")
-  (( ph - phd > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - phd - plen + poff ))")
+  (( ! framed && ph - phd > plen - poff )) && sp+=("$(( side ? px : 2 )) $(( side ? W - px + 1 : W - 1 )) $(( py + ph - 1 )) $(( ph - phd - plen + poff ))")
   music_space $sp
   # The footer: a note a key left, or what enter does and the keys to reach
   # for first, as many as fit.
@@ -1130,6 +1172,7 @@ draw() {
   shown_rows=("${fr[@]}") shown_pane=("${pr[@]}")
   local t1=$EPOCHREALTIME
   print -rnu $tty -- $body
+  framepush
   print -r -- "$EPOCHREALTIME frame cur=$cur build=$(( int((t1 - t0) * 1000) )) write=$(( int((EPOCHREALTIME - t1) * 1000) )) bytes=${#body} key=${kt:+$(( int((EPOCHREALTIME - kt) * 1000) ))} keys=$nk" >> $trace
   kt= nk=0
 }
@@ -2116,6 +2159,9 @@ while :; do
     if (( EPOCHSECONDS != stick )); then
       stick=$EPOCHSECONDS
       orphaned && quit 1
+      # In a frame, nvim's window beside this one changed width (a split, or
+      # nvim resized) while this terminal kept its own: drawn for the new one.
+      (( framed )) && [[ -r $OTIS_NVIM_FRAME/cols && $(<$OTIS_NVIM_FRAME/cols) != $pw ]] && { layout; (( gen++ )); fshown= changed=1; }
       [[ -z $winch ]] && resize
       # The panel's clock, while Claude answers.
       (( chat )) && chat_busy && changed=1
@@ -2153,6 +2199,7 @@ while :; do
     fi
     (( changed )) && draw
     (( ! help && ! settle )) && want
+    framepush
     (( EPOCHREALTIME - ti > 0.02 )) && print -r -- "$EPOCHREALTIME upkeep $(( int((EPOCHREALTIME - ti) * 1000) ))ms changed=$changed" >> $trace
   fi
 done

@@ -7,7 +7,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 PATH=$root/bin:$PATH
 share=$root/share
 export PATH
-unset GIT_FZF_STATE OTIS_FRAME
+unset GIT_FZF_STATE OTIS_NVIM_FRAME
 # Nor on the settings of the repo this was run from: a shell that otis-config
 # --env was evaluated in exports them (OTIS_C_*), and a script that trusts
 # them would look at that repo's worktrees instead of the throwaway one's.
@@ -1781,24 +1781,35 @@ expect edit/zed "$(OTIS_EDITOR=$tmp/eds/zed otis-edit +7 -- -odd.ts)" "./-odd.ts
 git config otis.editor "$tmp/eds/hx"
 expect edit/git-config "$(OTIS_EDITOR= otis-edit +2 -- b.ts)" "b.ts:2"
 git config --unset otis.editor
+# Under one of otis's screens (OTIS_FRAME, the file it drew itself into),
+# the editor opens as anywhere: that is not nvim's frame.
+expect edit/under-a-screen "$(OTIS_FRAME=$tmp/frame OTIS_EDITOR=$tmp/eds/nvim otis-edit +3 -- a.ts)" "+3 -- a.ts"
+expect frame/focus-outside "$(OTIS_FRAME=$tmp/frame otis-frame --focus; echo "rc=$?")" "rc=0"
 # In otis-frame's picker, the file opens in the frame's nvim.
 mkdir -p "$tmp/nvs" && printf '#!/bin/sh\necho "$@" > "%s"\n' "$tmp/nvs.args" > "$tmp/nvs/nvim" && chmod +x "$tmp/nvs/nvim"
-expect edit/inside-nvim "$(OTIS_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true])"
+expect edit/inside-nvim "$(OTIS_NVIM_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true])"
 
 # --- otis-frame: a picker inside nvim, its output and exit status its own.
 # With another editor, or inside a frame already, the command runs as it is.
 expect frame/not-nvim "$(OTIS_EDITOR=$tmp/eds/cursor otis-frame sh -c 'echo out; exit 3'; echo "rc=$?")" "out
 rc=3"
-expect frame/inside-frame "$(OTIS_FRAME=1 OTIS_EDITOR=$tmp/eds/nvim otis-frame sh -c 'echo out'; echo "rc=$?")" "out
+expect frame/inside-frame "$(OTIS_NVIM_FRAME=1 OTIS_EDITOR=$tmp/eds/nvim otis-frame sh -c 'echo out'; echo "rc=$?")" "out
 rc=0"
 if command -v nvim >/dev/null 2>&1; then
-  # The first file opens right of the terminal, which keeps 40% (32 of 80),
-  # the cursor on the column asked for or, with 0, the first non-blank.
+  # A file shows right of the list, which keeps 30% and 46 columns at least
+  # (of 80), the cursor on the column asked for or, with 0, the first
+  # non-blank; the keys stay with the list, and the code's width is where
+  # the picker reads it.
   printf 'one\n  two words\n' > "$tmp/frame.txt"
-  fopen() { nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid()' -c "lua dofile('$share/frame.lua').open('$tmp/frame.txt', 2, $1, false)" \
-    -c 'lua local w = vim.api.nvim_tabpage_list_wins(0); io.stdout:write(#w, " ", vim.bo.buftype == "" and "code" or "term", " ", table.concat(vim.api.nvim_win_get_cursor(0), ","), " ", vim.api.nvim_win_get_width(w[1]))' -c 'qa!' 2>&1; }
-  expect frame/open-col "$(fopen 7)" "2 code 2,6 32"
-  expect frame/open-line "$(fopen 0)" "2 code 2,2 32"
+  fopen() { OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid()' -c "lua dofile('$share/frame.lua').open('$tmp/frame.txt', 2, $1, false)" \
+    -c 'lua io.stdout:write(#vim.api.nvim_tabpage_list_wins(0), " ", vim.bo.buftype, " ", table.concat(vim.api.nvim_win_get_cursor(vim.t.otis_code), ","), " ", vim.api.nvim_win_get_width(vim.t.otis_list), " ", vim.fn.readfile(vim.env.OTIS_NVIM_FRAME .. "/cols")[1])' -c 'qa!' 2>&1; }
+  expect frame/open-col "$(fopen 7)" "2 terminal 2,6 46 33"
+  expect frame/open-line "$(fopen 0)" "2 terminal 2,2 46 33"
+  # A row with no file shows its preview there, less the lines the picker
+  # marks for itself.
+  printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"
+  expect frame/text "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid()' -c "lua dofile('$share/frame.lua').text('$tmp/pv.txt')" -c 'sleep 200m' \
+    -c 'lua local b = vim.api.nvim_win_get_buf(vim.t.otis_code); io.stdout:write(vim.bo.buftype, " ", table.concat(vim.tbl_filter(function(x) return x ~= "" end, vim.api.nvim_buf_get_lines(b, 0, -1, false)), "|"))' -c 'qa!' 2>&1)" "terminal hello there|world"
 fi
 # F on the board (otis-find): nvim opened straight into your own fuzzy finder
 # (share/find.lua), which reads what git config otis.finder names.
