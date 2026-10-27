@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-file-open [--at <line>] <status> <path> [rename source]: open a changed
+# git-file-open [--at <line[:col]>] <status> <path> [rename source]: open a changed
 # file from ga in your editor (otis-edit), at <line> when the caller knows it (git-symbols), else
 # at the line its preview is scrolled to, or at its first changed line against
 # HEAD. A deleted file opens as it was, read only (git-show-file), at

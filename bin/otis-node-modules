@@ -129,6 +129,10 @@ install() {
 if [ "$main" = "$root" ]; then
   install || installing || workspace
 else
+  # A link to main's node_modules, made by hand to get a worktree going, is
+  # main's tree: the repo's packages in it are main's source, not this
+  # checkout's, so a branch's new exports read as missing. It goes, for a mirror.
+  [ -L "$dst" ] && [ "$(cd "$dst" && pwd -P)" = "$(cd "$src" && pwd -P)" ] && rm -f "$dst"
   if [ -e "$dst" ]; then
     [ -f "$dst/.otis-mirror" ] || exit 0
     [ "$src" -nt "$dst/.otis-mirror" ] && rm -rf "$dst"

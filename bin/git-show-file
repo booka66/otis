@@ -1,11 +1,13 @@
 #!/bin/sh
-# git-show-file <rev>:<path> <path> [line]: a file as a commit (or the index,
-# ":path") had it, in your editor, read only and unmodifiable, at <line>. For a
+# git-show-file <rev>:<path> <path> [line[:col]]: a file as a commit (or the
+# index, ":path") had it, in your editor, read only and unmodifiable, at <line>
+# (its column goes unused: nothing works one out on an old version). For a
 # deleted file, which has nothing in the working tree to open: enter on one in
 # ga (git-file-open) and in a commit's or a branch's file picker
 # (git-commit-open). In nvim the buffer is named after the path, so it is
 # colored as the file it was, and nothing is written anywhere.
 spec=$1 p=$2 line=${3:-1}
+line=${line%%:*}
 [ -n "$spec" ] && [ -n "$p" ] || exit 2
 git cat-file -e "$spec" 2>/dev/null || { otis-popup say "${spec%%:*} has no $p"; exit 0; }
 name=$(otis-edit --name)

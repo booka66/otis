@@ -1,6 +1,7 @@
 #!/bin/sh
 # git-mr-lines <iid> <range> <path> [line]   one file of an MR as a list of its diff's lines,
-#                                            the cursor at <line> (the new side's)
+#                                            the cursor at <line> (the new side's); a :col
+#                                            after it, as git-symbols --at says it, is the editor's
 # git-mr-lines --list <iid> <range> <path>   its rows
 # git-mr-lines --preview <iid> <range> <kind> <side> <line> <other> <thread id> <row id>
 # git-mr-lines --comment <iid> <range> <kind> <thread id> <row ids...>   c, as fzf actions
@@ -184,7 +185,7 @@ case $mode in
     ;;
 esac
 
-path=$3 line=$4
+path=$3 line=${4%%:*}
 [ -n "$path" ] || exit 0
 export GMR_LINES_PATH=$path
 # The cursor starts on the first row at or past <line> on the new side, once

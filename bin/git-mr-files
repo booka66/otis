@@ -7,8 +7,8 @@
 # each with the open threads and drafts on its lines. Either
 # way the preview and nvim show the MR's
 # comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
-# and nvim starts in a diff against the range's base, with ]r and [r for the
-# next and previous file. Opening a file marks it viewed, v flips that and
+# and nvim opens on the file, its diff against the range's base a <leader>mb
+# away, with ]r and [r for the next and previous file. Opening a file marks it viewed, v flips that and
 # moves on (git-mr-viewed); on a case, v marks all of its symbols, and a file
 # is viewed once all its symbols are (git-symbols --viewed). o lists the threads on no line: the MR's overview,
 # whole files, outdated ones (git-mr-threads).

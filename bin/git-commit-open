@@ -1,5 +1,5 @@
 #!/bin/sh
-# git-commit-open <rev> [path [line]]
+# git-commit-open <rev> [path [line[:col]]]
 # git-commit-open --files [--deleted] <rev>
 # git-commit-open --line <rev> <path>
 # Open a file that <rev> changed in nvim, at <line> when the caller knows it
@@ -174,7 +174,7 @@ if [ -n "$2" ]; then
   # line); elsewhere an added or deleted file's is the file itself.
   st=$(changes --name-status --no-renames | awk -F'\t' '$2 == p { print $1 }' p="$2")
   at=$3
-  case $at in *[!0-9]*) at= ;; esac
+  case $at in *[!0-9:]*) at= ;; esac
   if [ "$st" = D ]; then
     if [ -n "$at" ]; then line=$at; elif [ -n "$GMR_IID" ]; then line=$(preview_line "$2"); else line=$(plain_line "$2"); fi
     exec git-show-file "$(before):$2" "$2" "${line:-1}"
@@ -186,8 +186,12 @@ if [ -n "$2" ]; then
   fi
   if [ -n "$at" ]; then line=$at; elif [ "$st" = A ] && [ -z "$GMR_IID" ]; then line=$(plain_line "$2"); else line=$(preview_line "$2"); fi
   [ -n "$line" ] || line=$(first_line)
-  # From gmr's review picker: the MR's comments inline, and keys to add more.
-  [ -n "$GMR_IID" ] && [ -n "$nvim" ] && exec nvim "+${line:-1}" -c "luafile $share/mr-comments.lua" -- "$2"
+  # From gmr's review picker: the MR's comments inline, and keys to add more,
+  # at the line and column as otis-edit puts nvim there.
+  if [ -n "$GMR_IID" ] && [ -n "$nvim" ]; then
+    case $line in *:*) at="+call cursor(${line%%:*}, ${line#*:})" ;; *) at=+${line:-1} ;; esac
+    exec nvim "$at" -c "luafile $share/mr-comments.lua" -- "$2"
+  fi
   exec otis-edit "+${line:-1}" -- "$2"
 fi
 

@@ -1168,8 +1168,11 @@ EOF
   expect symbols/close-all "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep -c 'type Opts\|grow()')" "0"
   expect symbols/preview "$(git-symbols --preview "$base..$head" lib.ts new 2 4 | strip | grep -c 'twice\|return o.a')" "2"
   # enter opens where the preview is scrolled to: with no scroll the row's
-  # own line, scrolled to the preview's last row the symbol's last line, 4.
-  expect symbols/at-unscrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "2"
+  # own line, on the symbol's name, scrolled to the preview's last row the
+  # symbol's last line, 4.
+  expect symbols/at-unscrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "2:17"
+  expect symbols/at-member "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 7 9 'lib.ts#Box+grow' 7)" "7:3"
+  expect symbols/at-type "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 1 1 'lib.ts#type Opts' 1)" "1:13"
   printf '100\n' > "$tmp/symst/cols"
   FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | wc -l | tr -d ' ' > "$tmp/symst/off.lib.ts#run"
   expect symbols/at-scrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "4"
@@ -1299,6 +1302,11 @@ expect nm/marked "$([ -f "$tmp/nm-wt/node_modules/.otis-mirror" ] && echo mirror
 rm -rf "$tmp/nm-wt/node_modules" && mkdir "$tmp/nm-wt/node_modules" && printf 'mine\n' > "$tmp/nm-wt/node_modules/real"
 otis-node-modules "$tmp/nm-wt"
 expect nm/real-install-kept "$(ls "$tmp/nm-wt/node_modules")" "real"
+# A link to main's whole node_modules has the repo's packages resolve to
+# main's source, so it gives way to a mirror; main's tree is left as it was.
+rm -rf "$tmp/nm-wt/node_modules" && ln -s "$tmp/nm/node_modules" "$tmp/nm-wt/node_modules"
+otis-node-modules "$tmp/nm-wt"
+expect nm/main-link-mirrored "$(cd "$tmp/nm-wt/node_modules/@scope/one" && pwd -P):$(ls -a "$tmp/nm/node_modules" | grep -c otis-mirror)" "$(cd "$tmp/nm-wt/pkg/one" && pwd -P):0"
 # A run killed partway leaves nothing behind, so the next one mirrors afresh
 # instead of taking half a mirror for an install of your own.
 mkdir -p "$tmp/nmkill" && printf '#!/bin/sh\nkill -TERM $PPID; sleep 1\n' > "$tmp/nmkill/cp" && chmod +x "$tmp/nmkill/cp"
@@ -1761,6 +1769,8 @@ expect edit/default "$(PATH=$tmp/eds:$PATH otis-edit --name)" "nvim"
 expect edit/default-without-nvim "$(EDITOR=nano VISUAL= PATH=$root/bin:/usr/bin:/bin otis-config editor)" "nano"
 expect edit/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-edit -R +3 -- a.ts)" "-R +3 -- a.ts"
 expect edit/cursor "$(OTIS_EDITOR=$tmp/eds/cursor otis-edit -R +12 -- a.ts)" "--goto a.ts:12"
+expect edit/nvim-col "$(OTIS_EDITOR=$tmp/eds/nvim otis-edit +12:5 -- a.ts)" "+call cursor(12, 5) -- a.ts"
+expect edit/cursor-col "$(OTIS_EDITOR=$tmp/eds/cursor otis-edit +12:5 -- a.ts)" "--goto a.ts:12:5"
 expect edit/zed "$(OTIS_EDITOR=$tmp/eds/zed otis-edit +7 -- -odd.ts)" "./-odd.ts:7"
 git config otis.editor "$tmp/eds/hx"
 expect edit/git-config "$(otis-edit +2 -- b.ts)" "b.ts:2"

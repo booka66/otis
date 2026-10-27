@@ -29,8 +29,9 @@
 #                                            prints the footer note's fzf actions
 # git-symbols --again <rev>                  a review's r: Claude asked again for the gloss and the cases, where it failed
 # git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
-#                                            the file line the row's preview is scrolled to, else <line>:
-#                                            enter opens there, where you are
+#                                            the file line the row's preview is scrolled to, else <line>
+#                                            and the column of the row's name on it (line:col): enter
+#                                            opens there, where you are, or on the symbol itself
 #
 # <rev> is one commit (gl), base..head (an MR under review, which git-mr-files
 # says by exporting GMR_IID), base...head (gdm's branch) or the word worktree
@@ -119,6 +120,10 @@ above() {
   [ "$a" = "$1" ] && a=
   if [ ${#a} -gt ${#b} ]; then above=$a; else above=$b; fi
 }
+
+# name_of <row id>: the name its last step gives, in $name: Class+member as
+# the id has it, without the "type " seam puts before a type's.
+name_of() { name=${1##*>}; name=${name#*#}; name=${name#type }; }
 
 case $mode in
   --close-all) rm -f "$st/open"; exit 0 ;;
@@ -276,7 +281,7 @@ case $mode in
     rid=$1 last=${1##*>}
     case $rid in
       ''|gk-*|*'>callers') exec git-fzf-note "nothing to copy on this row" ;;
-      *'#'*) name=${last#*#} name=${name#type } name=$(printf '%s' "$name" | tr + .); text="$name in ${last%%#*}" ;;
+      *'#'*) name_of "$rid"; name=$(printf '%s' "$name" | tr + .); text="$name in ${last%%#*}" ;;
       *'>callers>'*) exec git-fzf-note "nothing to copy on this row" ;;
       *) text=$rid ;;
     esac
@@ -772,7 +777,7 @@ EOF
     # A caller elsewhere: its lines as git-callers read the file, which is
     # as the change leaves a file it touches (the disk copy may have moved
     # on) and as the disk has any other; the called symbol underlined.
-    called=${rid%>callers>*}; sym=${called##*>}; called=${sym##*#}; called=${called#type }
+    called=${rid%>callers>*}; sym=${called##*>}; name_of "$sym"; called=$name
     # Its type errors against the change, from the callers cache (keyed
     # without the worktree'"'"'s line numbers, so by its own key): the count in
     # the header, and each one under its line, the way a review prints a
@@ -972,7 +977,20 @@ if [ "$mode" = --at ]; then
       awk -F'\t' -v s="$sym" -v c="${rid##*>}" '$1 == s && $4 == c && $9 > 0 { l = $10; sub(/:.*/, "", l); print l; exit }' "$croot/callers/$ckey.tsv"; } 2>/dev/null)
     [ -n "$at" ] && line=$at
   fi
-  printf '%s\n' "${line:-1}"
+  # Still the row's own line, it is where the symbol is declared, so the
+  # cursor goes on its name there, a member's own rather than its class's.
+  col=
+  if [ -n "$s" ] && [ "$side" = new ] && [ "$line" = "$7" ]; then
+    name_of "$rid"
+    col=$(LC_ALL=C awk -v l="$line" -v n="${name##*+}" 'NR == l {
+      for (from = 0; (i = index(substr($0, from + 1), n)) > 0; from += i) {
+        at = from + i
+        if (substr($0, at - 1, 1) !~ /[A-Za-z0-9_$]/ && substr($0, at + length(n), 1) !~ /[A-Za-z0-9_$]/) { print at; exit }
+      }
+      exit
+    }' "$(git rev-parse --show-toplevel)/$path" 2>/dev/null)
+  fi
+  printf '%s\n' "${line:-1}${col:+:$col}"
   exit 0
 fi
 
@@ -2105,8 +2123,8 @@ if [ -z "$head" ]; then
     --bind "C:execute(git-split --wait $rev)" \
     --bind "p:execute-silent(git-symbols --peeks $rev {2} {4} {5} {6} {12})+refresh-preview"
 else
-  # A commit or a branch: its symbols, and tab its files, in place (--files). nvim opens in the diff against
-  # the change's base, the hunks lit, as it does from a review: the gitsigns config reads NVIM_DIFF_BASE.
+  # A commit or a branch: its symbols, and tab its files, in place (--files). nvim opens on the file, with
+  # NVIM_DIFF_BASE naming the change's base, as from a review, for an nvim config's own diff to read.
   keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:execute(NVIM_DIFF_BASE=$base git-commit-open $rev {2} \$(git-symbols --at $rev {2} {4} {5} {6} {12} {3}))+reload($list)+refresh-preview" \

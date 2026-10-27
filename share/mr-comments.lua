@@ -17,6 +17,7 @@
 --   <leader>mu   refetch the threads, for comments made elsewhere
 --   <leader>mt   new comments and replies as drafts, or sent at once
 --   <leader>ms   submit your drafts: publish them all, and approve if you like
+--   <leader>mb   the file beside its base, in a diff, or on its own again
 --   ]r  [r       the next or previous file in the MR, at its first change
 --
 -- Reviewing, new comments and replies are drafts, shown as ✎ until you submit
@@ -25,8 +26,8 @@
 -- deletes and resolving always happen at once.
 --
 -- Comments on the right (the MR's file) land on the new side of the diff; from
--- the left (gitsigns' base buffer, open by default) on the old side, which is
--- the only way to comment on a removed line. A thread shows on its line only
+-- the left (the base, <leader>mb) on the old side, which is the only way to
+-- comment on a removed line. A thread shows on its line only
 -- while the file is the one it was written on; one on lines a push has changed
 -- since is outdated, and waits under <leader>mo (git-mr-threads says how that
 -- is decided). Threads refresh after each change.
@@ -705,14 +706,15 @@ end
 
 -- ]r and [r: the next or previous file in the MR, in the file picker's order
 -- (tests hidden or shown, as there), at its first change, marked viewed, and
--- in the same two-pane diff against the base when that was showing. The base
+-- in the same two-pane diff against the base when that was showing (nvim
+-- opens on the file alone, <leader>mb shows its base beside it). The base
 -- pane is built here from git rather than through gitsigns, which attaches to
 -- a new buffer asynchronously; for a file the MR adds it is empty, so the
 -- layout holds and every line shows as added. A file the MR deletes is the
 -- mirror image, and always two panes: its base version on the left, focused so
 -- its removed lines can take comments, and an empty pane where it was.
 local files -- the MR's files as { path, deleted }, listed on first use
-local diffing = base ~= nil -- gmr opens nvim in the diff
+local diffing = false -- gmr opens nvim on the file alone
 
 local function is_base_pane(buf)
   local name = vim.api.nvim_buf_get_name(buf)
@@ -778,6 +780,19 @@ local function open_base_pane(win, path)
   return pane
 end
 
+-- Every base pane in the tab closed, and the diff with them: whether one was up.
+local function close_base_panes()
+  local open = false
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if is_base_pane(vim.api.nvim_win_get_buf(w)) then
+      open = true
+      vim.api.nvim_win_close(w, true)
+    end
+  end
+  vim.cmd("diffoff!")
+  return open
+end
+
 -- A deleted file in win: the empty pane where it was, its base beside it, and
 -- the cursor in the base, where its lines are.
 local function show_deleted(win, path)
@@ -828,14 +843,7 @@ local function goto_file(step)
   end
   -- Keep the diff if a base pane is up, drop it if you closed it. A deleted
   -- file always has one, so it says nothing about that.
-  local open = false
-  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if is_base_pane(vim.api.nvim_win_get_buf(w)) then
-      open = true
-      vim.api.nvim_win_close(w, true)
-    end
-  end
-  vim.cmd("diffoff!")
+  local open = close_base_panes()
   if not current_deleted then
     diffing = open
   end
@@ -856,6 +864,22 @@ local function goto_file(step)
   vim.cmd("normal! zz")
   vim.system({ "git-mr-viewed", "add", iid, range:match("%.%.(.+)$"), path }, { cwd = root })
   notify(("%d of %d  %s%s"):format(to, #files, path, target.deleted and "  (deleted)" or ""))
+end
+
+-- <leader>mb: the base beside the MR's side of the file, or gone again.
+local function toggle_base()
+  if close_base_panes() then
+    return
+  end
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local path = shown_file(w)
+    if path then
+      local at = vim.api.nvim_win_get_cursor(w)
+      open_base_pane(w, path)
+      vim.api.nvim_win_set_cursor(w, at)
+      return
+    end
+  end
 end
 
 local function attach(buf)
@@ -888,6 +912,7 @@ local function attach(buf)
   vim.keymap.set("n", "<leader>mo", others, { buffer = buf, desc = "MR: threads on no line" })
   vim.keymap.set("n", "<leader>mt", toggle_drafting, { buffer = buf, desc = "MR: drafts or sent at once" })
   vim.keymap.set("n", "<leader>ms", submit, { buffer = buf, desc = "MR: submit your drafts" })
+  vim.keymap.set("n", "<leader>mb", toggle_base, { buffer = buf, desc = "MR: the file beside its base, or alone" })
   vim.keymap.set("n", "]r", function()
     goto_file(1)
   end, { buffer = buf, desc = "MR: next file" })
@@ -897,23 +922,11 @@ local function attach(buf)
   render(buf)
 end
 
--- gmr opens nvim in the diff against the MR's base: the base pane is opened
--- here, the same one ]r opens, empty for a file the MR adds and beside an empty
--- pane for one it deletes. vim.g.diff_base_opened claims it, for an nvim config
--- that would open a diff of its own for NVIM_DIFF_BASE and checks that flag.
-do
-  local path, side = buf_target(vim.api.nvim_get_current_buf())
-  if base and vim.env.GMR_DELETED then
-    -- Opened on a deleted file (git-commit-open starts nvim on an empty placeholder for it).
-    vim.g.diff_base_opened = true
-    show_deleted(vim.api.nvim_get_current_win(), vim.env.GMR_DELETED)
-  elseif base and path and side == "new" and not vim.g.diff_base_opened then
-    vim.g.diff_base_opened = true
-    local win = vim.api.nvim_get_current_win()
-    local line = vim.api.nvim_win_get_cursor(win)[1]
-    open_base_pane(win, path)
-    pcall(vim.api.nvim_win_set_cursor, win, { line, 0 })
-  end
+-- gmr opens nvim on the file alone. A file the MR deletes has nothing to show
+-- but its base, so it opens in the same panes ]r gives it (git-commit-open
+-- starts nvim on an empty placeholder for it).
+if base and vim.env.GMR_DELETED then
+  show_deleted(vim.api.nvim_get_current_win(), vim.env.GMR_DELETED)
 end
 
 vim.api.nvim_create_autocmd("ColorScheme", {

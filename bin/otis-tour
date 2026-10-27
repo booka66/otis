@@ -578,7 +578,7 @@ part_reading() {
   look 3 "${k}l${r} opens a row to the changed symbols it uses, in the order it uses them: refundAmount, receiptLine, and restockingFee, which it now calls itself. Keep going, down to daysSince. ${k}h${r} closes, from the row or anything under it; ${k}L${r} and ${k}H${r} open and close everything."
   look 4 "${k}⇢${r} before a row: the mention is new in this change. That is rewiring, as against behavior, and worth knowing apart."
   look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow; ${k}p${r} adds a dim ↳ line under the changed line that first uses each, saying what it is. ${k}i${r} shows all of those whole instead. ${k}]${r} and ${k}[${r} jump the preview from change to change."
-  look 6 "${k}enter${r} opens your editor on the symbol, on the hunk in view; nvim opens it in a diff against the base. Quitting comes back."
+  look 6 "${k}enter${r} opens your editor on the symbol's name, or on the hunk in view once you have scrolled the preview. Quitting comes back."
   look 7 "No cases and no gloss here. An MR opened from the board with ${k}o${r} adds Claude's reading: the change told as cases, and Haiku's few words on each symbol, with the entry point to read first."
   say "${k}?${r} in the picker lists every key it has."
   demo_reset
@@ -853,7 +853,7 @@ part_mr() {
   key enter "review it, by symbol, each symbol with its open threads and drafts beside it and the threads under their lines in the preview. It opens in a shared review worktree, never your checkout"
   key f "by file and back: each file with its viewed mark, unresolved threads and waiting drafts"
   key c "comment without nvim: the file's diff as lines with the threads under them. c on a line comments (J marks several), c on a thread replies, r resolves; ctrl-e at the prompt takes it to your editor"
-  key "then enter" "your editor at the line; nvim opens side by side against the MR's base, comments inline"
+  key "then enter" "your editor on the symbol; in nvim the comments are inline"
   print
   print -r -- "  ${m}in nvim${r}"
   key "<leader>mc" "comment on the line, or reply to its thread; a visual selection starts a new one"
@@ -861,6 +861,7 @@ part_mr() {
   key "<leader>me md" "edit or delete your comment"
   key "<leader>ml" "every thread in the quickfix list"
   key "<leader>mo" "threads on no line: overview, whole-file, outdated"
+  key "<leader>mb" "the file beside the MR's base, in a diff, or alone again"
   key "]r [r" "next or previous file in the MR"
   key "<leader>ms" "submit your drafts"
   print
