@@ -26,6 +26,8 @@ shift 9
 pipeline=$1 start=$2
 . "$(dirname "$0")/../share/claude-run.sh"
 
+# What has something to copy here is where the board offers y (otis-dash's
+# offers): a run's folder, an MR, or a branch.
 if [ "$what" = copy ]; then
   case $extra in
     */otis-verify/*|*/gmr-watch/*|*/gmr-fix/*|*/gmr-claude/*) ;;

@@ -24,7 +24,8 @@
 # is its commits, m merges, b rebases, a asks reviewers, and so on. The keys
 # are one table (KEYS): the footer, the ? help, the key log and what a key is
 # called while it runs all read it, so they cannot disagree. The footer
-# shows the same keys on every row.
+# shows the few used most, those of them that do something on the row
+# (offers).
 #
 # The row keys hand back fzf actions (execute(...), a footer note), since
 # they are shared with the pickers; run() below carries out the few that
@@ -64,7 +65,7 @@ forge=GitLab
 [[ $(otis-config forge) == github ]] && forge=GitHub
 # The keys, in one table, four fields a key: the key; where ? lists it (move,
 # change, mr or else); what the footer calls it, for the few the footer
-# shows, the same on every row; and what it does in whole words, which is
+# shows where they act; and what it does in whole words, which is
 # what ? says, what the key log calls it, and what the footer spins with
 # while it runs. Nothing else in this file says what a key is for. (No
 # commas in the words: the key log lists the keys with commas between.)
@@ -171,23 +172,23 @@ typeset -a gates=(local verify pipeline review ship)
 typeset -A open
 # How wide the moves are, so the titles after them start in one column: the
 # board's own rows in mvw[-], a group's in mvw[<group>], each the longest
-# move it has whether or not the group is open, so opening one moves nothing.
-# And how wide their MR numbers are (iww, the same way), for a column of
-# them at the right edge, the digits of one under the next's.
+# move it has had since the board opened, whether or not the group is open.
+# Opening one moves nothing, nor do rows landing whose moves are shorter
+# (the first after the last screen's, at once), which moved every title
+# over in a frame. And how wide their MR numbers are (iww, the same way),
+# for a column of them at the right edge, the digits of one under the next's.
 typeset -A mvw iww
 integer n_need=0 n_draft=0 n_moving=0 col=1 fixkey=0
-# A screen too short for the board as it is draws it tight: no blank lines
-# between its parts. What the row says in full goes under the board, in a
-# few lines only when that is all the room there is (brief, bs its mark in a
-# kept preview's name).
-integer tight=0 brief=0
-bs=
+# What the row says in full goes under the board, in a few lines only when
+# that is all the room there is (brief, and bs its mark in a kept preview's
+# name: bm, else nothing).
+integer brief=0
+bm=b bs=
 loaded=0
 load() {
   local line f c n=0 g
   lane=() id=() type=() title=() who=() when=() mark=() defc=() iid=() target=() url=() source=() head=() base=() pipeline=() purl=() start=() mrkind=() draft=() verb=() note=() prog=() sub=() dots=() fold=() count=() say=() rail=() own=() gpos=() move=() tone=()
   cg=() cc=() ck=() cv=() ce=() cd=() cm=() cf=() cw=()
-  mvw=() iww=()
   for line in ${(f)"$(<$st/board)"}; do
     f=("${(@ps:\t:)line}")
     if [[ $f[1] == '#' ]]; then n_need=$f[2] n_draft=$f[3] n_moving=$f[4]; continue; fi
@@ -223,10 +224,12 @@ reveal=
 # follow what moved: its rows come out from its line down, and go back from
 # the last up. foldg is the group on its way, foldn how many of its rows are
 # out now, between foldfrom (when it started, at foldt) and foldto. Only the
-# rows the board has room for (brows, its height as last drawn) are counted
-# out over that time (to foldcap): the rest of a long group are off the
-# screen, and counting them too had the ones you can see all out in the
-# first fifth of a second.
+# rows the board has room for (brows: the screen less the least the pane
+# under it is left with) are counted out over that time (to foldcap): the
+# rest of a long group are off the screen, and counting them too had the
+# ones you can see all out in the first fifth of a second. Not the board's
+# height as it was, which grows as a group opens: that had the last of a
+# group out at once at the end.
 foldg=
 integer foldn=0 foldfrom=0 foldto=0 foldcap=0 brows=0
 float foldt=0 folddur=0.6
@@ -296,24 +299,28 @@ fields() {
 
 lpid= ltick=$EPOCHSECONDS lastsig=
 # The branches and the worktrees, gb's and gw's own rows, for the local light
-# and the groups. They are slower than the rest (a second or two), so they
-# are on a clock of their own: as it opens, a minute apart, and on u. The
-# worktrees are listed from the main checkout, as gw lists them.
+# and the groups. They are slower than the rest (a second or two, and the
+# worktrees' git status many in a big checkout), so they are on a clock of
+# their own: as it opens, a minute apart, and on u. One job lists both, the
+# branches first, since both ask git-branch-facts, whose cache of MRs the
+# second then finds fresh; each says when it is in ($st/listed), so the
+# branches never wait on the worktrees' status. The worktrees are listed
+# from the main checkout, as gw lists them.
 bpid= btick=0
 wmain=$(git-worktree-path main 2>/dev/null) whome=$(git rev-parse --show-toplevel 2>/dev/null)
 relist() {
   [[ -n $bpid ]] && kill -0 $bpid 2>/dev/null && return
-  { git-branch-list --switch $1 > $st/branches.new 2>/dev/null && mv -f $st/branches.new $st/branches.tsv
-    ( cd ${wmain:-.} && GW_HERE=$whome GW_MAIN=$wmain git-worktree-list $1 ) > $st/worktrees.new 2>/dev/null && mv -f $st/worktrees.new $st/worktrees.tsv
+  { git-branch-list --switch $1 > $st/branches.new 2>/dev/null && mv -f $st/branches.new $st/branches.tsv && : > $st/listed
+    ( cd ${wmain:-.} && GW_HERE=$whome GW_MAIN=$wmain git-worktree-list $1 ) > $st/worktrees.new 2>/dev/null && mv -f $st/worktrees.new $st/worktrees.tsv && : > $st/listed
   } >/dev/null &!
   bpid=$! btick=$EPOCHSECONDS
 }
-# They have landed: the board again with them, unless a refresh is on its
-# way to make it anyway.
+# One of them is in: the board again with it, once no refresh is on its way,
+# which may have read the list before it landed.
 listed() {
-  [[ -n $bpid ]] && ! kill -0 $bpid 2>/dev/null || return 1
-  bpid=
+  [[ -e $st/listed ]] || return 1
   [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null && return 1
+  rm -f $st/listed
   [[ -s $st/rows ]] || return 1
   { otis-board > $st/board.new 2>>$st/err && mv -f $st/board.new $st/board || : > $st/board.failed } >/dev/null &!
   lpid=$!
@@ -362,14 +369,16 @@ stale_read() {
 # index, which anything that so much as reads the checkout rewrites.
 typeset -a wpaths
 gdir=$(git rev-parse --absolute-git-dir 2>/dev/null)
+# rundirs: those four folders, as a pattern.
+rundirs="${cache:h}/(otis-verify|gmr-claude|gmr-fix|gmr-watch)"
 watching() {
   local i c
-  wpaths=(${cache:h}/(otis-verify|gmr-claude|gmr-fix|gmr-watch) $gdir/HEAD $gdir/logs/HEAD)
+  wpaths=(${~rundirs} $gdir/HEAD $gdir/logs/HEAD)
   for (( i = 1; i <= $#id; i++ )); do
     [[ -z $fold[i] ]] || continue
     for c in 1 2 3 4 5; do
       cell $i $c
-      [[ $ce[k] == ${cache:h}/(otis-verify|gmr-claude|gmr-fix|gmr-watch)/* ]] && wpaths+=($ce[k]/status $ce[k]/ended $ce[k]/pid)
+      [[ $ce[k] == ${~rundirs}/* ]] && wpaths+=($ce[k]/status $ce[k]/ended $ce[k]/pid)
     done
   done
 }
@@ -403,6 +412,10 @@ refresh() {
 # dashboard early until otis-list's first rows land. Early, the previews and
 # the row keys wait for them, since what they read under $st is otis-list's;
 # a key pressed meanwhile (pend) runs when they land, on the row you are on.
+# The branches and the worktrees it was made from are kept with it
+# ($memo.branches, $memo.worktrees), for the first board made as it opens
+# until they are listed again (relist): made without them, it had none of
+# their groups, which came back a second later.
 memo=
 integer early=0
 typeset -a pend
@@ -413,6 +426,7 @@ at_leave() {
   local -A best
   mkdir -p ${memo:h} 2>/dev/null
   print -rn -- "$(<$st/board)" > $memo
+  for f in branches worktrees; do [[ -s $st/$f.tsv ]] && print -r -- "$(<$st/$f.tsv)" > $memo.$f; done
   # Each light's newest preview at this width.
   for f in $st/pv/*.$pw.<->(N); do
     n=${f%.*} g=${f##*.}
@@ -482,6 +496,20 @@ landed() {
 # A line is built from pieces whose widths are known (put, pad, share/screen.zsh),
 # then kept with the row it is part of.
 emit() { L+=("$line") LI+=($1) LU+=($used); line= used=0; }
+# gap: a blank line between the board's parts, which a screen too short for
+# the board with them goes without (ungap).
+gap() { line= used=0; emit -1; }
+# ungap <n>: the last n gaps gone, from the bottom up, each moving only what
+# is under it: as many as the board is over by, so a group opening takes
+# them as its rows come out, not all of them when one row goes over.
+ungap() {
+  integer n=$1 y
+  for (( y = $#L; y >= 1 && n > 0; y-- )); do
+    (( LI[y] < 0 )) || continue
+    L[y]=() LI[y]=() LU[y]=()
+    (( n-- ))
+  done
+}
 
 # What enter does on the row, in the words the footer says it in
 # (otis-board works it out): what its move opens. Where a fix is ready
@@ -502,9 +530,13 @@ bar() {
 }
 
 # --- the board -----------------------------------------------------------------
-# L: its lines; LI: the row each is part of (0 for none), to keep the cursor
-# in view; LU: how wide each is.
+# L: its lines; LI: the row each is part of (0 for none, -1 for a gap), to
+# keep the cursor in view; LU: how wide each is.
 typeset -a L LI LU
+# fade <row>: the line, faint, for the last rows out of a group on its way:
+# out, they come up to their colors, and they go faint before they go, the
+# lines under one with it.
+fade() { [[ -n $foldg && $fold[$1] == $foldg ]] && (( gpos[$1] > foldn - 2 )) && line=$F${line//$e\[[0-9;]#m/$F}; }
 # under <row> <width> <column> <color> <lines...>: what a row had more to say
 # than its line held, whole, on lines of their own under where it began.
 under() {
@@ -517,6 +549,7 @@ under() {
     else put "" "${(l:ind:: :)}"; fi
     put "$c" "$s"; line+=$UB
     pad $w
+    fade $i
     (( i == cur )) && line=$BG${line//$R/$R$BG}
     line+=$R
     emit $i
@@ -624,14 +657,13 @@ row() {
         [[ -n $prog[i] ]] && (( rw += 18 )) ;;
     esac
     mind=$used
-    # A title that fits on its line only without what is on its right is
-    # said without it: the title is what the row is. First how long ago
-    # goes, then its number; under the board says both.
+    # Its number ends the row at the edge, every row of its part in one
+    # column: dropped to fit a title, it left the edge ragged. How long ago
+    # gives way where that is all the title needs to fit on its line (under
+    # the board says it); else the title goes on under itself. With no
+    # number of its own, a title takes the numbers' column for its text.
     if (( ${(m)#t} > w - used - iw - rw - 1 )); then
       if (( rw == 5 && ${(m)#t} <= w - used - iw - (iw ? 1 : 0) )); then rw=0
-      elif (( rw <= 5 && ${(m)#t} <= w - used )); then rw=0 iw=0
-      # Too long for a line whatever goes: with no number of its own, it
-      # takes the numbers' column for its text.
       elif [[ -z $iid[i] ]]; then iw=0; fi
     fi
     # The title whole: what of it does not fit on the line goes on under
@@ -656,9 +688,7 @@ row() {
     fi
   fi
   pad $w
-  # The last rows out of a group on its way, faint: out, they come up to
-  # their colors, and they go faint before they go.
-  [[ -n $foldg && $fold[i] == $foldg ]] && (( gpos[i] > foldn - 2 )) && line=$F${line//$e\[[0-9;]#m/$F}
+  fade $i
   (( on )) && line=$BG${line//$R/$R$BG}
   line+=$R
   emit $i
@@ -726,7 +756,7 @@ headline() {
 left() {
   local w=$1 i part last= sl
   L=() LI=() LU=()
-  (( tight )) || { line= used=0; emit 0; }
+  gap
   # The top line: the name, the project where there is room for it, and on
   # the right how many moves are yours and when the forge last answered.
   line= used=0
@@ -765,7 +795,7 @@ left() {
   if [[ $foot == *alone ]]; then
     line= used=0; put "" "  "; put "$C" "${foot##* · }"; emit 0
   fi
-  (( tight )) || { line= used=0; emit 0; }
+  gap
   # The rows, in three parts with a line between: what wants you, your
   # drafts among it, and under those yours that is in review; what is moving
   # without you, and where you are; then the groups, a line each, their rows
@@ -783,7 +813,7 @@ left() {
     if [[ $type[i] == group || -n $fold[i] ]]; then part=g
     elif [[ $lane[i] == (prod|review|move|draft|sent) ]]; then part=a
     else part=b; fi
-    [[ -n $last && $part != $last ]] && (( ! tight )) && { line= used=0; emit 0; }
+    [[ -n $last && $part != $last ]] && gap
     row $i $w; last=$part
   done
 }
@@ -809,8 +839,10 @@ shown() {
   pvname "$id[cur]@$col$bs" $1
   local -a have=($REPLY.<->(Nom))
   # None at this width yet (a resize): the row's at the width it last had,
-  # cut at the edge, rather than an empty pane until it is drawn again.
-  (( $#have )) || have=(${REPLY%.*}.<->.<->(Nom))
+  # cut at the edge, rather than an empty pane until it is drawn again. Or
+  # as a pane of the other height drew it, brief or not: kept by the last
+  # screen, of another size, it was a lone … until the rows were in.
+  (( $#have )) || have=(${${REPLY%.*}%$bm}(|$bm).<->.<->(Nom))
   REPLY=${have[1]}
 }
 # states <row>: how each gate the row has to get through stands, in words, in
@@ -877,14 +909,15 @@ warm() {
 
 # --- the frame -------------------------------------------------------------------
 top=0 help=0 flash= pre= notet=
-# The pane's scroll: poff where it is; plen its lines, for where it stops.
-integer poff=0 plen=0
+# The pane's scroll, or with ? up the help's: poff where it is; plen its
+# lines and pview how many of them are on the screen, for where it stops.
+integer poff=0 plen=0 pview=0
 # scroll <lines>: the wheel, ctrl-d and ctrl-u, in one frame. A glide sent a
 # frame of the whole pane every 10ms, which under a multiplexer stuttered
 # rather than glided.
 scroll() {
   local max
-  (( max = plen - ph, max < 0 ? (max = 0) : 0 ))
+  (( max = plen - pview, max < 0 ? (max = 0) : 0 ))
   (( poff += $1, poff > max ? (poff = max) : 0, poff < 0 ? (poff = 0) : 0 ))
 }
 # What is on the screen now, a line a row; emptied when the screen may no
@@ -898,23 +931,40 @@ shown_geom=
 # is the board's height; the pane is pw wide and ph high, from row py,
 # column px.
 integer pw=0 side=0 py=1 ph=0 px=3
+# The least the pane under the board is left with, as the board grows.
+integer pmin=4
 pfile=
-# helpcell <key, a tab, its words | a tab, a heading | nothing>: one of them
-# onto the line.
-helpcell() {
-  [[ -n $1 ]] || return 0
-  if [[ $1 == $'\t'* ]]; then put "$C" "${(U)1#$'\t'}"
-  else put "$A" "${(r:8:: :)${1%%$'\t'*}}"; put "$T" "${1#*$'\t'}"; fi
+# helpcol <width> <key, a tab, its words | a tab, a heading | nothing>...: a
+# column of ? in hcl, its lines, and hcu, how wide each is: a heading in
+# capitals, else a key and its words, whole, what does not fit in the
+# column going on under the words.
+typeset -a hcl hcu
+helpcol() {
+  local cell s
+  integer cw=$1
+  shift
+  hcl=() hcu=()
+  for cell; do
+    line= used=0
+    if [[ $cell == $'\t'* ]]; then put "$C" "${(U)cell#$'\t'}"
+    elif [[ -n $cell ]]; then
+      whole "${cell#*$'\t'}" $(( cw - 7 ))
+      put "$A" "${(r:7:: :)${cell%%$'\t'*}}"; put "$T" "$reply[1]"
+      for s in "${(@)reply[2,-1]}"; do hcl+=("$line") hcu+=($used); line= used=0; put "" "       "; put "$T" "$s"; done
+    fi
+    hcl+=("$line") hcu+=($used)
+  done
 }
 # helplines <width>: every key there is, from the table, in P: the keys that
 # move and a merge request's on the left, a change's and the rest on the
-# right, so ? is one screen and does not scroll. Too narrow for a key's
-# words in half the screen, it is one column.
+# right, so ? is one screen. Each column is half the screen less a gap,
+# and a key's words that are wider go on under themselves; with under 20
+# columns for them, it is one column.
 helplines() {
   local hk hg hf hl want e w=$1
-  local -a lft rgt
+  local -a lft rgt ll lu
   local -A head=(move moving mr "on a merge request" change "on a change" else elsewhere)
-  integer half n i
+  integer half cw n i
   # A line between a column's two parts, where the screen has the lines.
   integer gap=$(( H >= 28 ))
   for want in move mr change else; do
@@ -926,22 +976,23 @@ helplines() {
       if [[ $want == (move|mr) ]]; then lft+=("$hk"$'\t'"$hl"); else rgt+=("$hk"$'\t'"$hl"); fi
     done
   done
-  (( half = (w - 2) / 2 ))
-  (( half < 39 )) && { lft+=("${rgt[@]}"); rgt=(); }
-  (( n = $#lft > $#rgt ? $#lft : $#rgt ))
+  (( half = (w - 2) / 2, cw = half - 2 ))
+  (( cw - 7 < 20 )) && { lft+=("${rgt[@]}"); rgt=(); cw=$(( w - 4 )); }
+  helpcol $cw "${lft[@]}"; ll=("${hcl[@]}") lu=("${hcu[@]}")
+  helpcol $cw "${rgt[@]}"
+  (( n = $#ll > $#hcl ? $#ll : $#hcl ))
   P=()
   (( H > n + 3 )) && P=("")
   for (( i = 1; i <= n; i++ )); do
-    line= used=0; put "" "  "
-    helpcell "$lft[i]"
-    (( $#rgt )) && { pad $(( 2 + half )); helpcell "$rgt[i]"; }
+    line="  $ll[i]" used=$(( 2 + lu[i] ))
+    (( $#hcl )) && { pad $(( 2 + half )); line+=$hcl[i]; }
     P+=("$line$R")
   done
 }
 draw() {
   local t0=$EPOCHREALTIME
   local lw=$W y i f lo=0 hi=0 body foot rows avail hk hg hf hl
-  pw=0 side=0 py=1 px=3 tight=0 brief=0 bs=
+  pw=0 side=0 py=1 px=3 brief=0 bs=
   (( avail = H - 2 ))
   # Beside it, the board is no wider than a row has words for (120): the
   # rest of a big screen is the pane's, which has lines that long.
@@ -951,21 +1002,21 @@ draw() {
   left $lw
   if (( side )); then
     (( rows = avail, ph = rows, px = lw + 6 ))
-    (( $#L > rows )) && { tight=1; left $lw; }
+    ungap $(( $#L - rows ))
   else
     # No room beside the board: the pane goes under it. The board is as tall
-    # as it is: drawn tight when that would leave what is under it less than
-    # eight lines, and scrolling when even that leaves it under four. In
-    # under ten lines the row says only its own part (brief). A screen under
-    # 16 lines is all board, as is the ? help.
-    (( $#L + 9 > avail )) && { tight=1; left $lw; }
+    # as it is: its gaps go, as many as it takes, where it would leave what
+    # is under it less than eight lines, and it scrolls where even that
+    # leaves it under pmin. In under ten lines the row says only its own
+    # part (brief). A screen under 16 lines is all board, as is the ? help.
+    ungap $(( $#L + 9 - avail ))
     if (( avail >= 16 && ! help )); then
-      (( ph = avail - $#L - 1, ph < 4 ? (ph = 4) : 0 ))
+      (( ph = avail - $#L - 1, ph < pmin ? (ph = pmin) : 0 ))
       (( rows = avail - ph - 1, py = rows + 2, pw = W - 4 ))
-      (( ph < 10 )) && brief=1 bs=b
+      (( ph < 10 )) && brief=1 bs=$bm
     else rows=$avail ph=0; fi
   fi
-  brows=$rows
+  (( brows = pw > 0 && ! side ? avail - pmin - 1 : rows, pview = ph ))
   # The cursor's row in view.
   local ghi=0
   for (( y = 1; y <= $#LI; y++ )); do
@@ -982,7 +1033,7 @@ draw() {
   # between the board's parts, the top line over the first row).
   (( hi > top + rows )) && (( top = hi - rows ))
   if (( lo > 0 && lo <= top )); then
-    y=$lo; while (( y > 1 && LI[y-1] == 0 )); do (( y-- )); done
+    y=$lo; while (( y > 1 && LI[y-1] <= 0 )); do (( y-- )); done
     (( top = y - 1 ))
   fi
   (( top > $#L - rows )) && (( top = $#L - rows ))
@@ -990,7 +1041,7 @@ draw() {
   if (( help )); then
     # The keys are the screen: no board under them, nothing beside them.
     helplines $lw
-    plen=$#P pfile=
+    plen=$#P pview=$rows pfile=
     L=("${(@)P[1+poff,-1]}") LU=("${(@)L/*/$lw}") LI=() top=0
   elif (( pw > 0 )); then
     if (( $#id )) && [[ $type[cur] == group ]]; then
@@ -1049,8 +1100,8 @@ draw() {
   music_space $sp
   music_rule; fr+=("$REPLY") fy+=($(( H - 1 )))
   # The footer: a note if a key left one, else what enter does on the row
-  # (and d, where it removes), then the same few keys on every row, the
-  # ones used most; ? has them all.
+  # (and d, where it removes), then the few keys used most that do
+  # something there; ? has them all.
   foot="  "
   # A note or a flash stays until the next key: a preview landing redraws
   # the frame, and a note gone then was gone before it was read.
@@ -1067,9 +1118,10 @@ draw() {
     d_says; [[ -n $REPLY ]] && foot+=${lead:+"   "}$A"d"$R$C" ${${REPLY/removes/remove}/forgets/forget}"$R
     [[ -n $lead$REPLY ]] && foot+="   "
     local -a hint
-    for hk hg hf hl in "${KEYS[@]}"; do [[ -n $hf ]] && hint+=("${A}$hk$R$C $hf"); done
+    for hk hg hf hl in "${KEYS[@]}"; do [[ -n $hf ]] && offers $hk && hint+=("${A}$hk$R$C $hf"); done
     # On a narrow screen the last of them go, never ?: it lists them all.
-    while vw "$foot${(j:  :)hint}  ? all"; (( REPLY > W && $#hint > 0 )); do hint[-1]=(); done
+    # Two columns are kept at the right, as at the left.
+    while vw "$foot${(j:  :)hint}  ? all"; (( REPLY > W - 2 && $#hint > 0 )); do hint[-1]=(); done
     foot+=${(j:  :)hint}${hint:+"  "}"$A?$R$C all$R"
   fi
   fr+=("$foot") fy+=($H)
@@ -1384,54 +1436,77 @@ rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh
 # rbehind <key> <command line>: one that only asks and then works, behind
 # the board.
 rbehind() { keys_used $1 "$KL[$1]"; behind "$KL[$1]" "$2"; }
+# rowis: what the row the cursor is on is to the keys that act on a change,
+# in REPLY: an open MR, yours (own) or another's (mr); a branch, with no MR
+# or the one you are on (branch); one that shipped (merged); else nothing.
+rowis() {
+  REPLY=
+  (( $#id )) || return
+  if [[ $type[cur] == change && -n $iid[cur] && $mrkind[cur] != run ]]; then
+    REPLY=mr; [[ $mrkind[cur] == mine ]] && REPLY=own
+  elif [[ -n $source[cur] && $type[cur] == (change|here) ]]; then REPLY=branch
+  elif [[ $mrkind[cur] == merged ]]; then REPLY=merged; fi
+}
+# offers <key>: the key does something on the row the cursor is on, which
+# is said here alone: rowkey asks it before a row's key acts, and the footer
+# names only the keys it offers. One that is not a row's acts anywhere.
+offers() {
+  rowis
+  case $1 in
+    V|C|c) [[ $REPLY == (own|mr|branch) ]] ;;
+    s) [[ $REPLY == (own|mr|branch) && $type[cur] == change ]] ;;
+    o|b|A|a|r|N) [[ $REPLY == (own|mr) ]] ;;
+    m|R|X) [[ $REPLY == own ]] ;;
+    D) [[ $REPLY == merged && -n $iid[cur] ]] ;;
+    w) [[ -n $iid[cur] ]] ;;
+    # What otis-do copy has to copy: an MR's link, a branch's name, or what
+    # one of Claude's runs is.
+    y) [[ -n $iid[cur]$source[cur] ]] || { cell; [[ $ce[k] == ${~rundirs}/* ]]; } ;;
+    *) return 0 ;;
+  esac
+}
 # rowkey <key>: a key that acts on the change the row is, an open MR or a
 # branch (what that key does in gb, by the same scripts). Where you are
 # (the here row) is the branch you are on, and takes what gb's row for it
-# took. 1 when it is not such a key, or the row is not one it acts on.
+# took. 1 when it is not such a key; a row it does nothing on says so.
 # Enter is the row's move; each of the gates behind it has a key of its own
 # whatever the move is: s its branch, V its verification, o the merge
 # request, m merging it.
 rowkey() {
   (( $#id )) || return 1
+  [[ $1 == (V|C|c|s|o|m|b|A|R|X|a|r|N|D|w|y) ]] || return 1
   # The rows are still the last screen's (early): a change's key waits for
   # the ones being made, as enter does, and is pressed then, on the row the
-  # cursor is on. It was refused before, as a key the row had nothing for.
+  # cursor is on.
   if (( early )); then
-    [[ $1 == (V|C|c|s|o|m|b|A|R|X|a|r|N|D) ]] || return 1
     pend=(handle $1); flash="$KL[$1]…" at0=$EPOCHREALTIME
     return 0
   fi
-  local i=$iid[cur] br=$source[cur] kind=$mrkind[cur] mr= own= asb=
-  # An open MR (mr), yours (own); a branch, with no MR or the one you are
-  # on (asb); or one that shipped.
-  [[ $type[cur] == change && -n $i && $kind != run ]] && mr=1
-  [[ -n $mr && $kind == mine ]] && own=1
-  [[ -z $mr && -n $br ]] && [[ $type[cur] == (change|here) ]] && asb=1
-  [[ $type[cur] == change || $kind == merged || -n $asb ]] || return 1
+  offers $1 || { flash="nothing on this row for $1 ($KL[$1])"; return 0; }
+  rowis
+  local i=$iid[cur] br=$source[cur] kind=$mrkind[cur] is=$REPLY
   case $1 in
     # What it has to find out before it has anything to open or to ask
     # (whether a run is there already) is found out behind the board.
-    V) if [[ -n $mr ]]; then rask V git-verify --ask $kind "$i" "$br"
-       elif [[ -n $asb ]]; then rask V git-verify --ask "$kind" "$i" "$br" 1
-       else return 1; fi ;;
-    C) if [[ -n $mr ]]; then rask C git-mr-do claude $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]"
-       elif [[ -n $asb ]]; then rtty C "git-branch-fix ${(q)br} ${(q)i}"
-       else return 1; fi ;;
-    c) [[ -n $br ]] && [[ $type[cur] == (change|here) ]] || return 1; rtty c "git-branch-log ${(q)br}" ;;
-    s) [[ $type[cur] == change && -n $br ]] || return 1
-       [[ -n $mark[cur] ]] && { flash="you are on it"; return 0; }
+    V) if [[ $is == branch ]]; then rask V git-verify --ask "$kind" "$i" "$br" 1
+       else rask V git-verify --ask $kind "$i" "$br"; fi ;;
+    C) if [[ $is == branch ]]; then rtty C "git-branch-fix ${(q)br} ${(q)i}"
+       else rask C git-mr-do claude $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]"; fi ;;
+    c) rtty c "git-branch-log ${(q)br}" ;;
+    s) [[ -n $mark[cur] ]] && { flash="you are on it"; return 0; }
        keys_used s "$KL[s]"; leave goto "$br" ;;
-    o) [[ -n $mr ]] || return 1; rask o git-mr-do open $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]" ;;
-    m) [[ -n $own ]] || return 1; rask m git-ci-merge --check $i ;;
-    b) [[ -n $mr ]] || return 1; rask b git-mr-rebase --check $kind $i ;;
-    A) [[ -n $mr ]] || return 1; rask A git-mr-do approve $kind $i "$head[cur]" "$base[cur]" ;;
-    R) [[ -n $own ]] || return 1; rask R git-mr-do draft $kind $i ;;
-    X) [[ -n $own ]] || return 1; rask X git-mr-do close $kind $i ;;
-    a) [[ -n $mr ]] || return 1; rask a git-mr-do reviewers $i 'execute-silent(:)' ;;
-    r) [[ -n $mr ]] || return 1; rask r git-ci-do retry "$pipeline[cur]" $i ;;
-    N) [[ -n $mr ]] || return 1; rask N git-ci-do new "$pipeline[cur]" $i ;;
-    D) [[ $kind == merged && -n $i ]] || return 1; rask D git-mr-watch --check merged $i ;;
-    *) return 1 ;;
+    o) rask o git-mr-do open $kind $i "$target[cur]" "$url[cur]" "$br" "$head[cur]" "$base[cur]" "$pipeline[cur]" "$start[cur]" ;;
+    m) rask m git-ci-merge --check $i ;;
+    b) rask b git-mr-rebase --check $kind $i ;;
+    A) rask A git-mr-do approve $kind $i "$head[cur]" "$base[cur]" ;;
+    R) rask R git-mr-do draft $kind $i ;;
+    X) rask X git-mr-do close $kind $i ;;
+    a) rask a git-mr-do reviewers $i 'execute-silent(:)' ;;
+    r) rask r git-ci-do retry "$pipeline[cur]" $i ;;
+    N) rask N git-ci-do new "$pipeline[cur]" $i ;;
+    D) rask D git-mr-watch --check merged $i ;;
+    w) keys_used w "$KL[w]"; ask "$KL[w]" git-mr-do web "$i" ;;
+    y) keys_used y "$KL[y]"; act copy "$KL[y]" ;;
   esac
   return 0
 }
@@ -1450,6 +1525,9 @@ mouse() {
   [[ ${r[-1]} == m ]] && up=1
   r=${r[1,-2]}; b=${r%%;*}; r=${r#*;}; x=${r%%;*}; y=${r#*;}
   (( y > H - 2 )) && return
+  # ? takes the whole screen: the wheel scrolls it, and a press on a row
+  # under it would be one you cannot see.
+  if (( help )); then (( b == 64 || b == 65 )) && scroll $(( b == 64 ? -3 : 3 )); return; fi
   # In the pane: beside the board, right of it; under it, below it.
   local inpane=0 l
   (( pw > 0 && (side ? x >= px : y >= py) )) && inpane=1
@@ -1556,6 +1634,21 @@ handle() {
   # as it ended lands under your typing, and went with the next key.
   [[ -n $notet ]] && (( EPOCHREALTIME - notet < 1 )) || { rm -f $st/note; notet=; }
   sel=0
+  # With ? up the keys are its own: ? q and esc close it, j k ^d ^u scroll
+  # it on a screen too short for it. None reaches the board under it, whose
+  # rows you cannot see.
+  if (( help )); then
+    case $1 in
+      '?') keys_used '?' "${KL[?]}"; help=0 poff=0 ;;
+      q|$e) help=0 poff=0 ;;
+      $'\x03') quit ;;
+      j|$e'[B') scroll 1 ;;
+      k|$e'[A') scroll -1 ;;
+      $'\x04') scroll $(( pview / 2 )) ;;
+      $'\x15') scroll $(( - pview / 2 )) ;;
+    esac
+    return
+  fi
   # The second key of a g name, within 1.5s of the g; any other key is
   # itself, as if no g had come before it.
   if [[ -n $pre ]] && (( EPOCHREALTIME - pre < 1.5 )); then
@@ -1583,7 +1676,6 @@ handle() {
     # On a worktree or under clean up, d removes, as it does in gb.
     d) removable && { remove; return; }
        flash="nothing on this row can be removed" ;;
-    m|b|a|V|c|C|A|R|X|r|N|D|s|o) flash="nothing on this row for $1 ($KL[$1])" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
     M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
     # A thread of Claude's on the workspace (otis-thread): on the branch of
@@ -1592,9 +1684,7 @@ handle() {
        [[ $type[cur] == change && -n $source[cur] && $mrkind[cur] != (review|merged) ]] && tb=$source[cur]
        rbehind t "otis-thread --start ${(q)tb}" ;;
     # ctrl-c is a key here (-isig), since a signal's trap would never run.
-    # With ? up, q and esc close it rather than the dashboard.
-    q|$e) (( help )) && { help=0 poff=0; return; } ;|
-    # And esc what a command behind the board had to say, once it is read.
+    # esc clears what a command behind the board had to say, once it is read.
     $e) (( $#notes )) && { notes=(); return; } ;|
     q|$e|$'\x03') quit ;;
     $'\n'|$'\r') keys_used enter "$KL[enter]"
@@ -1627,8 +1717,6 @@ handle() {
        if (( fc )); then keys_used f "$KL[f]"; col=$fc fixkey=1; act enter "fold in the fix"; fixkey=0 col=$defc[cur]
        else flash="no fix is ready on this row"; fi ;;
     x) keys_used x "$KL[x]"; (( $#id )) && act dismiss "$KL[x]" ;;
-    y) keys_used y "$KL[y]"; (( $#id )) && act copy "$KL[y]" ;;
-    w) keys_used w "$KL[w]"; (( $#id )) && { fields; ask "$KL[w]" git-mr-do web "$reply[2]"; } ;;
     # With the login gone there is nothing to refetch until it is back: u
     # logs in first, in the terminal, as the line under the top one says.
     u) keys_used u "$KL[u]"
@@ -1636,9 +1724,9 @@ handle() {
        refresh --refresh; relist --refresh; waiting=1 ;;
     # Your editor's own fuzzy finder, on the checkout you are in (otis-find).
     F) keys_used F "$KL[F]"; bykey=$KL[F]; run_tty "otis-find" sh; bykey=; refresh ;;
-    '?') keys_used '?' "${KL[?]}"; help=$(( !help )) poff=0 ;;
-    $'\x04') scroll $(( ph / 2 )) ;;
-    $'\x15') scroll $(( - ph / 2 )) ;;
+    '?') keys_used '?' "${KL[?]}"; help=1 poff=0 ;;
+    $'\x04') scroll $(( pview / 2 )) ;;
+    $'\x15') scroll $(( - pview / 2 )) ;;
     # All of the change at once: every gate in turn, then what a
     # verification made of it and its branch.
     ' ') if (( early )); then pend=(handle ' '); flash="…"
@@ -1657,7 +1745,10 @@ handle() {
 screen_on
 size
 cur=1
-[[ -n $memo && -s $memo ]] && { print -rn -- "$(<$memo)" > $st/board; load; early=1; memo_restore; (( $#id )) && go 1; }
+if [[ -n $memo && -s $memo ]]; then
+  print -rn -- "$(<$memo)" > $st/board; load; early=1; memo_restore; (( $#id )) && go 1
+  () { local l; for l in branches worktrees; do [[ -s $memo.$l ]] && print -r -- "$(<$memo.$l)" > $st/$l.tsv; done }
+fi
 watching
 refresh; waiting=1
 relist

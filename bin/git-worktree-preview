@@ -129,11 +129,4 @@ if [ -n "$b" ]; then
   exec git-branch-preview "$b" "$kind" "" "" "$iid" "$ahead" "$behind"
 fi
 pane_section "detached at"
-git -C "$wtp" log --format='%h%x09%ct%x09%s' -8 | LC_ALL=C awk -F'\t' -v now="$(date +%s)" -v w="$PANE_W" -v e="$(printf "$GK_ELSEWHERE")" \
-  -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v a="$(printf "$GK_ATTENTION")" -v r="$(printf "$GK_R")" "$PANE_AWK"'
-  function ago(ts,   s) { s = now - ts
-    if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
-    if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }
-  { g = ago($2); col = (g == was) ? "" : g; was = g
-    s = ufit($3, w - 18)
-    printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, s, r }'
+git -C "$wtp" log --format='%h%x09%ct%x09%s' -8 | pane_commits

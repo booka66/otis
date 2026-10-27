@@ -22,6 +22,7 @@ kind=$1 iid=$2 row=$3 extra=$4 gate=$5
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 . "$share/palette.sh"
+. "$share/pane.sh"
 w=${FZF_PREVIEW_COLUMNS:-80}
 
 # The row as otis-list drew it: its glyph's color, its verb, what enter does.
@@ -313,9 +314,10 @@ EOF
         END { show("staged", st, ns, g); show("not staged", wt, nw, y); show("untracked", u, nu, x) }'
       printf '\n'
     fi
+    # What it carries, as a branch's preview lists commits (pane_commits).
     if [ -n "$b" ] && [ "$ahead" != 0 ]; then
       heading "past $base"
-      git -c color.ui=always log --format="  %C(yellow)%h%C(reset)  %s  %C(dim)%cr%C(reset)" "$base..HEAD" 2>/dev/null | head -20
+      git log --format='%h%x09%ct%x09%s' -40 "$base..HEAD" 2>/dev/null | pane_commits "$ahead"
       printf '\n'
     fi
     behind=$(git rev-list --count "HEAD..$base" 2>/dev/null || echo 0)

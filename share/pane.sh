@@ -67,7 +67,36 @@ function kept(s, w, most,   n, ws, i, acc, best) {
     }
   }
   return best
-}'
+}
+# hang(s, n, ind, c): the text in lines of n columns broken at spaces, a
+# word wider than a line where the line ends, each line after the first
+# ind columns in and in color c: whole, under itself.
+function hang(s, n, ind, c,   ws, k, i, j, line, out, pre) {
+  if (n < 1) n = 1
+  pre = "\033[0m\n" sprintf("%" ind "s", "") c
+  k = split(s, ws, " "); line = ""; out = ""
+  for (i = 1; i <= k; i++) {
+    while (ulen(ws[i]) > n) {
+      if (line != "") { out = out line pre; line = "" }
+      j = ubytes(ws[i], n); out = out substr(ws[i], 1, j) pre; ws[i] = substr(ws[i], j + 1)
+    }
+    if (ws[i] == "") continue
+    if (line != "" && ulen(line " " ws[i]) > n) { out = out line pre; line = ws[i] }
+    else line = line (line == "" ? "" : " ") ws[i]
+  }
+  return out line
+}
+# ubytes(s, n): the bytes of s its first n columns take.
+function ubytes(s, n,   i, L, k) {
+  L = length(s); k = 0
+  for (i = 1; i <= L; i++) if (substr(s, i, 1) !~ /[\200-\277]/ && ++k > n) break
+  return i - 1
+}
+# ago(ts, now): how long before now, as a list says it: now, 5m, 3h, 2d,
+# 6w, 4mo.
+function ago(ts, now,   s) { s = now - ts
+  if (s < 60) return "now"; if (s < 3600) return int(s / 60) "m"; if (s < 86400) return int(s / 3600) "h"
+  if (s < 1209600) return int(s / 86400) "d"; if (s < 5184000) return int(s / 604800) "w"; return int(s / 2592000) "mo" }'
 
 # pane_fit <text> [width]: the text, whole. It once cut what was too long
 # for a line with an ellipsis; nothing a preview says is cut now, and the
@@ -151,14 +180,33 @@ pane_bar() {
   printf "${PANE_C}%s${GK_FAINT}%s${GK_R}" "$_pn_on" "$_pn_off"
 }
 
+# pane_commits [total]: the commits on stdin (git log
+# --format='%h%x09%ct%x09%s'), newest first, as every preview lists them:
+# how long ago, once for a run of the same age, the sha, and the subject's
+# first sentences (kept, about two lines), whole, under themselves. Eight at
+# most; given how many there are, how many more and back to when.
+pane_commits() {
+  LC_ALL=C awk -F'\t' -v now="$(date +%s)" -v w="$PANE_W" -v a="$(printf "$GK_ATTENTION")" -v e="$(printf "$GK_ELSEWHERE")" \
+    -v t="$(printf "$GK_TEXT")" -v f="$(printf "$GK_FAINT")" -v r="$(printf "$GK_R")" -v total="${1:-0}" "$PANE_AWK"'
+    NR <= 8 {
+      g = ago($2, now); col = (g == was) ? "" : g; was = g
+      sw = w - 9 - length($1); if (sw < 20) sw = 20
+      printf "  %s%3s%s %s●%s %s%s%s %s%s%s\n", f, col, r, a, r, e, $1, r, t, hang(kept($3, sw, 2), sw, 9 + length($1), t), r
+      oldest = g; next }
+    { oldest = ago($2, now) }
+    END { if (total > 8) printf "        %s+ %d more, back to %s ago%s\n", f, total - 8, oldest, r }'
+}
+
 # pane_hang <lead> <lead's columns> <color> <lines> <text> [tail]: the text
 # after a lead (a glyph and an id, colors and all), wrapped under itself in
 # about that many lines (whole sentences of it: kept), the tail (a state,
 # colored) after the first.
 pane_hang() {
   pane_color "$3"
-  printf '%s' "$5" | tr '\n\t' '  ' | LC_ALL=C awk -v w=$((PANE_W - $2 - ${#6} - 1)) -v most="$4" -v ind="$2" \
+  printf '%s' "$5" | tr '\n\t' '  ' | LC_ALL=C awk -v pw="$PANE_W" -v most="$4" -v ind="$2" \
     -v lead="$(printf '%b' "$1")" -v t="$(printf "$PANE_C")" -v r="$(printf "$GK_R")" -v tail="$(printf '%b' "$6")" "$PANE_AWK"'
+    # The tail by the columns it takes, less its colors, so it ends at the edge.
+    BEGIN { s = tail; gsub(/\033\[[0-9;:]*m/, "", s); w = pw - ind - ulen(s) - 1 }
     function emit(s) { if (k == 0) printf "%s%s%s%s", lead, t, s, r; else printf "%" ind "s%s%s%s", "", t, s, r
       if (k == 0 && tail != "") printf "%" (w - ulen(s) + 1) "s%s%s", "", tail, r
       printf "\n"; k++ }

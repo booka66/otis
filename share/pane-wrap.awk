@@ -50,6 +50,9 @@ function out(s, piece) { print s; on++; if (piece) print on, lw > cont }
     break
   }
   if (lw > w / 2) { lead = ""; lw = 0 }
+  # Ended by a reset: a color that opens the text after it (a sha's) is the
+  # text's, and a piece after the first takes the colors in force at its break.
+  lead = lead "\033[0m"
   cur = ""; cw = 0; sgr = ""; sp = 0; pc = 0
   for (k = 1; k <= n; k++) {
     if (!vis[k]) { cur = cur u[k]; if (esc(u[k])) sgr = ""; else if (u[k] ~ /m$/) sgr = sgr u[k]; continue }

@@ -22,10 +22,10 @@
 # from under it, and passes where you are in GW_HERE.
 #
 # git status is the slow part, up to a second per worktree in a big checkout,
-# so --status runs them all at once and the picker reads the result through
-# the cache (git-cached-json): it draws from the last run and refreshes behind
-# when that is over half a minute old, or on u. A worktree made since shows
-# without its counts until then.
+# so --status runs them all at once. It is asked each time, behind the board
+# (its relist), never read from a cache: one kept for gw's picker was
+# fetched again only for a picker, so once the board was all that read it
+# a worktree said clean a month after it had work in it.
 st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
@@ -60,16 +60,12 @@ fi
 
 : > "$st/footer"
 refresh=$1
-# The status cache, the branch prefix and the branch facts know nothing of
-# each other, so they run at once and the draw costs the slowest of them
-# (the facts), where it used to cost their sum. Each lands in a file of its
-# own under the picker's state, which awk then reads: nothing waits on a
-# pipe, and no cat carries a file across.
-if [ -n "$refresh" ]; then set -- --refresh wt-status "execute-silent(git-fzf-bg git-worktree-list)"; else set -- wt-status 30 "execute-silent(git-fzf-bg git-worktree-list)"; fi
-{
-  status=$(git-cached-json "$@" -- git-worktree-list --status 2>/dev/null) || status=/dev/null
-  jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' "$status" 2>/dev/null
-} > "$st/wt.state" &
+# The status, the branch prefix and the branch facts know nothing of each
+# other, so they run at once and the list costs the slowest of them, where it
+# used to cost their sum. Each lands in a file of its own under the state,
+# which awk then reads: nothing waits on a pipe, and no cat carries a file
+# across.
+git-worktree-list --status 2>/dev/null | jq -r 'to_entries[] | ["STATE", .key, .value.n, .value.op, .value.date] | @tsv' > "$st/wt.state" 2>/dev/null &
 git config --get otis.branchPrefix > "$st/wt.prefix" 2>/dev/null &
 git-branch-facts $refresh "execute-silent(git-fzf-bg git-worktree-list)" > "$st/wt.facts"
 wait

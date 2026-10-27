@@ -1428,9 +1428,10 @@ dash=$(TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b d "stty rows 40 c
 expect otis/quiet "$(printf '%s\n' "$dash" | grep -q 'nothing needs you' && echo said)" "said"
 expect otis/here "$(printf '%s\n' "$dash" | grep -o 'main *nothing to commit or push' | head -1 | tr -s ' ')" "main nothing to commit or push"
 # Nothing uncommitted and nothing past the base: enter has nothing to do on
-# the row it opens on, so the footer has no enter, only the keys it shows on
-# every row and the one that lists the rest.
-expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  c commits  w web  y link  F files  ? all')" "0:1"
+# the row it opens on, so the footer has no enter, only the keys that act on
+# a branch with no MR (no w, with no MR to open) and the one that lists the
+# rest.
+expect otis/enter-says "$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c '⏎'):$(printf '%s\n' "$dash" | sed '/^@@j$/,$d' | grep -c 'V verify  c commits  y link  F files  ? all')" "0:1"
 # ? is every key there is, from the one table, on one screen in two
 # columns, and the footer says how to leave it.
 expect otis/help "$(printf '%s\n' "$dash" | grep -c 'MOVING *ON A CHANGE'):$(printf '%s\n' "$dash" | grep -c 'down and up *V *verify it in Cursor Cloud'):$(printf '%s\n' "$dash" | grep -c 'ON A MERGE REQUEST'):$(printf '%s\n' "$dash" | grep -c '? or q back to the board')" "1:1:1:1"

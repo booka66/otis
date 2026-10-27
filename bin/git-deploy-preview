@@ -172,15 +172,11 @@ if [ "$kind" = deploy ]; then
     pane_section "carried" "$nmrs merge request$([ "$nmrs" = 1 ] || echo s)" text "$n commit$([ "$n" = 1 ] || echo s)"
     # Main's own commits: a merge commit per MR, whose body GitLab writes
     # as the MR's title, a blank line, then the "See merge request"
-    # trailer; or a commit pushed straight to main. One line each, yours
-    # first and starred.
+    # trailer; or a commit pushed straight to main. Each title whole, what
+    # does not fit going on under itself; yours first and starred.
     git log --first-parent --format='%h%x09%s%x09%b%x00' "$prev..$sha" 2>/dev/null | tr '\n\0' '\001\n' | head -60 |
       LC_ALL=C awk -F'\t' -v mine="$(printf '%s' "$mine" | tr -d '[]"' | tr ',' ' ')" -v w="$PANE_W" -v Y="$(printf "$GK_YOURS")" -v A="$(printf "$GK_ATTENTION")" \
-          -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v R="$(printf "$GK_R")" '
-        function ulen(s,   t) { t = s; return length(s) - gsub(/[\200-\277]/, "", t) }
-        function fit(s, n,   out, i, c, k) { if (ulen(s) <= n) return s; k = 0; out = ""
-          for (i = 1; i <= length(s); i++) { c = substr(s, i, 1); if (c !~ /[\200-\277]/ && ++k > n - 1) break; out = out c }
-          return out "\342\200\246" }
+          -v T="$(printf "$GK_TEXT")" -v C="$(printf "$GK_CONTEXT")" -v F="$(printf "$GK_FAINT")" -v R="$(printf "$GK_R")" "$PANE_AWK"'
         # The number as gk_iid in share/rowfmt.awk has it: the last three digits stand out.
         function mr(n) { return F "!" substr(n, 1, length(n) - 3) R A substr(n, length(n) - 2) R }
         BEGIN { k = split(mine, m, " "); for (i = 1; i <= k; i++) own[m[i]] = 1 }
@@ -188,9 +184,9 @@ if [ "$kind" = deploy ]; then
         $2 == "" { next }
         { iid = ""; if (match($3, /merge request [^ ]*![0-9]+/)) { iid = substr($3, RSTART, RLENGTH); sub(/.*!/, "", iid) }
           title = $3; sub(/\001.*/, "", title); if (title == "") title = $2
-          if (iid != "" && (iid in own)) top[++nt] = "  " Y "\342\230\205 " mr(iid) " " T "\033[1m" fit(title, w - 16 - length(iid)) R Y "  you" R
-          else if (iid != "") rest[++nr] = "    " mr(iid) " " T fit(title, w - 6 - length(iid)) R
-          else rest[++nr] = "    " C $1 " " fit($2, w - 13) R }
+          if (iid != "" && (iid in own)) top[++nt] = "  " Y "\342\230\205 " mr(iid) " " T "\033[1m" hang(title, w - 11 - length(iid), 6 + length(iid), T "\033[1m") R Y "  you" R
+          else if (iid != "") rest[++nr] = "    " mr(iid) " " T hang(title, w - 6 - length(iid), 6 + length(iid), T) R
+          else rest[++nr] = "    " C $1 " " hang($2, w - 5 - length($1), 5 + length($1), C) R }
         END { shown = 0
           for (i = 1; i <= nt; i++) { print top[i]; shown++ }
           # Five at most, yours first and always.
@@ -208,8 +204,9 @@ if [ "$s_n" -gt 1 ]; then
   [ "$s_bad" -gt 0 ] && aside="$aside · $s_bad failed"
   [ "$s_rb" -gt 0 ] && aside="$aside · $s_rb rolled back"
   pane_section "the last $s_n" "" "" "$aside"
-  printf '  %s\n' "$strip"
-  printf "  ${GK_FAINT}%-*s%s${GK_R}\n" $((s_n - 8 > 7 ? s_n - 8 : 7)) "oldest" "this one"
+  # Its ends named either side of it: under a strip of a few, the names ran
+  # into each other.
+  printf "  ${GK_FAINT}oldest${GK_R} %s ${GK_FAINT}this one${GK_R}\n" "$strip"
 fi
 
 # --- a failed one: what broke, and the end of its log ----------------------------------
