@@ -994,7 +994,7 @@ part_dashboard() {
   look 2 "One row a change, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, ${b}pipeline broke${r}, because that is what you would do next. Beside the board, the row the cursor is on in full: how its verification, pipeline, review and merge each stand."
   look 3 "Under those, what is moving without you, and the branch you are on: uncommitted, unpushed, behind. Then everything else, folded to a line each: other open MRs, branches not sent yet, what shipped, what can be cleaned up, worktrees, deploys. ${k}enter${r} opens a group in place."
   look 4 "${k}enter${r} does what the row says. Whatever it says, ${k}s${r} switches to its branch, ${k}V${r} verifies it, ${k}o${r} opens the merge request and ${k}w${r} the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads all of the row in a pager. ${k}F${r} finds a file with your editor's own fuzzy finder. ${k}?${r} is every key, on one screen."
-  look 5 "It keeps itself fresh: GitLab is asked behind it a minute apart, and again after a key that changed something. ${k}u${r} asks now."
+  look 5 "It keeps itself fresh: GitLab is asked behind it while it is open, and again after a key that changed something, and the top line says when you are waiting on it. ${k}u${r} asks now."
   say "Nothing waiting is the point: a part with nothing in it is simply gone."
   offer "Open otis" otis
 }

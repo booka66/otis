@@ -62,9 +62,9 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 
 # The dashboard has no picker to reload, so it names a file to be told by
 # when a fetch lands behind it (told, git-cached-json's OTIS_FETCHED), and
-# its caches are kept fresh without u: the merge requests a minute apart,
-# what merged and the deploys two, while it is open.
-age=60 merged_age=120
+# its caches are kept fresh without u: the merge requests half a minute
+# apart, what merged and the deploys two minutes, while it is open.
+age=30 merged_age=120
 [ "$1" = --refresh ] && age=0 merged_age=0
 reload="execute-silent(git-fzf-bg --then refresh-preview otis-list)"
 . "$share/repo.sh" || exit 1

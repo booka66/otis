@@ -41,8 +41,8 @@
 # takes the terminal.
 #
 # It keeps itself fresh: the rows again every 10s from what is on this
-# machine, and the forge asked behind it a minute apart while it is open
-# (otis-list, git-cached-json), with when it last answered on the top line.
+# machine, and the forge asked behind it while it is open (otis-list's age,
+# git-cached-json), with when it last answered on the top line.
 # u asks now, and waits for nothing: the rows are what is here at once, and
 # each thing the forge answers changes them as it lands. The cursor stays on
 # the row it was on.
@@ -393,7 +393,7 @@ moved() {
 # says so (landed), rather than leave the screen looking for good.
 refresh() {
   # u while one is on its way is not dropped: its refetch goes when that
-  # one lands (landed), the footer spinning for it until then.
+  # one lands (landed), the top line saying so until then (waiting).
   if [[ -n $lpid ]] && kill -0 $lpid 2>/dev/null; then [[ $1 == --refresh ]] && again=1; return; fi
   { otis-list $1 > $st/rows.new 2>/dev/null && mv -f $st/rows.new $st/rows &&
     { otis-board > $st/board.new 2>>$st/err && mv -f $st/board.new $st/board || : > $st/board.failed } } >/dev/null &!
@@ -421,6 +421,15 @@ at_leave() {
   local -a keep
   for n g in ${(kv)best}; do keep+=($n.$g); done
   memo_keep $keep
+}
+# unwait: what you were waiting on has all come in: no rows being made or
+# about to be, no fetch out, none landed and not yet in the rows. 0 when
+# waiting ends.
+unwait() {
+  (( waiting && ! again )) && [[ -z $lpid && ! -e $st/fetched ]] || return 1
+  as_of
+  (( fetching )) && return 1
+  waiting=0
 }
 landed() {
   [[ -n $lpid ]] && ! kill -0 $lpid 2>/dev/null || return 1
@@ -670,9 +679,12 @@ row() {
 # as_of: when the forge last answered for the merge requests (yours, and
 # those asked of you: the older of the two), as HH:MM in REPLY, nothing
 # where there is no forge. old is 1 once that is over five minutes ago, and
-# fetching 1 while it is being asked now: an attempt begun in the last half
-# minute that has neither landed nor failed.
-integer fetching=0 old=0
+# fetching 1 while either is being asked now: git-cached-json's pid for it,
+# trusted for two minutes as it trusts it.
+# waiting is 1 while you are waiting on the forge: from u, a key's command
+# landing, a screen you come back from or the board opening, until nothing
+# it started is still out (unwait). The top line says so meanwhile.
+integer fetching=0 old=0 waiting=0
 as_of() {
   local f
   local -a tm
@@ -682,9 +694,9 @@ as_of() {
     [[ -s $f ]] || continue
     zstat -A tm +mtime -- $f
     (( at == 0 || tm[1] < at )) && at=$tm[1]
-    if [[ -e $f.tried && $f.tried -nt $f && ! -s $f.err ]]; then
-      zstat -A tm +mtime -- $f.tried
-      (( EPOCHSECONDS - tm[1] < 30 )) && fetching=1
+    if [[ -s $f.pid ]]; then
+      zstat -A tm +mtime -- $f.pid
+      (( EPOCHSECONDS - tm[1] < 120 )) && kill -0 $(<$f.pid) 2>/dev/null && fetching=1
     fi
   done
   (( at )) || return 0
@@ -693,7 +705,8 @@ as_of() {
 }
 # headline: the right of the top line: how many moves are yours, and when the
 # forge last answered, in the color for a thing to look at once that is long
-# ago. In REPLY, its width in hw.
+# ago; while you are waiting on it, that instead, since the time of the last
+# answer reads as stale and was pressed u for. In REPLY, its width in hw.
 integer hw=0
 headline() {
   local s t n=$(( n_need + n_draft ))
@@ -702,10 +715,9 @@ headline() {
   else s=$B$T"$n moves"$UB$R hw=$(( $#n + 6 )); fi
   as_of
   if [[ -n $REPLY ]]; then
-    t="as of $REPLY"
-    (( fetching )) && t+=" ↻"
+    (( waiting )) && t="asking $forge…" || t="as of $REPLY"
     s+=$C"  ·  "$R
-    (( old )) && s+=$A$t$R || s+=$C$t$R
+    (( old && ! waiting )) && s+=$A$t$R || s+=$C$t$R
     (( hw += 5 + ${(m)#t} ))
   fi
   REPLY=$s
@@ -1229,7 +1241,7 @@ outs_in() {
       # What it did may have changed the rows, here and on the forge's side,
       # which is asked again (again, in landed), and the branches and the
       # worktrees: a merge, a push, a removal, a thread's new branch.
-      refresh; again=1; relist --refresh
+      refresh; again=1 waiting=1; relist --refresh
       follow $n "$orest[$n]"
     else said $n
     fi
@@ -1340,22 +1352,18 @@ run() {
           # A screen of its own. What it did may have changed the forge's
           # side too: the rows at once from what is here, then the forge
           # asked (again, in landed).
-          bykey=$owhat[$oj]; run_tty "$arg" sh; bykey=; refresh; again=1
+          bykey=$owhat[$oj]; run_tty "$arg" sh; bykey=; refresh; again=1 waiting=1
         else orest[$oj]=$s; work "$arg"; return; fi ;;
     esac
   done
 }
-# working: a key pressed before the rows were in, or the refresh u asked
-# for, has been out long enough (0.15s) for the footer to spin, rather than
-# blink on every key; in REPLY the spinner's frame now, ten a second. A
-# command out spins on its row instead (doing).
-# uask: u has asked the forge, 1 until it is seen being asked and 2 from
-# then until it has answered (as_of's fetching), which is when the footer
-# stops saying so; ut when u was pressed, for a forge that is never asked.
-float at0=0 ut=0
-integer uask=0
+# working: a key pressed before the rows were in has been out long enough
+# (0.15s) for the footer to spin, rather than blink on every key; in REPLY
+# the spinner's frame now, ten a second. A command out spins on its row
+# instead (doing), and u's fetch is the top line's (headline).
+float at0=0
 working() {
-  { (( $#pend )) || { (( uask )) && [[ $flash == "refreshing from $forge…" ]] }; } && (( EPOCHREALTIME - at0 >= 0.15 )) || return 1
+  (( $#pend )) && (( EPOCHREALTIME - at0 >= 0.15 )) || return 1
   spin_frame
 }
 # The light, as otis-do takes it: kind, verb, extra, then gmr's fields.
@@ -1372,7 +1380,7 @@ rask() { keys_used $1 "$KL[$1]"; ask "$KL[$1]" "${@:2}"; }
 # rtty <key> <command line>: one that takes the terminal itself, as gb's
 # execute did; the rows and the branches may have changed after it, here and
 # on the forge, which is asked again.
-rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh; again=1; relist --refresh; }
+rtty() { keys_used $1 "$KL[$1]"; bykey=$KL[$1]; run_tty "$2" sh; bykey=; refresh; again=1 waiting=1; relist --refresh; }
 # rbehind <key> <command line>: one that only asks and then works, behind
 # the board.
 rbehind() { keys_used $1 "$KL[$1]"; behind "$KL[$1]" "$2"; }
@@ -1625,7 +1633,7 @@ handle() {
     # logs in first, in the terminal, as the line under the top one says.
     u) keys_used u "$KL[u]"
        (( stale_login )) && { bykey="log in to $forge"; run_tty "git-forge login" sh; bykey=; }
-       refresh --refresh; relist --refresh; flash="refreshing from $forge…" at0=$EPOCHREALTIME ut=$EPOCHREALTIME uask=1 ;;
+       refresh --refresh; relist --refresh; waiting=1 ;;
     # Your editor's own fuzzy finder, on the checkout you are in (otis-find).
     F) keys_used F "$KL[F]"; bykey=$KL[F]; run_tty "otis-find" sh; bykey=; refresh ;;
     '?') keys_used '?' "${KL[?]}"; help=$(( !help )) poff=0 ;;
@@ -1651,7 +1659,7 @@ size
 cur=1
 [[ -n $memo && -s $memo ]] && { print -rn -- "$(<$memo)" > $st/board; load; early=1; memo_restore; (( $#id )) && go 1; }
 watching
-refresh
+refresh; waiting=1
 relist
 draw
 # Keys first: every key waiting is handled before the one draw after them,
@@ -1697,22 +1705,13 @@ while :; do
       orphaned && quit 1
       [[ -z $winch ]] && resize
       as_of
-      [[ "$REPLY $fetching $old" == $lastasof ]] || { lastasof="$REPLY $fetching $old"; changed=1; }
+      [[ "$REPLY $old" == $lastasof ]] || { lastasof="$REPLY $old"; changed=1; }
       busy_says && changed=1
-    fi
-    # u's refresh is over when the forge has answered, not when the rows
-    # were made again from what was here: until then the footer says so.
-    if (( uask )); then
-      as_of
-      (( fetching )) && uask=2
-      if (( uask == 2 && ! fetching )) || (( uask == 1 && EPOCHREALTIME - ut > 3 )); then
-        uask=0 changed=1
-        [[ $flash == "refreshing from $forge…" ]] && flash=
-      fi
     fi
     lap second
     folding && changed=1
     landed && changed=1
+    unwait && changed=1
     lap landed
     # Something moved on this machine (a run finished or started, a commit,
     # a switch): the rows again now, or once the ones being made have landed.
