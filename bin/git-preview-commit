@@ -81,7 +81,7 @@ summary() {
     function rep(c, n,   o) { o = ""; while (n-- > 0) o = o c; return o }
     function base(p) { sub(/.*\//, "", p); return p }
     BEGIN {
-      RS = "\037"; getline h < meta; getline an < meta; getline ago < meta; getline subj < meta; getline body < meta; getline parents < meta
+      RS = "\037"; getline h < meta; getline an < meta; getline when < meta; getline subj < meta; getline body < meta; getline parents < meta
       RS = "\n"; close(meta); system("rm -f \"" meta "\"")
       sub(/\n+$/, "", body)
     }
@@ -96,9 +96,9 @@ summary() {
       print T "\033[1m" subj R
       # Who goes first when the pane is narrow, then when.
       dot = "  \302\267  "; mg = (split(parents, ps, " ") > 1) ? dot "merge" : ""; np_ = pushed ? "" : dot "not pushed"
-      if (len(h dot an dot ago mg np_) > w) an = ""
-      if (len(h (an != "" ? dot an : "") dot ago mg np_) > w) ago = ""
-      m = E h R C (an != "" ? dot an : "") (ago != "" ? dot ago : "") mg R (pushed ? "" : C dot R Y "not pushed")
+      if (len(h dot an dot when mg np_) > w) an = ""
+      if (len(h (an != "" ? dot an : "") dot when mg np_) > w) when = ""
+      m = E h R C (an != "" ? dot an : "") (when != "" ? dot when : "") mg R (pushed ? "" : C dot R Y "not pushed")
       print m R
       # The message whole, since this is where a commit is read in full, as
       # markdown (share/markdown.awk): its paragraphs wrapped to the pane, not
