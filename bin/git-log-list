@@ -84,14 +84,6 @@ LC_ALL=C awk -F'\037' -v minef="$tmp.mine" -v heldf="$tmp.held" -v cap="$cap" -v
     }
     close(heldf)
   }
-  function ago(t,   s) {
-    s = GK_NOW - t
-    if (s < 3600) return int(s / 60) "m"
-    if (s < 86400) return int(s / 3600) "h"
-    if (s < 86400 * 14) return int(s / 86400) "d"
-    if (s < 86400 * 60) return int(s / 604800) "w"
-    return int(s / 2592000) "mo"
-  }
   cap != "" && NR > cap { more = 1; next }
   {
     sha = $1; refs = $3; subj = $4; who = $5
@@ -101,7 +93,7 @@ LC_ALL=C awk -F'\037' -v minef="$tmp.mine" -v heldf="$tmp.held" -v cap="$cap" -v
     # A no-break space between its names, so a row that wraps never parts them.
     gsub(/ /, "\302\240", who)
     print (unpushed ? GK_YOURS : yours ? GK_ATTENTION : GK_FAINT) sha GK_R " " \
-      GK_CONTEXT gk_padl(ago($2), 4) GK_R "  " \
+      GK_CONTEXT gk_padl(ago($2, GK_NOW), 4) GK_R "  " \
       (yours ? GK_TEXT : GK_CONTEXT) kept(subj, 80, 2) GK_R \
       (refs != "" ? "  " GK_MAIN refs GK_R : "") \
       (authors ? "  " GK_CONTEXT who GK_R : "") "\t" sha "\t" subj
