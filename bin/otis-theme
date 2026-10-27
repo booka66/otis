@@ -11,8 +11,8 @@
 #
 # A theme is a file in share/themes: the ten colors the palette names by
 # their job (share/palette.sh says which is which), as SGR parameters, and
-# what delta, bat and glow need to match, and its ground for a page drawn
-# in it (git-trace --page; the terminal themes have none). A symbol's name
+# what delta, bat and glow need to match, and its ground, which the music's
+# rows fade toward (share/music.awk; the terminal themes have none). A symbol's name
 # in the review's list is in the color of what it is, a function, a value or
 # a type: main's, elsewhere's and attention's in a theme that names none.
 # What a changed line changed is on plus_word and minus_word, else on halfway from the

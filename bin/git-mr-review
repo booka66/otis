@@ -18,27 +18,11 @@
 # opens the MR's version of each file. The worktree is always detached at the
 # MR's head: nothing of yours is ever checked out or moved.
 #
-# --ready <iid> <head> <base> <start> moves the worktree to the MR the same
-# way and no more, as P's screen opens (git-walk --view), and all of it behind
-# that screen: its git status too, which took ten seconds when the worktree
-# was cold, with the walk waiting on it. It asks nothing, having no screen:
-# a worktree with edits is left where it is, which whoever waits for the
-# move is told (git-mr-wait). --open <iid> <head> <base> <start> <path>
-# <line>, enter there, then only opens that line in it, moving it first only
-# when it is at another head and not on its way; it is the one that asks
-# what becomes of the edits.
-#
 # --claude (gmr's C) has Claude review it instead (git-mr-claude), straight
 # from the list: the same commits, no worktree, since Claude takes its own.
-claude= open= ready=
+claude=
 [ "$1" = --claude ] && { claude=1; shift; }
-if [ "$1" = --open ]; then
-  open=1 iid=$2 head=$3 base=$4 start=$5 path=$6 line=$7 target=$(otis-config main)
-elif [ "$1" = --ready ]; then
-  ready=1 iid=$2 head=$3 base=$4 start=$5 target=$(otis-config main)
-else
-  iid=$1 target=${2:-$(otis-config main)} url=$3 head=$5 base=$6 start=$7
-fi
+iid=$1 target=${2:-$(otis-config main)} url=$3 head=$5 base=$6 start=$7
 [ -n "$iid" ] || exit 0
 
 pause() { otis-popup say "$1"; }
@@ -51,18 +35,6 @@ common=$(git rev-parse --git-common-dir)
 # deleted below if it is still there, untouched.
 record="$common/gmr-review-branch"
 moving="$common/gmr-review-moving"
-
-# open_it: the line, in the worktree, as the file picker's enter opens it:
-# the review's diff base (what merging would change now, git-mr-base) and
-# its comments; nvim waits on a move still going (git-mr-wait).
-open_it() {
-  cd "$dir" || exit 1
-  [ -n "$start" ] || start=$(git rev-parse -q --verify "origin/$target")
-  base=$(git-mr-base "$base" "$head" "$start")
-  export NVIM_DIFF_BASE=$base GMR_IID=$iid GMR_RANGE=$base..$head GMR_KIND=review GMR_MOVING=$moving
-  exec git-commit-open "$base..$head" "$path" "$line"
-}
-[ -n "$open" ] && { [ "$(git -C "$dir" rev-parse -q --verify HEAD 2>/dev/null)" = "$head" ] || [ -s "$moving" ]; } && open_it
 
 if have "$head" && have "$base" && { [ -z "$start" ] || have "$start"; }; then
   git update-ref "$mr" "$head"
@@ -81,24 +53,6 @@ fi
 
 # A move still running from the MR before has to land before this one starts.
 GMR_MOVING=$moving git-mr-wait quiet
-
-if [ -n "$ready" ]; then
-  rm -f "$moving.err"
-  (
-    if [ ! -e "$dir" ]; then
-      git-worktree-add review --quiet --detach "$mr" 2> "$moving.err" || { rm -f "$moving"; exit 1; }
-    elif ! git worktree list --porcelain | grep -qxF "worktree $dir"; then
-      echo "$dir exists but is not a git worktree, so it was left alone" > "$moving.err"; rm -f "$moving"; exit 1
-    elif [ -n "$(git -C "$dir" status --porcelain)" ]; then
-      echo "it has edits, so it was left where it is; enter again asks what becomes of them" > "$moving.err"; rm -f "$moving"; exit 1
-    else
-      git -C "$dir" switch --quiet --detach "$mr" 2> "$moving.err" || { rm -f "$moving"; exit 1; }
-    fi
-    rm -f "$moving" "$moving.err"
-  ) </dev/null >/dev/null 2>&1 &
-  echo $! > "$moving"
-  exit 0
-fi
 
 if [ ! -e "$dir" ]; then
   printf 'creating the review worktree, first time only ...\n'
@@ -131,7 +85,6 @@ rm -f "$moving.err"
   rm -f "$record" "$moving" "$moving.err"
 ) </dev/null >/dev/null 2>&1 &
 echo $! > "$moving"
-[ -n "$open" ] && open_it
 
 cd "$dir" || exit 1
 # The diff shows what merging would change now, not what GitLab's merge base

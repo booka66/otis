@@ -6,7 +6,7 @@
 #
 # Every run keeps its state in a directory (share/claude-run.sh, git-claude-view):
 # reviews under gmr-claude, fix runs under gmr-fix, production watches under
-# gmr-watch, verifications under otis-verify, walks under otis-walk and threads under otis-thread,
+# gmr-watch, verifications under otis-verify and threads under otis-thread,
 # each named by what it is about, an MR's iid or b-<branch> with slashes as %. A row is the run's state
 # as a glyph, what kind of run, what it is about, when and how long, and its
 # last word to you; running ones first, then newest first. Then tab-separated
@@ -39,7 +39,6 @@ if [ "$1" = --open ]; then
         *) echo "execute(git-verify '$key')+$back" ;;
       esac ;;
     */gmr-watch) echo "execute(git-mr-watch '$key')+$back" ;;
-    */otis-walk) echo "execute(git-walk '$key')+$back" ;;
     */otis-thread) echo "execute(otis-thread '$(printf '%s' "${key#b-}" | tr '%' '/')')+$back" ;;
     */gmr-claude)
       # The range it reviewed, from what resume would run: git-mr-claude --run <iid> <range>.

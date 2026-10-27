@@ -20,9 +20,8 @@
 # deleted, the worktrees, the deploys) sits in groups folded to a line each,
 # which enter opens in place.
 #
-# What you do to a change is done here too, on its row: P walks it, V
-# verifies it, c is its commits, m merges, b rebases, a asks reviewers, and
-# so on. The keys are one table (KEYS): the footer, the ? help, the key log
+# What you do to a change is done here too, on its row: V verifies it, c
+# is its commits, m merges, b rebases, a asks reviewers, and so on. The keys are one table (KEYS): the footer, the ? help, the key log
 # and what a key is called while it runs all read it, so they cannot
 # disagree. The footer shows the same keys on every row.
 #
@@ -78,7 +77,6 @@ typeset -a KEYS=(
   '?'      move   ''       'show these keys'
   q        move   ''       'quit'
   V        change verify   'verify it in Cursor Cloud'
-  P        change walk     'walk its tests line by line'
   c        change commits  'its commits'
   C        change ''       'Claude reviews or fixes it'
   f        change ''       'fold in a fix that is ready'
@@ -362,7 +360,7 @@ stale_read() {
 # seconds' look: a run that finishes says so in its folder (status, ended),
 # one that starts makes a folder, and a commit or a switch moves the
 # checkout's HEAD. wpaths is those paths (not watch, which is zsh's own):
-# the five folders runs are kept in, what a run a row is of writes when it
+# the four folders runs are kept in, what a run a row is of writes when it
 # ends or starts again, and the checkout's HEAD and its log. moved says
 # they have changed since it last looked, five times a second. Not a run's
 # folder itself, which one that is going writes into all the time, nor the
@@ -371,12 +369,12 @@ typeset -a wpaths
 gdir=$(git rev-parse --absolute-git-dir 2>/dev/null)
 watching() {
   local i c
-  wpaths=(${cache:h}/(otis-verify|otis-walk|gmr-claude|gmr-fix|gmr-watch) $gdir/HEAD $gdir/logs/HEAD)
+  wpaths=(${cache:h}/(otis-verify|gmr-claude|gmr-fix|gmr-watch) $gdir/HEAD $gdir/logs/HEAD)
   for (( i = 1; i <= $#id; i++ )); do
     [[ -z $fold[i] ]] || continue
     for c in 1 2 3 4 5; do
       cell $i $c
-      [[ $ce[k] == ${cache:h}/(otis-verify|otis-walk|gmr-claude|gmr-fix|gmr-watch)/* ]] && wpaths+=($ce[k]/status $ce[k]/ended $ce[k]/pid)
+      [[ $ce[k] == ${cache:h}/(otis-verify|gmr-claude|gmr-fix|gmr-watch)/* ]] && wpaths+=($ce[k]/status $ce[k]/ended $ce[k]/pid)
     done
   done
 }
@@ -1397,7 +1395,7 @@ rowkey() {
   # the ones being made, as enter does, and is pressed then, on the row the
   # cursor is on. It was refused before, as a key the row had nothing for.
   if (( early )); then
-    [[ $1 == (P|V|C|c|p|n|W|s|o|J|m|b|A|R|X|L|a|r|N|D) ]] || return 1
+    [[ $1 == (V|C|c|p|n|W|s|o|J|m|b|A|R|X|L|a|r|N|D) ]] || return 1
     pend=(handle $1); flash="$KL[$1]…" at0=$EPOCHREALTIME
     return 0
   fi
@@ -1409,12 +1407,8 @@ rowkey() {
   [[ -z $mr && -n $br ]] && [[ $type[cur] == (change|here) ]] && asb=1
   [[ $type[cur] == change || $kind == merged || -n $asb ]] || return 1
   case $1 in
-    # What either has to find out before it has anything to open or to ask
-    # (whether the tests can be traced, whether a run is there already) is
-    # found out behind the board.
-    P) if [[ -n $mr ]]; then rask P git-walk --check $kind $i "$head[cur]" "$base[cur]"
-       elif [[ -n $asb ]]; then rask P git-walk --check-branch "$br"
-       else return 1; fi ;;
+    # What it has to find out before it has anything to open or to ask
+    # (whether a run is there already) is found out behind the board.
     V) if [[ -n $mr ]]; then rask V git-verify --ask $kind "$i" "$br"
        elif [[ -n $asb ]]; then rask V git-verify --ask "$kind" "$i" "$br" 1
        else return 1; fi ;;
@@ -1596,7 +1590,7 @@ handle() {
     # On a worktree or under clean up, d removes, as it does in gb.
     d) removable && { remove; return; }
        flash="nothing on this row can be removed" ;;
-    m|b|a|P|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;
+    m|b|a|V|c|C|p|n|W|A|R|X|L|r|N|D|s|o|J) flash="nothing on this row for $1 ($KL[$1])" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
     M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
     # A thread of Claude's on the workspace (otis-thread): on the branch of

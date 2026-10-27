@@ -118,13 +118,11 @@ stack-push() {
 # and opens the branch in a worktree of its own, or goes to the one it is in.
 # d deletes the marked branches, or the one under the cursor, and M marks the
 # ones that lose nothing (git-branch-delete); one checked out anywhere stays.
-# p force-pushes the branch with gp, asked first (git-branch-push). P walks
-# it (git-walk): its own tests run and traced where they can be (git-trace),
-# else inputs Claude follows through it; as V verifies it.
+# p force-pushes the branch with gp, asked first (git-branch-push).
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),P=walk it: its tests traced line by line or inputs Claude picks,p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link (no MR: the branch name),t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open MR,y=copy MR link (no MR: the branch name),t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
@@ -136,7 +134,6 @@ gb() {
       --bind 'c:execute(git-branch-log {2})' \
       --bind 'C:execute(git-branch-fix {2} {5})' \
       --bind 'V:execute(git-verify --branch {2} {5})+refresh-preview' \
-      --bind 'P:execute(git-walk --branch {2})+execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 'p:execute(git-branch-push {2})+execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 't:execute-silent(git-test-files toggle; git-test-files state > "$GIT_FZF_STATE/footer")+refresh-preview' \
       --bind 'n:transform(git-mr-new --check {2} {5})' \

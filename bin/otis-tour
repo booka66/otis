@@ -997,7 +997,7 @@ part_dashboard() {
   look 1 "What wants you comes first. Production trouble, then what is broken: a failed verification, a pipeline. Then what a person is waiting on: threads on yours, a review asked of you. Then what $who has left you, and what you can finish: one ready to merge, one nobody is reviewing. Red is only for a change of yours that broke."
   look 2 "One row a change, never one a fact. An MR with a failed pipeline and three unresolved threads is one row, ${b}pipeline broke${r}, because that is what you would do next. Beside the board, the row the cursor is on in full: how its verification, pipeline, review and merge each stand."
   look 3 "Under those, what is moving without you, and the branch you are on: uncommitted, unpushed, behind. Then everything else, folded to a line each: other open MRs, branches not sent yet, what shipped, what can be cleaned up, worktrees, deploys. ${k}enter${r} opens a group in place."
-  look 4 "${k}enter${r} does what the row says. Whatever it says, ${k}s${r} switches to its branch, ${k}V${r} verifies it, ${k}P${r} walks it, ${k}J${r} is its pipeline's jobs, ${k}o${r} opens the merge request and ${k}w${r} the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads all of the row in a pager. ${k}F${r} finds a file with your editor's own fuzzy finder. ${k}?${r} is every key, on one screen."
+  look 4 "${k}enter${r} does what the row says. Whatever it says, ${k}s${r} switches to its branch, ${k}V${r} verifies it, ${k}J${r} is its pipeline's jobs, ${k}o${r} opens the merge request and ${k}w${r} the browser. ${k}x${r} discards otis's own note, never the MR's state. ${k}space${r} reads all of the row in a pager. ${k}F${r} finds a file with your editor's own fuzzy finder. ${k}?${r} is every key, on one screen."
   look 5 "It keeps itself fresh: GitLab is asked behind it a minute apart, and again after a key that changed something. ${k}u${r} asks now."
   say "Nothing waiting is the point: a part with nothing in it is simply gone."
   offer "Open otis" otis
@@ -1105,7 +1105,7 @@ part_cheatsheet() {
   print
   print -r -- "  ${m}the board${r}   otis"
   key "enter" "what the row says: review it, its failed jobs, its threads, merge it"
-  key "s V P J o" "its branch, verify, walk, its pipeline's jobs, the merge request"
+  key "s V J o" "its branch, verify, its pipeline's jobs, the merge request"
   key "C" "$who drafts comments, or proposes fixes on yours"
   key "m b A a" "merge, rebase, approve, reviewers"
   key "D" "watch production (one that shipped)"

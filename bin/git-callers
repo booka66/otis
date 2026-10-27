@@ -35,8 +35,8 @@
 #
 # Lazy and cached like the gloss (git-symbols-gloss): a commit, branch or MR
 # by its shas for good, the worktree by its symbols. git config otis.callers
-# off turns it off, and with it every tsgo run in otis (the walk's types, the
-# split's members) and the node_modules kept for them; callers already found
+# off turns it off, and with it every tsgo run in otis (the split's members)
+# and the node_modules kept for them; callers already found
 # still show. Without tsgo or node nothing runs. tsgo resolves the
 # workspace's packages through node_modules, which a worktree gets mirrored
 # from the main checkout's first, and which is brought up to the lockfile

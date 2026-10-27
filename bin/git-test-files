@@ -99,7 +99,7 @@ declared_generated() {
   if declares; then
     # A run left going in the background outlives the picker that started
     # it, and its state with it: with none there, git answers every path,
-    # rather than nothing coming back (a walk found no tests at all).
+    # rather than nothing coming back.
     known=; [ -d "${GIT_FZF_STATE:-}" ] && known=$GIT_FZF_STATE/declared
     [ -n "$known" ] && : >> "$known"
     awk -F'\t' -v fs="$1" '{ n = split(fs, f, ","); for (i = 1; i <= n; i++) if ($f[i] != "") print $f[i] }' "$2" | sort -u > "$2.paths"

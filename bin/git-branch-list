@@ -62,9 +62,6 @@ f=$st/list.$$
 trap 'rm -f "$f".*' EXIT
 git-mr-fix --marks > "$f.fixes" 2>/dev/null &
 git-verify --marks > "$f.verify" 2>/dev/null &
-git-walk --marks > "$f.walk" 2>/dev/null &
-# Your branches, traced for P before you open them (git-walk --ahead-branches).
-(git-walk --ahead-branches </dev/null >/dev/null 2>&1 &)
 git-test-files state > "$f.tests" 2>/dev/null &
 git-branch-facts $2 "execute-silent(git-fzf-bg git-branch-list $mode)" > "$f.facts"
 wait
@@ -80,15 +77,9 @@ case $verify in
   '' | '{}') verify= ;;
   *) verify=$(jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' "$f.verify" 2>/dev/null) ;;
 esac
-# And the walks started from here (P, git-walk), by branch.
-read -r walk < "$f.walk" || walk=
-case $walk in
-  '' | '{}') walk= ;;
-  *) walk=$(jq -r 'to_entries[] | [.key, (.value.walking | tostring), .value.status, .value.head] | @tsv' "$f.walk" 2>/dev/null) ;;
-esac
 
 # The rows go to the list's file, for M, and to the picker.
-GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
+GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
      "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {
     # Thirty-seven columns of fixed zone, then the name takes the rest.
@@ -107,11 +98,6 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
       if (split(vrows[vi], vf, "\t") < 5) continue
       vgoing[vf[1]] = vf[2]; vstatus[vf[1]] = vf[3]; vverdict[vf[1]] = vf[4]; vhead[vf[1]] = vf[5]
     }
-    wn = split(ENVIRON["GK_WALK"], wrows, "\n")
-    for (i = 1; i <= wn; i++) {
-      split(wrows[i], wf, "\t")
-      wgoing[wf[1]] = wf[2]; wstatus[wf[1]] = wf[3]; whead[wf[1]] = wf[4]
-    }
   }
   # Two columns, as in gmr: Claude working, or something of its waiting on you,
   # and how much. A run from gb is filed under the branch and one from gmr
@@ -126,17 +112,14 @@ GK_MARKS="$marks" GK_VERIFY="$verify" GK_WALK="$walk" awk -F'\t' -v cols="$cols"
   # What AI is doing on it, or has left for it, in a word, as gmr says it:
   # work going (what kind), what waits on you, what broke, what is ready;
   # nothing when there is none, and its width in awn. Verifications are
-  # filed under the MR when there is one; walks under the branch.
+  # filed under the MR when there is one.
   function ai_word(b, mrid, tip, cw,   k, c, w, n) {
     k = (mrid != "") ? mrid : "b-" b; gsub(/\//, "%", k)
     if (cw == "fixing") { c = GK_ATTENTION; w = "fixing" }
     else if (vgoing[k] == "true") { c = GK_ATTENTION; w = "verifying" }
-    else if (wgoing[b] == "true") { c = GK_ATTENTION; w = "tracing" }
     else if (cw != "") { c = GK_YOURS; w = cw (cw == 1 ? " fix" : " fixes") }
     else if (vstatus[k] == "failed" || (vstatus[k] == "done" && vhead[k] == tip && vverdict[k] == "fail")) { c = GK_BAD; w = "\342\234\227 verify"; n = 8 }
-    else if (wstatus[b] == "failed") { c = GK_BAD; w = "\342\234\227 trace"; n = 7 }
     else if (vstatus[k] == "done" && vhead[k] == tip && vverdict[k] == "pass") { c = GK_GOOD; w = "verified" }
-    else if (wstatus[b] == "done" && whead[b] == tip) { c = GK_GOOD; w = "tour" }
     else { awn = 0; return "" }
     # The cross is three bytes and one column: its words say their width.
     awn = (n == "") ? length(w) : n

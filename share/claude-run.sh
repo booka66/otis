@@ -7,11 +7,11 @@
 
 # run_kinds: every kind of run, each a folder of them under .git; run_label
 # <kind>: what otis calls one.
-run_kinds='gmr-claude gmr-fix gmr-watch otis-verify otis-walk otis-thread'
+run_kinds='gmr-claude gmr-fix gmr-watch otis-verify otis-thread'
 run_label() {
   case $1 in
     gmr-claude) echo review ;; gmr-fix) echo fixes ;; gmr-watch) echo watch ;;
-    otis-verify) echo verify ;; otis-walk) echo walk ;; otis-thread) echo thread ;; *) echo run ;;
+    otis-verify) echo verify ;; otis-thread) echo thread ;; *) echo run ;;
   esac
 }
 
@@ -31,9 +31,8 @@ running() { [ ! -s "$1/status" ] && [ -r "$1/pid" ] && kill -0 "$(cat "$1/pid")"
 say() { jq -nc --arg t "$*" '{type: "otis", text: $t, at: (now | floor)}' >> "$d/events.jsonl"; }
 oneline() { printf '%s' "$1" | tr '\n' ' ' | cut -c1-300; }
 # stopping: x in git-claude-view leaves $d/stopping; the run ends at its next
-# look. Its last word is what the file says, when what stopped it said why
-# (git-claude-view --halt); x leaves it empty.
-stopping() { [ -e "$d/stopping" ] && finish stopped "$(grep . "$d/stopping" 2>/dev/null || echo stopped)"; }
+# look.
+stopping() { [ -e "$d/stopping" ] && finish stopped stopped; }
 # alert <title> <body> [state]: a desktop notification, through the terminal
 # tab the run was started from, or from the system when that tab is gone or
 # cannot send one (otis-notify). A failed state marks it ✗.

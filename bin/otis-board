@@ -548,8 +548,8 @@ jq -nr -L "$share" --rawfile rows "$st/rows" --rawfile seen "$st/seen.tsv" --raw
   # runs: what Claude ran in the background and is over, newest first. Only
   # those of a change that is on no row above (its merge request merged or
   # closed, its branch gone), and of this week: a run of a change that is
-  # here is that change'"'"'s, reached from its row (V its verification, P its
-  # walk, enter on a review or a fix).
+  # here is that change'"'"'s, reached from its row (V its verification, enter
+  # on a review or a fix).
   ($open | map(.iid)) as $open_iids |
   def here_still: sub("^[vf]-"; "") | if test("^[0-9]+$") then IN($open_iids[])
     elif startswith("b-") then (.[2:] | gsub("%"; "/")) as $b | ($br[$b] != null or ($b | IN($open_branches[]))) else false end;

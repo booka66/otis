@@ -1,6 +1,5 @@
 # cursor.sh: Cursor's cloud agents API, for what otis runs in Cursor's VMs:
-# V's tester (git-verify-run) and P's tests (git-trace, with otis.walkRemote
-# cursor). Sourced; CURSOR_API_KEY is the caller's to have.
+# V's tester (git-verify-run). Sourced; CURSOR_API_KEY is the caller's to have.
 api=https://api.cursor.com
 
 # cursor <method> <path> [json]: Cursor's API. The response on stdout, and

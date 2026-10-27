@@ -1012,9 +1012,8 @@ if [ -n "$GIT_FZF_STATE" ]; then table=$GIT_FZF_STATE/symbols.tsv; else table=$(
 # does: across pushes and amends, from ga to the commit gl shows, and in any
 # change whose diff of that symbol is the same one; an edit to it clears it.
 # One store rather than one per change, since the hash is what says it is
-# the same thing to read. OTIS_VIEWED_STORE stands in for it: a page of the
-# change (walk.mjs symbols) is drawn with none of your marks.
-vstore=${OTIS_VIEWED_STORE:-$(git rev-parse --path-format=absolute --git-common-dir)/otis-viewed}
+# the same thing to read.
+vstore=$(git rev-parse --path-format=absolute --git-common-dir)/otis-viewed
 # vspec_awk: from the table, key, path, side, start and end for each key in
 # the first file. A file row is its whole diff.
 vspec_awk='
