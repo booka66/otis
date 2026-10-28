@@ -11,6 +11,12 @@ local function valid(win)
   return win and vim.api.nvim_win_is_valid(win)
 end
 
+-- The list's window options: the terminal's alone, at a width it keeps
+-- whatever the windows around it do (winfixwidth: closing a split beside the
+-- code, or a config evening the windows out on a resize, leaves it be). A
+-- split made from it takes them, and the code window gives them back.
+local list_opts = { number = false, relativenumber = false, signcolumn = "no", statuscolumn = "", foldcolumn = "0", spell = false, winfixwidth = true }
+
 -- One file at a time: a file the frame opened goes once the code window
 -- shows something else, unless you changed it or it is up elsewhere too.
 local function let_go(buf)
@@ -31,18 +37,33 @@ local function sizes()
   end
 end
 
--- code(): the window right of the list, made again if it was closed. A diff
--- is of the file the window had, and goes with it.
+-- code(): the window right of the list: when it was closed, the last window
+-- on the tab showing a file or a preview of the frame's in its place, else a
+-- new one (never a quickfix list or a plugin's pane). A diff is of the file
+-- the window had, and goes with it.
 function M.code()
   local code = vim.t.otis_code
+  if not valid(code) then
+    for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      local b = vim.api.nvim_win_get_buf(w)
+      if w ~= vim.t.otis_list and vim.fn.win_gettype(w) == "" and (vim.bo[b].buftype == "" or vim.b[b].otis_text) then
+        code = w
+      end
+    end
+  end
+  if valid(code) and code ~= vim.t.otis_code then
+    vim.t.otis_code = code
+    sizes()
+  end
   if not valid(code) then
     local back = vim.api.nvim_get_current_win()
     vim.api.nvim_set_current_win(vim.t.otis_list)
     vim.cmd("botright vnew")
     code = vim.api.nvim_get_current_win()
     vim.bo.bufhidden = "wipe"
-    -- A split takes the terminal's options; the code wants yours.
-    vim.cmd("setlocal number< relativenumber< signcolumn< statuscolumn< foldcolumn< spell<")
+    for opt in pairs(list_opts) do
+      vim.cmd("setlocal " .. opt .. "<")
+    end
     vim.t.otis_code = code
     vim.api.nvim_set_current_win(back)
     sizes()
@@ -59,13 +80,34 @@ function M.code()
   return code
 end
 
+local function list_window(win)
+  for opt, v in pairs(list_opts) do
+    vim.wo[win][opt] = v
+  end
+  vim.t.otis_list = win
+  sizes()
+end
+
 function M.start()
   local buf, win = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
   vim.t.otis_list = win
+  -- The list is not a file to switch to, and the frame shows one file at a
+  -- time: no tab line of buffers, whatever a config turns it on for (which
+  -- hides real tabs too; the frame is one).
+  vim.bo[buf].buflisted = false
+  vim.o.showtabline = 0
+  vim.api.nvim_create_autocmd("OptionSet", {
+    pattern = "showtabline",
+    callback = function()
+      if vim.o.showtabline ~= 0 then
+        vim.schedule(function()
+          vim.o.showtabline = 0
+        end)
+      end
+    end,
+  })
   M.code()
-  for opt, v in pairs({ number = false, relativenumber = false, signcolumn = "no", statuscolumn = "", foldcolumn = "0", spell = false }) do
-    vim.wo[win][opt] = v
-  end
+  list_window(win)
   -- A window opened or closed beside the code changes its width as a
   -- resize of the whole does.
   vim.api.nvim_create_autocmd({ "VimResized", "WinResized" }, { callback = sizes })
@@ -94,7 +136,12 @@ function M.start()
   -- is each buffer's own, so it wins over a config's (LazyVim's moves a
   -- window left, which from a quickfix list at the bottom is nowhere).
   vim.keymap.set("t", "<C-l>", M.focus, { buffer = buf, desc = "otis: the code" })
+  -- A :only in the code took the list's window with it: back at the left.
   local function to_list()
+    if not valid(vim.t.otis_list) then
+      vim.cmd("topleft vertical sbuffer " .. buf)
+      list_window(vim.api.nvim_get_current_win())
+    end
     vim.api.nvim_set_current_win(vim.t.otis_list)
   end
   vim.api.nvim_create_autocmd("BufEnter", {
@@ -160,6 +207,7 @@ function M.text(file)
   end
   local b, was = vim.api.nvim_create_buf(false, true), vim.api.nvim_win_get_buf(code)
   vim.bo[b].bufhidden = "wipe"
+  vim.b[b].otis_text = true
   vim.api.nvim_win_set_buf(code, b)
   let_go(was)
   vim.api.nvim_chan_send(vim.api.nvim_open_term(b, {}), table.concat(lines, "\r\n"))

@@ -963,7 +963,9 @@ if [ "$mode" = --at ]; then
   # file, not a diff, so it opens at its first error, else its first call.
   path=$2 side=$3 s=$4 e=$5 rid=$6 line=$7
   k=$(printf '%s' "$rid" | tr '/' '%'); while [ ${#k} -gt 200 ]; do k=${k#?}; done
-  off=$(cat "$st/off.$k" 2>/dev/null)
+  # In nvim's frame (otis-frame) no preview is shown, so neither its scroll
+  # nor where one said it opens is where you are: the row's own line, on its name.
+  off=; [ -n "$OTIS_NVIM_FRAME" ] || off=$(cat "$st/off.$k" 2>/dev/null)
   # In i'"'"'s view the preview is not the diff, so enter opens at the row.
   if [ "${off:-1}" -gt 1 ] 2>/dev/null && [ -n "$s" ] && [ "$side" != file ] && [ "$(cat "$st/uses-for" 2>/dev/null)" != "$rid" ]; then
     export FZF_PREVIEW_COLUMNS="$(cat "$st/cols" 2>/dev/null)"

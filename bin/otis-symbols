@@ -937,6 +937,8 @@ typeset -a shown_rows shown_pane
 # the whole pane every 10ms, which under a multiplexer stuttered and lagged
 # rather than glided.
 scroll() {
+  # In a frame the preview is nvim's to scroll; this one is not drawn.
+  (( framed )) && return
   local max
   (( max = plen - (ph - phd), max < 0 ? (max = 0) : 0 ))
   (( poff += $1, poff > max ? (poff = max) : 0, poff < 0 ? (poff = 0) : 0 ))

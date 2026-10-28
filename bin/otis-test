@@ -1182,6 +1182,8 @@ EOF
   printf '100\n' > "$tmp/symst/cols"
   FZF_PREVIEW_COLUMNS=100 GIT_FZF_STATE=$tmp/symst git-symbols --preview "$base..$head" lib.ts new 2 4 'lib.ts#run' | wc -l | tr -d ' ' > "$tmp/symst/off.lib.ts#run"
   expect symbols/at-scrolled "$(GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "4"
+  # In nvim's frame there is no preview to have scrolled: on the name.
+  expect symbols/at-in-frame "$(OTIS_NVIM_FRAME=$tmp GIT_FZF_STATE=$tmp/symst git-symbols --at "$base..$head" lib.ts new 2 4 'lib.ts#run' 2)" "2:17"
   # A changed line on the screen wins: scrolled two rows above run's changed
   # signature with a five-row screen, enter lands on it, line 2, not on the
   # header row itself.
