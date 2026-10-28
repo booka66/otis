@@ -1813,6 +1813,67 @@ if command -v nvim >/dev/null 2>&1; then
   # A preview after a file is written into a buffer of its own, never into
   # the file's, which shows as it was when opened again.
   expect frame/preview-apart "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.open('$tmp/frame.txt', 1, 0, false); f.text('$tmp/pv0.txt'); f.open('$tmp/frame.txt', 1, 0, false); io.stdout:write(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(vim.t.otis_code), 0, 1, false)[1])" -c 'qa!' 2>&1)" "one"
+  # The lit row's name, where its open put the cursor, underlined in its file
+  # as _name_: not after a dot unless a spread's, nor before a colon. The
+  # next row's name takes its place; none in a base beside it, a preview, the
+  # file come back to after a case, or a row opened on no name.
+  printf 'exec sleep 9\n' > "$tmp/frun"
+  printf 'new Cart(); helper(c.helper())\nconst o = { helper: 1, Cart }\nf(...helper)\n' > "$tmp/u.ts"
+  printf 'helper Cart\n' > "$tmp/pv4.txt"
+  cat > "$tmp/underline.lua" <<'EOF'
+local f, seen = dofile(vim.env.SHARE .. "/frame.lua"), {}
+local set = vim.api.nvim_buf_set_extmark
+vim.api.nvim_buf_set_extmark = function(buf, ns, row, col, o)
+  if o.hl_group == "OtisFrameChanged" then
+    seen[buf .. ":" .. row .. ":" .. col] = { row, col, o.end_col }
+  end
+  return set(buf, ns, row, col, o)
+end
+local function shown()
+  local buf = vim.api.nvim_get_current_buf()
+  seen = {}
+  vim.cmd("redraw!")
+  local lines, at = vim.api.nvim_buf_get_lines(buf, 0, -1, false), {}
+  for k, m in pairs(seen) do
+    if k:match("^" .. buf .. ":") then
+      table.insert(at, m)
+    end
+  end
+  table.sort(at, function(a, b) return a[1] > b[1] or a[1] == b[1] and a[2] > b[2] end)
+  for _, m in ipairs(at) do
+    local l = lines[m[1] + 1]
+    lines[m[1] + 1] = l:sub(1, m[2]) .. "_" .. l:sub(m[2] + 1, m[3]) .. "_" .. l:sub(m[3] + 1)
+  end
+  io.stdout:write(table.concat(lines, "|"), "\n")
+end
+vim.o.showmode = false
+f.start()
+vim.api.nvim_set_current_win(vim.t.otis_code)
+f.open(vim.env.TMP .. "/u.ts", 1, 13, false)
+shown()
+f.open(vim.env.TMP .. "/u.ts", 1, 5, false)
+shown()
+local base = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(base, 0, -1, false, { "helper(Cart)" })
+vim.bo[base].buftype = "nowrite"
+vim.cmd("aboveleft vertical sbuffer " .. base)
+shown()
+vim.cmd("close")
+local file = vim.api.nvim_get_current_buf()
+f.text(vim.env.TMP .. "/pv4.txt")
+shown()
+vim.api.nvim_win_set_buf(vim.t.otis_code, file)
+shown()
+f.open(vim.env.TMP .. "/u.ts", 2, 0, false)
+shown()
+EOF
+  mkdir -p "$tmp/uf"
+  expect frame/underline "$(SHARE=$share TMP=$tmp OTIS_NVIM_FRAME=$tmp/uf OTIS_NVIM_FRAME_RUN=$tmp/frun OTIS_NVIM_FRAME_STATUS=$tmp/uf/status nvim --clean --headless -c "luafile $tmp/underline.lua" -c 'qa!' 2>&1)" "new Cart(); _helper_(c.helper())|const o = { helper: 1, Cart }|f(..._helper_)
+new _Cart_(); helper(c.helper())|const o = { helper: 1, _Cart_ }|f(...helper)
+helper(Cart)
+helper Cart
+new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)
+new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   # A row with no file shows its preview there, less the lines the picker
   # marks for itself.
   printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"

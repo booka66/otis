@@ -133,6 +133,35 @@ local function list_window(win)
   sizes()
 end
 
+-- underline(): the mentions of the lit row's symbol underlined in the file
+-- that row opened (open's otis_lit) while it is in the code window, matched
+-- as the picker's diff preview matched them (git-symbols' mark_awk): not
+-- after a dot unless a spread's, nor before a colon or a ?.
+local function underline()
+  local ns, name = vim.api.nvim_create_namespace("otis_frame_names"), nil
+  -- Again after a colorscheme, whose :hi clear takes it.
+  local function hl()
+    vim.api.nvim_set_hl(0, "OtisFrameChanged", { underline = true })
+  end
+  hl()
+  vim.api.nvim_create_autocmd("ColorScheme", { callback = hl })
+  vim.api.nvim_set_decoration_provider(ns, {
+    on_win = function(_, win, buf)
+      local lit = vim.t.otis_lit
+      name = lit and win == vim.t.otis_code and buf == lit.buf and lit.name or nil
+      return name ~= nil
+    end,
+    on_line = function(_, _, buf, row)
+      local l = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
+      for s, word, e in l:gmatch("()([%w_$]+)()") do
+        if word == name and (l:sub(s - 1, s - 1) ~= "." or l:sub(s - 3, s - 1) == "...") and not l:find("^%s*[:?]", e) then
+          vim.api.nvim_buf_set_extmark(buf, ns, row, s - 1, { end_col = e - 1, hl_group = "OtisFrameChanged", ephemeral = true })
+        end
+      end
+    end,
+  })
+end
+
 function M.start()
   local buf, win = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
   vim.t.otis_list = win
@@ -234,6 +263,7 @@ function M.start()
       end)
     end)
   end
+  underline()
   vim.cmd.startinsert()
 end
 
@@ -270,6 +300,10 @@ function M.open(path, line, col, readonly)
       vim.cmd("normal! ^")
     end
     vim.cmd("normal! zz")
+    -- On a name (git-symbols --at puts a symbol's row there): its mentions
+    -- underlined while this file shows here; a row on no name has none.
+    local name = col > 0 and vim.api.nvim_get_current_line():match("^[%w_$]+", col) or nil
+    vim.t.otis_lit = name and { buf = vim.api.nvim_get_current_buf(), name = name } or nil
   end)
 end
 
@@ -406,6 +440,8 @@ function M.text(file)
     end
   end
   local lines, marks = render(raw)
+  -- The lit row is no symbol's: nothing underlined, whatever comes back here.
+  vim.t.otis_lit = nil
   -- From the code window, the buffer shown before anything is set on it, in
   -- the one redraw: what nvim does to a buffer in no window (an option set)
   -- it does through a window of its own as wide as the screen, which from
@@ -449,8 +485,10 @@ function M.text(file)
 end
 
 -- run(cmd, arg): an Ex command in the code window, the keys left with the
--- list: a review's :GmrDeleted, a deleted file beside its base.
+-- list: a review's :GmrDeleted, a deleted file beside its base, no symbol's
+-- to underline.
 function M.run(cmd, arg)
+  vim.t.otis_lit = nil
   vim.api.nvim_win_call(M.code(), function()
     vim.cmd({ cmd = cmd, args = { arg } })
   end)
