@@ -37,6 +37,10 @@ case $name in
   nvim|vim|vi)
     at=+$line; [ -n "$col" ] && at="+call cursor($line, $col)"
     exec $ed ${ro:+-R} "$at" -- "$p" ;;
+  # A window of its own, nvim's arguments after its --.
+  neovide)
+    at=+$line; [ -n "$col" ] && at="+call cursor($line, $col)"
+    exec $ed -- ${ro:+-R} "$at" -- "$p" ;;
 esac
 case $p in -*) p=./$p ;; esac
 case $name in

@@ -9,8 +9,9 @@
 # a review's comments (share/mr-comments.lua) for every file it shows. The
 # command's output and exit status are its own, as if it had run alone.
 #
-# The command runs as it is where the editor is not nvim, or inside a frame
-# already (a picker opened from a framed one). OTIS_NVIM_FRAME, the frame's own
+# With Neovide as the editor the frame is a Neovide window, its own nvim's
+# terminal running the picker. The command runs as it is where the editor is
+# neither, or inside a frame already (a picker opened from a framed one). OTIS_NVIM_FRAME, the frame's own
 # directory, says to everything the picker runs that it is in one.
 #
 # otis-frame --open <path> <line> <col> <true|false>  the file on the right
@@ -36,7 +37,9 @@ src=
 [ "$1" = -S ] && { src=$2; shift 2; }
 ed=$(otis-config editor)
 name=${ed%% *}
-[ "${name##*/}" = nvim ] && [ -z "$OTIS_NVIM_FRAME" ] || exec "$@"
+name=${name##*/}
+case $name in nvim|neovide) ;; *) exec "$@" ;; esac
+[ -z "$OTIS_NVIM_FRAME" ] || exec "$@"
 d=$(mktemp -d) || exec "$@"
 trap 'rm -rf "$d"' EXIT
 # The command as a script for the terminal to run: its words quoted, and
@@ -49,6 +52,10 @@ trap 'rm -rf "$d"' EXIT
 set -- -c "lua dofile('$share/frame.lua').start()"
 [ -n "$src" ] && set -- -c "source $src" "$@"
 set -f
-OTIS_NVIM_FRAME=$d OTIS_NVIM_FRAME_RUN=$d/run OTIS_NVIM_FRAME_STATUS=$d/status $ed "$@" </dev/tty >/dev/tty
+export OTIS_NVIM_FRAME=$d OTIS_NVIM_FRAME_RUN=$d/run OTIS_NVIM_FRAME_STATUS=$d/status
+# Neovide's window waits here until it is closed (--no-fork), nvim's own
+# arguments after its --.
+if [ "$name" = neovide ]; then $ed --no-fork -- "$@"
+else $ed "$@" </dev/tty >/dev/tty; fi
 cat "$d/out" 2>/dev/null
 exit "$(cat "$d/status" 2>/dev/null || echo 1)"
