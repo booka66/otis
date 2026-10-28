@@ -39,6 +39,10 @@ end
 -- nvim narrowed the list's terminal for that gutter and does not widen it
 -- again until the window's width changes: a column there and back.
 local function hold_list()
+  -- And no tab line: a config turns one on as it loads, unannounced too.
+  if vim.o.showtabline ~= 0 then
+    vim.o.showtabline = 0
+  end
   local list = vim.t.otis_list
   if valid(list) and set(list, list_opts) then
     local w = vim.api.nvim_win_get_width(list)
@@ -244,8 +248,10 @@ function M.open(path, line, col, readonly)
         return
       end
       -- A file the frame opened stays loaded as the window moves on (see
-      -- preview), off the buffer list, so no list of buffers ever shows it.
-      if fresh then
+      -- preview), off the buffer list, so no list of buffers ever shows it:
+      -- each time it shows, since :edit puts an unlisted buffer back on.
+      if fresh or vim.b.otis_shown then
+        vim.b.otis_shown = true
         vim.bo.buflisted = false
       end
     end
