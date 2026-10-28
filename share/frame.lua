@@ -18,7 +18,7 @@ local gutter = { number = false, relativenumber = false, signcolumn = "no", stat
 -- windows around it do (winfixwidth: closing a split beside the code, or a
 -- config evening the windows out on a resize, leaves it be). A split made
 -- from it takes them, and the code window gives them back.
-local list_opts = vim.tbl_extend("force", gutter, { spell = false, winfixwidth = true, wrap = false })
+local list_opts = vim.tbl_extend("force", gutter, { spell = false, winfixwidth = true, wrap = false, list = false })
 
 -- set(win, opts): the options for what the window shows now, not its own
 -- defaults (a window's "global" values are its own in nvim, copied by a
@@ -145,11 +145,12 @@ function M.start()
   end
   vim.api.nvim_create_autocmd("WinScrolled", {
     callback = function()
-      local list = vim.t.otis_list
-      if valid(list) and vim.api.nvim_win_call(list, vim.fn.winsaveview).leftcol > 0 then
-        vim.api.nvim_win_call(list, function()
-          vim.fn.winrestview({ leftcol = 0 })
-        end)
+      for _, w in ipairs({ vim.t.otis_list, vim.t.otis_code }) do
+        if valid(w) and (w == vim.t.otis_list or vim.b[vim.api.nvim_win_get_buf(w)].otis_text) and vim.api.nvim_win_call(w, vim.fn.winsaveview).leftcol > 0 then
+          vim.api.nvim_win_call(w, function()
+            vim.fn.winrestview({ leftcol = 0 })
+          end)
+        end
       end
     end,
   })
@@ -405,8 +406,11 @@ function M.text(file)
       end
     end
     vim.bo[b].modifiable = false
-    set(code, vim.tbl_extend("force", gutter, { wrap = false }))
+    -- No listchars either: a preview pads its lines with spaces, which a
+    -- trail:- drew as dashes.
+    set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false }))
     vim.api.nvim_win_set_cursor(code, { 1, 0 })
+    vim.fn.winrestview({ topline = 1, leftcol = 0 })
     let_go(was)
   end)
 end
