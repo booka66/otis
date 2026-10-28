@@ -18,7 +18,8 @@
 #
 # otis-frame --open <path> <line> <col> <true|false>  the file on the right
 #                                                     (otis-edit), read only
-# otis-frame --text <file>                            a preview on the right
+# otis-frame --text <file> [<key>]                    a preview on the right,
+#                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right
 #                                                     (a review's :GmrDeleted)
 # otis-frame --focus                                  into the code
@@ -39,7 +40,7 @@ remote() {
 }
 case $1 in
   --open) remote "open(_A[2], _A[3], _A[4], _A[5])" ", $(vs "$2"), $3, $4, v:$5" ;;
-  --text) remote "text(_A[2])" ", $(vs "$2")" ;;
+  --text) remote "text(_A[2], _A[3])" ", $(vs "$2")${3+, $(vs "$3")}" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;
   --key) remote "key(_A[2])" ", $(vs "$2")" ;;

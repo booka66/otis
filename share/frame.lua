@@ -64,6 +64,18 @@ local function sizes()
   end
 end
 
+-- keep(b): where the code window is in the preview, kept for the row it
+-- shows (text's key) before something else is drawn there, as the picker's
+-- pane keeps each row's scroll.
+local function keep(b)
+  local code, key = vim.t.otis_code, vim.b[b].otis_key
+  if key and valid(code) and vim.api.nvim_win_get_buf(code) == b then
+    local views = vim.b[b].otis_views or {}
+    views[key] = vim.api.nvim_win_call(code, vim.fn.winsaveview)
+    vim.b[b].otis_views = views
+  end
+end
+
 -- preview(): the one buffer every preview is drawn into, in place, made the
 -- first time. Nothing the frame shows is ever deleted or wiped while it runs:
 -- nvim scrolled the list's terminal a line each time a buffer went, which left
@@ -77,6 +89,13 @@ function M.preview()
     vim.api.nvim_buf_set_name(b, "otis://preview")
     vim.b[b].otis_text = true
     vim.t.otis_preview = b
+    -- A file opened in its place: back on the row, where you were.
+    vim.api.nvim_create_autocmd("BufWinLeave", {
+      buffer = b,
+      callback = function()
+        keep(b)
+      end,
+    })
   end
   return b
 end
@@ -427,11 +446,12 @@ local function render(raw)
   return lines, marks
 end
 
--- text(file): a row's preview, colors and all, in the code window, for a
+-- text(file, key): a row's preview, colors and all, in the code window, for a
 -- row with no file to open (a case, a heading): drawn whole before it shows,
 -- with no gutter, as wide as the window it was drawn for. The lines the
--- picker marks for itself (\036) are its own.
-function M.text(file)
+-- picker marks for itself (\036) are its own. key names the row: drawn again
+-- (something landed) or come back to, it is where you left it, else at its top.
+function M.text(file, key)
   local code = M.code()
   local raw = {}
   for _, l in ipairs(vim.fn.readfile(file)) do
@@ -448,6 +468,7 @@ function M.text(file)
   -- the list's resized the list's terminal to all of it.
   vim.api.nvim_win_call(code, function()
     local b = M.preview()
+    keep(b)
     if vim.api.nvim_win_get_buf(code) ~= b then
       vim.api.nvim_win_set_buf(code, b)
     end
@@ -479,8 +500,8 @@ function M.text(file)
     -- No listchars either: a preview pads its lines with spaces, which a
     -- trail:- drew as dashes. Nor a lit line: its first is no symbol's.
     set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false, cursorline = false }))
-    vim.api.nvim_win_set_cursor(code, { 1, 0 })
-    vim.fn.winrestview({ topline = 1, leftcol = 0 })
+    vim.b[b].otis_key = key
+    vim.fn.winrestview(key and (vim.b[b].otis_views or {})[key] or { lnum = 1, col = 0, topline = 1, leftcol = 0 })
   end)
 end
 

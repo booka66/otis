@@ -976,8 +976,8 @@ coderow() { [[ -n $show ]] && fields $1 && [[ -n $fld[2] ]]; }
 framepush() {
   (( framed && cur )) || return
   (( fpid )) && kill -0 $fpid 2>/dev/null && return
-  local what cmd
-  if (( help )); then what="text $st/help.txt"
+  local what cmd key="$typ[cur] $rid[cur]"
+  if (( help )); then what="text $st/help.txt" key='?'
   elif coderow $cur; then what="row $rid[cur]"
   else shown; [[ -n $REPLY ]] || return; what="text $REPLY"; fi
   [[ $what == $fshown ]] && return
@@ -985,7 +985,8 @@ framepush() {
   if [[ $what == row\ * ]]; then subst "$show" $cur; cmd=$REPLY
   else
     (( help )) && print -rl -- "${(@)P}" > $st/help.txt
-    cmd="otis-frame --text ${(qq)${what#text }}"
+    # A row drawn again as something lands keeps nvim's scroll, by its key.
+    cmd="otis-frame --text ${(qq)${what#text }} ${(qq)key}"
   fi
   { unlisten; zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
   fpid=$!

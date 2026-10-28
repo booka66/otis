@@ -1883,6 +1883,15 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   printf '\033[38;2;250;189;47mhi\033[0m there\n' > "$tmp/pv2.txt"
   expect frame/text-colors "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua dofile('$share/frame.lua').text('$tmp/pv2.txt')" \
     -c 'lua local c = vim.t.otis_code; local b = vim.api.nvim_win_get_buf(c); local m = vim.api.nvim_buf_get_extmarks(b, -1, 0, -1, { details = true })[1]; io.stdout:write(vim.api.nvim_buf_get_lines(b, 0, 1, false)[1], " ", m[3], "-", m[4].end_col, " ", ("%06x"):format(vim.api.nvim_get_hl(0, { name = m[4].hl_group }).fg), " number=", tostring(vim.wo[c].number))' -c 'qa!' 2>&1)" "hi there 0-2 fabd2f number=false"
+  # A case read down to line 30 stays there as it is drawn again (a thread
+  # landed), and when you come back to it from another case or a file; a new
+  # case, or a preview with no key, is at its top.
+  seq 1 80 > "$tmp/pv5.txt"
+  expect frame/text-keeps-place "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua')
+    local function top() io.stdout:write(vim.api.nvim_win_call(vim.t.otis_code, vim.fn.winsaveview).topline, ' ') end
+    f.text('$tmp/pv5.txt', 'a'); vim.api.nvim_win_call(vim.t.otis_code, function() vim.fn.winrestview({ lnum = 30, topline = 30 }) end)
+    f.text('$tmp/pv5.txt', 'a'); top(); f.text('$tmp/pv5.txt', 'b'); top(); f.text('$tmp/pv5.txt', 'a'); top()
+    f.open('$tmp/frame.txt', 1, 0, false); f.text('$tmp/pv5.txt', 'a'); top(); f.text('$tmp/pv5.txt'); top()" -c 'qa!' 2>&1)" "30 1 30 30 1 "
   # ] and [ pressed in the list go to the code's next and last change: a
   # file's since the base (line 20 taken out, 40 changed), a preview's on a
   # diff's background but the code's own.
