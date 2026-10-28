@@ -47,13 +47,6 @@ local function hold_list()
   end
 end
 
--- One file at a time: a file the frame opened goes once the code window
--- shows something else, unless you changed it or it is up elsewhere too.
-local function let_go(buf)
-  if vim.api.nvim_buf_is_valid(buf) and vim.b[buf].otis_shown and not vim.bo[buf].modified and #vim.fn.win_findbuf(buf) == 0 then
-    pcall(vim.api.nvim_buf_delete, buf, {})
-  end
-end
 
 -- The list as wide as the picker's own beside its preview (30%, 46 columns
 -- at least), and the code's width where the picker reads it for its rows'
@@ -154,6 +147,13 @@ function M.start()
       end
     end,
   })
+  vim.api.nvim_create_autocmd("BufModifiedSet", {
+    callback = function(ev)
+      if vim.b[ev.buf].otis_shown and vim.bo[ev.buf].modified then
+        vim.bo[ev.buf].bufhidden = ""
+      end
+    end,
+  })
   -- A file open in another nvim too opens here without asking about its swap file.
   vim.opt.shortmess:append("A")
   M.code()
@@ -228,7 +228,7 @@ end
 function M.open(path, line, col, readonly)
   local code = M.code()
   vim.api.nvim_win_call(code, function()
-    local full, was = vim.fn.fnamemodify(path, ":p"), vim.api.nvim_get_current_buf()
+    local full = vim.fn.fnamemodify(path, ":p")
     if vim.api.nvim_buf_get_name(0) ~= full then
       local fresh = vim.fn.bufexists(full) == 0
       local ok, err = pcall(vim.cmd, "silent keepalt edit " .. vim.fn.fnameescape(path))
@@ -236,10 +236,14 @@ function M.open(path, line, col, readonly)
         vim.notify(err, vim.log.levels.WARN)
         return
       end
+      -- One file at a time: one the frame opened is wiped as the window
+      -- moves on, by nvim in the window (a buffer deleted from no window went
+      -- through nvim's own, and shifted the list's terminal a line), unless
+      -- you change it, when it stays like any other.
       if fresh then
         vim.b.otis_shown = true
+        vim.bo.bufhidden = "wipe"
       end
-      let_go(was)
     end
     -- A preview there before had the gutter off: a file has yours.
     set(code, vim.t.otis_code_opts)
@@ -393,7 +397,7 @@ function M.text(file)
   -- one before it wiped) it does through a window of its own as wide as the
   -- screen, which from the list's resized the list's terminal to all of it.
   vim.api.nvim_win_call(code, function()
-    local b, was = vim.api.nvim_create_buf(false, true), vim.api.nvim_get_current_buf()
+    local b = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_win_set_buf(code, b)
     vim.bo[b].bufhidden = "wipe"
     vim.b[b].otis_text = true
@@ -411,7 +415,6 @@ function M.text(file)
     set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false }))
     vim.api.nvim_win_set_cursor(code, { 1, 0 })
     vim.fn.winrestview({ topline = 1, leftcol = 0 })
-    let_go(was)
   end)
 end
 
