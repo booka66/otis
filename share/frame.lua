@@ -255,8 +255,9 @@ function M.open(path, line, col, readonly)
         vim.bo.buflisted = false
       end
     end
-    -- A preview there before had the gutter off: a file has yours.
-    set(code, vim.t.otis_code_opts)
+    -- A preview there before had the gutter off: a file has yours, and the
+    -- line a row opens on lit, as the list lights the row, whatever yours is.
+    set(code, vim.tbl_extend("force", vim.t.otis_code_opts, { cursorline = true }))
     if readonly then
       vim.bo.readonly = true
       vim.bo.modifiable = false
@@ -423,8 +424,8 @@ function M.text(file)
     end
     vim.bo[b].modifiable = false
     -- No listchars either: a preview pads its lines with spaces, which a
-    -- trail:- drew as dashes.
-    set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false }))
+    -- trail:- drew as dashes. Nor a lit line: its first is no symbol's.
+    set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false, cursorline = false }))
     vim.api.nvim_win_set_cursor(code, { 1, 0 })
     vim.fn.winrestview({ topline = 1, leftcol = 0 })
   end)

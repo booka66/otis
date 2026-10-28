@@ -1807,6 +1807,9 @@ if command -v nvim >/dev/null 2>&1; then
     -c 'lua io.stdout:write(#vim.api.nvim_tabpage_list_wins(0), " ", vim.bo.buftype, " ", table.concat(vim.api.nvim_win_get_cursor(vim.t.otis_code), ","), " ", vim.api.nvim_win_get_width(vim.t.otis_list), " ", vim.fn.readfile(vim.env.OTIS_NVIM_FRAME .. "/cols")[1])' -c 'qa!' 2>&1; }
   expect frame/open-col "$(fopen 7)" "2 terminal 2,6 46 33"
   expect frame/open-line "$(fopen 0)" "2 terminal 2,2 46 33"
+  # A file's line is lit where it opens, and a preview after it has none.
+  printf 'hello\n' > "$tmp/pv0.txt"
+  expect frame/open-lit "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.open('$tmp/frame.txt', 2, 0, false); io.stdout:write(tostring(vim.wo[vim.t.otis_code].cursorline), ' '); f.text('$tmp/pv0.txt'); io.stdout:write(tostring(vim.wo[vim.t.otis_code].cursorline))" -c 'qa!' 2>&1)" "true false"
   # A row with no file shows its preview there, less the lines the picker
   # marks for itself.
   printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"
