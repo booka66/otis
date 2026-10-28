@@ -17,7 +17,11 @@
 # directory, says to everything the picker runs that it is in one.
 #
 # otis-frame --open <path> <line> <col> <true|false>  the file on the right
-#                                                     (otis-edit), read only
+#                                                     (otis-edit), read only;
+#                                                     OTIS_FRAME_UNDERLINE,
+#                                                     "<first> <last> <name>...",
+#                                                     the names underlined
+#                                                     between those lines there
 # otis-frame --text <file> [<key>]                    a preview on the right,
 #                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right
@@ -39,7 +43,7 @@ remote() {
   exec nvim --server "$NVIM" --remote-expr "luaeval('dofile(_A[1]).$1', [$(vs "$share/frame.lua")$2])" >/dev/null
 }
 case $1 in
-  --open) remote "open(_A[2], _A[3], _A[4], _A[5])" ", $(vs "$2"), $3, $4, v:$5" ;;
+  --open) remote "open(_A[2], _A[3], _A[4], _A[5], _A[6])" ", $(vs "$2"), $3, $4, v:$5, $(vs "$OTIS_FRAME_UNDERLINE")" ;;
   --text) remote "text(_A[2], _A[3])" ", $(vs "$2")${3+, $(vs "$3")}" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;

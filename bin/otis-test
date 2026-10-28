@@ -840,6 +840,8 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/order "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box grow helper fresh Wide Opts "
   expect symbols/changes "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $6 }' "$table" | tr '\n' ' ')" "signature body body removed added added signature "
   expect symbols/uses "$(awk -F'\t' '$3 == "run" || $3 == "fresh" { print $18 }' "$table" | tr '\n' ' ')" "lib.ts#Opts lib.ts#Opts "
+  # What nvim's frame underlines in run's lines: what it uses; nothing outside a frame.
+  expect symbols/deps "$(OTIS_NVIM_FRAME=$tmp GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')|$(GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')" "2 4 Opts|"
   expect symbols/roots "$(awk -F'\t' '$19 == 1 && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box helper fresh Wide "
   expect symbols/same-name "$(awk -F'\t' '$1 == "pair.ts" && $3 ~ /Pair$/ { print $3 ":" $6 ":" $18 }' "$table" | tr '\n' ' ')" "Pair:added: type Pair:added:pair.ts#Pair usePair:added:pair.ts#type Pair "
   expect symbols/gen-isolated "$(awk -F'\t' '$1 == "gen.generated.ts" { print $3 ":" $18 ":" $19 }' "$table")" "G::1"
@@ -1789,7 +1791,7 @@ expect edit/under-a-screen "$(OTIS_FRAME=$tmp/frame OTIS_EDITOR=$tmp/eds/nvim ot
 expect frame/focus-outside "$(OTIS_FRAME=$tmp/frame otis-frame --focus; echo "rc=$?")" "rc=0"
 # In otis-frame's picker, the file opens in the frame's nvim.
 mkdir -p "$tmp/nvs" && printf '#!/bin/sh\necho "$@" > "%s"\n' "$tmp/nvs.args" > "$tmp/nvs/nvim" && chmod +x "$tmp/nvs/nvim"
-expect edit/inside-nvim "$(OTIS_NVIM_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true])"
+expect edit/inside-nvim "$(OTIS_NVIM_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5], _A[6])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true, ''])"
 
 # --- otis-frame: a picker inside nvim, its output and exit status its own.
 # With another editor, or inside a frame already, the command runs as it is.
@@ -1813,10 +1815,10 @@ if command -v nvim >/dev/null 2>&1; then
   # A preview after a file is written into a buffer of its own, never into
   # the file's, which shows as it was when opened again.
   expect frame/preview-apart "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.open('$tmp/frame.txt', 1, 0, false); f.text('$tmp/pv0.txt'); f.open('$tmp/frame.txt', 1, 0, false); io.stdout:write(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(vim.t.otis_code), 0, 1, false)[1])" -c 'qa!' 2>&1)" "one"
-  # The lit row's name, where its open put the cursor, underlined in its file
-  # as _name_: not after a dot unless a spread's, nor before a colon. The
-  # next row's name takes its place; none in a base beside it, a preview, the
-  # file come back to after a case, or a row opened on no name.
+  # What the lit row's symbol uses underlined in its lines of the file it
+  # opened, as _name_: not after a dot unless a spread's, nor before a colon.
+  # The next row's take their place; none in a base beside it, a preview, the
+  # file come back to after a case, or a row that uses nothing.
   printf 'exec sleep 9\n' > "$tmp/frun"
   printf 'new Cart(); helper(c.helper())\nconst o = { helper: 1, Cart }\nf(...helper)\n' > "$tmp/u.ts"
   printf 'helper Cart\n' > "$tmp/pv4.txt"
@@ -1849,9 +1851,9 @@ end
 vim.o.showmode = false
 f.start()
 vim.api.nvim_set_current_win(vim.t.otis_code)
-f.open(vim.env.TMP .. "/u.ts", 1, 13, false)
+f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 2 helper")
 shown()
-f.open(vim.env.TMP .. "/u.ts", 1, 5, false)
+f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 3 Cart helper")
 shown()
 local base = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(base, 0, -1, false, { "helper(Cart)" })
@@ -1864,12 +1866,12 @@ f.text(vim.env.TMP .. "/pv4.txt")
 shown()
 vim.api.nvim_win_set_buf(vim.t.otis_code, file)
 shown()
-f.open(vim.env.TMP .. "/u.ts", 2, 0, false)
+f.open(vim.env.TMP .. "/u.ts", 2, 0, false, "")
 shown()
 EOF
   mkdir -p "$tmp/uf"
-  expect frame/underline "$(SHARE=$share TMP=$tmp OTIS_NVIM_FRAME=$tmp/uf OTIS_NVIM_FRAME_RUN=$tmp/frun OTIS_NVIM_FRAME_STATUS=$tmp/uf/status nvim --clean --headless -c "luafile $tmp/underline.lua" -c 'qa!' 2>&1)" "new Cart(); _helper_(c.helper())|const o = { helper: 1, Cart }|f(..._helper_)
-new _Cart_(); helper(c.helper())|const o = { helper: 1, _Cart_ }|f(...helper)
+  expect frame/underline "$(SHARE=$share TMP=$tmp OTIS_NVIM_FRAME=$tmp/uf OTIS_NVIM_FRAME_RUN=$tmp/frun OTIS_NVIM_FRAME_STATUS=$tmp/uf/status nvim --clean --headless -c "luafile $tmp/underline.lua" -c 'qa!' 2>&1)" "new Cart(); _helper_(c.helper())|const o = { helper: 1, Cart }|f(...helper)
+new _Cart_(); _helper_(c.helper())|const o = { helper: 1, _Cart_ }|f(..._helper_)
 helper(Cart)
 helper Cart
 new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)

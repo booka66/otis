@@ -152,12 +152,12 @@ local function list_window(win)
   sizes()
 end
 
--- underline(): the mentions of the lit row's symbol underlined in the file
--- that row opened (open's otis_lit) while it is in the code window, matched
--- as the picker's diff preview matched them (git-symbols' mark_awk): not
--- after a dot unless a spread's, nor before a colon or a ?.
+-- underline(): what the lit row's symbol uses underlined in its lines of the
+-- file that row opened (open's otis_lit) while it is in the code window,
+-- matched as the picker's diff preview matched them (git-symbols' mark_awk):
+-- not after a dot unless a spread's, nor before a colon or a ?.
 local function underline()
-  local ns, name = vim.api.nvim_create_namespace("otis_frame_names"), nil
+  local ns, lit = vim.api.nvim_create_namespace("otis_frame_names"), nil
   -- Again after a colorscheme, whose :hi clear takes it.
   local function hl()
     vim.api.nvim_set_hl(0, "OtisFrameChanged", { underline = true })
@@ -166,14 +166,17 @@ local function underline()
   vim.api.nvim_create_autocmd("ColorScheme", { callback = hl })
   vim.api.nvim_set_decoration_provider(ns, {
     on_win = function(_, win, buf)
-      local lit = vim.t.otis_lit
-      name = lit and win == vim.t.otis_code and buf == lit.buf and lit.name or nil
-      return name ~= nil
+      lit = vim.t.otis_lit
+      lit = lit and win == vim.t.otis_code and buf == lit.buf and lit or nil
+      return lit ~= nil
     end,
     on_line = function(_, _, buf, row)
+      if row + 1 < lit.from or row + 1 > lit.to then
+        return
+      end
       local l = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
       for s, word, e in l:gmatch("()([%w_$]+)()") do
-        if word == name and (l:sub(s - 1, s - 1) ~= "." or l:sub(s - 3, s - 1) == "...") and not l:find("^%s*[:?]", e) then
+        if lit.names[word] and (l:sub(s - 1, s - 1) ~= "." or l:sub(s - 3, s - 1) == "...") and not l:find("^%s*[:?]", e) then
           vim.api.nvim_buf_set_extmark(buf, ns, row, s - 1, { end_col = e - 1, hl_group = "OtisFrameChanged", ephemeral = true })
         end
       end
@@ -286,9 +289,11 @@ function M.start()
   vim.cmd.startinsert()
 end
 
--- open(path, line, col, readonly): the file in the code window, its cursor
--- on line and col (bytes, 1-based; 0 is the line's first non-blank).
-function M.open(path, line, col, readonly)
+-- open(path, line, col, readonly, underline): the file in the code window,
+-- its cursor on line and col (bytes, 1-based; 0 is the line's first
+-- non-blank). underline, "<first> <last> <name>...", is what the row's
+-- symbol uses (git-symbols --deps): underlined there while the file shows here.
+function M.open(path, line, col, readonly, underline)
   local code = M.code()
   vim.api.nvim_win_call(code, function()
     local full = vim.fn.fnamemodify(path, ":p")
@@ -319,10 +324,11 @@ function M.open(path, line, col, readonly)
       vim.cmd("normal! ^")
     end
     vim.cmd("normal! zz")
-    -- On a name (git-symbols --at puts a symbol's row there): its mentions
-    -- underlined while this file shows here; a row on no name has none.
-    local name = col > 0 and vim.api.nvim_get_current_line():match("^[%w_$]+", col) or nil
-    vim.t.otis_lit = name and { buf = vim.api.nvim_get_current_buf(), name = name } or nil
+    local w, names = vim.split(underline or "", " ", { trimempty = true }), {}
+    for i = 3, #w do
+      names[w[i]] = true
+    end
+    vim.t.otis_lit = next(names) and { buf = vim.api.nvim_get_current_buf(), from = tonumber(w[1]), to = tonumber(w[2]), names = names } or nil
   end)
 end
 

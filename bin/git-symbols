@@ -28,6 +28,10 @@
 # git-symbols --copy <row id>               y: "<symbol> in <path>" on the clipboard, a file row its path;
 #                                            prints the footer note's fzf actions
 # git-symbols --again <rev>                  a review's r: Claude asked again for the gloss and the cases, where it failed
+# git-symbols --deps <side> <start> <end> <row id>
+#                                            in nvim's frame, what the row's open underlines there
+#                                            (otis-frame's OTIS_FRAME_UNDERLINE): "<start> <end>" and
+#                                            the names of the changed symbols it uses; outside it, nothing
 # git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
 #                                            the file line the row's preview is scrolled to, else <line>
 #                                            and the column of the row's name on it (line:col): enter
@@ -106,7 +110,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 # within the second it was read (F, then its preview).
 mtimes() { stat -c %.9Y "$@" 2>/dev/null || stat -f %Fm "$@" 2>/dev/null; }
 mode=
-case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--files|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again) mode=$1; shift ;; esac
+case $1 in --rows|--preview|--open|--close|--open-all|--close-all|--flip|--files|--split|--peeks|--uses|--stage|--edit|--at|--viewed|--table|--page|--publish|--copy|--again|--deps) mode=$1; shift ;; esac
 
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
 
@@ -124,6 +128,14 @@ above() {
 # name_of <row id>: the name its last step gives, in $name: Class+member as
 # the id has it, without the "type " seam puts before a type's.
 name_of() { name=${1##*>}; name=${name#*#}; name=${name#type }; }
+
+# uses_of <row id>: the ids of the changed symbols its symbol uses, from the
+# table, in the order it mentions them; a member takes its class's.
+uses_of() {
+  set -- "${1##*>}"
+  set -- "${1%%#*}" "${1#*#}"
+  awk -F'\t' -v id="$1#${2%%+*}" '$2 != "file" && $4 == "" && $1 "#" $3 == id { n = split($18, u, "|"); for (i = 1; i <= n; i++) if (u[i] != "" && !seen[u[i]]++) print u[i] }' "$st/symbols.tsv"
+}
 
 case $mode in
   --close-all) rm -f "$st/open"; exit 0 ;;
@@ -273,6 +285,14 @@ case $mode in
     key "$rid"
     if [ -e "$st/off.$k" ]; then mv "$st/off.$k" "$st/off.$k.diff"; fi
     printf '%s\n' "$rid" > "$st/uses-for"
+    exit 0 ;;
+  # The names as the row's preview marks them (deps): a symbol of the table's
+  # own, "type " off a type's.
+  --deps)
+    [ -n "$OTIS_NVIM_FRAME" ] && [ "$1" != file ] && [ -n "$2" ] && [ -s "$st/symbols.tsv" ] || exit 0
+    uses_of "$4" | awk -F'\t' -v at="$2 $3" 'FILENAME == ARGV[1] { if ($2 != "file" && $4 == "") top[$1 "#" $3] = 1; next }
+      $0 in top { sub(/.*#/, ""); sub(/^type /, ""); if (!seen[$0]++) at = at " " $0 }
+      END { print at }' "$st/symbols.tsv" -
     exit 0 ;;
   --copy)
     # The row's symbol is its id's last step, path#name, a member's name
@@ -704,7 +724,7 @@ if [ "$mode" = --preview ]; then
   # of the gloss, so one jq answers for the symbol and for these at once.
   uses=
   if [ -z "$GIT_SYMBOLS_PLAIN" ] && [ -n "$rid" ] && [ "$side" != file ] && [ -n "$s" ] && [ -s "$st/symbols.tsv" ]; then
-    uses=$(awk -F'\t' -v id="$dsid" '$2 != "file" && $4 == "" && $1 "#" $3 == id { n = split($18, u, "|"); for (i = 1; i <= n; i++) if (u[i] != "" && !seen[u[i]]++) print u[i] }' "$st/symbols.tsv")
+    uses=$(uses_of "$rid")
   fi
   deps=$st/deps.$$
   : > "$deps"
@@ -2103,8 +2123,10 @@ fold="OTIS_SYMBOLS_FOLD=1 $list"
 # What enter opens, and, in a frame (otis-frame), what the row you settle on
 # shows beside the list (--show), enter then taking you into it.
 where="\$(git-symbols --at $rev {2} {4} {5} {6} {12} {3})"
+# In nvim's frame, what the row's symbol uses underlined in the file it opens.
+under="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\""
 if [ -z "$head" ]; then
-  open="git-symbols --edit $rev {2} $where"
+  open="$under git-symbols --edit $rev {2} $where"
   # ga: this is the picker, by symbol, to stage one at a time; f is its file panel, with hunks and discards.
   # Opened from that panel, f goes back to it rather than opening another on top, or every trip back and
   # forth would be one more q on the way out.
@@ -2133,7 +2155,7 @@ else
   # NVIM_DIFF_BASE naming the change's base, as from a review, for an nvim config's own diff to read:
   # exported, so the frame's nvim (otis-frame), up before any enter, has it too.
   export NVIM_DIFF_BASE=$base
-  open="git-commit-open $rev {2} $where"
+  open="$under git-commit-open $rev {2} $where"
   keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
     --bind "enter:transform(otis-frame --enter {2} -- $open)+reload($list)+refresh-preview" \
