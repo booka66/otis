@@ -60,6 +60,20 @@ local function sizes()
   end
 end
 
+-- preview(): the one buffer every preview is drawn into, in place, made the
+-- first time. Nothing the frame shows is ever deleted or wiped while it runs:
+-- nvim scrolled the list's terminal a line each time a buffer went, which left
+-- a row you had been on lit and every line a row off.
+function M.preview()
+  local b = vim.t.otis_preview
+  if not (b and vim.api.nvim_buf_is_valid(b)) then
+    b = vim.api.nvim_create_buf(false, true)
+    vim.b[b].otis_text = true
+    vim.t.otis_preview = b
+  end
+  return b
+end
+
 -- code(): the window right of the list: when it was closed, the last window
 -- on the tab showing a file or a preview of the frame's in its place, else a
 -- new one (never a quickfix list or a plugin's pane). A diff is of the file
@@ -82,9 +96,9 @@ function M.code()
   if not valid(code) then
     local back = vim.api.nvim_get_current_win()
     vim.api.nvim_set_current_win(vim.t.otis_list)
-    vim.cmd("botright vnew")
+    vim.cmd("botright vsplit")
     code = vim.api.nvim_get_current_win()
-    vim.bo.bufhidden = "wipe"
+    vim.api.nvim_win_set_buf(code, M.preview())
     -- A split from the list takes its options; the code wants yours, as the
     -- first code window had them (otis_code_opts).
     if vim.t.otis_code_opts then
@@ -144,13 +158,6 @@ function M.start()
             vim.fn.winrestview({ leftcol = 0 })
           end)
         end
-      end
-    end,
-  })
-  vim.api.nvim_create_autocmd("BufModifiedSet", {
-    callback = function(ev)
-      if vim.b[ev.buf].otis_shown and vim.bo[ev.buf].modified then
-        vim.bo[ev.buf].bufhidden = ""
       end
     end,
   })
@@ -236,13 +243,10 @@ function M.open(path, line, col, readonly)
         vim.notify(err, vim.log.levels.WARN)
         return
       end
-      -- One file at a time: one the frame opened is wiped as the window
-      -- moves on, by nvim in the window (a buffer deleted from no window went
-      -- through nvim's own, and shifted the list's terminal a line), unless
-      -- you change it, when it stays like any other.
+      -- A file the frame opened stays loaded as the window moves on (see
+      -- preview), off the buffer list, so no list of buffers ever shows it.
       if fresh then
-        vim.b.otis_shown = true
-        vim.bo.bufhidden = "wipe"
+        vim.bo.buflisted = false
       end
     end
     -- A preview there before had the gutter off: a file has yours.
@@ -393,15 +397,17 @@ function M.text(file)
   end
   local lines, marks = render(raw)
   -- From the code window, the buffer shown before anything is set on it, in
-  -- the one redraw: what nvim does to a buffer in no window (an option, the
-  -- one before it wiped) it does through a window of its own as wide as the
-  -- screen, which from the list's resized the list's terminal to all of it.
+  -- the one redraw: what nvim does to a buffer in no window (an option set)
+  -- it does through a window of its own as wide as the screen, which from
+  -- the list's resized the list's terminal to all of it.
   vim.api.nvim_win_call(code, function()
-    local b = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_win_set_buf(code, b)
-    vim.bo[b].bufhidden = "wipe"
-    vim.b[b].otis_text = true
+    local b = M.preview()
+    if vim.api.nvim_win_get_buf(code) ~= b then
+      vim.api.nvim_win_set_buf(code, b)
+    end
+    vim.bo[b].modifiable = true
     vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+    vim.api.nvim_buf_clear_namespace(b, ns, 0, -1)
     for _, m in ipairs(marks) do
       if m[3] == -1 then
         pcall(vim.api.nvim_buf_set_extmark, b, ns, m[1], m[2], { end_row = m[1] + 1, end_col = 0, hl_group = m[4], hl_eol = true })

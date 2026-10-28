@@ -2154,13 +2154,6 @@ while :; do
     changed=0
     (( lon )) && changed=1
     landed_jobs && changed=1
-    # A push to the frame landed (framepush). nvim can move the rows its
-    # terminal shows while it works on the code window (one taking a file
-    # away scrolled them up a line), so they are written whole once more,
-    # over what is there rather than after a clear.
-    if (( fpid )) && ! kill -0 $fpid 2>/dev/null; then
-      fpid=0 shown_rows=("${(@)shown_rows//*/$'\1'}") changed=1
-    fi
     spun_on && changed=1
     (( ! loaded )) && { spin_frame; [[ $REPLY != $lspun ]] && { lspun=$REPLY; changed=1 dirty=1; }; }
     # Once a second: whatever opened this is still there (else it goes,
