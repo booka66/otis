@@ -44,6 +44,9 @@
 #                none means the repo's own packages are linked and a third-party one added since is missed
 #   editor       what opens a file (otis-edit): $OTIS_EDITOR, else otis.editor, else nvim where it is
 #                installed, else $VISUAL, $EDITOR, vi
+#   frame        where a review and the symbol views open with nvim as the editor (otis-frame): terminal,
+#                nvim in this terminal, the list beside the code, or neovide, the same in a Neovide window
+#                of its own, everything else still opening in nvim: otis.frame, else terminal
 #   terminalBrowser  exit 0 when w, p and the rest open in terminal-browser where it is
 #                installed, so the page takes this pane and ctrl-c comes back
 #                (git config otis.terminalBrowser false turns it off); on by default
@@ -83,7 +86,7 @@
 # Your own git config wins over it. Only the settings named in shared() are
 # read from it: a repo you clone must not be able to choose the agent, your
 # editor, or where worktrees go.
-names='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees install editor terminalBrowser lessons music musicColors musicBackground musicFps'
+names='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees install editor frame terminalBrowser lessons music musicColors musicBackground musicFps'
 sharednames='forge host project mainBranch gateJob deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak'
 nl='
 '
@@ -177,7 +180,7 @@ cfg_bool() {
   esac
 }
 
-keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees editor terminalBrowser lessons music musicColors musicBackground musicFps gitlab'
+keys='forge host url project main base gateJobs deployEnv deployJob rollbackJob datadogEnv readyLabel cursorEnv cursorModel verifyCheckIn checkInModel verifyRetro verifyFix verifyBreak agent agentModel engine sideBySide worktrees editor frame terminalBrowser lessons music musicColors musicBackground musicFps gitlab'
 
 # The origin remote's host and path, from either URL form:
 # https://host/group/repo.git or git@host:group/repo.git. Worked out once:
@@ -252,6 +255,7 @@ one() {
     install) cfg install ;;
     editor) [ -n "$OTIS_EDITOR" ] && echo "$OTIS_EDITOR" || cfg editor ||
       { command -v nvim >/dev/null 2>&1 && echo nvim; } || echo "${VISUAL:-${EDITOR:-vi}}" ;;
+    frame) case $(cfg frame) in neovide) echo neovide ;; *) echo terminal ;; esac ;;
     terminalBrowser) [ "$(cfg_bool terminalBrowser || echo true)" = true ] ;;
     lessons) [ "$(cfg_bool lessons)" = true ] ;;
     music) case $(cfg music) in off) echo off ;; *) echo on ;; esac ;;
