@@ -937,8 +937,6 @@ typeset -a shown_rows shown_pane
 # the whole pane every 10ms, which under a multiplexer stuttered and lagged
 # rather than glided.
 scroll() {
-  # In a frame the preview is nvim's to scroll; this one is not drawn.
-  (( framed )) && return
   local max
   (( max = plen - (ph - phd), max < 0 ? (max = 0) : 0 ))
   (( poff += $1, poff > max ? (poff = max) : 0, poff < 0 ? (poff = 0) : 0 ))
@@ -2077,6 +2075,8 @@ handle() {
     '?') help=$(( !help )) poff=0 ;;
     J) headscroll 3 ;;
     K) headscroll -3 ;;
+    # In a frame the pane is nvim's code window, which these keys move (otis-frame --key).
+    ctrl-[duey]|'['|']') (( framed )) && { { unlisten; otis-frame --key $n } </dev/null >/dev/null 2>&1 &!; return } ;|
     ctrl-d) scroll $(( (ph - phd) / 2 )) ;;
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
     ctrl-e) scroll 1 ;;
@@ -2163,7 +2163,8 @@ while :; do
       orphaned && quit 1
       # In a frame, nvim's window beside this one changed width (a split, or
       # nvim resized) while this terminal kept its own: drawn for the new one.
-      (( framed )) && [[ -r $OTIS_NVIM_FRAME/cols && $(<$OTIS_NVIM_FRAME/cols) != $pw ]] && { layout; (( gen++ )); fshown= changed=1; }
+      # A file shown there is no width's, and showing it again ended a diff split beside it.
+      (( framed )) && [[ -r $OTIS_NVIM_FRAME/cols && $(<$OTIS_NVIM_FRAME/cols) != $pw ]] && { layout; (( gen++ )); [[ $fshown == row\ * ]] || fshown=; changed=1; }
       [[ -z $winch ]] && resize
       # The panel's clock, while Claude answers.
       (( chat )) && chat_busy && changed=1

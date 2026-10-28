@@ -1810,6 +1810,9 @@ if command -v nvim >/dev/null 2>&1; then
   # A file's line is lit where it opens, and a preview after it has none.
   printf 'hello\n' > "$tmp/pv0.txt"
   expect frame/open-lit "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.open('$tmp/frame.txt', 2, 0, false); io.stdout:write(tostring(vim.wo[vim.t.otis_code].cursorline), ' '); f.text('$tmp/pv0.txt'); io.stdout:write(tostring(vim.wo[vim.t.otis_code].cursorline))" -c 'qa!' 2>&1)" "true false"
+  # A preview after a file is written into a buffer of its own, never into
+  # the file's, which shows as it was when opened again.
+  expect frame/preview-apart "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.open('$tmp/frame.txt', 1, 0, false); f.text('$tmp/pv0.txt'); f.open('$tmp/frame.txt', 1, 0, false); io.stdout:write(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(vim.t.otis_code), 0, 1, false)[1])" -c 'qa!' 2>&1)" "one"
   # A row with no file shows its preview there, less the lines the picker
   # marks for itself.
   printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"
@@ -1819,6 +1822,14 @@ if command -v nvim >/dev/null 2>&1; then
   printf '\033[38;2;250;189;47mhi\033[0m there\n' > "$tmp/pv2.txt"
   expect frame/text-colors "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua dofile('$share/frame.lua').text('$tmp/pv2.txt')" \
     -c 'lua local c = vim.t.otis_code; local b = vim.api.nvim_win_get_buf(c); local m = vim.api.nvim_buf_get_extmarks(b, -1, 0, -1, { details = true })[1]; io.stdout:write(vim.api.nvim_buf_get_lines(b, 0, 1, false)[1], " ", m[3], "-", m[4].end_col, " ", ("%06x"):format(vim.api.nvim_get_hl(0, { name = m[4].hl_group }).fg), " number=", tostring(vim.wo[c].number))' -c 'qa!' 2>&1)" "hi there 0-2 fabd2f number=false"
+  # ] and [ pressed in the list go to the code's next and last change: a
+  # file's since the base (line 20 taken out, 40 changed), a preview's on a
+  # diff's background but the code's own.
+  fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[' }) do f.key(k); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
+  ( mkdir -p "$tmp/fk" && cd "$tmp/fk" && seq 1 60 > n.txt && git init -q . && git add n.txt && git -c user.email=t@t -c user.name=t commit -qm n && sed -i.bak -e 20d -e '40s/.*/x/' n.txt )
+  expect frame/key-file "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false)")" "19 39 39 19 "
+  printf 'a\n\033[48;2;1;2;3mcode\033[m\n\033[48;2;0;50;0m+new\033[m\nb\n\033[48;2;50;0;0m-old\033[m\n' > "$tmp/pv3.txt"
+  expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 "
 fi
 # F on the board (otis-find): nvim opened straight into your own fuzzy finder
 # (share/find.lua), which reads what git config otis.finder names.

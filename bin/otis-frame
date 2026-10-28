@@ -22,6 +22,9 @@
 # otis-frame --run <ex command> <arg>                 a command on the right
 #                                                     (a review's :GmrDeleted)
 # otis-frame --focus                                  into the code
+# otis-frame --key <ctrl-d|ctrl-u|ctrl-e|ctrl-y|]|[>  a key of the picker's
+#                                                     pane, pressed in the
+#                                                     list, done in the code
 # Each does nothing outside a frame, and the keys stay with the list.
 # otis-frame --enter <path> -- <open command...>      enter's action, for a
 #   picker's transform: in a frame, the open beside the list and then into
@@ -39,6 +42,7 @@ case $1 in
   --text) remote "text(_A[2])" ", $(vs "$2")" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;
+  --key) remote "key(_A[2])" ", $(vs "$2")" ;;
   --enter)
     p=$2; shift 3
     w=; for a; do w="$w '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done

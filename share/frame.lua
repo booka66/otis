@@ -2,8 +2,8 @@
 -- its preview was, nvim itself. start() lays the two windows out and runs
 -- the picker (otis-frame's script) in the left one. The rest is for what
 -- the picker runs, through $NVIM (otis-frame --open, --text, --run,
--- --focus): a file shown on the right, or a row's preview where it has no
--- file, the list keeping the keys, and enter's step into the code. The windows are
+-- --focus, --key): a file shown on the right, or a row's preview where it has no
+-- file, the list keeping the keys, the pane's keys passed on, and enter's step into the code. The windows are
 -- kept on the tab, as this file is loaded afresh on every call.
 local M = {}
 
@@ -72,6 +72,9 @@ function M.preview()
   local b = vim.t.otis_preview
   if not (b and vim.api.nvim_buf_is_valid(b)) then
     b = vim.api.nvim_create_buf(false, true)
+    -- Named, or the first file opened took it (:edit reuses an empty buffer
+    -- with no name), and every preview after was written into that file.
+    vim.api.nvim_buf_set_name(b, "otis://preview")
     vim.b[b].otis_text = true
     vim.t.otis_preview = b
   end
@@ -423,6 +426,20 @@ function M.text(file)
       end
     end
     vim.bo[b].modifiable = false
+    -- Its changes, for ] and [ (key): runs of lines on a diff's background,
+    -- the code's own (OTIS_T_CODEBG) aside, as the picker's pane finds them.
+    local codebg, runs = vim.env.OTIS_T_CODEBG or "", {}
+    for i, l in ipairs(raw) do
+      if l:find("\27[48;", 1, true) and (codebg == "" or not l:find("\27[" .. codebg .. "m", 1, true)) then
+        local last = runs[#runs]
+        if last and last[2] == i - 1 then
+          last[2] = i
+        else
+          table.insert(runs, { i, i })
+        end
+      end
+    end
+    vim.b[b].otis_changes = runs
     -- No listchars either: a preview pads its lines with spaces, which a
     -- trail:- drew as dashes. Nor a lit line: its first is no symbol's.
     set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false, cursorline = false }))
@@ -444,6 +461,60 @@ function M.focus()
   if valid(vim.t.otis_code) then
     vim.api.nvim_set_current_win(vim.t.otis_code)
   end
+end
+
+-- changes(win): the runs of lines the window's change made, { first, last }
+-- in order: a preview's, found as it was drawn (text), or a file's since the
+-- change's base (NVIM_DIFF_BASE, else HEAD), all of it where the base has none.
+local function changes(win)
+  local b = vim.api.nvim_win_get_buf(win)
+  if vim.b[b].otis_text then
+    return vim.b[b].otis_changes or {}
+  end
+  local name = vim.api.nvim_buf_get_name(b)
+  local base = vim.system({ "git", "-C", vim.fs.dirname(name), "show", (vim.env.NVIM_DIFF_BASE or "HEAD") .. ":./" .. vim.fs.basename(name) }, { text = true }):wait()
+  local now = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n") .. "\n"
+  local runs = {}
+  for _, h in ipairs((vim.text and vim.text.diff or vim.diff)(base.code == 0 and base.stdout or "", now, { result_type = "indices" })) do
+    -- Lines taken out are a run on the line they were under.
+    local first = math.max(h[3], 1)
+    table.insert(runs, { first, math.max(h[3] + h[4] - 1, first) })
+  end
+  return runs
+end
+
+-- What the list's scrolling keys are in the code window: nvim's own.
+local scrolls = { ["ctrl-d"] = "\4", ["ctrl-u"] = "\21", ["ctrl-e"] = "\5", ["ctrl-y"] = "\25" }
+
+-- key(name): a key of the picker's pane, pressed in the list, done in the
+-- code window: ctrl-d, ctrl-u, ctrl-e and ctrl-y scroll it, and ] and [ put
+-- the next or the last change after or before its cursor in its middle.
+function M.key(name)
+  local code = vim.t.otis_code
+  if not valid(code) then
+    return
+  end
+  if scrolls[name] then
+    vim.api.nvim_win_call(code, function()
+      vim.cmd("normal! " .. scrolls[name])
+    end)
+    return
+  end
+  local at, to = vim.api.nvim_win_get_cursor(code)[1], nil
+  for _, r in ipairs(changes(code)) do
+    if name == "]" and r[1] > at and not to or name == "[" and r[1] < at then
+      to = r
+    end
+  end
+  if not to then
+    return
+  end
+  -- From near the top when it is taller than the window, as the pane put it.
+  local h = vim.api.nvim_win_get_height(code)
+  local top = to[2] - to[1] < h and math.floor((to[1] + to[2] - h) / 2) + 1 or to[1] - 3
+  vim.api.nvim_win_call(code, function()
+    vim.fn.winrestview({ lnum = to[1], col = 0, topline = math.max(top, 1) })
+  end)
 end
 
 return M
