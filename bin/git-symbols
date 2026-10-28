@@ -2117,7 +2117,7 @@ if [ -z "$head" ]; then
     --bind "a:execute-silent(git add -A)+reload($list)+refresh-preview" \
     --bind "U:execute-silent(git reset -q)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \
-    --bind "enter:execute($open; otis-frame --focus)+reload($list)" \
+    --bind "enter:transform(otis-frame --enter {2} -- $open)+reload($list)" \
     --bind "space:execute-silent(git-symbols --stage $rev {2} {4} {5} {6} {7} {8} {9} {10})+reload($list)" \
     --bind "L:execute-silent(OTIS_SYMBOLS_FOLD=1 git-symbols --open-all $rev)+reload($fold)" \
     --bind "H:execute-silent(git-symbols --close-all)+reload($fold)" \
@@ -2136,7 +2136,7 @@ else
   open="git-commit-open $rev {2} $where"
   keys='tab=by symbol / by file,enter=open in editor,v=viewed (and all under it),a=ask Claude about it,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,G=seam'"'"'s page in the browser,y=copy its name,t=tests/config/generated,u=refresh'
   set -- --bind "a:execute(git-symbols-ask $rev {2} {4} {5} {6} {12})+reload($list)+refresh-preview" \
-    --bind "enter:execute($open; otis-frame --focus)+reload($list)+refresh-preview" \
+    --bind "enter:transform(otis-frame --enter {2} -- $open)+reload($list)+refresh-preview" \
     --bind "tab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "btab:execute-silent(git-symbols --files)+reload($list)+refresh-preview" \
     --bind "u:reload($list)+refresh-preview" \

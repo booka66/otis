@@ -19,8 +19,13 @@
 # otis-frame --text <file>                            a preview on the right
 # otis-frame --run <ex command> <arg>                 a command on the right
 #                                                     (a review's :GmrDeleted)
-# otis-frame --focus                                  into the code (enter)
+# otis-frame --focus                                  into the code
 # Each does nothing outside a frame, and the keys stay with the list.
+# otis-frame --enter <path> -- <open command...>      enter's action, for a
+#   picker's transform: in a frame, the open beside the list and then into
+#   the code, the list never giving up the terminal (which redrew it whole,
+#   and asked the terminal a question nvim's answered late, as keys), and
+#   nothing on a row with no path; elsewhere the open, taking the terminal.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 vs() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 remote() {
@@ -32,6 +37,12 @@ case $1 in
   --text) remote "text(_A[2])" ", $(vs "$2")" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;
+  --enter)
+    p=$2; shift 3
+    w=; for a; do w="$w '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done
+    if [ -z "$OTIS_NVIM_FRAME" ]; then printf 'execute(%s)\n' "${w# }"
+    elif [ -n "$p" ]; then printf 'execute-silent(%s; otis-frame --focus)\n' "${w# }"; fi
+    exit 0 ;;
 esac
 src=
 [ "$1" = -S ] && { src=$2; shift 2; }
