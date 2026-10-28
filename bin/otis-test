@@ -1803,15 +1803,19 @@ if command -v nvim >/dev/null 2>&1; then
   # non-blank; the keys stay with the list, and the code's width is where
   # the picker reads it.
   printf 'one\n  two words\n' > "$tmp/frame.txt"
-  fopen() { OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid()' -c "lua dofile('$share/frame.lua').open('$tmp/frame.txt', 2, $1, false)" \
+  fopen() { OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua dofile('$share/frame.lua').open('$tmp/frame.txt', 2, $1, false)" \
     -c 'lua io.stdout:write(#vim.api.nvim_tabpage_list_wins(0), " ", vim.bo.buftype, " ", table.concat(vim.api.nvim_win_get_cursor(vim.t.otis_code), ","), " ", vim.api.nvim_win_get_width(vim.t.otis_list), " ", vim.fn.readfile(vim.env.OTIS_NVIM_FRAME .. "/cols")[1])' -c 'qa!' 2>&1; }
   expect frame/open-col "$(fopen 7)" "2 terminal 2,6 46 33"
   expect frame/open-line "$(fopen 0)" "2 terminal 2,2 46 33"
   # A row with no file shows its preview there, less the lines the picker
   # marks for itself.
   printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"
-  expect frame/text "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid()' -c "lua dofile('$share/frame.lua').text('$tmp/pv.txt')" -c 'sleep 200m' \
+  expect frame/text "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua dofile('$share/frame.lua').text('$tmp/pv.txt')" -c 'sleep 200m' \
     -c 'lua local b = vim.api.nvim_win_get_buf(vim.t.otis_code); io.stdout:write(vim.bo.buftype, " ", table.concat(vim.tbl_filter(function(x) return x ~= "" end, vim.api.nvim_buf_get_lines(b, 0, -1, false)), "|"))' -c 'qa!' 2>&1)" "terminal hello there|world"
+  # Its colors are highlights on the plain text, with no gutter beside it.
+  printf '\033[38;2;250;189;47mhi\033[0m there\n' > "$tmp/pv2.txt"
+  expect frame/text-colors "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua dofile('$share/frame.lua').text('$tmp/pv2.txt')" \
+    -c 'lua local c = vim.t.otis_code; local b = vim.api.nvim_win_get_buf(c); local m = vim.api.nvim_buf_get_extmarks(b, -1, 0, -1, { details = true })[1]; io.stdout:write(vim.api.nvim_buf_get_lines(b, 0, 1, false)[1], " ", m[3], "-", m[4].end_col, " ", ("%06x"):format(vim.api.nvim_get_hl(0, { name = m[4].hl_group }).fg), " number=", tostring(vim.wo[c].number))' -c 'qa!' 2>&1)" "hi there 0-2 fabd2f number=false"
 fi
 # F on the board (otis-find): nvim opened straight into your own fuzzy finder
 # (share/find.lua), which reads what git config otis.finder names.
