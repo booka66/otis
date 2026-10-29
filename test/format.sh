@@ -101,7 +101,8 @@ rm -rf "$tmp/delta"
 # the line it became have what changed on the word grounds delta.sh draws it
 # on, here in [ ]; a line put in between them pairs with neither.
 cat > "$tmp/case.json" <<'EOF'
-{"sentences": [{"kind": "case", "text": "A text is cut", "facts": [], "runs": [], "stops": [{"name": "cut", "path": "a.ts", "side": "new", "where": "a.ts", "mark": "◆", "inChange": true, "parent": -1, "lines": [], "code": [
+{"sentences": [{"kind": "case", "text": "A text is cut", "facts": [], "runs": [], "route": 0, "letter": "A"}],
+ "routes": [{"text": "a cut", "where": "", "runs": [], "stops": [{"name": "cut", "path": "a.ts", "side": "new", "where": "a.ts", "mark": "◆", "inChange": true, "parent": -1, "lines": [], "by": ["A"], "code": [
   {"n": 1, "sign": " ", "t": "function cut(text) {", "mine": true},
   {"n": 2, "sign": "-", "t": "  return text.slice(0, MAX);", "mine": false},
   {"n": 2, "sign": "+", "t": "  const count = 1;", "mine": true},
@@ -116,7 +117,7 @@ rm -f "$tmp/case.json"
 # A paragraph of a case's pane says in its map how each of its lines goes on from the one above, after a space or
 # inside a word too long for a line, so a selection of it copies as the one line it was: here the author band,
 # where it runs, wrapped, and a test file's path, cut.
-printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"stops":[],"where":"The page a merchant opens to turn a product on, one row a product.","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}]}' > "$tmp/case.json"
+printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"route":0,"letter":"A","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}],"routes":[{"text":"a row","where":"The page a merchant opens to turn a product on, one row a product.","stops":[],"runs":[]}]}' > "$tmp/case.json"
 expect story-pane/paragraphs "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | awk 'NR == 1 { n = $2; next } NR <= n + 1' | awk -F'\t' '$2 == "text" { print $5 }' | tr '\n' ' ')" \
   "new new word new cut "
 rm -f "$tmp/case.json"

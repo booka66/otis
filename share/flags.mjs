@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // flags.mjs <outline.json> [--now]: the design red flags a change brings in, by A Philosophy of Software Design
 // and Simple Made Easy, each on the route through the code that runs through it. Run behind the screen once a
-// change's cases are told (git-sentences); the list and the route's pane show what it leaves:
+// change's cases are told (git-sentences); the list and the panes of the cases on that route show what it leaves:
 //   <key>.flags.json   what was found, for the pane
 //   <key>.flags.tsv    a route's words, then its flag, a line each, for the list
 // One Claude raises at most five flags it can pin to lines; otis checks each line is there; a second Claude
@@ -26,11 +26,12 @@ const config = (name) => { try { return git("config", "--get", name).trim(); } c
 
 if (!existsSync(file)) process.exit(0);
 const outline = JSON.parse(readFileSync(file, "utf8"));
-const cases = (outline.sentences ?? []).filter((part) => part.kind === "case" || part.kind === "also");
-if (!cases.length || !outline.base || !outline.head) process.exit(0);
-// A flag is filed under its route's words; one found while each case was a part of its own, under that case's,
-// belongs to the route the case now takes, whether or not flags are looked for any more.
-const routeOf = new Map(cases.flatMap((part) => [[part.text, part.text], ...part.inputs.map((input) => [input.title, part.text])]));
+// Claude reads the change by its routes, each drawn once with what holds on its lines for each of its cases.
+const routes = outline.routes ?? [];
+if (!routes.length || !outline.base || !outline.head) process.exit(0);
+// A flag is filed under its route's words, which every case on that route shows. One found when each case was told
+// on its own, under that case's words, is moved to its route's, whether or not flags are looked for any more.
+const routeOf = new Map([...routes.map((route) => [route.text, route.text]), ...outline.sentences.filter((part) => part.route != null).map((part) => [part.text, routes[part.route].text])]);
 const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
 const save = (found) => {
   write(at("tsv"), found.flags.map((flag) => `${flag.case.replace(/[\t\n]/g, " ")}\t${flag.flag}\n`).join(""));
@@ -45,8 +46,8 @@ if (found?.flags.some((flag) => routeOf.has(flag.case) && routeOf.get(flag.case)
 
 const model = config("otis.flagsModel") || "claude-opus-5-5";
 if (model === "off") process.exit(0);
-// Found already for these cases: a flag on a case the change is no longer told with is looked for again.
-if (found?.version === VERSION && found.flags.every((flag) => routeOf.has(flag.case))) process.exit(0);
+// Found already for these routes: a flag on one the change is no longer told with is looked for again.
+if (found?.version === VERSION && found.flags.every((flag) => routes.some((route) => route.text === flag.case))) process.exit(0);
 const alive = (path) => { try { process.kill(Number(readFileSync(path, "utf8")), 0); return true; } catch { return false; } };
 if (alive(at("running"))) process.exit(0);
 // Your own change is pushed many times before anyone reads it: three in four Opus runs went to its pushes.
@@ -80,14 +81,16 @@ const ROOM = 400000;
 const diff = code.length > ROOM ? code.slice(0, ROOM) + "\n[cut: read the rest with the commands]" : code + (tests ? "\n" + tests.slice(0, ROOM - code.length) : "");
 
 const unmark = (text) => (text ?? "").replace(/`/g, "");
-const caseText = (part, i) => [
-  `## Route ${i + 1}: ${part.text}`,
-  ...(part.setup ? [`setup: ${unmark(part.setup)}`] : []),
-  ...part.inputs.map((input) => `case ${input.letter}: ${input.title}. before: ${input.was || "(nothing ran)"}   now: ${input.now || ""}   (${input.change})`),
-  "route:",
-  ...(part.stops ?? []).flatMap((stop) => [`  ${stop.name}  ${stop.path} (${stop.side}): ${unmark(stop.is)}`,
-    ...(stop.lines ?? []).map((line) => `    ${line.n}: ${(line.t ?? "").trim()}${line.notes.map((note) => `   -- ${note.of.map((k) => part.inputs[k].letter).join(" ")}: ${unmark(note.value)}`).join("")}`)]),
-].join("\n");
+const routeText = (route, i) => {
+  const its = outline.sentences.filter((part) => part.route === i);
+  return [
+    `## Route ${i + 1}: ${route.text}`,
+    ...its.map((part) => `case ${part.letter}: ${part.text}. before: ${part.was || "(nothing ran)"}   now: ${part.now || ""}   (${part.change})`),
+    "route:",
+    ...route.stops.flatMap((stop) => [`  ${stop.name}  ${stop.path} (${stop.side}): ${unmark(stop.is)}`,
+      ...stop.lines.map((line) => `    ${line.n}: ${(line.t ?? "").trim()}${line.notes.map((note) => `   -- ${note.of.join(" ")}: ${unmark(note.value)}`).join("")}`)]),
+  ].join("\n");
+};
 
 const object = (properties) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
 const list = (items) => ({ type: "array", items });
@@ -148,7 +151,7 @@ const raised = await ask([
   "",
   "# The routes",
   "",
-  ...cases.map(caseText).flatMap((one) => [one, ""]),
+  ...routes.map(routeText).flatMap((one) => [one, ""]),
   "# The change's diff, base to head",
   "",
   diff,
@@ -170,7 +173,7 @@ function cited(ref) {
 }
 // A run that answered nothing is asked again the next time, never kept as a change with no flags.
 if (!raised) { writeFileSync(at("err"), "flags: Claude gave no answer\n"); process.exit(1); }
-const pinned = raised.flags.filter((flag) => cases[flag.case - 1] && cited(flag.line) && cited(flag.caller));
+const pinned = raised.flags.filter((flag) => routes[flag.case - 1] && cited(flag.line) && cited(flag.caller));
 
 let standing = [];
 if (pinned.length) {
@@ -201,5 +204,5 @@ if (pinned.length) {
     .map((one) => ({ ...pinned[one.flag - 1], why: one.why }));
 }
 
-const flags = standing.map(({ case: n, ...flag }) => ({ case: cases[n - 1].text, ...flag }));
+const flags = standing.map(({ case: n, ...flag }) => ({ case: routes[n - 1].text, ...flag }));
 save({ version: VERSION, model, base, head, raised: raised?.flags?.length ?? null, flags });

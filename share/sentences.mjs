@@ -364,13 +364,14 @@ async function tellCases(only = null, told = null) {
     "Code the change removes is told by what a person or another system could do with it: one case for each (a button they clicked, a call another system made), what it did before and what happens now. How the removed code failed, what it stored and the helpers only it used are stops on that case, never cases of their own. Removed code that nothing could reach (a path no caller took) is one case for all of it, which says nothing reached it.",
     "- group: where the case comes in, 2 to 6 everyday words, like \"we send Apple a message\". Cases that come in the same way use the same words.",
     "- name: the situation, at most 10 everyday words a newcomer understands without reading anything else, like \"Apple never answers a message we send\". Never a setting, option or value from the code, even put in English (\"a caller leaves off the defer option\"): say what someone does or what happens, like \"a caller wants the reply written on the spot\".",
+    "- input: what comes in for this case, as the code first sees it, in at most 60 characters: the text, value or event itself, quoted when it is text, like \"It's at x.myshopify.com/products/tee\" or a page view of /products/tee?utm_source=sms. Never a description of it.",
     "- setup: one or two sentences that make it concrete for someone who has never seen this code. The first time a thing comes up in a case, say what it is in everyday words: never a bare word from the code's own world like \"a provider\", but \"the AI service the judge sends the question to, like OpenAI\". Name who does what as the code has it: before you say a person sets or triggers something, check who the code lets do it (a permission check, an admin gate).",
     "- was, now: how it ended before and how it ends now, at most 8 words each, each a plain clause with its subject, the same words where they agree, like \"it is tried again\" and \"it fails, and may have been sent\".",
     "- change: \"ends differently\", \"only a label\" or \"the same\". Before you say a case ends differently because a value changed (a flag like retryable, an error's type), find what reads that value: when nothing acts on it, only logs, metrics or a stored field read it, the case is \"only a label\", and its was and now say what a person or system actually sees. A check, a guard or a path the change removes is never only a label.",
     "- described: true when the author's words below describe this case, false when they never mention it.",
     "- said: the author's own sentence about this case, copied exactly from their words below, or \"\".",
     "- facts: at most 5 things a reviewer would compare, each about one thing (when a count and a list move differently, they are two facts): what (a question a newcomer would ask about this case, at most 6 words, like \"Is the model called?\" or \"What does the shopper see?\"), before and after (its answer before and after the change, at most 8 words each, plain enough to read alone, never a label only this code uses), and test (the one line of a test in this change that asserts this answer: path, its line number after the change, its code copied exactly; or path \"\", line 0 and code \"\" when no test asserts it). In everyday words a teammate from outside this code would use; a code value only when it is what a person or another system sees, like a 400 status or a reason \"delivery_unknown\". before is what the code before the change does with this same situation: when the situation needs something this change adds (a setting, a field), say what the old code does without it, never what it would have done with it. When nothing ran for this case before the change, before is \"\".",
-    "- stops: the route, in the order it runs. Each is a place in the code: name (the function's or symbol's own name, nothing else), is (what that function or place is for, at most 12 everyday words, like \"reads one page of the window's orders from the database\"), path (from the repository's root), side (\"new\" for the code after the change, \"old\" only for code the change removed), lines (the 1 to 5 lines there that decide this case, each with its line number on that side, its code copied exactly, and value: what holds on that line for this case, a short phrase that says what it is about, like \"the window has a rate, so go on\" or \"paid through Gale, so 2%\", never a bare true or false; or \"\"; check each value against its line: a comparison's edge as the code has it (>= is \"at least\", > is \"over\"), and arithmetic done with the case's own numbers). Take unchanged code in when it decides the ending, and take in the function that calls the others when that is what holds the route together.",
+    "- stops: the route, in the order it runs. Each is a place in the code: name (the function's or symbol's own name, nothing else), is (what that function or place is for, at most 12 everyday words, like \"reads one page of the window's orders from the database\"), path (from the repository's root), side (\"new\" for the code after the change, \"old\" only for code the change removed), lines (the lines there this case passes that a reader needs to follow it as it runs, usually 2 to 8, each with its line number on that side, its code copied exactly, and value: what holds on that line for this case, the way a debugger would show it, a short phrase that says what it is about, like \"the window has a rate, so go on\" or \"paid through Gale, so 2%\", never a bare true or false; or \"\"; check each value against its line: a comparison's edge as the code has it (>= is \"at least\", > is \"over\"), and arithmetic done with the case's own numbers). skipped (the stretches of that function this case never runs: an if it does not enter, a return it never reaches, the right side of an || that is already true; each as from and to, line numbers on that side; or none). Take unchanged code in when it decides the ending, and take in the function that calls the others when that is what holds the route together.",
     "- tests: the names of tests in this change that run this case, copied exactly from the rows below.",
     "- data: the paths of changed files that hold data this case runs on: a test case or fixture it reads, a migration that adds what its code reads; or none.",
     "",
@@ -406,10 +407,11 @@ async function tellCases(only = null, told = null) {
   const object = (properties) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
   const list = (items) => ({ type: "array", items });
   const text = { type: "string" };
-  const stop = object({ name: text, is: text, path: text, side: { enum: ["new", "old"] }, lines: list(object({ line: { type: "integer" }, code: text, value: text })) });
+  const stop = object({ name: text, is: text, path: text, side: { enum: ["new", "old"] }, lines: list(object({ line: { type: "integer" }, code: text, value: text })),
+    skipped: list(object({ from: { type: "integer" }, to: { type: "integer" } })) });
   const schema = object({
     cases: list(object({
-      group: text, name: text, setup: text, was: text, now: text,
+      group: text, name: text, input: text, setup: text, was: text, now: text,
       change: { enum: ["ends differently", "only a label", "the same"] }, described: { type: "boolean" }, said: text,
       facts: list(object({ what: text, before: text, after: text, test: object({ path: text, line: { type: "integer" }, code: text }) })),
       stops: list(stop), tests: list(text), data: list(text),
@@ -687,7 +689,7 @@ function placeStops(stop) {
   // took out with nothing in its place makes it the code the change removed, read as it was.
   const now = (line) => line.other?.n ?? (line.sign === " " ? entryAt(path, "old", line.n)?.line.n ?? line.n : null);
   if (side === "old" && textAt("new", path) && lines.every(now)) {
-    const placed = placeStops({ ...stop, side: "new", is: "", lines: lines.map((line) => ({ line: now(line), code: textAt("new", path)[now(line) - 1], value: "" })) });
+    const placed = placeStops({ ...stop, side: "new", is: "", skipped: [], lines: lines.map((line) => ({ line: now(line), code: textAt("new", path)[now(line) - 1], value: "" })) });
     for (const one of placed) {
       for (const line of one.lines) { const was = lines.find((old) => now(old) === line.n); if (was.other) line.other = { n: was.n, t: was.t }; }
       for (const line of lines) if (rowByUnit.has(unitOf.get(line))) one.covers.add(rowByUnit.get(unitOf.get(line)));
@@ -717,10 +719,13 @@ function placeStops(stop) {
     for (const word of identifiers(group.lines)) for (const row of named.get(word) ?? []) covers.add(row);
     const { def } = group;
     const name = !def || callee({ name: claimed }) === def.name ? claimed : def.name;
+    // The stretches of it the case never runs, inside it, as Claude read them.
+    const [lo, hi] = def ? [def.start, def.end] : [1, text.length];
+    const skips = (stop.skipped ?? []).map(({ from, to }) => ({ of: [], from: Math.max(lo, Math.min(from, to)), to: Math.min(hi, Math.max(from, to)) })).filter((skip) => skip.from <= skip.to);
     return {
       name, is: group === mine ? is : "", path, side, where: files.has(path) ? where(path) : basename(path), inChange: files.has(path),
       range: def ? [def.start, def.end] : enclosing({ path, side, lines: group.lines }), inside: def?.inside ?? "",
-      mark: group.lines.some((line) => line.sign !== " ") ? "◆" : covers.size ? "●" : "○", fresh, lines: group.lines, covers,
+      mark: group.lines.some((line) => line.sign !== " ") ? "◆" : covers.size ? "●" : "○", fresh, lines: group.lines, skips, by: [], covers,
     };
   });
 }
@@ -865,7 +870,7 @@ function nest(stops) {
     if (at < 0) {
       stops.push({ name: inner.name, is: "", path: a.path, side: a.side, where: a.where, inChange: a.inChange, range: [inner.start, inner.end], inside: a.name,
         mark: touched(a.path, a.side, [inner.start, inner.end]) ? "◆" : "○",
-        fresh: a.fresh, lines: [], covers: new Set(), parent: -1, call: null });
+        fresh: a.fresh, lines: [], skips: [], by: [], covers: new Set(), parent: -1, call: null });
       at = stops.length - 1;
       const into = callIn(a, stops[at]);
       if (into) hang(stops[at], pick.i, into);
@@ -1087,7 +1092,7 @@ if (told && !told.cached) {
   }
 }
 
-const parts = [];
+const parts = [], routes = [];
 if (told) {
   const RANK = { "ends differently": 0, "only a label": 1, "the same": 2 };
   // A case the author describes is one whose own sentence about it otis finds in their words.
@@ -1120,6 +1125,8 @@ if (told) {
         }
       }
       same.lines.sort((a, b) => a.n - b.n);
+      for (const skip of stop.skips) if (!same.skips.some((one) => one.from === skip.from && one.to === skip.to && one.of.join() === skip.of.join())) same.skips.push(skip);
+      same.by = [...new Set([...same.by, ...stop.by])];
       for (const row of stop.covers) same.covers.add(row);
       same.mark = same.lines.some((line) => line.sign !== " ") ? "◆" : same.covers.size ? "●" : "○";
       same.is ||= stop.is;
@@ -1127,28 +1134,37 @@ if (told) {
     }
     return stops;
   };
-  // A path: the cases that come in the same way, read as one route with each function on it once, and the cases
-  // themselves as the situations that take it, each line saying what holds there for each.
+  // A route: the cases that come in the same way, read as one walk through the code with each function on it once.
+  // Each case is a part of its own that runs that walk: what holds on a line, and what it skips, are the case's.
   for (const [g, group] of groups.entries()) {
-    const stops = [], inputs = [];
-    order.filter(({ one }) => groupAt(one) === g).forEach(({ one, said }, k) => {
+    const stops = [], cases = [];
+    for (const { one, said } of order.filter(({ one }) => groupAt(one) === g)) {
       const own = merge([], (one.stops ?? []).flatMap(placeStops));
-      for (const stop of own) for (const line of stop.lines) for (const note of line.notes) note.of = [k];
+      // The changed files that hold the data it runs on: a case file, a migration.
+      const data = [...new Set((one.data ?? []).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && meat(path)))];
+      // A case none of whose lines otis found, and that runs on no data, has nothing to show.
+      if (!own.length && !data.length) continue;
+      // Its letter on its route says whose a stop, a note and a skip are.
+      const letter = String.fromCharCode(65 + (cases.length % 26)).repeat(Math.floor(cases.length / 26) + 1);
+      for (const stop of own) { stop.by = [letter]; for (const mark of [...stop.lines.flatMap((line) => line.notes), ...stop.skips]) mark.of = [letter]; }
       nest(own);
       const change = RANK[one.change] == null ? "ends differently" : one.change;
-      inputs.push({
-        title: bare(one.name), kind: said ? "case" : "also", setup: coded(one.setup), was: bare(one.was), now: bare(one.now), change,
+      cases.push({
+        kind: said ? "case" : "also", title: bare(one.name), group, route: routes.length, letter,
+        input: unmark(one.input), setup: coded(one.setup), was: bare(one.was), now: bare(one.now), change,
+        quote: said?.quote ?? "", origin: said?.from ?? null,
+        facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
         // New code: the route starts in code the change adds, so the case has no before; one that ends the same had one.
         fresh: change !== "the same" && own.length > 0 && own.filter((stop) => stop.parent < 0).every((stop) => stop.fresh),
-        quote: said?.quote ?? "",
-        facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
-        tests: one.tests ?? [], data: one.data ?? [],
+        runs: testsNamed(one.tests), data, paths: [...new Set(own.map((stop) => stop.path))],
+        // What its own stops run through, before they are merged with the others': the rows under it in the list.
+        rows: [...new Set([...own.flatMap((stop) => [...stop.covers]), ...rows.filter((row) => data.includes(row.path))])],
       });
       merge(stops, own);
-    });
+    }
     nest(stops);
     // A route whose first stop the change's own code calls: that function goes above it, with the line that calls
-    // it, so the path shows where it comes from and what happens around it.
+    // it, so the route shows where it comes from and what happens around it.
     const first = stops.findIndex((stop) => stop.parent < 0);
     const up = first < 0 ? null : caller(stops[first]);
     if (up && up.verb === "calls" && up.fn && files.has(up.path) && !stops.some((stop) => stop.path === up.path && stop.name === up.fn)) {
@@ -1158,38 +1174,36 @@ if (told) {
       const unit = entry?.line.owner ?? smallestUnit(up.path, "new", up.n);
       if (rowByUnit.has(unit)) covers.add(rowByUnit.get(unit));
       stops.unshift({ name: def.name, is: "", path: up.path, side: "new", where: where(up.path), inChange: true, range: [def.start, def.end], inside: def.inside,
-        mark: touched(up.path, "new", [def.start, def.end]) ? "◆" : covers.size ? "●" : "○", fresh: Boolean(files.get(up.path)?.added || unit?.mark === "new"), lines: [], covers, parent: -1, call: null });
+        mark: touched(up.path, "new", [def.start, def.end]) ? "◆" : covers.size ? "●" : "○", fresh: Boolean(files.get(up.path)?.added || unit?.mark === "new"), lines: [], skips: [], by: [], covers, parent: -1, call: null });
       for (const stop of stops.slice(1)) if (stop.parent >= 0) stop.parent++;
       stops[first + 1].parent = 0;
       stops[first + 1].call = { n: up.n, t: textAt("new", up.path)[up.n - 1], sign: entry ? entry.line.s : " ", verb: "calls" };
     }
-    // A stop after the first that nothing on the route calls: what in the code calls it, to show how the path gets there.
+    // A stop after the first that nothing on the route calls: what in the code calls it, to show how the route gets there.
     stops.forEach((stop, i) => { if (stop.parent < 0 && stops.findIndex((one) => one.parent < 0) !== i) stop.from = caller(stop); });
     stops.forEach((stop, i) => { stop.code = codeOf(stop, stops.filter((kid) => kid.parent === i).map((kid) => kid.call.n)); });
-    const runs = testsNamed(inputs.flatMap((input) => input.tests));
+    // A case comes to every function above one it was told through, and passes over a line it skips that it has
+    // nothing to say about: by on a stop, off on a line, as the panes draw them.
+    for (const stop of stops) for (let up = stop.parent; up >= 0; up = stops[up].parent) stops[up].by = [...new Set([...stops[up].by, ...stop.by])];
+    for (const stop of stops) for (const line of stop.code) {
+      if (line.gap || line.mine === false) continue;
+      line.off = [...new Set(stop.skips.filter((skip) => line.n >= skip.from && line.n <= skip.to).flatMap((skip) => skip.of))]
+        .filter((letter) => !line.notes.some((note) => note.of.includes(letter)));
+    }
     for (const stop of stops) {
       keys.push(`${stop.side}\t${stop.path}`);
       if (stop.code.some((line) => line.n && !line.mine)) keys.push(`${stop.side === "old" ? "new" : "old"}\t${stop.path}`);
     }
-    // The changed files that hold the data it runs on: a case file, a migration.
-    const data = [...new Set(inputs.flatMap((input) => input.data).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && meat(path)))];
-    // A path opens as its first case tells it, the change's main one, and ends as the case it moves most.
-    const most = inputs.reduce((a, b) => (RANK[b.change] < RANK[a.change] ? b : a));
-    parts.push({
-      kind: inputs.some((input) => input.kind === "case") ? "case" : "also", title: group, group, where: whereOf.get(group.toLowerCase()) ?? "",
-      setup: inputs[0].setup, was: most.was, now: most.now, change: most.change, fresh: most.fresh,
-      inputs: inputs.map(({ setup, tests, data, ...input }, k) => ({ letter: String.fromCharCode(65 + (k % 26)).repeat(Math.floor(k / 26) + 1), ...input })), stops, runs, data,
-      // Its tests are named under it, not read in it.
-      rows: [...new Set([...stops.flatMap((stop) => [...stop.covers]), ...rows.filter((row) => data.includes(row.path))])],
-    });
+    routes.push({ text: group, where: whereOf.get(group.toLowerCase()) ?? "", stops, runs: [...new Set(cases.flatMap((one) => one.runs))] });
+    parts.push(...cases);
   }
   await paint(keys);
-  for (const part of parts) for (const stop of part.stops) {
+  for (const route of routes) for (const stop of route.stops) {
     for (const line of stop.lines) {
       line.paint = colored(stop.side, stop.path, line.n);
       if (line.other) line.other.paint = colored(stop.side === "old" ? "new" : "old", stop.path, line.other.n);
     }
-    if (stop.call) { const a = part.stops[stop.parent]; stop.call.paint = colored(a.side, a.path, stop.call.n); }
+    if (stop.call) { const a = route.stops[stop.parent]; stop.call.paint = colored(a.side, a.path, stop.call.n); }
     const other = stop.side === "old" ? "new" : "old";
     for (const line of stop.code) {
       if (line.joined) line.paint = line.joined.map((n) => trimPainted(colored(stop.side, stop.path, n))).join(" ");
@@ -1201,14 +1215,14 @@ if (told) {
 }
 const onRoute = new Set(parts.flatMap((part) => part.rows));
 // A file's lines outside any symbol (its imports, say) go under the first case with a stop in that file.
-if (told) for (const part of parts) for (const stop of part.stops) for (const row of rows) if (row.rest && row.path === stop.path && !onRoute.has(row)) { part.rows.push(row); onRoute.add(row); }
+if (told) for (const part of parts) for (const path of part.paths ?? []) for (const row of rows) if (row.rest && row.path === path && !onRoute.has(row)) { part.rows.push(row); onRoute.add(row); }
 // Told as cases, what no case runs is read elsewhere when it is a test or wiring (the files tab) or what a row on a
 // route uses (the list opens it under that row); only the rest of the meat is loose.
 const reached = new Set([...onRoute].flatMap((row) => [...uses.get(row)]));
 const elsewhere = told ? rows.filter((row) => !onRoute.has(row) && (!meat(row.path) || reached.has(row))) : [];
 const loose = rows.filter((row) => !onRoute.has(row) && !elsewhere.includes(row));
 if (loose.length) parts.push({ kind: "rest", title: told ? "Changed lines no case runs" : "In the change, and in no part", quote: "", origin: null, rows: loose });
-const sentences = parts.filter((part) => part.rows.length || part.stops?.length);
+const sentences = parts.filter((part) => part.rows.length || part.paths?.length);
 let numbered = 0;
 for (const part of sentences) part.num = part.kind === "rest" ? "·" : String(++numbered);
 
@@ -1250,20 +1264,23 @@ const outline = {
   cases: sentences.filter((part) => part.kind === "case" || part.kind === "also").length, stories: numbered,
   sentences: sentences.map((part, at) => ({
     id: `s${at + 1}`, kind: part.kind, num: part.num, text: part.title, group: part.group ?? "",
-    setup: part.setup ?? "", where: part.where ?? "", was: part.was ?? "", now: part.now ?? "", change: part.change ?? "",
+    setup: part.setup ?? "", was: part.was ?? "", now: part.now ?? "", change: part.change ?? "",
     ending: part.fresh && part.now ? `new → ${part.now}` : part.was || part.now ? `${part.was || "?"} → ${part.now || "?"}` : "",
-    // The first case to say where this runs says it in full; the rest point back to it.
-    whereAt: part.where ? sentences.find((one) => one.where === part.where).num : "",
     quote: part.quote ?? "", origin: part.origin ?? null, from: part.kind === "rest" ? "rest" : "author", links: [],
-    facts: part.facts ?? [], fresh: part.fresh ?? false, ends: part.ends ?? "", stopped: part.stopped ?? "", data: part.data ?? [],
-    // The situations that take a path, in the order to read them: what its lines' notes are of.
-    inputs: part.inputs ?? [],
-    stops: (part.stops ?? []).map(({ covers, ...stop }) => stop),
+    facts: part.facts ?? [], fresh: part.fresh ?? false, data: part.data ?? [],
+    // A case runs its route (routes, below) under its letter there: what comes in, as the code first sees it.
+    route: part.route ?? null, letter: part.letter ?? "", input: part.input ?? "",
     runs: (part.runs ?? []).map((row) => ({ name: testName(row), where: row.where })),
     add: sum(part.rows, "add"), del: sum(part.rows, "del"),
     ntests: part.runs ? part.runs.length : part.rows.filter((row) => row.block && row.kind === "test").length,
     code: gather(part.rows, false), tests: gather(part.rows, true),
     units: [false, true].flatMap((test) => part.rows.filter((row) => row.test === test).sort((a, b) => a.order - b.order).flatMap((row) => row.at)),
+  })),
+  // Each route its cases run, drawn once: its code, by its cases' letters what holds on each line, the lines each
+  // passes over (a code line's off) and the functions each comes to (a stop's by).
+  routes: routes.map((route) => ({
+    text: route.text, where: route.where, stops: route.stops.map(({ covers, skips, ...stop }) => stop),
+    runs: route.runs.map((row) => ({ name: testName(row), where: row.where })),
   })),
 };
 outline.ms = Date.now() - started;
@@ -1313,29 +1330,34 @@ if (htmlOut) {
   process.stdout.write(JSON.stringify(outline) + "\n");
 } else {
   if (outline.summary) console.log(outline.summary);
-  for (const part of outline.sentences) {
-    if (part.kind === "rest") console.log("\nON NO ROUTE");
-    console.log(`\n${part.num}  ${part.text}${part.ending ? `   ${part.ending}` : ""}${part.change && part.change !== "ends differently" ? `  (${part.change})` : ""}`);
-    if (part.setup) console.log(`   ${part.setup}`);
-    for (const input of part.inputs) {
-      console.log(`   ${input.letter}  ${input.title}   ${input.fresh ? "new" : input.was || "?"} → ${input.now || "?"}${input.change !== "ends differently" ? `  (${input.change})` : ""}`);
-      if (input.quote) console.log(`      said  ${input.quote}`);
+  outline.routes.forEach((route, r) => {
+    console.log(`\n${route.text.toUpperCase()}`);
+    const cases = outline.sentences.filter((part) => part.route === r);
+    for (const part of cases) {
+      console.log(`${part.num.padStart(3)} ${part.letter}  ${part.input || part.text}   ${part.ending}${part.change !== "ends differently" ? `  (${part.change})` : ""}`);
+      if (part.input) console.log(`       ${part.text}`);
+      if (part.quote) console.log(`       said  ${part.quote}`);
     }
-    if (part.quote) console.log(`   said  ${part.quote}`);
-    const depth = (stop) => (stop.parent < 0 ? 0 : 1 + depth(part.stops[stop.parent]));
-    if (part.where) console.log(`   where: ${part.where}`);
-    part.stops.forEach((stop, i) => {
+    if (route.where) console.log(`   where: ${route.where}`);
+    const depth = (stop) => (stop.parent < 0 ? 0 : 1 + depth(route.stops[stop.parent]));
+    route.stops.forEach((stop) => {
       if (stop.from) console.log(`     ↓ ${stop.from.fn || "code outside any function"} in ${stop.from.where}:${stop.from.n} ${stop.from.verb} it`);
       else if (stop.from === null) console.log("     ↓ next");
       const pad = "  ".repeat(depth(stop));
       if (stop.call) console.log(`   ${pad}called at ${stop.call.n}: ${stop.call.t.trim()}`);
       console.log(`   ${pad}${stop.mark} ${stop.name}  ${stop.where}${stop.inChange ? "" : ", not in this change"}${stop.is ? `: ${stop.is}` : ""}`);
       for (const line of stop.lines) {
-        console.log(`       ${String(line.n).padStart(5)} ${line.sign === " " ? " " : line.sign} ${line.t.trim()}${line.notes.map((note) => `      ${note.of.map((k) => part.inputs[k].letter).join(" ")}: ${note.value}`).join("")}`);
+        console.log(`       ${String(line.n).padStart(5)} ${line.sign === " " ? " " : line.sign} ${line.t.trim()}${line.notes.map((note) => `      ${note.of.join(" ")}: ${note.value}`).join("")}`);
         if (line.other) console.log(`       ${String(line.other.n).padStart(5)} ${stop.side === "old" ? "now" : "was"} ${line.other.t.trim()}`);
       }
+      const off = cases.map((part) => [part.letter, stop.code.filter((line) => line.off?.includes(part.letter)).map((line) => line.n)]).filter(([, lines]) => lines.length);
+      if (off.length) console.log(`       passed over: ${off.map(([letter, lines]) => `${letter} ${lines.join(" ")}`).join(", ")}`);
     });
-    for (const run of part.runs) console.log(`   ◦ ${run.name}  ${run.where}`);
+    for (const run of route.runs) console.log(`   ◦ ${run.name}  ${run.where}`);
+  });
+  for (const part of outline.sentences.filter((one) => one.route == null)) {
+    console.log(`\n${part.kind === "rest" ? "ON NO ROUTE\n" : ""}${part.num}  ${part.text}`);
+    if (part.quote) console.log(`   said  ${part.quote}`);
     if (part.kind === "rest") for (const row of part.code) console.log(`    ${row.mark.padEnd(8)} ${row.name}  ${row.kind}  +${row.add} -${row.del}  ${row.where}`);
   }
   console.log(`\n${outline.cases} cases, ${rows.length} rows, ${loose.length} on no route, +${total.add} -${total.del}, ${outline.ms} ms${told?.cached ? ", cases cached" : ""}`);

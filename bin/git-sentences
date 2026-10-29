@@ -62,7 +62,7 @@ build() {
   # First, the whole change in a sentence or two, for the top of the list.
   jq -r '(select(.summary // "" | length > 0) | ["M", .summary] | @tsv),
     (.sentences | to_entries[] | (.key + 1) as $n | .value as $s
-    | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change, ($s.inputs // [] | length)] | @tsv),
+    | (["S", $n, $s.kind, $s.num, $s.add, $s.del, $s.text, $s.ntests, $s.group, $s.ending, $s.change, "", ($s.input // "")] | @tsv),
       ($s.units[] | ["R", $n] + . | @tsv)),
     (.elsewhere // [] | .[] | ["E"] + . | @tsv)' "$dir/$key.json.$$" > "$rows.$$" || return 1
   mv -f "$dir/$key.json.$$" "$dir/$key.json" && mv -f "$page.$$" "$page" && mv -f "$rows.$$" "$rows" || return 1

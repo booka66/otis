@@ -47,7 +47,7 @@ jq -n --argjson a "\$(stop lib.spec.ts 2 'export const r = run({ a: 1 });')" --a
 EOF
   chmod +x "$tmp/meatstub/claude"
   SEAM_CLAUDE=$tmp/meatstub/claude node "$root/share/sentences.mjs" "$base" "$head" --model stub --outline "$tmp/meat.json" >/dev/null 2>&1
-  expect sentences/meat-only "$(jq -r '.sentences[0] | "\([.stops[].path] | unique | join(" ")):\(.data | join(" ")):\([.units[][1]] | unique | join(" "))"' "$tmp/meat.json"):$(grep -c 'gen.generated.ts' "$tmp/meat-prompt")" "lib.ts::lib.ts:0"
+  expect sentences/meat-only "$(jq -r '.routes[0] as $r | .sentences[0] | "\([$r.stops[].path] | unique | join(" ")):\(.data | join(" ")):\([.units[][1]] | unique | join(" "))"' "$tmp/meat.json"):$(grep -c 'gen.generated.ts' "$tmp/meat-prompt")" "lib.ts::lib.ts:0"
   # A case reads its code as it runs now: a stop on a line the change replaced is the new line's, which keeps its
   # own reading; the old line goes under its run, past the brace that closes it, and the rest removed is a count.
   (
@@ -67,13 +67,13 @@ EOF
     chmod +x stub
     SEAM_CLAUDE=$PWD/stub node "$root/share/sentences.mjs" HEAD~ HEAD --model stub --outline turn.json >/dev/null 2>&1
   )
-  expect sentences/reads-as-now "$(jq -r '.sentences[0].stops | "\(length):\(.[0].side):\(.[0].lines | map(.notes[].value) | join(",")):\(.[0].code | map(if .gap then "\(.sign // "⋯")\(.gap)" else "\(.n)\(.sign | sub(" "; "="))" end) | join(","))"' "$tmp/turn/turn.json")" \
+  expect sentences/reads-as-now "$(jq -r '.routes[0].stops | "\(length):\(.[0].side):\(.[0].lines | map(.notes[].value) | join(",")):\(.[0].code | map(if .gap then "\(.sign // "⋯")\(.gap)" else "\(.n)\(.sign | sub(" "; "="))" end) | join(","))"' "$tmp/turn/turn.json")" \
     "1:new:an EmptyError:1=,2=,3=,4+,5=,4-,6+,-2,7="
   rm -rf "$tmp/turn"
-  # The cases that come in the same way are one route: each function on it once, a line saying what holds there for
-  # each case by its letter, the cases that read it alike sharing a note. A function the change leaves alone shows
-  # only what the route uses of it; one whose doc comment is cited is still one stop; an old stop on a line the
-  # change kept reads where it runs now.
+  # The cases that come in the same way run one route: each function on it once, a line keeping what holds there for
+  # each case by its letter, the cases that read it alike sharing a note. A function the change leaves alone shows only
+  # what the route uses of it; one whose doc comment is cited is still one stop; an old stop on a line the change
+  # kept reads where it runs now.
   (
     mkdir -p "$tmp/routes" && cd "$tmp/routes" && git init -q && git config user.email t@t && git config user.name t
     printf '%s\n' 'export function run(list: number[]) {' '  const a = 1;' '  const b = 2;' '  const c = 3;' '  const d = 4;' '  const e = 5;' \
@@ -85,37 +85,40 @@ EOF
     cat > stub <<'EOF'
 #!/bin/sh
 cat > /dev/null
-at() { jq -n --arg name "$1" --arg side "$2" --argjson line "$3" --arg code "$4" --arg value "$5" '{name: $name, is: "", path: "a.ts", side: $side, lines: [{line: $line, code: $code, value: $value}]}'; }
-one() { jq -n --arg group "$1" --arg name "$2" --argjson stops "$3" '{group: $group, name: $name, setup: "", was: "it was", now: "it is", change: "ends differently",
-  described: false, said: "", facts: [], stops: $stops, ends: "", stopped: "", tests: [], data: []}'; }
-a=$(one "a pick" "a list has one" "[$(at run new 10 '  return pick(list);' 'it asks pick'), $(at pick new 14 ' * Picks the first one.' 'the comment says one'), $(at pick new 18 '  return first + 2;' 'one more than before')]")
-b=$(one "a pick" "a list has two" "[$(at pick new 18 '  return first + 2;' 'one more than before'), $(at pick old 17 '  const first = list[0];' 'the first is read')]")
-c=$(one "an empty list" "the list is empty" "[$(at pick new 17 '  const first = list[0];' 'there is none')]")
+at() { jq -n --arg name "$1" --arg side "$2" --argjson line "$3" --arg code "$4" --arg value "$5" --argjson skipped "${6:-[]}" '{name: $name, is: "", path: "a.ts", side: $side, lines: [{line: $line, code: $code, value: $value}], skipped: $skipped}'; }
+one() { jq -n --arg group "$1" --arg name "$2" --arg input "$3" --argjson stops "$4" '{group: $group, name: $name, input: $input, setup: "", was: "it was", now: "it is", change: "ends differently",
+  described: false, said: "", facts: [], stops: $stops, tests: [], data: []}'; }
+a=$(one "a pick" "a list has one" "[1]" "[$(at run new 10 '  return pick(list);' 'it asks pick'), $(at pick new 14 ' * Picks the first one.' 'the comment says one'), $(at pick new 18 '  return first + 2;' 'one more than before')]")
+b=$(one "a pick" "a list has two" "[1, 2]" "[$(at pick new 18 '  return first + 2;' 'one more than before'), $(at pick old 17 '  const first = list[0];' 'the first is read')]")
+c=$(one "an empty list" "the list is empty" "[]" "[$(at pick new 17 '  const first = list[0];' 'there is none' '[{"from": 18, "to": 18}]')]")
 jq -n --argjson a "$a" --argjson b "$b" --argjson c "$c" '{structured_output: {summary: "", groups: [], cases: [$a, $b, $c]}, num_turns: 1, total_cost_usd: 0}'
 EOF
     chmod +x stub
     SEAM_CLAUDE=$PWD/stub node "$root/share/sentences.mjs" HEAD~ HEAD --model stub --outline r.json >/dev/null 2>&1
   )
-  expect sentences/routes "$(jq -r '[.sentences[] | "\(.text)=\(.inputs | map(.letter) | join(""))"] | join(" ")' "$tmp/routes/r.json")" "a pick=AB an empty list=A"
-  expect sentences/route-once "$(jq -r '.sentences[0].stops | map("\(.name):\(.side):\(.range[0]):\(.inside)") | join(" ")' "$tmp/routes/r.json")" "run:new:1: pick:new:13:"
-  expect sentences/route-notes "$(jq -r '.sentences[0].stops[1].lines | map("\(.n)=" + (.notes | map("\(.of | join("+")):\(.value)") | join("/"))) | join(" ")' "$tmp/routes/r.json")" \
-    "14=0:the comment says one 17= 18=0+1:one more than before"
-  expect sentences/route-untouched "$(jq -r '.sentences[0].stops[0].code | map(if .gap then "⋯\(.gap)" else .n end) | join(",")' "$tmp/routes/r.json")" "1,⋯8,10,11"
-  pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 1 | strip)
-  expect sentences/route-pane "$(printf '%s\n' "$pane" | grep -c -e '◀ A B one more than before' -e '^  A  a list has one' -e '^  B  a list has two' -e '2 cases take this route')" "4"
-  # A flag filed on a case before cases were read as routes is the route's that case now takes, with no one asked.
-  printf '%s' '{"version":1,"flags":[{"case":"a list has two","flag":"shallow"}]}' > "$tmp/routes/r.flags.json"
+  expect sentences/routes "$(jq -r '"\(.routes | map(.text) | join("|")) \([.sentences[] | "\(.route)\(.letter)=\(.input)"] | join(" "))"' "$tmp/routes/r.json")" "a pick|an empty list 0A=[1] 0B=[1, 2] 1A=[]"
+  expect sentences/route-once "$(jq -r '.routes[0].stops | map("\(.name):\(.side):\(.range[0]):\(.inside)") | join(" ")' "$tmp/routes/r.json")" "run:new:1: pick:new:13:"
+  expect sentences/route-notes "$(jq -r '.routes[0].stops[1].lines | map("\(.n)=" + (.notes | map("\(.of | join("+")):\(.value)") | join("/"))) | join(" ")' "$tmp/routes/r.json")" \
+    "14=A:the comment says one 17= 18=A+B:one more than before"
+  expect sentences/route-untouched "$(jq -r '.routes[0].stops[0].code | map(if .gap then "⋯\(.gap)" else .n end) | join(",")' "$tmp/routes/r.json")" "1,⋯8,10,11"
+  # A case's pane is its route as it runs it: what holds on a line for it alone, and a line it never runs dim.
+  pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 2 | strip)
+  expect sentences/trace-own "$(printf '%s\n' "$pane" | grep -c -e '^  \[1, 2\]$' -e 'ROUTE: a pick (case B of 2)' -e '◀ one more than before'):$(printf '%s\n' "$pane" | grep -c -e 'the comment says one' -e 'it asks pick')" "3:0"
+  expect sentences/trace-skipped "$(OTIS_T_CONTEXT=7 FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 3 | grep -c "$(printf '\033')\[7m *return first + 2;")" "1"
+  # A flag filed on a route is on the pane of every case that runs it; one filed on a case when each case was told
+  # on its own moves to its route, with no one asked.
+  printf '%s' '{"version":1,"flags":[{"case":"a list has two","flag":"shallow","claim":"pick only adds","cost":"c","smaller":"s","comment":"","line":{"path":"a.ts","side":"new","line":18,"code":"  return first + 2;","note":"n"},"caller":{"path":"a.ts","side":"new","line":10,"code":"  return pick(list);","note":"m"}}]}' > "$tmp/routes/r.flags.json"
   (cd "$tmp/routes" && SEAM_CLAUDE=false node "$root/share/flags.mjs" r.json --now)
-  expect sentences/flags-on-route "$(cat "$tmp/routes/r.flags.tsv")" "$(printf 'a pick\tshallow')"
+  expect sentences/flags-on-route "$(cut -f1 "$tmp/routes/r.flags.tsv"):$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 1 | strip | grep -c 'SHALLOW MODULE'):$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 3 | strip | grep -c 'SHALLOW MODULE')" "a pick:1:0"
   rm -rf "$tmp/routes"
-  # A route's title and how many cases take it are pinned to the top of its pane, so they stay while the rest
-  # scrolls; each case is said once.
-  printf '%s' '{"sentences":[{"kind":"case","text":"a retry","facts":[],"stops":[],"runs":[],"inputs":[{"letter":"A","title":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[]},{"letter":"B","title":"A retry works","was":"it works","now":"it works","change":"the same","facts":[]}]}]}' > "$tmp/case.json"
+  # What comes in and how it ends are pinned to the top of a case's pane, so they stay while the rest scrolls, and
+  # are said once.
+  printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","input":"","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"runs":[],"route":0,"letter":"A"}],"routes":[{"text":"a retry","where":"","stops":[],"runs":[]}]}' > "$tmp/case.json"
   pane=$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | strip)
-  expect sentences/case-pinned "$(printf '%s\n' "$pane" | awk '/^\036pin/ { on = 1 } on' | head -3 | tr '\036\n' '^|'):$(printf '%s\n' "$pane" | grep -c 'A retry runs out')" "^pin 3|  a retry|  2 cases take this route|:1"
-  # An outline an older otis told, shown while its change is told again, draws each case as a route of its own.
+  expect sentences/case-pinned "$(printf '%s\n' "$pane" | awk '/^\036pin/ { on = 1 } on' | head -3 | tr '\036\n' '^|'):$(printf '%s\n' "$pane" | grep -c 'A retry runs out')" "^pin 3|  A retry runs out|  it hangs → it gives up|:1"
+  # An outline an older otis told, shown while its change is told again, says so rather than draw it half.
   printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"stops":[],"code":[],"tests":[],"links":[],"runs":[]}]}' > "$tmp/case.json"
-  expect sentences/older-outline "$(FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 2>&1 | strip | grep -c -e 'A retry runs out' -e 'it hangs → it gives up')" "3"
+  expect sentences/older-outline "$(FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 2>&1 | strip | grep -c 'being told again')" "1"
   expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
   # A screen with tabs lists cases, never the tree: before they come, it says why there are none.
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"
