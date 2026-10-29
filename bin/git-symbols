@@ -29,9 +29,10 @@
 #                                            prints the footer note's fzf actions
 # git-symbols --again <rev>                  a review's r: Claude asked again for the gloss and the cases, where it failed
 # git-symbols --deps <side> <start> <end> <row id>
-#                                            in nvim's frame, what the row's open underlines there
-#                                            (otis-frame's OTIS_FRAME_UNDERLINE): "<start> <end>" and
-#                                            the names of the changed symbols it uses; outside it, nothing
+#                                            in nvim's frame, the row's symbol for the file its open
+#                                            shows (otis-frame's OTIS_FRAME_UNDERLINE): its lines there
+#                                            and in the base, 0 0 for none, and the names of the
+#                                            changed symbols it uses; outside it, nothing
 # git-symbols --at <rev> <path> <side> <start> <end> <row id> <line>
 #                                            the file line the row's preview is scrolled to, else <line>
 #                                            and the column of the row's name on it (line:col): enter
@@ -290,9 +291,22 @@ case $mode in
   # own, "type " off a type's.
   --deps)
     [ -n "$OTIS_NVIM_FRAME" ] && [ "$1" != file ] && [ -n "$2" ] && [ -s "$st/symbols.tsv" ] || exit 0
-    uses_of "$4" | awk -F'\t' -v at="$2 $3" 'FILENAME == ARGV[1] { if ($2 != "file" && $4 == "") top[$1 "#" $3] = 1; next }
-      $0 in top { sub(/.*#/, ""); sub(/^type /, ""); if (!seen[$0]++) at = at " " $0 }
-      END { print at }' "$st/symbols.tsv" -
+    # A removed symbol's lines are the base's: none of a file the change kept,
+    # nothing to underline there; a deleted file opens as its base, with them.
+    if [ "$1" = old ]; then
+      p=${4##*>} head=
+      read -r _ head 2>/dev/null < "$st/symbols.tsv.rev"
+      if [ -n "$head" ]; then git cat-file -e "$head:${p%%#*}" 2>/dev/null; else [ -e "$(git rev-parse --show-toplevel)/${p%%#*}" ]; fi && { echo "0 0 $2 $3"; exit 0; }
+    fi
+    # A kept symbol's base lines are the table's own, after its lines here.
+    uses_of "$4" | awk -F'\t' -v at="$2 $3" -v id="${4##*>}" 'FILENAME == ARGV[1] {
+        if ($2 == "file") next
+        if ($4 == "") top[$1 "#" $3] = 1
+        if ($7 == "new" && $14 != "" && $1 "#" ($4 != "" ? $4 "+" : "") $3 == id) base = $14 " " $15
+        next
+      }
+      $0 in top { sub(/.*#/, ""); sub(/^type /, ""); if (!seen[$0]++) names = names " " $0 }
+      END { print at " " (base == "" ? "0 0" : base) names }' "$st/symbols.tsv" -
     exit 0 ;;
   --copy)
     # The row's symbol is its id's last step, path#name, a member's name
@@ -2123,7 +2137,8 @@ fold="OTIS_SYMBOLS_FOLD=1 $list"
 # What enter opens, and, in a frame (otis-frame), what the row you settle on
 # shows beside the list (--show), enter then taking you into it.
 where="\$(git-symbols --at $rev {2} {4} {5} {6} {12} {3})"
-# In nvim's frame, what the row's symbol uses underlined in the file it opens.
+# In nvim's frame, the row's symbol in the file it opens: its lines, where ] and [
+# stay, and what it uses, underlined there.
 under="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\""
 if [ -z "$head" ]; then
   open="$under git-symbols --edit $rev {2} $where"

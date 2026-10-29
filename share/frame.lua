@@ -167,11 +167,11 @@ local function underline()
   vim.api.nvim_set_decoration_provider(ns, {
     on_win = function(_, win, buf)
       lit = vim.t.otis_lit
-      lit = lit and win == vim.t.otis_code and buf == lit.buf and lit or nil
+      lit = lit and win == vim.t.otis_code and buf == lit.buf and next(lit.names) and lit or nil
       return lit ~= nil
     end,
     on_line = function(_, _, buf, row)
-      if row + 1 < lit.from or row + 1 > lit.to then
+      if row + 1 < lit.lines[1] or row + 1 > lit.lines[2] then
         return
       end
       local l = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1]
@@ -289,11 +289,13 @@ function M.start()
   vim.cmd.startinsert()
 end
 
--- open(path, line, col, readonly, underline): the file in the code window,
--- its cursor on line and col (bytes, 1-based; 0 is the line's first
--- non-blank). underline, "<first> <last> <name>...", is what the row's
--- symbol uses (git-symbols --deps): underlined there while the file shows here.
-function M.open(path, line, col, readonly, underline)
+-- open(path, line, col, readonly, symbol): the file in the code window, its
+-- cursor on line and col (bytes, 1-based; 0 is the line's first non-blank).
+-- symbol, "<first> <last> <base first> <base last> <name>...", is the row's
+-- (git-symbols --deps): its lines here and in the change's base, 0 0 for
+-- none, where ] and [ stay, and the changed symbols it uses, underlined in
+-- its lines while the file shows here.
+function M.open(path, line, col, readonly, symbol)
   local code = M.code()
   vim.api.nvim_win_call(code, function()
     local full = vim.fn.fnamemodify(path, ":p")
@@ -324,11 +326,11 @@ function M.open(path, line, col, readonly, underline)
       vim.cmd("normal! ^")
     end
     vim.cmd("normal! zz")
-    local w, names = vim.split(underline or "", " ", { trimempty = true }), {}
-    for i = 3, #w do
+    local w, names = vim.split(symbol or "", " ", { trimempty = true }), {}
+    for i = 5, #w do
       names[w[i]] = true
     end
-    vim.t.otis_lit = next(names) and { buf = vim.api.nvim_get_current_buf(), from = tonumber(w[1]), to = tonumber(w[2]), names = names } or nil
+    vim.t.otis_lit = w[4] and { buf = vim.api.nvim_get_current_buf(), lines = { tonumber(w[1]), tonumber(w[2]) }, base = { tonumber(w[3]), tonumber(w[4]) }, names = names } or nil
   end)
 end
 
@@ -531,6 +533,8 @@ end
 -- changes(win): the runs of lines the window's change made, { first, last }
 -- in order: a preview's, found as it was drawn (text), or a file's since the
 -- change's base (NVIM_DIFF_BASE, else HEAD), all of it where the base has none.
+-- In the lit row's file, its symbol's alone: those that touch its lines here
+-- or in the base, cut to its lines here.
 local function changes(win)
   local b = vim.api.nvim_win_get_buf(win)
   if vim.b[b].otis_text then
@@ -539,11 +543,22 @@ local function changes(win)
   local name = vim.api.nvim_buf_get_name(b)
   local base = vim.system({ "git", "-C", vim.fs.dirname(name), "show", (vim.env.NVIM_DIFF_BASE or "HEAD") .. ":./" .. vim.fs.basename(name) }, { text = true }):wait()
   local now = table.concat(vim.api.nvim_buf_get_lines(b, 0, -1, false), "\n") .. "\n"
-  local runs = {}
+  local lit, runs = vim.t.otis_lit, {}
+  lit = lit and lit.buf == b and lit or nil
+  local function meets(at, n, lines)
+    return n > 0 and at <= lines[2] and at + n > lines[1]
+  end
   for _, h in ipairs((vim.text and vim.text.diff or vim.diff)(base.code == 0 and base.stdout or "", now, { result_type = "indices" })) do
     -- Lines taken out are a run on the line they were under.
     local first = math.max(h[3], 1)
-    table.insert(runs, { first, math.max(h[3] + h[4] - 1, first) })
+    local run = { first, math.max(h[3] + h[4] - 1, first) }
+    if not lit then
+      table.insert(runs, run)
+    elseif meets(h[3], h[4], lit.lines) then
+      table.insert(runs, { math.max(run[1], lit.lines[1]), math.min(run[2], lit.lines[2]) })
+    elseif meets(h[1], h[2], lit.base) then
+      table.insert(runs, run)
+    end
   end
   return runs
 end
@@ -553,7 +568,8 @@ local scrolls = { ["ctrl-d"] = "\4", ["ctrl-u"] = "\21", ["ctrl-e"] = "\5", ["ct
 
 -- key(name): a key of the picker's pane, pressed in the list, done in the
 -- code window: ctrl-d, ctrl-u, ctrl-e and ctrl-y scroll it, and ] and [ put
--- the next or the last change after or before its cursor in its middle.
+-- the next or the last change after or before its cursor in its middle, a
+-- symbol's own on its row.
 function M.key(name)
   local code = vim.t.otis_code
   if not valid(code) then

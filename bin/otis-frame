@@ -19,9 +19,8 @@
 # otis-frame --open <path> <line> <col> <true|false>  the file on the right
 #                                                     (otis-edit), read only;
 #                                                     OTIS_FRAME_UNDERLINE,
-#                                                     "<first> <last> <name>...",
-#                                                     the names underlined
-#                                                     between those lines there
+#                                                     the row's symbol there
+#                                                     (git-symbols --deps)
 # otis-frame --text <file> [<key>]                    a preview on the right,
 #                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right

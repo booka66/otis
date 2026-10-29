@@ -126,7 +126,7 @@ list="git-mr-files --list $iid $range" light="git-mr-files --light $iid $range"
 refresh="execute-silent(git-mr-file-preview --refresh $iid $range)+reload($list)"
 # What enter opens, and, in a frame (otis-frame), what the row you settle on
 # shows beside the list (--show), enter then taking you into it.
-# In nvim's frame, what the row's symbol uses is underlined in the file.
+# In nvim's frame, ] and [ stay in the row's symbol, and what it uses is underlined.
 open="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\" git-commit-open $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3})"
 
 # The first keys are the review itself, and the footer shows those; the

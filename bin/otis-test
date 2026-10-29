@@ -840,8 +840,10 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   expect symbols/order "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box grow helper fresh Wide Opts "
   expect symbols/changes "$(awk -F'\t' '$2 != "file" && $1 == "lib.ts" { print $6 }' "$table" | tr '\n' ' ')" "signature body body removed added added signature "
   expect symbols/uses "$(awk -F'\t' '$3 == "run" || $3 == "fresh" { print $18 }' "$table" | tr '\n' ' ')" "lib.ts#Opts lib.ts#Opts "
-  # What nvim's frame underlines in run's lines: what it uses; nothing outside a frame.
-  expect symbols/deps "$(OTIS_NVIM_FRAME=$tmp GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')|$(GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')" "2 4 Opts|"
+  # What nvim's frame takes for run: its lines, its base's, and what it uses
+  # to underline; nothing outside a frame. Removed helper has no lines in the
+  # file the change kept, only its base's.
+  expect symbols/deps "$(OTIS_NVIM_FRAME=$tmp GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')|$(GIT_FZF_STATE=$tmp/symst git-symbols --deps new 2 4 'lib.ts#run')|$(OTIS_NVIM_FRAME=$tmp GIT_FZF_STATE=$tmp/symst git-symbols --deps old 5 7 'lib.ts#helper')" "2 4 2 4 Opts||0 0 5 7"
   expect symbols/roots "$(awk -F'\t' '$19 == 1 && $1 == "lib.ts" { print $3 }' "$table" | tr '\n' ' ')" "run Box helper fresh Wide "
   expect symbols/same-name "$(awk -F'\t' '$1 == "pair.ts" && $3 ~ /Pair$/ { print $3 ":" $6 ":" $18 }' "$table" | tr '\n' ' ')" "Pair:added: type Pair:added:pair.ts#Pair usePair:added:pair.ts#type Pair "
   expect symbols/gen-isolated "$(awk -F'\t' '$1 == "gen.generated.ts" { print $3 ":" $18 ":" $19 }' "$table")" "G::1"
@@ -1851,9 +1853,9 @@ end
 vim.o.showmode = false
 f.start()
 vim.api.nvim_set_current_win(vim.t.otis_code)
-f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 2 helper")
+f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 2 0 0 helper")
 shown()
-f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 3 Cart helper")
+f.open(vim.env.TMP .. "/u.ts", 1, 0, false, "1 3 0 0 Cart helper")
 shown()
 local base = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(base, 0, -1, false, { "helper(Cart)" })
@@ -1895,13 +1897,16 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
     f.text('$tmp/pv5.txt', 'a'); top(); f.text('$tmp/pv5.txt', 'b'); top(); f.text('$tmp/pv5.txt', 'a'); top()
     f.open('$tmp/frame.txt', 1, 0, false); f.text('$tmp/pv5.txt', 'a'); top(); f.text('$tmp/pv5.txt'); top()" -c 'qa!' 2>&1)" "30 1 30 30 1 "
   # ] and [ pressed in the list go to the code's next and last change: a
-  # file's since the base (line 20 taken out, 40 changed), a preview's on a
-  # diff's background but the code's own.
-  fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[' }) do f.key(k); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
-  ( mkdir -p "$tmp/fk" && cd "$tmp/fk" && seq 1 60 > n.txt && git init -q . && git add n.txt && git -c user.email=t@t -c user.name=t commit -qm n && sed -i.bak -e 20d -e '40s/.*/x/' n.txt )
-  expect frame/key-file "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false)")" "19 39 39 19 "
+  # file's since the base (5 and 40 changed, 20 taken out), a symbol's own on
+  # its row (lines 10 to 45, never 5), a removed one's where it was, and a
+  # preview's on a diff's background but the code's own.
+  fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[', '[' }) do f.key(k); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
+  ( mkdir -p "$tmp/fk" && cd "$tmp/fk" && seq 1 60 > n.txt && git init -q . && git add n.txt && git -c user.email=t@t -c user.name=t commit -qm n && sed -i.bak -e '5s/.*/a/' -e 20d -e '40s/.*/x/' n.txt )
+  expect frame/key-file "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false)")" "5 19 39 19 5 "
+  expect frame/key-symbol "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46')")" "19 39 39 19 19 "
+  expect frame/key-removed "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false, '0 0 20 20')")" "19 19 19 19 19 "
   printf 'a\n\033[48;2;1;2;3mcode\033[m\n\033[48;2;0;50;0m+new\033[m\nb\n\033[48;2;50;0;0m-old\033[m\n' > "$tmp/pv3.txt"
-  expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 "
+  expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 3 "
 fi
 # F on the board (otis-find): nvim opened straight into your own fuzzy finder
 # (share/find.lua), which reads what git config otis.finder names.
