@@ -107,8 +107,9 @@ at_quit() { (( $#outq )) && print -rl -- $outq; }
 # Side by side from 120 columns, as git-fzf had them (the preview's 55% at 66
 # or more), the list 42% of it; under that the preview under the list. lw
 # the list's width, lh its height; the pane at column px, row py, pw wide
-# and ph high, its first two rows where the row is (phd).
-integer lw lh px py pw ph side phd=2
+# and ph high, its first two rows where the row is (phd). beside: the pane
+# is right of the list in this terminal, so a row clears up to it and no more.
+integer lw lh px py pw ph side beside phd=2
 # In otis-frame's nvim, whose window beside this terminal is the pane.
 integer framed=0
 [[ -n $OTIS_NVIM_FRAME ]] && framed=1
@@ -120,15 +121,16 @@ integer hoff=0 hroom=0
 layout() {
   if (( framed )); then
     # In a frame the list is this whole terminal, and the pane is nvim's
-    # window beside it (otis-frame), as wide as the frame says.
-    side=1 lw=$(( W - 1 )) lh=$(( H - 2 )) px=$(( W + 2 )) py=1 ph=$(( H - 2 )) pw=0
+    # window beside it (otis-frame), as wide as the frame says. A row clears
+    # to its end, or what one cut for a wider list left in the last column stayed.
+    side=1 beside=0 lw=$(( W - 1 )) lh=$(( H - 2 )) px=$(( W + 2 )) py=1 ph=$(( H - 2 )) pw=0
     [[ -r $OTIS_NVIM_FRAME/cols ]] && pw=$(<$OTIS_NVIM_FRAME/cols)
     (( pw > 0 )) || pw=80
   elif (( W >= 120 )); then
-    side=1; (( lw = W * 30 / 100, lw < 44 ? (lw = 44) : 0 ))
+    side=1 beside=1; (( lw = W * 30 / 100, lw < 44 ? (lw = 44) : 0 ))
     (( lh = H - 2, px = lw + 6, py = 1, pw = W - px, ph = H - 2 ))
   else
-    side=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
+    side=0 beside=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
   fi
   # What the rows and the previews are drawn for, for every command run
   # from here: --rows fits the signatures to the list, and a preview's
@@ -1076,7 +1078,7 @@ draw() {
     fi
     # Beside the pane, the list's side cleared first (ECH, which leaves the
     # pane be), then the rule between them.
-    (( side )) && { s=$e"[${lw}X"$s; (( framed )) || s+=$e"[$(( lw + 1 ))G"$R"  "$F"│"$R; }
+    (( beside )) && s=$e"[${lw}X"$s$e"[$(( lw + 1 ))G"$R"  "$F"│"$R
     fr+=("$s")
   done
   if (( ! side )); then
@@ -1163,7 +1165,7 @@ draw() {
     [[ $fr[y] == "$shown_rows[y]" ]] && continue
     (( y <= rows )) && srow=$y || { (( side )) && srow=$y || srow=$(( y <= rows + 1 ? y : y + ph )); }
     body+=$e"[$srow;1H"$fr[y]$R
-    (( ! side || y > rows )) && body+=$e'[K'
+    (( ! beside || y > rows )) && body+=$e'[K'
   done
   for (( y = 1; y <= $#pr; y++ )); do
     [[ $pr[y] == "$shown_pane[y]" ]] && continue

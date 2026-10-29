@@ -191,7 +191,9 @@ case $mode in
   # --at) is the note.
   --page)
     # Listed by sentence, the page is that list's: the same sentences, symbols and lines (git-sentences).
-    if read -r sentf 2>/dev/null < "$st/sentences" && [ -s "${sentf%.tsv}.html" ]; then exec otis-open --fzf "${sentf%.tsv}.html"; fi
+    if [ ! -e "$st/by-symbol" ] && [ ! -e "$st/by-file" ] && read -r sentf 2>/dev/null < "$st/sentences" && [ -s "${sentf%.tsv}.html" ]; then
+      exec otis-open --fzf "${sentf%.tsv}.html"
+    fi
     rev=$1 id=${2%%>callers*}; id=${id##*>}
     # otis.engine dagger: dagger's own page, which a server of its own on
     # localhost answers for as long as it runs, so the one this repo last
@@ -1403,14 +1405,16 @@ if [ "$mode" = --rows ]; then
   # otis.symbolsModel off keeps Claude out of it; the symbols tab (by-symbol) is the tree. The cases tab lists
   # only cases, and says so while they are on their way, or why none will come.
   sentf=/dev/null sentwait= casesoff= failed=
-  [ -n "$GIT_FZF_STATE" ] && rm -f "$st/sentences"
+  told=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }
+  # Where a case's pane, v and the page find a review's cases: written once, since its range never moves. A reload
+  # took it away and put it back, and a case's pane drawn in between, coming back to the cases tab, stayed blank.
+  [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/sentences" ] && printf '%s\n' "$told.tsv" > "$st/sentences"
   if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
-    sentf=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.tsv
-    if [ -s "$sentf" ] && [ ! "$root/share/sentences.mjs" -nt "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"
-    else
+    sentf=$told.tsv
+    if [ ! -s "$sentf" ] || [ "$root/share/sentences.mjs" -nt "$sentf" ]; then
       # Told by an older otis: shown as it is while it is told again behind it, never a wait in place of the
       # cases you had. The screen reloads when the new ones land.
-      if [ -s "$sentf" ]; then printf '%s\n' "$sentf" > "$st/sentences"; else sentf=/dev/null; fi
+      [ -s "$sentf" ] || sentf=/dev/null
       asked=$st/sentences-asked.${now#* }
       if [ ! -e "$asked" ]; then
         : > "$asked"
@@ -1419,7 +1423,7 @@ if [ "$mode" = --rows ]; then
       fi
       [ -s "$asked" ] && sentwait=1 || casesoff=1
       # A telling that failed, and why (git-sentences), in place of the wait.
-      if [ -n "$sentwait" ] && read -r failed 2>/dev/null < "$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }.failed"; then
+      if [ -n "$sentwait" ] && read -r failed 2>/dev/null < "$told.failed"; then
         sentwait=
       fi
     fi
