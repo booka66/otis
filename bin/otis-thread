@@ -256,7 +256,7 @@ fi
 
 if [ "$mode" = send ]; then
   message=$2 where=$3
-  printf '\n\001U %s\n' "$message" >> "$d/chat"
+  jq -nj -L "$share" --arg q "$message" 'include "chat"; $q | question' >> "$d/chat"
   [ -n "$where" ] && printf '\001O on %s\n' "$where" >> "$d/chat" && message="$message
 
 (I'm on $where.)"

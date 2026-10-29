@@ -412,7 +412,7 @@ gunwip() {
 # screen's (scroll region, wrap, cursor, mouse reporting, the main screen).
 # clear does not reset the scroll region; a TUI that exits badly leaves it set
 # and later output scrolls out of view.
-fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?1049l'; clear }
+fixterm() { stty sane; printf '\033[r\033[?7h\033[?25h\033[0m\033[?1000l\033[?1002l\033[?1006l\033[?2004l\033[?1049l'; clear }
 
 # The board, and the one command named after the tool: every change a row
 # that says the one move it needs next, then what is moving without you and

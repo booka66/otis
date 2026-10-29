@@ -6,8 +6,8 @@
 # The header sits above it, saying what the line is about (the lines of code
 # a comment is on, the thread it answers); rows piped in (git-symbols-ask's
 # starters) sit between, one under the cursor, up and down moving it; the
-# footer says what the keys do. Editing is a line's: the arrows, home and
-# end move, backspace deletes, ctrl-a and ctrl-u and ctrl-w as in a shell.
+# footer says what the keys do. Editing is lineedit's (share/screen.zsh), on
+# one line: a paste's line ends go in as spaces.
 #
 # enter, or ctrl-e (a caller's editor), ends it, and it prints three lines:
 # the key, the row under the cursor (as it was piped, whole) and the text
@@ -100,30 +100,14 @@ shown_foot=
 finish() { key=$1 code=0; quit 0; }
 handle() {
   [[ $1 == $e'[<'* ]] && return
-  local k=$1 n
-  keyname "$k"; n=$REPLY
-  case $k in
-    $'\t') n=tab ;; $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
-    $e'[H'|$e'[1~'|$'\x01') n=home ;; $e'[F'|$e'[4~') n=end ;;
-    $'\x17') n=ctrl-w ;;
-  esac
-  case $n in
+  keyname "$1"
+  case $REPLY in
     enter) finish enter ;;
     ctrl-e) finish ctrl-e ;;
     esc|ctrl-c) quit 130 ;;
     up|ctrl-p) (( cur > 1 )) && (( cur-- )) ;;
     down|ctrl-n|tab) (( cur < $#raw )) && (( cur++ )) ;;
-    left) (( at > 0 )) && (( at-- )) ;;
-    right) (( at < $#text )) && (( at++ )) ;;
-    home) at=0 ;;
-    end) at=$#text ;;
-    bspace) (( at > 0 )) && { text=${text[1,at-1]}${text[at+1,-1]}; (( at-- )); } ;;
-    ctrl-u) text=${text[at+1,-1]} at=0 ;;
-    ctrl-w)
-      local head=${text[1,at]}
-      head=${head%%[[:space:]]#}; head=${head%%[^[:space:]]#}
-      text=$head${text[at+1,-1]} at=$#head ;;
-    *) [[ $k == [[:print:]]* && $k != $e* ]] && { text=${text[1,at]}$k${text[at+1,-1]}; (( at += $#k )); } ;;
+    *) lineedit text at "$1" $W && text=${text//$'\n'/ } ;;
   esac
 }
 

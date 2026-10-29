@@ -66,8 +66,8 @@ exec {tty}<>/dev/tty
 saved=$(stty -g <&$tty)
 # busy reads no key: the terminal stays the command's, and ctrl-c with it.
 if [[ $mode != busy ]]; then
-  at_leave() { stty $saved <&$tty; }
-  stty -icanon -echo -isig min 1 time 0 <&$tty
+  at_leave() { keys_back; }
+  keys_raw
 fi
 loader_stop
 size
@@ -180,31 +180,16 @@ tick() {
 
 # ask: a line typed into the box, in text; 0 for enter, 1 for esc.
 ask() {
-  local k n hint=$1
+  local k hint=$1
   while :; do
     box "$hint" input
     readkey; k=$REPLY
     [[ $k == $e'[<'* ]] && continue
-    keyname "$k"; n=$REPLY
-    case $k in
-      $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
-      $e'[H'|$e'[1~'|$'\x01') n=home ;; $e'[F'|$e'[4~') n=end ;;
-      $'\x17') n=ctrl-w ;;
-    esac
-    case $n in
+    keyname "$k"
+    case $REPLY in
       enter) return 0 ;;
       esc|ctrl-c) return 1 ;;
-      left) (( at > 0 )) && (( at-- )) ;;
-      right) (( at < $#text )) && (( at++ )) ;;
-      home) at=0 ;;
-      end|ctrl-e) at=$#text ;;
-      bspace) (( at > 0 )) && { text=${text[1,at-1]}${text[at+1,-1]}; (( at-- )); } ;;
-      ctrl-u) text=${text[at+1,-1]} at=0 ;;
-      ctrl-w)
-        local head=${text[1,at]}
-        head=${head%%[[:space:]]#}; head=${head%%[^[:space:]]#}
-        text=$head${text[at+1,-1]} at=$#head ;;
-      *) [[ $k == [[:print:]]* && $k != $e* ]] && { text=${text[1,at]}$k${text[at+1,-1]}; (( at += $#k )); } ;;
+      *) lineedit text at "$k" $iw && text=${text//$'\n'/ } ;;
     esac
   done
 }

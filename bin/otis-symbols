@@ -117,7 +117,7 @@ typeset -a PH HB
 # The pinned head whole (HB) when it is taller than its share of the pane
 # (hroom rows), and how far it is scrolled (hoff): J and K, or the wheel
 # over it, scroll it; the code under it keeps the rest of the pane.
-integer hoff=0 hroom=0
+integer hoff=0 hroom=0 ctw=0
 layout() {
   if (( framed )); then
     # In a frame the list is this whole terminal, and the pane is nvim's
@@ -132,6 +132,9 @@ layout() {
   else
     side=0 beside=0 lw=$W; (( lh = (H - 2) * 45 / 100, py = lh + 2, ph = H - 2 - lh - 1, px = 1, pw = W - 1 ))
   fi
+  # What you type in Claude's panel is this wide, from column 5: draw's
+  # margin and the › before it (chat_frame).
+  (( ctw = lw - 6 ))
   # What the rows and the previews are drawn for, for every command run
   # from here: --rows fits the signatures to the list, and a preview's
   # position (git-symbols --at, --peeks) is worked out at the pane's width.
@@ -1141,7 +1144,7 @@ draw() {
   elif (( searching )); then foot+=$A"/"$R$T" type to search the rows · enter or esc to stop · esc again clears it"$R
   elif (( cfocus )); then
     chat_busy && foot+=$B$A"ctrl-c"$R$B$T" stops it"$UB$R$C"   ·   "$R
-    foot+=$A"⏎"$R$C" asks  "$A"tab"$R$C" an idea  "$A"↑↓"$R$C" scroll  "$A"ctrl-f"$R$C" in Claude Code  "$A"/new"$R$C" starts over  "$A"esc"$R$C" back to the rows  "$R$A"ctrl-a"$R$C" hides it"$R
+    foot+=$A"⏎"$R$C" asks  "$A"⇧⏎"$R$C" newline  "$A"tab"$R$C" an idea  "$A"↑↓"$R$C" scroll  "$A"ctrl-f"$R$C" in Claude Code  "$A"/new"$R$C" starts over  "$A"esc"$R$C" back to the rows  "$R$A"ctrl-a"$R$C" hides it"$R
     cut "$foot" $(( W - 1 )); foot=$REPLY
   else
     local n v used_=2 room
@@ -1436,11 +1439,19 @@ mouse() {
   # scrolls; its rows sit in the pane between the pane's own lines.
   (( bfocus && b != 64 && b != 65 )) && return
   (( bshown && l > bline )) && (( l = l > bline + bshown ? l - bshown : bline ))
-  # The panel's: the wheel scrolls what Claude said, a click types in it.
+  # The panel's: the wheel scrolls what Claude said, a click types in it,
+  # and on what you typed puts the cursor there (from column 5: layout).
   if (( chat && y > lh - chh && y <= lh && (side ? x < lw : 1) )); then
     if (( b == 64 )); then (( coff += 3 ))
     elif (( b == 65 )); then (( coff -= 3, coff < 0 ? (coff = 0) : 0 ))
-    elif (( b == 0 && ! up )); then cfocus=1; fi
+    elif (( b == 0 && ! up )); then
+      if (( cfocus && y > lh - cin )); then
+        textrows "$ctext" $cat_ $ctw
+        (( l = cfirst + y - (lh - cin + 1), c = x - 5, c < 0 ? (c = 0) : 0 ))
+        (( c > $#TR[l] ? (c = $#TR[l]) : 0, cat_ = TS[l] - 1 + c ))
+      fi
+      cfocus=1
+    fi
     return
   fi
   if (( b == 64 || b == 65 )); then
@@ -1520,13 +1531,15 @@ hunk() {
 # chat file, which the panel draws, over the lower part of the list. esc
 # gives the keys back to the tree, the panel still up, so you move about
 # between questions; a types in it again, and esc once more closes it.
+# What you type wraps, the rows growing to half the panel; shift-enter
+# starts a new line and a paste goes in whole, its lines with it.
 # ctrl-a shows or hides it from anywhere, the conversation kept. tab puts in a question that fits the row
 # (--starters), ctrl-c stops an answer, /new starts over, and ctrl-f opens
 # the conversation in Claude Code, full screen, for what the panel's Claude
 # cannot do: edit, or ask a permission. ctpl is the picker's a, the row's
 # fields still {n}; cafter what the binding does after it (a reload), run
 # when Claude has drafted a comment.
-integer chat=0 cfocus=0 cat_=0 coff=0 cstn=0 chh=0 ccw=0 cwas=0 cdrafted=0
+integer chat=0 cfocus=0 cat_=0 coff=0 cstn=0 chh=0 ccw=0 cwas=0 cdrafted=0 cin=0 cfirst=1
 float csent=0
 ctext= cdir= caskl= ctpl= cafter= csig=
 typeset -a CL cst CF
@@ -1608,38 +1621,13 @@ chat_key() {
     tab)
       # The next idea, while what is typed is none of your own.
       (( $#cst )) && [[ -z $ctext || $ctext == $cst[cstn] ]] && { (( cstn = cstn % $#cst + 1 )); ctext=$cst[cstn] cat_=$#cst[cstn]; } ;;
-    up) (( coff += 3 )) ;;
-    down) (( coff -= 3, coff < 0 ? (coff = 0) : 0 )) ;;
+    # A row up or down in what you type, and past its first or last, what was said.
+    up) lineedit ctext cat_ "$k" $ctw || (( coff += 3 )) ;;
+    down) lineedit ctext cat_ "$k" $ctw || (( coff -= 3, coff < 0 ? (coff = 0) : 0 )) ;;
     page-up) (( coff += chh / 2 )) ;;
     page-down) (( coff -= chh / 2, coff < 0 ? (coff = 0) : 0 )) ;;
-    *) lineedit ctext cat_ "$k" ;;
+    *) lineedit ctext cat_ "$k" $ctw ;;
   esac
-}
-# lineedit <text> <cursor> <key>: a key typed into words being written (the
-# panel's question, a comment's box), on the text and the cursor in the
-# variables named: the arrows, home and end move, backspace deletes, ctrl-u
-# and ctrl-w as in a shell, anything printable goes in. False for any other.
-lineedit() {
-  local k=$3 t=${(P)1} h n
-  integer a=${(P)2}
-  keyname "$k"; n=$REPLY
-  case $k in
-    $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
-    $e'[H'|$e'[1~') n=home ;; $e'[F'|$e'[4~') n=end ;;
-    $'\x17') n=ctrl-w ;;
-  esac
-  case $n in
-    left) (( a > 0 )) && (( a-- )) ;;
-    right) (( a < $#t )) && (( a++ )) ;;
-    home) a=0 ;;
-    end|ctrl-e) a=$#t ;;
-    bspace) (( a > 0 )) && { t=${t[1,a-1]}${t[a+1,-1]}; (( a-- )); } ;;
-    ctrl-u) t=${t[a+1,-1]} a=0 ;;
-    ctrl-w) h=${t[1,a]}; h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}; t=$h${t[a+1,-1]} a=$#h ;;
-    *) [[ $k == [[:print:]]* && $k != $e* ]] || return 1
-       t=${t[1,a]}$k${t[a+1,-1]}; (( a += $#k )) ;;
-  esac
-  : "${(P)1::=$t}" "${(P)2::=$a}"
 }
 # inline <line>: a line of Claude's markdown as the panel shows it, **bold**
 # and `code` lit; a pair the wrap broke in two loses its marks.
@@ -1653,17 +1641,21 @@ inline() {
 # its own after \001 and a letter) as the panel's lines, wrapped to it, in CL.
 chat_load() {
   local l t pre ind lk= f=$cdir/chat
-  integer w=$(( lw - 5 )) code=0
+  integer w=$(( lw - 5 )) code=0 inq=0
   CL=() cdrafted=0 ccw=$lw
   [[ -s $f ]] || return
   local -a src=("${(@f)$(<$f)}")
   (( $#src > 800 )) && src=($src[-800,-1])
   for l in "${src[@]}"; do
+    [[ $l == $'\x01U '* ]] || inq=0
     case $l in
       $'\x01U '*)
-        code=0 cdrafted=0 pre="$A› $R" lk=U
-        [[ -n $CL[-1] ]] && CL+=("")
+        # A question's lines after its first go on under it.
+        if (( inq )); then pre="  "
+        else pre="$A› $R"; [[ -n $CL[-1] ]] && CL+=(""); fi
+        code=0 cdrafted=0 lk=U inq=1
         wrap "${l:3}" $(( w - 2 ))
+        (( $#reply )) || CL+=("")
         for t in $reply; do CL+=("$pre$B$T$t$R"); pre="  "; done ;;
       $'\x01O '*) fit "${l:3}" $(( w - 2 )); CL+=("  $F$REPLY$R" ""); lk=O ;;
       $'\x01T '*)
@@ -1706,10 +1698,12 @@ chat_tick() {
 }
 # chat_frame: the panel's chh lines, in CF: its top line (whether Claude is
 # answering, and what a question now would be about), what was said, the
-# newest at the bottom unless scrolled, and the line you type on.
+# newest at the bottom unless scrolled, and the rows you type on (cin of
+# them, from row cfirst of what you typed, ctw wide: layout).
 chat_frame() {
-  local s where before ch after
-  integer rows=$(( chh - 2 )) last first room from max
+  local s where ch
+  integer rows last first max i
+  local -a rc IN
   CF=()
   chat_where; where=$REPLY
   line= used=0
@@ -1719,29 +1713,39 @@ chat_frame() {
   put "" " "
   cut "$line" $(( lw - 4 )); line=$REPLY; vw "$line"
   CF+=("$line$F${(l:lw - 2 - REPLY::─:)}$R")
+  # What you type, wrapped: as many rows as it takes up to half the panel,
+  # the cursor a lit cell on the last of them shown when there are more.
+  if (( cfocus )); then
+    textrows "$ctext" $cat_ $ctw; rc=(${=REPLY})
+    (( cin = (chh - 1) / 2, cin > $#TR ? (cin = $#TR) : 0, cfirst = rc[1] - cin + 1, cfirst < 1 ? (cfirst = 1) : 0 ))
+    for (( i = cfirst; i < cfirst + cin; i++ )); do
+      s=$TR[i]
+      (( i == rc[1] )) && { ch=${s[rc[2]+1]:- }; s=${s[1,rc[2]]}$e"[7m$ch"$e"[27m${s[rc[2]+2,-1]}"; }
+      if (( i == 1 )); then IN+=("$A› $R$T$s$R"); else IN+=("  $T$s$R"); fi
+    done
+    [[ -z $ctext ]] && IN[1]+=$F" ask Claude"${cst:+ · tab for ideas}$R
+  else
+    IN=("$F› a to ask$R") cin=1
+  fi
+  (( rows = chh - 1 - cin ))
   if (( ! $#CL )) && (( cfocus )); then
-    CF+=("" "${C}Each question goes with the row you are on when you send it.$R" "" "${C}tab puts in one of these:$R")
+    CF+=("")
+    wrap "Each question goes with the row you are on when you send it." $(( lw - 4 ))
+    for s in $reply; do CF+=("$C$s$R"); done
+    CF+=("" "${C}tab puts in one of these:$R")
     for s in $cst; do fit "$s" $(( lw - 6 )); CF+=("  $T$REPLY$R"); done
-    [[ -s $cdir/session ]] && CF+=("" "${F}the conversation so far is in Claude Code: ctrl-f$R")
+    if [[ -s $cdir/session ]]; then
+      CF+=("")
+      wrap "the conversation so far is in Claude Code: ctrl-f" $(( lw - 4 ))
+      for s in $reply; do CF+=("$F$s$R"); done
+    fi
   else
     (( max = $#CL - rows, max < 0 ? (max = 0) : 0, coff > max ? (coff = max) : 0 ))
     (( last = $#CL - coff, first = last - rows + 1, first < 1 ? (first = 1) : 0 ))
     (( $#CL )) && CF+=("${(@)CL[first,last]}")
   fi
-  while (( $#CF < chh - 1 )); do CF+=(""); done
-  CF=("${(@)CF[1,chh-1]}")
-  # The line you type on: the cursor a lit cell, the text scrolled to keep it in sight.
-  if (( cfocus )); then
-    (( room = lw - 6, from = 1 ))
-    while (( ${(m)#${ctext[from,cat_]}} > room - 1 )); do (( from++ )); done
-    before=${ctext[from,cat_]} ch=${ctext[cat_+1]:- } after=${ctext[cat_+2,-1]}
-    fit "$after" $(( room - ${(m)#before} - 1 )); after=$REPLY
-    s="$A› $R$T$before${e}[7m$ch${e}[27m$after$R"
-    [[ -z $ctext ]] && s+=$F" ask Claude"${cst:+ · tab for ideas}$R
-  else
-    s="$F› a to ask$R"
-  fi
-  CF+=("$s")
+  while (( $#CF < chh - cin )); do CF+=(""); done
+  CF=("${(@)CF[1,chh-cin]}" "${(@)IN}")
 }
 
 # --- a comment, typed under its lines -------------------------------------------------
@@ -1792,7 +1796,7 @@ box_key() {
     enter) box_send ;;
     esc|ctrl-c) box_close ;;
     ctrl-e) box_editor ;;
-    *) lineedit btext bat "$1" && berr= ;;
+    *) box_size; local -a sz=(${=REPLY}); lineedit btext bat "$1" $sz[3] && berr= ;;
   esac
 }
 box_close() {
@@ -1819,30 +1823,24 @@ box_editor() {
   offout; run_tty "eval \"\$(git var GIT_EDITOR)\" ${(qq)st}/box.txt"; offin; resize
   btext=$(<$st/box.txt) bat=$#btext
 }
+# box_size: where the box stands at the pane's width now, in REPLY: its
+# indent, its width, and its text's width inside its borders.
+box_size() {
+  integer ind=$bindent bw
+  (( bw = pw - ind - 1, bw > 96 ? (bw = 96) : 0 ))
+  (( bw < 24 )) && (( ind = 2, bw = pw - 3 ))
+  REPLY="$ind $bw $(( bw - 4 ))"
+}
 # box_frame: the box's rows at the pane's width (BX), what of them the push
 # shows now (BXS, bshown), and where the push is going (btarget). The pane
 # follows it while it opens or grows and when you type in it (bkeep), and is
 # yours to scroll it out of sight otherwise.
 box_frame() {
-  local t=$btext rest chunk line ttl keys pad_ ch nlc=$'\n'
-  integer w s=1 nl sp k n col c=$(( bat + 1 )) ind=$bindent bw
-  local -a lines starts
-  (( bw = pw - ind - 1, bw > 96 ? (bw = 96) : 0 ))
-  (( bw < 24 )) && (( ind = 2, bw = pw - 3 ))
-  (( w = bw - 4 ))
-  # Broken at a space where a word fits, else where the room ends, and at each line you started.
-  while :; do
-    starts+=($s) rest=${t[s,-1]}
-    nl=${rest[(i)$nlc]}
-    if (( $#rest && nl <= $#rest && nl <= w + 1 )); then lines+=("${rest[1,nl-1]}"); (( s += nl )); continue; fi
-    (( $#rest <= w )) && { lines+=("$rest"); break }
-    chunk=${rest[1,w]} sp=${chunk[(I)[[:blank:]]]}
-    if (( sp > 1 )); then lines+=("${chunk[1,sp]}"); (( s += sp )); else lines+=("$chunk"); (( s += w )); fi
-  done
-  # The cursor at the end of a full line is at the start of the next.
-  (( c > $#t && $#lines[-1] >= w )) && { lines+=(""); starts+=($(( $#t + 1 ))); }
-  for (( k = $#starts; k > 1 && starts[k] > c; k-- )); do :; done
-  (( col = c - starts[k] ))
+  local t=$btext line ttl keys pad_ ch
+  integer w n ind bw
+  local -a lines rc
+  box_size; rc=(${=REPLY}); ind=$rc[1] bw=$rc[2] w=$rc[3]
+  textrows "$t" $bat $w; lines=("${(@)TR}") rc=(${=REPLY})
   case $bstate in
     reading) spin_frame; bspun=$REPLY ttl="$REPLY reading your comment" ;;
     sending) spin_frame; bspun=$REPLY ttl="$REPLY saving" ;;
@@ -1854,9 +1852,9 @@ box_frame() {
   BX=("$pad_$Y┌ $B$ttl$UB ${(l:bw - 4 - ${(m)#ttl}::─:)}┐$R")
   for (( n = 1; n <= $#lines; n++ )); do
     line=$lines[n]
-    if (( bfocus && n == k )) && [[ -z $bstate ]]; then
-      ch=${line[col+1]:- }
-      line="$T${line[1,col]}"$e"[7m$ch"$e"[27m${line[col+2,-1]}"
+    if (( bfocus && n == rc[1] )) && [[ -z $bstate ]]; then
+      ch=${line[rc[2]+1]:- }
+      line="$T${line[1,rc[2]]}"$e"[7m$ch"$e"[27m${line[rc[2]+2,-1]}"
       [[ -z $t ]] && { [[ $bargs == --reply* ]] && line+=$F"write a reply" || line+=$F"write a comment" }
       vw "$line"
     else line="$T$line"; vw "$line"; fi
@@ -1945,7 +1943,7 @@ handle() {
       bspace) ntext=${ntext[1,-2]} dirty=1; return ;;
       ctrl-u) ntext= dirty=1; return ;;
     esac
-    [[ $k == [[:print:]]* && $k != $e* ]] && { ntext+=$k dirty=1; }
+    typed "$k" && { ntext+=$REPLY dirty=1; }
     return
   fi
   if (( searching )); then
@@ -1957,7 +1955,7 @@ handle() {
       down|ctrl-j|ctrl-n) step 1; return ;;
       ctrl-u) query= dirty=1; return ;;
     esac
-    [[ $k == [[:print:]]* && $k != $e* ]] && { query+=$k dirty=1; }
+    typed "$k" && { query+=$REPLY dirty=1; }
     return
   fi
   # A word selected in the pane: y says you know it, n that you don't, and Claude reads up on it; in a

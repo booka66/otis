@@ -7,6 +7,11 @@
 # Claude, $root the checkout Claude is in; a note names a file the way the
 # person sees it, not by its path.
 
+# question: what was asked, a line of the file each line of it, so one in
+# more than a line reads as it was typed:
+#   jq -nj -L "$share" --arg q "$q" 'include "chat"; $q | question'
+def question: "\n" + (split("\n") | map("\u0001U " + .) | join("\n")) + "\n";
+
 # note: a tool Claude uses, as a line of its own.
 def note($ctx; $root): "\n\u0001T " + (
     if .name == "Read" then "reading " + (.input.file_path // "" | ltrimstr($ctx + "/")
@@ -37,6 +42,6 @@ def transcript($ctx; $root):
   fromjson? | select(.isSidechain != true and .isMeta != true) |
   if .type == "user" then
     [.message.content | if type == "string" then . else (.[]? | select(.type == "text") | .text) end | select(startswith("<") | not)]
-    | if length > 0 then "\n\u0001U " + (join(" ") | split("\n\n(I")[0] | gsub("\n"; " ")) + "\n" else empty end
+    | if length > 0 then join(" ") | split("\n\n(I")[0] | question else empty end
   elif .type == "assistant" then .message.content[]? | if .type == "text" then .text + "\n" elif .type == "tool_use" then note($ctx; $root) else empty end
   else empty end;

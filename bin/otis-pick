@@ -1061,8 +1061,8 @@ handle() {
       bspace) query=${query[1,-2]} qdirty=1; return ;;
       ctrl-u) query= qdirty=1; return ;;
     esac
-    if [[ $k == [[:print:]]* && $k != $e* && $n != (space|enter|tab) ]] || [[ $n == space && -z $bind[space] ]]; then
-      query+=$k qdirty=1; return
+    if typed "$k" && [[ $n != space || -z $bind[space] ]]; then
+      query+=$REPLY qdirty=1; return
     fi
     flushq
     # A key the picker binds, that is not text (tab, enter, ctrl-…, an

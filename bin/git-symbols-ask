@@ -276,7 +276,7 @@ fi
 
 if [ "$mode" = send ]; then
   # The panel's: busy holds what to stop while an answer is coming.
-  printf '\n\001U %s\n' "$OTIS_ASK_QUESTION" >> "$chat"
+  jq -nj -L "$share" --arg q "$OTIS_ASK_QUESTION" 'include "chat"; $q | question' >> "$chat"
   [ -n "$where" ] && printf '\001O on %s\n' "$where" >> "$chat"
   printf '%s\n' $$ > "$d/busy"
   trap 'rm -f "$d/busy"' EXIT

@@ -40,6 +40,28 @@ else
   expect pick/repeat-opens "no picker on port $port" "opened"
 fi
 
+# Claude's panel: shift-enter (ctrl-j, as a terminal set up for Claude Code
+# sends it) starts a new line, and a paste goes in whole with its line ends,
+# where its first one sent the question. What is sent keeps its lines, and so
+# does the conversation's copy of it.
+ask=$tmp/askstub; mkdir -p "$ask/bin"
+cat > "$ask/bin/git-symbols-ask" <<EOF
+#!/bin/sh
+case \$1 in
+  --dir) echo "$ask" ;;
+  --send) printf '%s' "\$OTIS_ASK_QUESTION" > "$ask/sent" ;;
+esac
+EOF
+printf '#!/bin/sh\nexit 1\n' > "$ask/bin/claude"
+chmod +x "$ask/bin"/*
+PATH=$ask/bin:$PATH OTIS_SYMBOLS_ASK=1 TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b s "stty rows 30 cols 140; git-symbols main...feature"; out=
+  for _ in {1..80}; do while zpty -rt s buf; do out+=$buf; done; [[ $out == *"ask Claude"* ]] && break; sleep 0.1; done
+  zpty -wn s why; zpty -wn s $'"'"'\n'"'"'; zpty -wn s $'"'"'\e[200~a\r\nb\e[201~'"'"'; zpty -wn s $'"'"'\r'"'"'
+  for _ in {1..30}; do while zpty -rt s buf; do :; done; [[ -e $1/sent ]] && break; sleep 0.1; done
+  zpty -wn s $'"'"'\e'"'"'; sleep 0.2; zpty -wn s q; sleep 0.3; zpty -d s 2>/dev/null' - "$ask"
+expect ask/panel-lines "$(tr '\n' '|' < "$ask/sent" 2>/dev/null)" "why|a|b"
+expect chat/question-lines "$(jq -nj -L "$share" --arg q "$(printf 'why\na')" 'include "chat"; $q | question' | tr '\001\n' '^|')" "|^U why|^U a|"
+
 # / searches the fields --nth names, shown or not: gl's whole subject,
 # where its row says less.
 if picker_open "git-fzf nth '' --delimiter='\t' --with-nth=1 --nth=1,2 --bind 'start:reload(printf \"a\\\\tsecret\\\\nb\\\\tother\\\\n\")'"; then

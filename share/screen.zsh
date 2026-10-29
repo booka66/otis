@@ -77,7 +77,7 @@ screen_on() {
   local alt=$e'[?1049h'
   loader_stop
   [[ -n $OTIS_ALT && -e $OTIS_ALT ]] && { rm -f -- $OTIS_ALT; alt=; }
-  stty -icanon -echo -isig min 1 time 0 <&$tty
+  keys_raw
   shown_rows=()
   if [[ $1 == over ]] || { [[ $1 == back ]] && on_alt }; then
     # A line no frame has, a screen's worth: every line differs, none is
@@ -104,8 +104,14 @@ screen_off() {
   else
     print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e'[?25h'$e'[?1049l'
   fi
-  stty $saved <&$tty; screen=0
+  keys_back; screen=0
 }
+# keys_raw: keys as readkey takes them, one at a time and unechoed, ctrl-c
+# one of them (-isig); enter \r, apart from ctrl-j's \n (-icrnl), which is
+# how a terminal set up for Claude Code sends shift-enter; a paste
+# bracketed, so it comes whole. keys_back: as they were (saved).
+keys_raw() { stty -icanon -echo -isig -icrnl min 1 time 0 <&$tty; print -nu $tty -- $e'[?2004h'; }
+keys_back() { print -nu $tty -- $e'[?2004l'; stty $saved <&$tty; }
 # kitty_split <preview> <file>: a preview that holds a kitty image (kitten
 # icat --unicode-placeholder), taken apart for a pane: the image itself into
 # <file>.gfx, sent to the terminal when the pane shows it, and the lines it
@@ -175,7 +181,7 @@ screen_hold() {
   shown_rows=() shown_pane=(); draw
   exec {tty}>&-; tty=$fd
   print -nu $tty -- $e'[?1006l'$e'[?1002l'$e'[?7h'$e"[$H;1H"
-  stty $saved <&$tty; screen=0
+  keys_back; screen=0
 }
 # A screen that goes back to a command run over another's frame (git-verify
 # asking after its run's screen says r) leaves its own frame up in that one's
@@ -363,7 +369,8 @@ music_paint() {
 # --- keys ----------------------------------------------------------------------------
 # readkey: one key in REPLY: an escape sequence whole (an arrow, \e[B or
 # \eOB; a mouse report, \e[<0;12;7M), a lone escape as esc, a character in
-# more than one byte whole.
+# more than one byte whole, a paste whole (\e[200~ and its text, for typed
+# and pasted).
 readkey() {
   local k c seq=
   sysread -s 1 -i $tty k || quit
@@ -371,6 +378,11 @@ readkey() {
     sysread -s 1 -i $tty seq
     if [[ $seq == [\[O] ]]; then
       while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == [@-~] ]] && break; done
+    fi
+    # Up to its end however it comes: nvim's terminal sends one a line at a time.
+    if [[ $seq == '[200~' ]]; then
+      while sysread -s 1 -i $tty c; do seq+=$c; [[ $c == '~' && $seq[-6,-1] == $e'[201~' ]] && break; done
+      seq=${seq%$e'[201~'}
     fi
   elif [[ $k == [$'\xc0'-$'\xf7'] ]]; then
     # As many bytes after it as its lead byte says (110xxxxx one, 1110xxxx
@@ -391,7 +403,7 @@ readkey() {
 # keyname <key>: its name as fzf spells it, for bindings.
 keyname() {
   case $1 in
-    $'\r'|$'\n') REPLY=enter ;; ' ') REPLY=space ;; $'\t') REPLY=tab ;; $e'[Z') REPLY=btab ;; $e) REPLY=esc ;;
+    $'\r') REPLY=enter ;; $'\n') REPLY=ctrl-j ;; ' ') REPLY=space ;; $'\t') REPLY=tab ;; $e'[Z') REPLY=btab ;; $e) REPLY=esc ;;
     $e'[A'|$e'OA') REPLY=up ;; $e'[B'|$e'OB') REPLY=down ;;
     $e'[5~') REPLY=page-up ;; $e'[6~') REPLY=page-down ;;
     $'\x7f'|$'\b') REPLY=bspace ;;
@@ -401,6 +413,96 @@ keyname() {
   esac
 }
 
+# typed <key>: the text a key types, in REPLY, on one line: a printable
+# key, or a paste with its lines joined; false for any other key.
+typed() {
+  if pasted "$1"; then REPLY=${REPLY//$'\n'/ }; return; fi
+  [[ $1 == [[:print:]]* && $1 != $e* ]] && REPLY=$1
+}
+# pasted <key>: a paste's text (readkey), in REPLY, each line ending in \n
+# whatever the terminal sent, a tab two spaces, nothing else unprintable;
+# false for any other key.
+pasted() {
+  [[ $1 == $e'[200~'* ]] || return 1
+  REPLY=${${${1#$e'[200~'}//$'\r\n'/$'\n'}//$'\r'/$'\n'}
+  REPLY=${${REPLY//$'\t'/  }//[^[:print:]$'\n']/}
+}
+
+# lineedit <text> <cursor> <key> <width>: a key typed into words being
+# written (Claude's panel, a comment's box, a prompt), on the text and the cursor
+# in the variables named, the text in rows that wide (textrows). The arrows
+# move, a row up or down; alt with them, or alt-b and alt-f, a word; home,
+# ctrl-a, end and ctrl-e go to the line's ends. backspace, delete, alt-backspace, ctrl-w,
+# ctrl-u and ctrl-k delete as in a shell. shift-enter (ctrl-j) and alt-enter
+# start a new line; anything printable or pasted goes in. False for any other
+# key, and for up on the first row or down on the last. Where the words are a
+# line, the caller puts spaces for the line ends.
+lineedit() {
+  local k=$3 t=${(P)1} h r n
+  integer a=${(P)2} ls le row col
+  local -a rc
+  keyname "$k"; n=$REPLY
+  case $k in
+    $e'[C'|$e'OC') n=right ;; $e'[D'|$e'OD') n=left ;;
+    $e'[1;3C'|$e'f') n=word-right ;; $e'[1;3D'|$e'b') n=word-left ;;
+    $e'[H'|$e'[1~'|$e'OH'|$'\x01') n=home ;; $e'[F'|$e'[4~'|$e'OF') n=end ;;
+    $e'[3~') n=delete ;;
+    $'\x17'|$e$'\x7f') n=ctrl-w ;;
+    $'\n'|$e$'\r') n=newline ;;
+  esac
+  # The line the cursor is on: where it starts and ends.
+  h=${t[1,a]} r=${t[a+1,-1]}
+  (( ls = a - ${#h##*$'\n'}, le = a + ${#r%%$'\n'*} ))
+  case $n in
+    left) (( a > 0 )) && (( a-- )) ;;
+    right) (( a < $#t )) && (( a++ )) ;;
+    word-left) h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}; a=$#h ;;
+    word-right) h=${r##[[:space:]]#}; h=${h##[^[:space:]]#}; (( a += $#r - $#h )) ;;
+    up|down)
+      textrows "$t" $a $4; rc=(${=REPLY})
+      if [[ $n == up ]]; then (( rc[1] > 1 )) || return 1; (( row = rc[1] - 1 ))
+      else (( rc[1] < $#TS )) || return 1; (( row = rc[1] + 1 )); fi
+      # The same column, or the row's end; a row the wrap broke ends just short of the next one's start.
+      (( col = rc[2] < $#TR[row] ? rc[2] : $#TR[row], a = TS[row] - 1 + col ))
+      (( row < $#TS && a >= TS[row+1] - 1 )) && (( a = TS[row+1] - 2 )) ;;
+    home) a=$ls ;;
+    end|ctrl-e) a=$le ;;
+    bspace) (( a > 0 )) && { t=${t[1,a-1]}${t[a+1,-1]}; (( a-- )); } ;;
+    delete) t=${t[1,a]}${t[a+2,-1]} ;;
+    ctrl-u) t=${t[1,ls]}$r a=$ls ;;
+    ctrl-k) t=$h${t[le+1,-1]} ;;
+    ctrl-w) h=${h%%[[:space:]]#}; h=${h%%[^[:space:]]#}; t=$h$r a=$#h ;;
+    newline) t=$h$'\n'$r; (( a++ )) ;;
+    *) pasted "$k" || typed "$k" || return 1
+       t=$h$REPLY$r; (( a += $#REPLY )) ;;
+  esac
+  : "${(P)1::=$t}" "${(P)2::=$a}"
+}
+# textrows <text> <cursor> <width>: the text in rows that wide, broken at a
+# space where a word fits, else where the room ends, and at each line of its
+# own. The rows in TR, where each starts in the text in TS, and the cursor's
+# row and column in REPLY.
+typeset -a TR TS
+textrows() {
+  local t=$1 l rest chunk
+  integer c=$(( $2 + 1 )) w=$3 s=1 sp k
+  TR=() TS=()
+  # A line at a time: taking rows off the whole text copied what was left
+  # of it for each, and a 20k paste took half a second to draw.
+  for l in "${(@ps:\n:)t}"; do
+    rest=$l
+    while (( $#rest > w )); do
+      chunk=${rest[1,w]} sp=${chunk[(I)[[:blank:]]]}
+      (( sp > 1 )) || sp=w
+      TR+=("${rest[1,sp]}") TS+=($s); (( s += sp )); rest=${rest[sp+1,-1]}
+    done
+    TR+=("$rest") TS+=($s); (( s += $#rest + 1 ))
+  done
+  # The cursor at the end of a full row is at the start of the next.
+  (( c > $#t && $#TR[-1] >= w )) && { TR+=(""); TS+=($(( $#t + 1 ))); }
+  for (( k = $#TS; k > 1 && TS[k] > c; k-- )); do :; done
+  REPLY="$k $(( c - TS[k] ))"
+}
 # --- text ----------------------------------------------------------------------------
 # plain <text>: its colors, links and titles out.
 plain() {
