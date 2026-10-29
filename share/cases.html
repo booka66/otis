@@ -76,7 +76,7 @@ h1{margin:0 0 14px; font:650 30px/1.2 var(--sans); letter-spacing:-.015em; color
 .group{margin:64px 0 0; padding-top:18px; border-top:1px solid var(--rule-strong)}
 .group > h2{margin:0; font:650 12.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.09em; color:var(--yellow)}
 .where{margin:18px 0 0; padding:16px 20px; background:var(--panel); border-radius:10px; max-width:52em}
-.where h3, .ends h3{margin:0 0 6px; font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; color:var(--faint)}
+.where h3{margin:0 0 6px; font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; color:var(--faint)}
 .where p{margin:0}
 
 /* a case */
@@ -91,8 +91,6 @@ h1{margin:0 0 14px; font:650 30px/1.2 var(--sans); letter-spacing:-.015em; color
 .badge.quiet{color:var(--orange); border-color:color-mix(in srgb, var(--orange) 40%, transparent)}
 .body{margin-left:calc(2.2ch + 16px)}
 .setup{margin:12px 0 0; font-size:17px; color:var(--text); max-width:46em}
-.ends{margin:20px 0 0; padding:14px 18px; border-left:3px solid var(--yellow); background:color-mix(in srgb, var(--yellow) 7%, var(--ground)); border-radius:0 10px 10px 0; max-width:52em}
-.ends p{margin:0; color:var(--ink); font-size:16.5px}
 
 table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; font-size:15px; max-width:60em; width:100%}
 .facts th{font:650 11.5px/1.3 var(--sans); text-transform:uppercase; letter-spacing:.08em; text-align:left; padding:0 14px 4px}
@@ -146,16 +144,20 @@ table.facts{margin:20px 0 0; border-collapse:separate; border-spacing:0 3px; fon
 .ln.last{border-bottom-left-radius:6px; border-bottom-right-radius:6px; padding-bottom:4px}
 .note{padding:0 0 0 14px; font-size:13.5px; line-height:1.45; align-self:center}
 .note.lit{color:var(--yellow); font-weight:650}
-.note.lit::before{content:"◀"; margin-right:7px; font-size:11px; vertical-align:1px}
+.note.lit > p:first-child::before{content:"◀"; margin-right:7px; font-size:11px; vertical-align:1px}
 .note.call{color:var(--faint)}
 .note code{font-size:.92em}
+.note p{margin:0}
+.note .who{color:var(--ink); margin-right:7px}
+.facts td.who{font-weight:700; color:var(--ink); padding-left:0; width:1%}
+.facts td .why{display:block; margin-top:2px; color:var(--faint); font-size:13px}
 .r:hover .ln.lit{box-shadow:inset 3px 0 0 var(--yellow)}
 .gap{font:12.5px/1.9 var(--mono); color:var(--comment); padding-left:3ch}
 .back{font-size:13.5px; color:var(--faint); padding:4px 0 6px}
 .hop{margin:16px 0 4px; font-size:13.5px; color:var(--faint); border-top:1px dashed var(--rule-strong); padding-top:10px}
-.stopped, .tests{margin:20px 0 0; display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:4px 14px; font-size:15px; max-width:60em}
-.stopped dt, .tests dt{color:var(--faint)}
-.stopped dd, .tests dd{margin:0; color:var(--soft)}
+.tests{margin:20px 0 0; display:grid; grid-template-columns:7.5em minmax(0,1fr); gap:4px 14px; font-size:15px; max-width:60em}
+.tests dt{color:var(--faint)}
+.tests dd{margin:0; color:var(--soft)}
 .tests ul{margin:0; padding:0; list-style:none}
 .tests li::before{content:"◦ "; color:var(--faint)}
 .tests .file{font:13px var(--mono); color:var(--faint); margin-top:4px}
@@ -193,9 +195,9 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
   .r{grid-template-columns:var(--w, 0px) minmax(0,1fr)}
   .r > .wide{grid-column:2}
   .note{grid-column:2; padding:2px 0 6px 7.2ch}
-  .note.lit::before{content:"↑"}
+  .note.lit > p:first-child::before{content:"↑"}
   .note:empty{display:none}
-  .said, .stopped, .tests{grid-template-columns:minmax(0,1fr)}
+  .said, .tests{grid-template-columns:minmax(0,1fr)}
   table.facts td.q{width:auto}
   :root{--rail:14px}
 }
@@ -302,9 +304,9 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
   tools.append(theme, save);
   top.append(head, tools);
   main.append(top);
-  const described = cases.filter((c) => c.kind === "case").length;
-  main.append(para("lede", "This change in " + plural(cases.length, "case") + ": each one situation the code meets, followed through the code in the order it runs."
-    + (described < cases.length ? " " + plural(described, "case") + " the author describes; " + (cases.length - described) + " they never mention." : "")
+  const all = cases.flatMap((c) => c.inputs), described = all.filter((one) => one.quote).length;
+  main.append(para("lede", "This change in " + plural(all.length, "case") + " on " + plural(cases.length, "route") + ": each case one situation the code meets, and the cases that come in the same way one route, followed once through the code in the order it runs, each line saying what holds there for each case."
+    + (described < all.length ? " " + plural(described, "case") + " the author describes; " + (all.length - described) + " they never mention." : "")
     + " Claude chose the cases and wrote the words. otis found every line it cites in the code, drew who calls whom from the code itself, and dropped what it could not find."));
   const legend = el("div", "legend");
   const chip = (cls) => { const c = el("span", "chip"); c.style.background = "var(--" + cls + ")"; return c; };
@@ -320,7 +322,7 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
   // A case's route: rows in one grid, so the notes of every function line up in one column however deep it sits.
   function route(c) {
     const box = el("section", "route");
-    const h = el("h3", null, "Who calls whom, as this case runs");
+    const h = el("h3", null, "Who calls whom, as it runs");
     box.append(h);
     const stops = c.stops || [];
     if (!stops.length) { box.append(el("p", "back", "No line Claude cited could be found in the code, so there is no route to show.")); return box; }
@@ -348,6 +350,7 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       const file = el("span", "file", s.where);
       if (s.inside) file.append(", inside ", el("code", null, s.inside));
       if (!s.inChange) file.append(", not in this change");
+      if (s.side === "old") file.append(", before the change");
       const hd = el("div", "head", el("span", "step", String(++step)), el("span", "mk " + mark, s.mark), el("code", null, s.name), file);
       row(depth, hd);
       if (s.is) row(depth + 1, para("purpose", s.is));
@@ -359,25 +362,39 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
       const drawn = new Set();
       let run = [];
       const close = () => { if (run.length) { run[0].classList.add("first"); run.at(-1).classList.add("last"); } run = []; };
-      code.forEach((l, at) => {
-        if (l.gap) { close(); row(depth + 1, el("div", "gap", "⋯ " + plural(l.gap, "line"))); return; }
+      // The stops a line calls go under it, and under what it took the place of, which is read with it.
+      let waiting = [];
+      const descend = (more) => {
+        if (!waiting.length) return;
+        close();
+        for (const k of waiting) { draw(k, depth + 1); drawn.add(k); }
+        waiting = [];
+        if (more) { const back = el("div", "back"); back.append("↩ back in ", el("code", null, s.name)); row(depth + 1, back); }
+      };
+      code.forEach((l) => {
+        if (l.mine !== false) descend(true);
+        if (l.gap) { close(); row(depth + 1, el("div", "gap", !l.sign ? "⋯ " + plural(l.gap, "line") : l.sign === "-" ? `− ${plural(l.gap, "line")} removed` : `+ ${plural(l.gap, "line")} added`)); return; }
         const calls = l.mine ? calledAt.get(l.n) || [] : [];
         const ln = el("div", "ln" + (l.sign === "+" ? " add" : l.sign === "-" ? " del" : "") + (l.cited ? " lit" : "") + (calls.length ? " call" : ""));
         const src = el("span", "src");
         const text = l.t.replace(/\t/g, "    ");
         src.innerHTML = dedent(l.html != null ? l.html : esc(text), Number.isFinite(cut) ? cut : 0);
         ln.append(el("span", "no" + (l.mine === false ? " old" : ""), String(l.n)), el("span", "sg", l.sign === "-" ? "−" : l.sign === "+" ? "+" : ""), src);
-        const note = el("div", "note" + (l.cited && l.value ? " lit" : calls.length ? " call" : ""));
-        if (l.cited && l.value) note.append(prose(l.value));
-        else if (calls.length) note.append((stops[calls[0]].call.verb || "uses") + " ", ...calls.flatMap((k, n) => [n ? " and " : "", el("code", null, stops[k].name)]), ", below");
+        const notes = l.cited ? l.notes : [];
+        const note = el("div", "note" + (notes.length ? " lit" : calls.length ? " call" : ""));
+        // Each case's reading of the line, by its letter when more than one case takes the route.
+        notes.forEach((one) => {
+          const p = el("p");
+          if (c.inputs.length > 1) p.append(el("span", "who", one.of.map((k) => c.inputs[k].letter).join(" ")));
+          p.append(prose(one.value));
+          note.append(p);
+        });
+        if (!notes.length && calls.length) note.append((stops[calls[0]].call.verb || "uses") + " ", ...calls.flatMap((k, n) => [n ? " and " : "", el("code", null, stops[k].name)]), ", below");
         row(depth + 1, ln, note);
         run.push(ln);
-        if (calls.length) {
-          close();
-          for (const k of calls) { draw(k, depth + 1); drawn.add(k); }
-          if (at < code.length - 1) { const back = el("div", "back"); back.append("↩ back in ", el("code", null, s.name)); row(depth + 1, back); }
-        }
+        waiting.push(...calls);
       });
+      descend(false);
       close();
       for (const k of kids[i]) if (!drawn.has(k)) draw(k, depth + 1);
     }
@@ -395,35 +412,28 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
     return box;
   }
 
-  function facts(c) {
-    if (!c.facts.length) return null;
+  // The cases that take a route, each by the letter its notes carry: what happens, how it ended before and how it
+  // ends now, and the test lines that assert it. New code has no before: none of it ran.
+  function situations(c) {
     const t = el("table", "facts");
-    const pins = c.facts.filter((f) => f.pinned).length;
-    const hr = el("tr", null, el("th"));
-    if (c.fresh) {
-      const th = el("th", "now", "now");
-      th.append(el("span", "why", "new code: the route starts in code this change adds, so there is no before"));
-      hr.append(th);
-    } else hr.append(el("th", "was", "before"), el("th", "now", "after"));
-    if (pins) hr.append(el("th", null, "asserted at"));
+    const pinsOf = (one) => [...new Set(one.facts.filter((f) => f.pinned).map((f) => f.pinned.where))];
+    const pinned = c.inputs.some((one) => pinsOf(one).length);
+    const hr = el("tr", null, el("th"), el("th", null, "case"), el("th", "was", "before"), el("th", "now", "now"));
+    if (pinned) hr.append(el("th", null, "asserted at"));
     t.append(el("thead", null, hr));
     const tb = el("tbody");
-    for (const f of c.facts) {
-      const tr = el("tr");
-      const q = el("td", "q"); q.append(prose(f.what));
-      tr.append(q);
-      if (!c.fresh) { const was = el("td", "was"); was.append(prose(f.before || "·")); tr.append(was); }
-      const now = el("td", "now" + (c.fresh ? " solo" : "")); now.append(prose(f.after || "·"));
-      tr.append(now);
-      if (pins) {
-        const pin = el("td", "pin");
-        if (f.pinned) { pin.append(el("b", null, "✓"), f.pinned.where, el("code", null, f.pinned.t)); pin.title = f.pinned.path + ":" + f.pinned.n; }
-        tr.append(pin);
-      }
+    for (const one of c.inputs) {
+      const tr = el("tr", null, el("td", "who", c.inputs.length > 1 ? one.letter : ""));
+      const q = el("td", "q"); q.append(prose(one.title));
+      const was = el("td", "was"); was.append(prose(one.fresh ? "new code" : one.was || "·"));
+      const now = el("td", "now"); now.append(prose(one.now || "·"));
+      if (one.change !== "ends differently") now.append(el("span", "why", one.change));
+      tr.append(q, was, now);
+      if (pinned) { const pin = el("td", "pin"); if (pinsOf(one).length) pin.append(el("b", null, "✓"), pinsOf(one).join(", ")); tr.append(pin); }
       tb.append(tr);
     }
-    t.append(tb, el("caption", null, pins ? "✓ the test line that asserts it" + (pins < c.facts.length ? "; the rest is Claude's reading of the code" : "")
-      : c.runs.length ? "Claude's reading of the code: no test line here asserts these answers" : "Claude's reading of the code: no test in this change asserts these answers"));
+    t.append(tb);
+    if (pinned) t.append(el("caption", null, "✓ the test line that asserts it; the rest is Claude's reading of the code"));
     return t;
   }
 
@@ -432,23 +442,26 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
     node.id = "case-" + c.num;
     const hd = el("header");
     const badges = el("div", "badges");
-    if (c.change === "ends differently") badges.append(el("span", "badge moves", "ends differently"));
-    else if (c.change) badges.append(el("span", "badge", c.change));
-    if (c.kind === "also") badges.append(el("span", "badge quiet", "the author never mentions this"));
+    const moves = c.inputs.filter((one) => one.change === "ends differently").length;
+    badges.append(el("span", "badge" + (moves ? " moves" : ""), plural(c.inputs.length, "case") + (moves ? `, ${moves} ending differently` : "")));
+    if (c.kind === "also") badges.append(el("span", "badge quiet", "the author never mentions " + (c.inputs.length > 1 ? "these" : "this")));
     const h2 = el("h2"); h2.append(prose(c.text));
     hd.append(el("span", "num", c.num), h2, badges);
     node.append(hd);
     const body = el("div", "body");
     if (c.setup) body.append(para("setup", c.setup));
-    if (c.ends) { const e = el("div", "ends", el("h3", null, "How it ends")); e.append(para(null, c.ends)); body.append(e); }
-    const f = facts(c); if (f) body.append(f);
+    body.append(situations(c));
+    // What the author said, each sentence once, with the cases it is about.
     const said = el("dl", "said", el("dt", null, "the author"));
     const dd = el("dd");
-    if (c.quote) dd.append(el("blockquote", null, "“" + c.quote + "”"));
-    else dd.append(el("span", "none", c.kind === "also" ? "never mentions this" : "said nothing about this"));
+    const quotes = [...new Set(c.inputs.map((one) => one.quote).filter(Boolean))];
+    for (const quote of quotes) {
+      const of = c.inputs.length > 1 ? c.inputs.filter((one) => one.quote === quote).map((one) => one.letter).join(" ") + "  " : "";
+      dd.append(el("blockquote", null, of + "“" + quote + "”"));
+    }
+    if (!quotes.length) dd.append(el("span", "none", "never mentions " + (c.inputs.length > 1 ? "these" : "this")));
     said.append(dd);
     body.append(said, route(c));
-    if (c.stopped) { const st = el("dl", "stopped", el("dt", null, "stopped")); const d = el("dd"); d.append(prose(c.stopped)); st.append(d); body.append(st); }
     const tests = el("dl", "tests", el("dt", null, "tested by"));
     const td = el("dd");
     if (!c.runs.length) td.append(el("span", "none", "no test in this change runs it"));
@@ -468,25 +481,17 @@ footer{margin-top:72px; padding-top:16px; border-top:1px solid var(--rule); font
     return node;
   }
 
-  // The cases under where they come in; one where-this-runs for as long as the cases share it.
-  let group = null, section = null, lastWhere = null;
+  // Each route where it comes in, with where this runs first.
   const navList = new Map();
   const navGroup = (title) => { nav.append(el("h2", null, title)); const ol = el("ol"); nav.append(ol); return ol; };
-  let ol = null;
+  const ol = navGroup("Routes");
   for (const c of cases) {
-    const title = c.group || "Cases";
-    if (title !== group) {
-      group = title;
-      section = el("section", "group", el("h2", null, title));
-      main.append(section);
-      ol = navGroup(title);
-      lastWhere = null;
-    }
-    if (c.where && c.where !== lastWhere) {
+    const section = el("section", "group");
+    main.append(section);
+    if (c.where) {
       const w = el("div", "where", el("h3", null, "Where this runs"));
       w.append(para(null, c.where));
       section.append(w);
-      lastWhere = c.where;
     }
     section.append(caseNode(c));
     const a = el("a", c.change === "only a label" ? "label" : c.change === "the same" ? "same" : null, el("span", "no", c.num));

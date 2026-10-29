@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // flags.mjs <outline.json> [--now]: the design red flags a change brings in, by A Philosophy of Software Design
-// and Simple Made Easy, each on the case whose route runs through it. Run behind the screen once a change's
-// cases are told (git-sentences); the case list and the case's pane show what it leaves:
+// and Simple Made Easy, each on the route through the code that runs through it. Run behind the screen once a
+// change's cases are told (git-sentences); the list and the route's pane show what it leaves:
 //   <key>.flags.json   what was found, for the pane
-//   <key>.flags.tsv    a case's words, then its flag, a line each, for the list
+//   <key>.flags.tsv    a route's words, then its flag, a line each, for the list
 // One Claude raises at most five flags it can pin to lines; otis checks each line is there; a second Claude
 // tries to throw each one out (the base had it, the neighbours do it so, the smaller design is not smaller).
 // Only what that leaves standing is shown, each with the comment a reviewer would leave on its line, which the
@@ -24,18 +24,29 @@ const MAX = 1 << 30;
 const git = (...args) => execFileSync("git", ["-c", "core.quotePath=false", ...args], { encoding: "utf8", maxBuffer: MAX, stdio: ["ignore", "pipe", "ignore"] });
 const config = (name) => { try { return git("config", "--get", name).trim(); } catch { return ""; } };
 
-const model = config("otis.flagsModel") || "claude-opus-5-5";
-if (model === "off" || !existsSync(file)) process.exit(0);
+if (!existsSync(file)) process.exit(0);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 const cases = (outline.sentences ?? []).filter((part) => part.kind === "case" || part.kind === "also");
 if (!cases.length || !outline.base || !outline.head) process.exit(0);
-const names = new Set(cases.map((part) => part.text));
+// A flag is filed under its route's words; one found while each case was a part of its own, under that case's,
+// belongs to the route the case now takes, whether or not flags are looked for any more.
+const routeOf = new Map(cases.flatMap((part) => [[part.text, part.text], ...part.inputs.map((input) => [input.title, part.text])]));
+const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
+const save = (found) => {
+  write(at("tsv"), found.flags.map((flag) => `${flag.case.replace(/[\t\n]/g, " ")}\t${flag.flag}\n`).join(""));
+  write(at("json"), JSON.stringify(found));
+};
+let found = null;
+try { found = JSON.parse(readFileSync(at("json"), "utf8")); } catch { /* not found yet */ }
+if (found?.flags.some((flag) => routeOf.has(flag.case) && routeOf.get(flag.case) !== flag.case)) {
+  found = { ...found, flags: found.flags.map((flag) => ({ ...flag, case: routeOf.get(flag.case) ?? flag.case })) };
+  save(found);
+}
 
+const model = config("otis.flagsModel") || "claude-opus-5-5";
+if (model === "off") process.exit(0);
 // Found already for these cases: a flag on a case the change is no longer told with is looked for again.
-try {
-  const found = JSON.parse(readFileSync(at("json"), "utf8"));
-  if (found.version === VERSION && found.flags.every((flag) => names.has(flag.case))) process.exit(0);
-} catch { /* not found yet */ }
+if (found?.version === VERSION && found.flags.every((flag) => routeOf.has(flag.case))) process.exit(0);
 const alive = (path) => { try { process.kill(Number(readFileSync(path, "utf8")), 0); return true; } catch { return false; } };
 if (alive(at("running"))) process.exit(0);
 // Your own change is pushed many times before anyone reads it: three in four Opus runs went to its pushes.
@@ -70,13 +81,12 @@ const diff = code.length > ROOM ? code.slice(0, ROOM) + "\n[cut: read the rest w
 
 const unmark = (text) => (text ?? "").replace(/`/g, "");
 const caseText = (part, i) => [
-  `## Case ${i + 1}: ${part.text}  (${part.group ?? ""})`,
+  `## Route ${i + 1}: ${part.text}`,
   ...(part.setup ? [`setup: ${unmark(part.setup)}`] : []),
-  `before: ${part.was || "(nothing ran)"}   now: ${part.now || ""}   (${part.change ?? ""})`,
-  ...(part.ends ? [`ends: ${unmark(part.ends)}`] : []),
+  ...part.inputs.map((input) => `case ${input.letter}: ${input.title}. before: ${input.was || "(nothing ran)"}   now: ${input.now || ""}   (${input.change})`),
   "route:",
   ...(part.stops ?? []).flatMap((stop) => [`  ${stop.name}  ${stop.path} (${stop.side}): ${unmark(stop.is)}`,
-    ...(stop.lines ?? []).map((line) => `    ${line.n}: ${(line.t ?? "").trim()}${line.value ? `   -- ${unmark(line.value)}` : ""}`)]),
+    ...(stop.lines ?? []).map((line) => `    ${line.n}: ${(line.t ?? "").trim()}${line.notes.map((note) => `   -- ${note.of.map((k) => part.inputs[k].letter).join(" ")}: ${unmark(note.value)}`).join("")}`)]),
 ].join("\n");
 
 const object = (properties) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
@@ -111,7 +121,7 @@ const ask = (prompt, schema) => new Promise((resolve) => {
 const raised = await ask([
   "You are reviewing the design of a code change, by the standards of John Ousterhout's A Philosophy of Software Design and Rich Hickey's Simple Made Easy. Not bugs: design. Raise the design red flags this change brings in, at most five, worst first. A second reviewer will try to throw each one out before anyone sees it, so raise what you can pin to lines even when you are not sure; leave out what you cannot.",
   "",
-  "The change has already been told as cases below: concrete situations its code meets, each followed through the code. Use them to learn what each piece is for. Its diff is at the bottom, each changed function whole.",
+  "The change has already been told as routes below: each a way into the code, the cases (concrete situations its code meets) that take it, each by its letter, and the route followed through the code once, with what holds on each line for each case. Use them to learn what each piece is for. Its diff is at the bottom, each changed function whole.",
   "",
   commands,
   "",
@@ -123,7 +133,7 @@ const raised = await ask([
   "How to look: read the diff whole. For each new function, type or layer, ask what a caller must learn to use it against what it hides. For each value, rule or format the change writes down, git grep for the same knowledge elsewhere. For each new if, ask whether it is a special case a different contract would remove. Read the neighbouring code the change sits in, and how nearby code does the same job. Use the commands: 10 to 40 of them.",
   "",
   "For each flag:",
-  "- case: the number of the case it belongs to: the one whose route runs through it, or else the one closest to it",
+  "- case: the number of the route it belongs to: the one that runs through it, or else the one closest to it",
   "- flag: which red flag",
   "- claim: one or two plain sentences: what is wrong, concretely, in this code",
   "- cost: what the next person to change this code has to do because of it, concretely (\"adding a new channel means editing these three switches\")",
@@ -136,7 +146,7 @@ const raised = await ask([
   "",
   authorWords,
   "",
-  "# The cases",
+  "# The routes",
   "",
   ...cases.map(caseText).flatMap((one) => [one, ""]),
   "# The change's diff, base to head",
@@ -192,6 +202,4 @@ if (pinned.length) {
 }
 
 const flags = standing.map(({ case: n, ...flag }) => ({ case: cases[n - 1].text, ...flag }));
-const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
-write(at("tsv"), flags.map((flag) => `${flag.case.replace(/[\t\n]/g, " ")}\t${flag.flag}\n`).join(""));
-write(at("json"), JSON.stringify({ version: VERSION, model, base, head, raised: raised?.flags?.length ?? null, flags }));
+save({ version: VERSION, model, base, head, raised: raised?.flags?.length ?? null, flags });

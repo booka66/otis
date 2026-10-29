@@ -1611,7 +1611,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[5] { vd[$1] = 1; next }
     FILENAME == ARGV[6] { cm[$1] = $2; next }
     FILENAME == ARGV[7] {
-      if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; if ($3 == "case" || $3 == "also") ncase++ }
+      if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sending[nsent] = $10; schange[nsent] = $11; scases[nsent] = $12 + 0; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "M") msummary = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
       else if ($1 == "E") away[$2 == "file" ? $3 : $3 SUBSEP $4 SUBSEP $5] = 1
@@ -1830,7 +1830,7 @@ if [ "$mode" = --rows ]; then
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
-    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
+    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, routes, was, now, how, clen) {
       numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
       ind = sprintf("%" (numw + 2) "s", "")
       w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
@@ -1858,26 +1858,28 @@ if [ "$mode" = --rows ]; then
           ln = (ln == "" ? "" : ln " ") words[x]
         }
         if (ln != "") lines[++nl] = ln
-        # Cases under where they come in, the ones the author never named after, what no case runs last; told
-        # without cases, the parts of the story under a heading and what serves them under another.
-        if ((sfrom[n] == "case" || sfrom[n] == "also") && sgroup[n] != group) { heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
-        else if (sfrom[n] == "case" || sfrom[n] == "also") seen++
-        else if (sfrom[n] == "story" && !told++) { seen++; heading("what changed", "gk-story-heading") }
+        # Each route its cases take a row, named for where they come in, what no case runs last; told without
+        # cases, the parts of the story under a heading and what serves them under another.
+        if (sfrom[n] == "case" || sfrom[n] == "also") { if (routes++) more("", "m", "") }
+        else if (sfrom[n] == "story" && !told++) heading("what changed", "gk-story-heading")
         else if (sfrom[n] == "support" && !sup++) { more("", "m", ""); heading("also changed, to support it", "gk-support-heading") }
         else if (sfrom[n] == "rest" && !rest++) { if (!ncase) more("", "m", ""); heading(ncase ? "on no route, read as a plain diff" : "in the change, in no part", "gk-rest-heading") }
         else more("", "m", "")
         print "  " lines[1] "\t\t\t\t\t\t\t\t\t\t\t" rid \
           (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
         for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
-        # A case says how it ended before and how it ends now; a line each when both will not fit on one.
+        # A route says how its first case ended before and how it ends now, and how many cases take it; a line
+        # each when both will not fit on one.
         if (sending[n] != "") {
           k = index(sending[n], " \342\206\222 "); was = substr(sending[n], 1, k - 1); now = substr(sending[n], k + 5)
           how = schange[n] == "only a label" ? GK_CONTEXT "  \302\267 only a label" GK_R : schange[n] == "the same" ? GK_CONTEXT "  = the same" GK_R : ""
+          clen = scases[n] > 1 ? length(scases[n] " cases") + 4 : 0
+          if (clen) how = how GK_CONTEXT "  \302\267 " scases[n] " cases" GK_R
           # A design red flag on it, in red after how it ends.
           if (stext[n] in flagged) { how = how "  " GK_BAD "\342\232\221 " flagged[stext[n]] GK_R; flen = length(flagged[stext[n]]) + 4 } else flen = 0
           c = schange[n] == "ends differently" ? GK_ATTENTION : GK_CONTEXT
           vw = dim ? "  " GK_GOOD "\342\234\223" GK_R : vdn ? "  " GK_CONTEXT vdn "/" vt GK_R : ""
-          if (length(was) + length(now) + 3 + flen + (schange[n] == "ends differently" ? 0 : 14) <= w) more(ind GK_CONTEXT was GK_R " \342\206\222 " c now GK_R how vw, "m", "")
+          if (length(was) + length(now) + 3 + flen + clen + (schange[n] == "ends differently" ? 0 : 14) <= w) more(ind GK_CONTEXT was GK_R " \342\206\222 " c now GK_R how vw, "m", "")
           else { flow(was, ind, w, "", 0, GK_CONTEXT, ""); flow(now, ind, w, "\342\206\222 ", 2, c, how vw) }
           if (!(rid in open)) continue
         } else {
@@ -2071,8 +2073,10 @@ if [ "$mode" = --rows ]; then
     bu=; [ -e "$st/up" ] && bu=', bottom up'
     note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, %s to start from%s${GK_R}" "$syms" "$nfiles" "$fs" "$roots" "$bu")
     [ "$sentf" != /dev/null ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, told in %s parts${GK_R}" "$syms" "$nfiles" "$fs" "$roots")
-    ncases=$(awk -F'\t' '$1 == "S" && ($3 == "case" || $3 == "also")' "$sentf" 2>/dev/null | wc -l | tr -d ' ')
-    [ "${ncases:-0}" -gt 0 ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, followed in %s cases${GK_R}" "$syms" "$nfiles" "$fs" "$ncases")
+    # Each route row says how many cases take it; a list an older otis told has a case a row.
+    counts=$(awk -F'\t' '$1 == "S" && ($3 == "case" || $3 == "also") { n++; c += ($12 == "" ? 1 : $12) } END { print n + 0 " " c + 0 }' "$sentf" 2>/dev/null)
+    nroutes=${counts%% *} ncases=${counts#* } rs=s; [ "$nroutes" = 1 ] && rs=
+    [ "${nroutes:-0}" -gt 0 ] && note=$(printf "${GK_CONTEXT}%s symbols in %s file%s, followed in %s cases on %s route%s${GK_R}" "$syms" "$nfiles" "$fs" "$ncases" "$nroutes" "$rs")
     [ -n "$sentwait" ] && note="$note · $(printf "${GK_ATTENTION}Claude is following it case by case${GK_R}")"
     # The cases tab says a failed telling in place of its cases; over cases an older otis told, here.
     [ -n "$failed" ] && [ "$sentf" != /dev/null ] && note="$note · $(printf "${GK_BAD}%s${GK_R}" "$failed")"

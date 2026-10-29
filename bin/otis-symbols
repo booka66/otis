@@ -862,8 +862,8 @@ crumb() {
     sent)
       case $err[i] in
         story) put "$T" "change ${cm[i]// /}" ;;
-        case) put "$T" "case ${cm[i]// /}" ;;
-        also) put "$T" "case ${cm[i]// /}, which the author never mentions" ;;
+        case) put "$T" "route ${cm[i]// /}" ;;
+        also) put "$T" "route ${cm[i]// /}, which the author never mentions" ;;
         support) put "$T" "also changed, to support it" ;;
         *) (( bycase )) && put "$T" "changed lines no case runs" || put "$T" "in the change, in no part" ;;
       esac ;;

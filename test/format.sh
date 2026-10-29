@@ -114,10 +114,10 @@ expect story-pane/changed-words "$(FZF_PREVIEW_COLUMNS=80 git-sentences --pane "
   "return text[.slice(0], MAX);|const count = 1;|return [truncate(]text, MAX);|"
 rm -f "$tmp/case.json"
 # A paragraph of a case's pane says in its map how each of its lines goes on from the one above, after a space or
-# inside a word too long for a line, so a selection of it copies as the one line it was: here where it runs,
-# wrapped, the author band, and a test file's path, cut.
+# inside a word too long for a line, so a selection of it copies as the one line it was: here the author band,
+# where it runs, wrapped, and a test file's path, cut.
 printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"stops":[],"where":"The page a merchant opens to turn a product on, one row a product.","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}]}' > "$tmp/case.json"
 expect story-pane/paragraphs "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | awk 'NR == 1 { n = $2; next } NR <= n + 1' | awk -F'\t' '$2 == "text" { print $5 }' | tr '\n' ' ')" \
-  "new word new new cut "
+  "new new word new cut "
 rm -f "$tmp/case.json"
 

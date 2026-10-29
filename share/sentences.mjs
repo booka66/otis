@@ -358,7 +358,7 @@ async function tellCases(only = null, told = null) {
     `  git -C ${root} grep -n -e <pattern> ${head} -- <paths>      search the code after the change (${base} for before)`,
     `  git -C ${root} grep -n -e '' ${head} -- <path>              a whole file, every line numbered`,
     `  git -C ${root} show ${head}:<path>`,
-    "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending, and say where you stopped. Use up to about 150 commands: a large change needs them, since its cases have to run through all of its code.",
+    "Follow each case past the changed lines until you reach where its ending is decided: what a person or another system sees, whether it is tried again, what is stored. That is often in code this change never touched: who calls the changed code, who catches what it throws, who reads the flag or value it returns (git grep for the field's name). Going that deep on the main cases matters more than listing many. Stop when following further would not change the ending. Use up to about 150 commands: a large change needs them, since its cases have to run through all of its code.",
     "",
     "cases: the situations whose ending this change moves, as many as it takes for every changed row of code to be on some case's route: usually 6 to 16, more for a large change. In the order to read them: a reader goes through them one by one, top to bottom, and after the last one understands the whole change. The first case is the change's main path, told so that a teammate who has never seen this code learns what the change does and why; each case after it builds on the ones before it and says what is different. Cases that come in the same way stay together. Add a few a reader would expect to have changed that end the same (\"the same\"), and ones where only a label moved: a value only logs, metrics or a stored field read (\"only a label\"). For each condition the change adds, take a case on each side of it, and when it reads a list (some, every, a filter), one with a mix. Each situation is told once: never two cases a reader would call the same one, told from another function along its route.",
     "Code the change removes is told by what a person or another system could do with it: one case for each (a button they clicked, a call another system made), what it did before and what happens now. How the removed code failed, what it stored and the helpers only it used are stops on that case, never cases of their own. Removed code that nothing could reach (a path no caller took) is one case for all of it, which says nothing reached it.",
@@ -371,8 +371,6 @@ async function tellCases(only = null, told = null) {
     "- said: the author's own sentence about this case, copied exactly from their words below, or \"\".",
     "- facts: at most 5 things a reviewer would compare, each about one thing (when a count and a list move differently, they are two facts): what (a question a newcomer would ask about this case, at most 6 words, like \"Is the model called?\" or \"What does the shopper see?\"), before and after (its answer before and after the change, at most 8 words each, plain enough to read alone, never a label only this code uses), and test (the one line of a test in this change that asserts this answer: path, its line number after the change, its code copied exactly; or path \"\", line 0 and code \"\" when no test asserts it). In everyday words a teammate from outside this code would use; a code value only when it is what a person or another system sees, like a 400 status or a reason \"delivery_unknown\". before is what the code before the change does with this same situation: when the situation needs something this change adds (a setting, a field), say what the old code does without it, never what it would have done with it. When nothing ran for this case before the change, before is \"\".",
     "- stops: the route, in the order it runs. Each is a place in the code: name (the function's or symbol's own name, nothing else), is (what that function or place is for, at most 12 everyday words, like \"reads one page of the window's orders from the database\"), path (from the repository's root), side (\"new\" for the code after the change, \"old\" only for code the change removed), lines (the 1 to 5 lines there that decide this case, each with its line number on that side, its code copied exactly, and value: what holds on that line for this case, a short phrase that says what it is about, like \"the window has a rate, so go on\" or \"paid through Gale, so 2%\", never a bare true or false; or \"\"; check each value against its line: a comparison's edge as the code has it (>= is \"at least\", > is \"over\"), and arithmetic done with the case's own numbers). Take unchanged code in when it decides the ending, and take in the function that calls the others when that is what holds the route together.",
-    "- ends: one or two sentences on how it ends, before and after, that a teammate who has never seen this code can read on their own.",
-    "- stopped: where you stopped following and what you left unfollowed, or \"\".",
     "- tests: the names of tests in this change that run this case, copied exactly from the rows below.",
     "- data: the paths of changed files that hold data this case runs on: a test case or fixture it reads, a migration that adds what its code reads; or none.",
     "",
@@ -385,7 +383,7 @@ async function tellCases(only = null, told = null) {
     ...(reader ? [reader, ""] : []),
     "Write for a teammate who has never seen this code. Every phrase has its subject and its verb, the way you would say it aloud: \"the model is asked one question\", never \"asked once\". Never use a value, label or flag from the code as a word (NO, OPT_OUT, retryable): say what it means, like \"the expected answer is no\". Never coin a name for one either (\"the marker\", \"the defer option\"): say what the code does with it, like \"the caller runs the other agent itself\". A word this part of the code gives its own meaning is defined in its group's where, and every other field uses it only that way.",
     "",
-    "Plain words in every sentence, nothing a teammate would have to ask about, and no markdown, with one exception: in setup, where, is, value, facts, ends and stopped, put each name from the code in backticks, like `needsJudgment` or `orderValue`, so a reader can tell it from an English word. Nowhere else.",
+    "Plain words in every sentence, nothing a teammate would have to ask about, and no markdown, with one exception: in setup, where, is, value and facts, put each name from the code in backticks, like `needsJudgment` or `orderValue`, so a reader can tell it from an English word. Nowhere else.",
     "",
     ...(only ? [
       "# Cases already told",
@@ -414,7 +412,7 @@ async function tellCases(only = null, told = null) {
       group: text, name: text, setup: text, was: text, now: text,
       change: { enum: ["ends differently", "only a label", "the same"] }, described: { type: "boolean" }, said: text,
       facts: list(object({ what: text, before: text, after: text, test: object({ path: text, line: { type: "integer" }, code: text }) })),
-      stops: list(stop), ends: text, stopped: text, tests: list(text), data: list(text),
+      stops: list(stop), tests: list(text), data: list(text),
     })),
     ...(only ? { adds: list(object({ case: { enum: told.cases.map((_, at) => at + 1) }, stops: list(stop), tests: list(text), data: list(text) })) } : {}),
     groups: list(object({ group: text, where: text })),
@@ -541,6 +539,11 @@ function counterpart({ file, i, line }) {
   }
   return best;
 }
+/** Whether the change touches lines first to last on one side of a file: adds or removes a line among them. */
+function touched(path, side, [first, last]) {
+  const from = entryAt(path, side, first), to = entryAt(path, side, last);
+  return Boolean(from && to) && from.file.lines.slice(from.i, to.i + 1).some((line) => line.s !== " ");
+}
 function smallestUnit(path, side, n) {
   let best = null;
   for (const unit of unitsByFile.get(path) ?? []) {
@@ -635,7 +638,10 @@ function definitions(side, path) {
       && !KEYWORDS.has(m[1]) && opensBody(text, i, m[1])) name = m[1];
     if (!name) continue;
     const end = closing(text, i);
-    if (end) defs.push({ name, start: i + 1, end });
+    // Its doc comment is part of it, as seam's rows have it: a line of the comment is the function's own.
+    let start = i;
+    while (start > 0 && COMMENT.test(text[start - 1])) start--;
+    if (end) defs.push({ name, start: start + 1, end });
   }
   defined.set(key, defs);
   return defs;
@@ -651,7 +657,7 @@ function ownOf(side, path, n) {
  * Claude said; a line otis can't find is dropped), what it replaced, and which changed rows it runs through. Each
  * line goes under the function it is in, as the code has it: a function inside another is a stop of its own, and
  * a stop Claude named for a function its lines are not in takes the name of the one they are in. A stop in a test,
- * a generated file or build wiring is dropped. */
+ * a generated file or build wiring is dropped. What holds on a line is its note, of no case until a route says. */
 function placeStops(stop) {
   const path = stop.path.trim().replace(/^(\.\/|[ab]\/)/, "");
   const side = stop.side === "old" ? "old" : "new";
@@ -661,7 +667,8 @@ function placeStops(stop) {
   const lines = [];
   for (const cited of stop.lines ?? []) {
     const n = findLine(text, cited.line, cited.code);
-    if (n && !lines.some((one) => one.n === n)) lines.push({ n, t: text[n - 1], value: coded(cited.value).replace(/\.$/, "") });
+    const value = coded(cited.value).replace(/\.$/, "");
+    if (n && !lines.some((one) => one.n === n)) lines.push({ n, t: text[n - 1], notes: value ? [{ of: [], value }] : [] });
   }
   if (!lines.length) return [];
   lines.sort((a, b) => a.n - b.n);
@@ -672,6 +679,20 @@ function placeStops(stop) {
     const other = found && counterpart(found);
     if (other) line.other = { n: side === "old" ? other.n : other.o, t: other.t };
     unitOf.set(line, found?.line.owner ?? smallestUnit(path, side, line.n));
+  }
+  // Code the change kept or replaced is read where it runs now: old lines that each have a place in the new code
+  // (the same line, or the one put in its place) are a stop on those, each replaced one paired with the old line
+  // Claude cited, still on the old rows' route. Its readings and what it is for told the old code, so the new lines
+  // are lit without them, and the old lines drawn under them (codeOf) say what was there. One cited line the change
+  // took out with nothing in its place makes it the code the change removed, read as it was.
+  const now = (line) => line.other?.n ?? (line.sign === " " ? entryAt(path, "old", line.n)?.line.n ?? line.n : null);
+  if (side === "old" && textAt("new", path) && lines.every(now)) {
+    const placed = placeStops({ ...stop, side: "new", is: "", lines: lines.map((line) => ({ line: now(line), code: textAt("new", path)[now(line) - 1], value: "" })) });
+    for (const one of placed) {
+      for (const line of one.lines) { const was = lines.find((old) => now(old) === line.n); if (was.other) line.other = { n: was.n, t: was.t }; }
+      for (const line of lines) if (rowByUnit.has(unitOf.get(line))) one.covers.add(rowByUnit.get(unitOf.get(line)));
+    }
+    return placed;
   }
   const claimed = bare(stop.name), is = coded(stop.is).replace(/\.$/, "");
   const groups = new Map();
@@ -843,7 +864,7 @@ function nest(stops) {
     let at = stops.findIndex((one) => one.path === a.path && one.side === a.side && one.range?.[0] === inner.start);
     if (at < 0) {
       stops.push({ name: inner.name, is: "", path: a.path, side: a.side, where: a.where, inChange: a.inChange, range: [inner.start, inner.end], inside: a.name,
-        mark: Array.from({ length: reach(inner) + 1 }, (_, k) => entryAt(a.path, a.side, inner.start + k)).some((entry) => entry && entry.line.s !== " ") ? "◆" : "○",
+        mark: touched(a.path, a.side, [inner.start, inner.end]) ? "◆" : "○",
         fresh: a.fresh, lines: [], covers: new Set(), parent: -1, call: null });
       at = stops.length - 1;
       const into = callIn(a, stops[at]);
@@ -889,18 +910,22 @@ function chainOf(text, i, hi) {
   return out;
 }
 
-/** The code a stop shows, in the order of the diff: its whole function, every line of it, as the symbols tab shows
- * it. A stop otis finds no function around: the statement around each line it cites or calls the next stop from,
- * the elses of an if it shows, the exits (a return, a throw, a continue) between the lines it shows and the ifs
- * they sit in, and every line between them. Lines the change removed sit where the diff has them, after the gap
- * before them. A skip is a gap. */
+// What a cited line took the place of, as many lines of it as a reader takes in at a glance.
+const TURN = 8;
+/** The code a stop shows, in the order of the diff. A function the change touches: all of it, every line, as the
+ * symbols tab shows it. One the change leaves alone: what the route uses of it, its name, the statement around each
+ * line it cites or calls the next stop from, and the line that closes it. A stop otis finds no function around:
+ * the statement around each of those lines, the elses of an if it shows, the exits (a return, a throw, a continue)
+ * between the lines it shows and the ifs they sit in, and every line between them. A run of changes reads as the
+ * stop's own side: the other side's lines in it are a gap with their sign after it, but for what a cited line
+ * took the place of, TURN lines of it at most, which go under the run with that gap after them. A skip is a gap. */
 function codeOf(stop, calls) {
   const text = textAt(stop.side, stop.path);
   const keep = [...new Set([...stop.lines.map((line) => line.n), ...calls])].sort((a, b) => a - b);
   const range = stop.range;
   const shown = new Set();
   let head = null;
-  if (range) for (let n = range[0]; n <= range[1]; n++) shown.add(n);
+  if (range && touched(stop.path, stop.side, range)) for (let n = range[0]; n <= range[1]; n++) shown.add(n);
   else {
     const [lo, hi] = range ?? [1, text.length];
     if (range) {
@@ -916,18 +941,18 @@ function codeOf(stop, calls) {
       shown.add(hi);
     }
     for (const n of keep) { const [a, b] = statement(text, n, lo, hi); for (let k = a; k <= b; k++) shown.add(k); }
-    // An if shows its elses, and the exits between the lines it shows show with the ifs they sit in: the doors a
-    // case can leave by. Not inside a function of its own within this one.
-    const inner = definitions(stop.side, stop.path).filter((def) => range && def.start > range[0] && def.end <= range[1]);
-    const within = (k) => inner.some((def) => def.start <= k && k <= def.end);
-    for (const k of [...shown]) if (BRANCH.test(text[k - 1]) && !within(k)) for (const c of chainOf(text, k, hi)) shown.add(c);
-    if (keep.length) for (let k = keep[0]; k <= keep.at(-1); k++) {
-      if (shown.has(k) || within(k) || !/^\s*(return|throw|continue|break)\b/.test(text[k - 1])) continue;
-      shown.add(k);
-      for (let u = k - 1; u >= Math.max(lo, k - 6); u--) if (BRANCH.test(text[u - 1])) { shown.add(u); for (const c of chainOf(text, u, hi)) shown.add(c); break; }
+    // Outside any function, an if shows its elses, and the exits between the lines it shows show with the ifs they
+    // sit in: the doors a case can leave by.
+    if (!range) {
+      for (const k of [...shown]) if (BRANCH.test(text[k - 1])) for (const c of chainOf(text, k, hi)) shown.add(c);
+      if (keep.length) for (let k = keep[0]; k <= keep.at(-1); k++) {
+        if (shown.has(k) || !/^\s*(return|throw|continue|break)\b/.test(text[k - 1])) continue;
+        shown.add(k);
+        for (let u = k - 1; u >= Math.max(lo, k - 6); u--) if (BRANCH.test(text[u - 1])) { shown.add(u); for (const c of chainOf(text, u, hi)) shown.add(c); break; }
+      }
+      const sorted = [...shown].sort((a, b) => a - b);
+      for (let i = 1; i < sorted.length; i++) for (let k = sorted[i - 1] + 1; k < sorted[i]; k++) shown.add(k);
     }
-    const sorted = [...shown].sort((a, b) => a - b);
-    for (let i = 1; i < sorted.length; i++) for (let k = sorted[i - 1] + 1; k < sorted[i]; k++) shown.add(k);
     // A head of three lines or more goes on one line when it is short enough to read as one, else only its
     // first line shows (the name), and what the case needs of the rest is in the lines it cites.
     if (head && head[1] - head[0] >= 2) {
@@ -940,38 +965,59 @@ function codeOf(stop, calls) {
   }
   const key = stop.side === "old" ? "o" : "n", otherKey = key === "n" ? "o" : "n";
   const cited = new Map(stop.lines.map((line) => [line.n, line]));
-  const theirs = new Set(stop.lines.filter((line) => line.other).map((line) => line.other.n));
   let lines = [];
   const file = files.get(stop.path);
   if (file) {
-    // A run the change removed is shown with the lines it sits between, or with the line it became.
-    let pending = [], before = false;
+    // What a cited line took the place of goes under its run, past the lines after it that only close brackets,
+    // so it doesn't split the statement the run ends in.
+    const under = new Map();
+    const put = (line) => lines.push(line, ...(under.get(line[key]) ?? []));
+    let run = [], before = false;
+    const close = (next) => {
+      const own = run.filter((line) => line[key] != null && shown.has(line[key]));
+      const theirs = run.filter((line) => line[key] == null);
+      // A run the stop shows a line of, or sits between two lines it shows.
+      const inside = theirs.length > 0 && (own.length > 0 || (before && next && shown.has(next[key])));
+      const took = inside ? own.map((line) => cited.get(line[key])).filter((line) => line?.other) : [];
+      const from = Math.min(...took.map((line) => theirs.findIndex((one) => one[otherKey] === line.other.n)));
+      const turn = took.length ? theirs.slice(from, from + TURN) : [];
+      // The rest of the other side is a gap with its sign, which a pane older than it draws as lines skipped.
+      const rest = inside && theirs.length > turn.length ? [{ s: theirs[0].s, gap: theirs.length - turn.length }] : [];
+      if (turn.length) {
+        let at = own.at(-1)[key];
+        while (shown.has(at + 1) && /^\s*[)\]}][\s)\]};,]*$/.test(bareCode(text[at]))) at++;
+        under.set(at, [...turn, ...rest]);
+      }
+      own.forEach(put);
+      if (!turn.length) lines.push(...rest);
+      run = [];
+    };
     for (const line of file.lines) {
-      if (line[key] == null) { pending.push(line); continue; }
-      const here = shown.has(line[key]);
-      lines.push(...pending.filter((one) => (here && (before || line.s !== " ")) || theirs.has(one[otherKey])));
-      if (here) lines.push(line);
-      pending = []; before = here;
+      if (line.s !== " ") { run.push(line); continue; }
+      close(line);
+      before = shown.has(line[key]);
+      if (before) put(line);
     }
+    close(null);
   } else lines = [...shown].sort((a, b) => a - b).map((n) => ({ s: " ", [key]: n, t: text[n - 1] }));
   const code = [];
   let last = null;
-  lines.forEach((line, at) => {
+  for (const line of lines) {
     const n = line[key];
-    // The gap before a line comes before the removed run that sits just above it.
-    const next = n ?? lines.slice(at).find((one) => one[key] != null)?.[key];
-    if (last != null && next != null && next > last + 1) { code.push({ gap: next - last - 1 }); last = next - 1; }
+    // Only a line of the stop's own side has a gap before it: the other side's go with the run above them.
+    if (n != null && last != null && n > last + 1) code.push({ gap: n - last - 1 });
     if (n != null) last = n;
+    if (line.gap) { code.push({ gap: line.gap, sign: line.s, mine: false }); continue; }
     const mine = n != null ? cited.get(n) : null;
-    code.push({ n: n ?? line[otherKey], sign: line.s, t: line.t, mine: n != null, cited: Boolean(mine), value: mine?.value ?? "" });
-  });
+    code.push({ n: n ?? line[otherKey], sign: line.s, t: line.t, mine: n != null, cited: Boolean(mine), notes: mine?.notes ?? [] });
+  }
   // A long head (name, parameters, return type) on one line, when nothing the change removed sits in it.
   if (head) {
     const at = code.findIndex((line) => line.mine && line.n === head[0]);
     const run = at < 0 ? [] : code.slice(at, at + head[1] - head[0] + 1);
     if (run.length === head[1] - head[0] + 1 && run.every((line, k) => line.mine && line.n === head[0] + k && !line.cited)) {
       const sign = run.every((line) => line.sign === run[0].sign) ? run[0].sign : " ";
-      code.splice(at, run.length, { n: head[0], to: head[1], sign, t: run.map((line) => line.t.trim()).join(" "), mine: true, cited: false, value: "", joined: run.map((line) => line.n) });
+      code.splice(at, run.length, { n: head[0], to: head[1], sign, t: run.map((line) => line.t.trim()).join(" "), mine: true, cited: false, notes: [], joined: run.map((line) => line.n) });
     }
   }
   return code;
@@ -1058,56 +1104,81 @@ if (told) {
   const order = told.cases.map((one, at) => ({ one, at, said: saidOf(one) })).sort((a, b) => groupAt(a.one) - groupAt(b.one) || a.at - b.at);
   const whereOf = new Map((told.groups ?? []).map((one) => [bare(one.group).toLowerCase(), coded(one.where)]));
   const keys = [];
-  for (const { one, said } of order) {
-    // One function cited twice is one stop, with both sets of lines.
-    const stops = [];
-    for (const stop of (one.stops ?? []).flatMap(placeStops)) {
+  // One function cited twice is one stop, with both sets of lines. A line cited twice keeps each case's reading
+  // of it, one a case, the cases that read it alike sharing it; a stop on lines the change replaced brings none.
+  const merge = (stops, placed) => {
+    for (const stop of placed) {
       const same = stops.find((x) => x.path === stop.path && x.side === stop.side && x.name === stop.name);
       if (!same) { stops.push(stop); continue; }
-      for (const line of stop.lines) if (!same.lines.some((x) => x.n === line.n)) same.lines.push(line);
+      for (const line of stop.lines) {
+        const was = same.lines.find((x) => x.n === line.n);
+        if (!was) { same.lines.push(line); continue; }
+        for (const note of line.notes) {
+          if (was.notes.some((one) => one.of.some((k) => note.of.includes(k)))) continue;
+          const alike = was.notes.find((one) => one.value === note.value);
+          if (alike) alike.of.push(...note.of); else was.notes.push(note);
+        }
+      }
       same.lines.sort((a, b) => a.n - b.n);
       for (const row of stop.covers) same.covers.add(row);
       same.mark = same.lines.some((line) => line.sign !== " ") ? "◆" : same.covers.size ? "●" : "○";
       same.is ||= stop.is;
       same.fresh &&= stop.fresh;
     }
+    return stops;
+  };
+  // A path: the cases that come in the same way, read as one route with each function on it once, and the cases
+  // themselves as the situations that take it, each line saying what holds there for each.
+  for (const [g, group] of groups.entries()) {
+    const stops = [], inputs = [];
+    order.filter(({ one }) => groupAt(one) === g).forEach(({ one, said }, k) => {
+      const own = merge([], (one.stops ?? []).flatMap(placeStops));
+      for (const stop of own) for (const line of stop.lines) for (const note of line.notes) note.of = [k];
+      nest(own);
+      const change = RANK[one.change] == null ? "ends differently" : one.change;
+      inputs.push({
+        title: bare(one.name), kind: said ? "case" : "also", setup: coded(one.setup), was: bare(one.was), now: bare(one.now), change,
+        // New code: the route starts in code the change adds, so the case has no before; one that ends the same had one.
+        fresh: change !== "the same" && own.length > 0 && own.filter((stop) => stop.parent < 0).every((stop) => stop.fresh),
+        quote: said?.quote ?? "",
+        facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
+        tests: one.tests ?? [], data: one.data ?? [],
+      });
+      merge(stops, own);
+    });
     nest(stops);
-    // A route whose first stop the change's own code calls: that function goes above it, whole, with the line that
-    // calls it, so the case shows where it comes from and what happens around it.
+    // A route whose first stop the change's own code calls: that function goes above it, with the line that calls
+    // it, so the path shows where it comes from and what happens around it.
     const first = stops.findIndex((stop) => stop.parent < 0);
     const up = first < 0 ? null : caller(stops[first]);
     if (up && up.verb === "calls" && up.fn && files.has(up.path) && !stops.some((stop) => stop.path === up.path && stop.name === up.fn)) {
       const def = ownOf("new", up.path, up.n);
-      const changed = Array.from({ length: def.end - def.start + 1 }, (_, k) => entryAt(up.path, "new", def.start + k)).some((entry) => entry && entry.line.s !== " ");
       const entry = entryAt(up.path, "new", up.n);
       const covers = new Set();
       const unit = entry?.line.owner ?? smallestUnit(up.path, "new", up.n);
       if (rowByUnit.has(unit)) covers.add(rowByUnit.get(unit));
       stops.unshift({ name: def.name, is: "", path: up.path, side: "new", where: where(up.path), inChange: true, range: [def.start, def.end], inside: def.inside,
-        mark: changed ? "◆" : covers.size ? "●" : "○", fresh: Boolean(files.get(up.path)?.added || unit?.mark === "new"), lines: [], covers, parent: -1, call: null });
+        mark: touched(up.path, "new", [def.start, def.end]) ? "◆" : covers.size ? "●" : "○", fresh: Boolean(files.get(up.path)?.added || unit?.mark === "new"), lines: [], covers, parent: -1, call: null });
       for (const stop of stops.slice(1)) if (stop.parent >= 0) stop.parent++;
       stops[first + 1].parent = 0;
       stops[first + 1].call = { n: up.n, t: textAt("new", up.path)[up.n - 1], sign: entry ? entry.line.s : " ", verb: "calls" };
     }
-    // A stop after the first that nothing on the route calls: what in the code calls it, to show how the case gets there.
+    // A stop after the first that nothing on the route calls: what in the code calls it, to show how the path gets there.
     stops.forEach((stop, i) => { if (stop.parent < 0 && stops.findIndex((one) => one.parent < 0) !== i) stop.from = caller(stop); });
     stops.forEach((stop, i) => { stop.code = codeOf(stop, stops.filter((kid) => kid.parent === i).map((kid) => kid.call.n)); });
-    const runs = testsNamed(one.tests);
+    const runs = testsNamed(inputs.flatMap((input) => input.tests));
     for (const stop of stops) {
       keys.push(`${stop.side}\t${stop.path}`);
       if (stop.code.some((line) => line.n && !line.mine)) keys.push(`${stop.side === "old" ? "new" : "old"}\t${stop.path}`);
     }
     // The changed files that hold the data it runs on: a case file, a migration.
-    const data = [...new Set((one.data ?? []).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && meat(path)))];
-    const change = RANK[one.change] == null ? "ends differently" : one.change;
+    const data = [...new Set(inputs.flatMap((input) => input.data).map((path) => path.trim().replace(/^(\.\/|[ab]\/)/, "")).filter((path) => files.has(path) && meat(path)))];
+    // A path opens as its first case tells it, the change's main one, and ends as the case it moves most.
+    const most = inputs.reduce((a, b) => (RANK[b.change] < RANK[a.change] ? b : a));
     parts.push({
-      kind: said ? "case" : "also", title: bare(one.name), group: groups[groupAt(one)],
-      setup: coded(one.setup), where: whereOf.get(bare(one.group).toLowerCase()) ?? "", was: bare(one.was), now: bare(one.now), change,
-      quote: said?.quote ?? "", origin: said?.from ?? null,
-      facts: (one.facts ?? []).slice(0, 5).map((fact) => ({ what: coded(fact.what), before: coded(fact.before), after: coded(fact.after), pinned: pinOf(fact.test) })),
-      // New code: the route starts in code the change adds, so the case has no before; one that ends the same had one.
-      stops, fresh: change !== "the same" && stops.length > 0 && stops.filter((stop) => stop.parent < 0).every((stop) => stop.fresh),
-      ends: coded(one.ends), stopped: coded(one.stopped), runs, data,
+      kind: inputs.some((input) => input.kind === "case") ? "case" : "also", title: group, group, where: whereOf.get(group.toLowerCase()) ?? "",
+      setup: inputs[0].setup, was: most.was, now: most.now, change: most.change, fresh: most.fresh,
+      inputs: inputs.map(({ setup, tests, data, ...input }, k) => ({ letter: String.fromCharCode(65 + (k % 26)).repeat(Math.floor(k / 26) + 1), ...input })), stops, runs, data,
       // Its tests are named under it, not read in it.
       rows: [...new Set([...stops.flatMap((stop) => [...stop.covers]), ...rows.filter((row) => data.includes(row.path))])],
     });
@@ -1183,8 +1254,10 @@ const outline = {
     ending: part.fresh && part.now ? `new → ${part.now}` : part.was || part.now ? `${part.was || "?"} → ${part.now || "?"}` : "",
     // The first case to say where this runs says it in full; the rest point back to it.
     whereAt: part.where ? sentences.find((one) => one.where === part.where).num : "",
-    quote: part.quote, origin: part.origin, from: part.kind === "rest" ? "rest" : "author", links: [],
+    quote: part.quote ?? "", origin: part.origin ?? null, from: part.kind === "rest" ? "rest" : "author", links: [],
     facts: part.facts ?? [], fresh: part.fresh ?? false, ends: part.ends ?? "", stopped: part.stopped ?? "", data: part.data ?? [],
+    // The situations that take a path, in the order to read them: what its lines' notes are of.
+    inputs: part.inputs ?? [],
     stops: (part.stops ?? []).map(({ covers, ...stop }) => stop),
     runs: (part.runs ?? []).map((row) => ({ name: testName(row), where: row.where })),
     add: sum(part.rows, "add"), del: sum(part.rows, "del"),
@@ -1240,13 +1313,14 @@ if (htmlOut) {
   process.stdout.write(JSON.stringify(outline) + "\n");
 } else {
   if (outline.summary) console.log(outline.summary);
-  let group = null;
   for (const part of outline.sentences) {
-    const heading = part.kind === "case" || part.kind === "also" ? part.group : part.kind === "rest" ? "on no route" : null;
-    if (heading && heading !== group) { console.log(`\n${heading.toUpperCase()}`); group = heading; }
+    if (part.kind === "rest") console.log("\nON NO ROUTE");
     console.log(`\n${part.num}  ${part.text}${part.ending ? `   ${part.ending}` : ""}${part.change && part.change !== "ends differently" ? `  (${part.change})` : ""}`);
     if (part.setup) console.log(`   ${part.setup}`);
-    for (const fact of part.facts) console.log(`   ${fact.what}: ${fact.before} → ${fact.after}${fact.pinned ? `  (asserted at ${fact.pinned.where})` : ""}`);
+    for (const input of part.inputs) {
+      console.log(`   ${input.letter}  ${input.title}   ${input.fresh ? "new" : input.was || "?"} → ${input.now || "?"}${input.change !== "ends differently" ? `  (${input.change})` : ""}`);
+      if (input.quote) console.log(`      said  ${input.quote}`);
+    }
     if (part.quote) console.log(`   said  ${part.quote}`);
     const depth = (stop) => (stop.parent < 0 ? 0 : 1 + depth(part.stops[stop.parent]));
     if (part.where) console.log(`   where: ${part.where}`);
@@ -1257,12 +1331,10 @@ if (htmlOut) {
       if (stop.call) console.log(`   ${pad}called at ${stop.call.n}: ${stop.call.t.trim()}`);
       console.log(`   ${pad}${stop.mark} ${stop.name}  ${stop.where}${stop.inChange ? "" : ", not in this change"}${stop.is ? `: ${stop.is}` : ""}`);
       for (const line of stop.lines) {
-        console.log(`       ${String(line.n).padStart(5)} ${line.sign === " " ? " " : line.sign} ${line.t.trim()}${line.value ? `      ${line.value}` : ""}`);
+        console.log(`       ${String(line.n).padStart(5)} ${line.sign === " " ? " " : line.sign} ${line.t.trim()}${line.notes.map((note) => `      ${note.of.map((k) => part.inputs[k].letter).join(" ")}: ${note.value}`).join("")}`);
         if (line.other) console.log(`       ${String(line.other.n).padStart(5)} ${stop.side === "old" ? "now" : "was"} ${line.other.t.trim()}`);
       }
     });
-    if (part.ends) console.log(`   ■ ${part.ends}`);
-    if (part.stopped) console.log(`     stopped: ${part.stopped}`);
     for (const run of part.runs) console.log(`   ◦ ${run.name}  ${run.where}`);
     if (part.kind === "rest") for (const row of part.code) console.log(`    ${row.mark.padEnd(8)} ${row.name}  ${row.kind}  +${row.add} -${row.del}  ${row.where}`);
   }

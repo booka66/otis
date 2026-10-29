@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// story-pane.mjs <outline.json> <n>: case n of a change (sentences.mjs) as the symbol view's pane,
-// FZF_PREVIEW_COLUMNS wide: the situation, how it ended before and how it ends now, its route through the
-// code in the order it runs, the tests that run it. A part told without cases is its words and its code.
+// story-pane.mjs <outline.json> <n>: path n of a change told as cases (sentences.mjs) as the symbol view's pane,
+// FZF_PREVIEW_COLUMNS wide: where it comes in, the situations that take it, each by its letter with how it ended
+// before and how it ends now, then its route through the code once, in the order it runs, each line saying what
+// holds there for each situation, and the tests that run it. A part told without cases is its words and its code.
 //
 // In a review, OTIS_CASE_THREADS is the MR's threads as git-mr-threads --json places them: each is drawn under the
 // line of the route it sits on, and those on the rest of the case's code (OTIS_CASE_ON, their ids, one a line)
@@ -11,7 +12,7 @@
 // or a thread's (thread, its id, resolvable, resolved and draft), for otis-symbols to comment from what you select;
 // or a paragraph's (text, the columns its words are in, and how it goes on from the line above: new, word after a
 // space, or cut inside a word too long for a line), for otis-symbols to copy it as the one line it was.
-// It also pins a case's title and how it ends ("\036pin N" and N lines), held at the pane's top while the rest scrolls.
+// It also pins a path's title and how its first situation ends ("\036pin N" and N lines), held at the pane's top while the rest scrolls.
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -21,24 +22,33 @@ const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 const part = outline.sentences[Number(which) - 1];
 if (!part) process.exit(0);
-// The case as it was told, which its flags are filed under, whether or not it is told again for you below.
+// An outline told before paths, drawn while its change is told again: each case a path of one situation, and
+// what holds on a line its value.
+if ((part.kind === "case" || part.kind === "also") && !part.inputs) {
+  part.inputs = [{ letter: "A", title: part.text, was: part.was, now: part.now, change: part.change, fresh: part.fresh, quote: part.quote, facts: part.facts }];
+  for (const stop of part.stops ?? []) for (const line of [...stop.lines, ...(stop.code ?? [])]) line.notes = line.value ? [{ of: [0], value: line.value }] : [];
+}
+// The path as it was told, which its flags are filed under, whether or not it is told again for you below.
 const told = part.text;
 const W = Math.max(40, Number(process.env.FZF_PREVIEW_COLUMNS) || 96);
-// The case told again for you (reword.mjs, from your words), laid over the case it was told from.
+// The path told again for you (reword.mjs, from your words), laid over the path it was told from.
 const reworded = (() => { try { return JSON.parse(readFileSync(file.replace(/\.json$/, `.reader.${which}.json`), "utf8")); } catch { return null; } })();
 const rewording = existsSync(file.replace(/\.json$/, `.reader.${which}.running`));
-// Only over the case it was told from, as it still is: the same situation, as many answers and stops, each stop
-// with as many lines; a case otis has since drawn otherwise is told again (retell).
-const overlaid = reworded?.of === part.text && reworded.facts?.length === part.facts.length && reworded.stops?.length === (part.stops ?? []).length
-  && reworded.stops.every((stop, i) => stop.values?.length === part.stops[i].lines.length);
+// Only over the path it was told from, as it still is: as many situations and stops, each stop with as many notes;
+// a path otis has since drawn otherwise is told again (retell).
+const notesOf = (stop) => stop.lines.flatMap((line) => line.notes);
+const overlaid = reworded?.of === part.text && reworded.inputs?.length === (part.inputs ?? []).length && reworded.stops?.length === (part.stops ?? []).length
+  && reworded.stops.every((stop, i) => stop.notes?.length === notesOf(part.stops[i]).length);
 if (overlaid) {
-  for (const key of ["text", "setup", "where", "ends", "stopped"]) if (part[key] || reworded[key]) part[key] = reworded[key];
-  reworded.facts.forEach((fact, k) => Object.assign(part.facts[k], fact));
+  for (const key of ["setup", "where"]) if (part[key] || reworded[key]) part[key] = reworded[key];
+  reworded.inputs.forEach((input, k) => Object.assign(part.inputs[k], input));
   reworded.stops.forEach((stop, i) => {
     const one = part.stops[i];
     if (stop.is || one.is) one.is = stop.is;
-    const value = new Map(one.lines.map((line, j) => [line.n, stop.values[j]]));
-    for (const line of [...one.lines, ...(one.code ?? [])]) if (value.has(line.n) && (line.cited || one.lines.includes(line))) line.value = value.get(line.n);
+    // Each line's notes told again, there and on the line as the code draws it.
+    let j = 0;
+    const values = new Map(one.lines.map((line) => [line.n, line.notes.map(() => stop.notes[j++])]));
+    for (const line of [...one.lines, ...(one.code ?? [])]) if (values.has(line.n) && (line.cited || one.lines.includes(line))) line.notes.forEach((note, k) => { note.value = values.get(line.n)[k]; });
   });
 }
 
@@ -329,78 +339,56 @@ function showFlags() {
   });
 }
 
-/** How the case ended before → how it ends now, as the list says it: yellow when it ends differently. */
-function ending() {
-  if (!part.was && !part.now) return [];
-  const was = part.fresh ? "new" : part.was || "?", now = part.now || "?", tone = part.change === "ends differently" ? A : C;
-  const how = { "only a label": "  · only a label", "the same": "  = the same" }[part.change] ?? "";
-  if (width(was) + width(now) + width(how) + 3 <= W - 4) return [`${C}${was}${R} → ${tone}${now}${R}${C}${how}${R}`];
-  return [...wrap(was, W - 4).map((line) => C + line + R), ...wrap(now, W - 6).map((line, at) => `${at ? "  " : "→ "}${tone}${line}${R}`),
+/** How a situation ended before → how it ends now, as the list says it, room wide: yellow when it ends differently. */
+function ending(one, room) {
+  if (!one.was && !one.now) return [];
+  const was = one.fresh ? "new" : one.was || "?", now = one.now || "?", tone = one.change === "ends differently" ? A : C;
+  const how = { "only a label": "  · only a label", "the same": "  = the same" }[one.change] ?? "";
+  if (width(was) + width(now) + width(how) + 3 <= room) return [`${C}${was}${R} → ${tone}${now}${R}${C}${how}${R}`];
+  return [...wrap(was, room).map((line) => C + line + R), ...wrap(now, room - 2).map((line, at) => `${at ? "  " : "→ "}${tone}${line}${R}`),
     ...(how ? [`  ${C}${how.trim()}${R}`] : [])];
 }
 
-/** A case: the situation, how it ended before and how it ends now, then its route through the code in the
- * order it runs, each stop's deciding lines with what holds there, and the tests that run it. */
+/** The cases that take the path, in the order to read them, each by the letter its notes in the code carry when
+ * there are more than one: what happens, how it ended before and how it ends now, and the test lines that assert
+ * it; then what the author said of them. */
+function situations() {
+  const many = part.inputs.length > 1;
+  for (const input of part.inputs) {
+    const lead = many ? input.letter.length + 2 : 0, room = W - 4 - lead;
+    [...prose(input.title, room, T), ...ending(input, room)].forEach((line, at) => say(`  ${at || !many ? " ".repeat(lead) : `${B}${T}${input.letter}${R}  `}${line}`));
+    const pins = [...new Set(input.facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where))];
+    if (pins.length) prose(`✓ ${pins.join(", ")}`, room, C).forEach((line) => say(`  ${" ".repeat(lead)}${line.replace("✓", `${G}✓${R}${C}`)}`));
+  }
+  // What the author said, each sentence once, with the situations it is about.
+  say();
+  const quotes = [...new Set(part.inputs.map((input) => input.quote).filter(Boolean))];
+  if (!quotes.length) band("the author", C, `never mentions ${many ? "these" : "this"}`, C + I);
+  quotes.forEach((quote, at) => {
+    const of = many ? `${part.inputs.filter((input) => input.quote === quote).map((input) => input.letter).join(" ")}  ` : "";
+    band(at ? "" : "the author", C, `${of}“${quote}”`, C + I);
+  });
+}
+
+/** A path: where it comes in, the cases that take it, then its route through the code in the order it runs,
+ * each stop's lines with what holds there for each case, and the tests that run it. */
 function showCase() {
-  const head = [...prose(part.text, W - 4, B + T), ...ending()].map((line) => `  ${line}`);
+  const many = part.inputs.length > 1;
+  const head = [...prose(part.text, W - 4, B + T), ...(many ? [`${C}${part.inputs.length} cases take this route${R}`] : [])].map((line) => `  ${line}`);
   if (env.OTIS_PANE_MAP) pinned.push(...head, `  ${C}${"─".repeat(W - 4)}${R}`);
   say();
   if (!env.OTIS_PANE_MAP) for (const line of head) say(line);
   if (part.setup) paragraph(wrapped(part.setup, W - 4), "  ");
   say();
-  if (rewording) { paragraph(wrapped("Claude is telling this case again in your words", W - 4, A), "  "); say(); }
+  if (rewording) { paragraph(wrapped("Claude is telling this again in your words", W - 4, A), "  "); say(); }
   showFlags();
-  // Where in the system this happens, for a reader who has never seen this code: in full in every case, so a
-  // case read on its own has the words it uses.
+  situations();
+  // Where in the system this happens, for a reader who has never seen this code.
   if (part.where) {
+    say();
     say(`  ${C}WHERE THIS RUNS${R}`);
     paragraph(wrapped(part.where, Math.min(W - 4, 100)), "  ");
-    say();
   }
-
-  // How it ends, in sentences; then before and after, side by side, the questions worth comparing. New code
-  // has no before: none of it ran.
-  if (part.ends) {
-    say(`  ${C}HOW IT ENDS${R}`);
-    paragraph(wrapped(part.ends, Math.min(W - 4, 100)), "  ");
-    say();
-  }
-  const facts = part.facts;
-  if (facts.length) {
-    const whatW = Math.min(Math.max(18, Math.floor(W / 4)), 36, Math.max(...facts.map((fact) => [...fact.what.replace(/`/g, "")].length)));
-    // An answer a test asserts says which test line, where the pane has room for it, else only that one does.
-    const pins = facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where.length);
-    const pinW = !pins.length ? 0 : W - 4 - whatW - 2 - 3 - Math.max(...pins) - 3 >= 40 ? Math.max(...pins) + 3 : 2;
-    const row = (fact, cells) => {
-      const what = prose(fact.what, whatW, C);
-      const tall = Math.max(what.length, ...cells.map((cell) => cell.lines.length));
-      for (let i = 0; i < tall; i++) {
-        const pin = i === 0 && fact.pinned ? `${G}✓${R}${pinW > 2 ? ` ${C}${fact.pinned.where}${R}` : ""}` : "";
-        say(`  ${pad(what[i] ?? "", whatW)}  ${cells.map(({ lines, w, ground }) => `${ground} ${lines[i] ?? ""}${ground}${" ".repeat(Math.max(0, w - width(lines[i] ?? "")))} ${R}`).join(" ")} ${pin}`);
-      }
-    };
-    if (part.fresh) {
-      const nowW = Math.min(W - 4 - whatW - 2 - 4 - pinW, 90);
-      for (const [at, line] of prose("new code: the route starts in code this change adds, so there is no before", nowW - 4, C).entries()) say(`  ${" ".repeat(whatW + 2)}${at ? "     " : `${G} now${R} `}${line}`);
-      for (const fact of facts) row(fact, [{ lines: prose(fact.after || "·", nowW - 2, T, PLUS), w: nowW - 2, ground: PLUS }]);
-    } else {
-      const room = W - 4 - whatW - 2 - 3 - pinW;
-      const beforeW = Math.max(12, Math.floor(room * 0.45)), afterW = Math.max(12, room - beforeW - 2);
-      say(`  ${" ".repeat(whatW + 2)}${X} before${R}${" ".repeat(Math.max(1, beforeW - 6))}${G} after${R}`);
-      for (const fact of facts) {
-        row(fact, [
-          { lines: prose(fact.before || "·", beforeW - 2, T, MINUS), w: beforeW - 2, ground: MINUS },
-          { lines: prose(fact.after || "·", afterW - 3, T, PLUS), w: afterW - 3, ground: PLUS },
-        ]);
-      }
-    }
-    const key = pins.length ? `✓ the test line that asserts it${pins.length < facts.length ? "; the rest is Claude's reading of the code" : ""}`
-      : part.runs.length ? "Claude's reading of the code: no test line here asserts these answers" : "Claude's reading of the code: no test in this change asserts these answers";
-    for (const line of prose(key, W - 4 - whatW - 2, C)) say(`  ${" ".repeat(whatW + 2)}${line.replace("✓", `${G}✓${R}${C}`)}`);
-    say();
-  }
-  if (part.quote) band("the author", C, `“${part.quote}”`, C + I);
-  else band("the author", C, part.kind === "also" ? "never mentions this" : "said nothing about this", C + I);
 
   // The route: who calls whom as the case runs. A stop under another is called from the line just above it,
   // which is drawn in the caller's code; a rail on the left runs down what is inside each function.
@@ -408,7 +396,7 @@ function showCase() {
   const marks = new Set(part.stops.map((stop) => stop.mark));
   const legend = [["◆", A, "changed here"], ["●", T, "in changed code"], ["○", C, "not in this change"]].filter(([mark]) => marks.has(mark))
     .map(([mark, color, says]) => `${color}${mark}${R}${C} ${says}${R}`).join("  ");
-  const title = `${C}WHO CALLS WHOM, as this case runs${R}`;
+  const title = `${C}WHO CALLS WHOM, as it runs${R}`;
   if (width(title) + width(legend) + 6 <= W - 2) say(`  ${pad(title, W - 4 - width(legend))}${legend}`);
   else { say(`  ${title}`); say(`  ${legend}`); }
   const kids = part.stops.map(() => []), roots = [];
@@ -429,8 +417,10 @@ function showCase() {
   const shared = part.stops.map((_, i) => Math.min(...texts(i).map(indent)));
   const spans = part.stops.flatMap((_, i) => texts(i).map((t) => ({ code: [...t].length - shared[i], at: 2 * (depthOf[i] + 1) + gutter + [...t].length - shared[i] })));
   const longest = Math.max(0, ...spans.map((one) => one.at));
+  // What holds on a line for a situation, by its letter when more than one takes the path.
+  const lettersOf = (note) => (many ? `${note.of.map((k) => part.inputs[k].letter).join(" ")} ` : "");
   // The room on the right is for the longest note: what holds on a line Claude cites, or a line's call to the stop below.
-  const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited && line.value).map((line) => [...line.value].length + 2)),
+  const noted = Math.max(0, ...part.stops.flatMap((stop) => stop.code.filter((line) => line.cited).flatMap((line) => line.notes.map((note) => width(lettersOf(note)) + [...note.value].length + 2))),
     ...part.stops.flatMap((stop) => stop.code.map((line) => flaggedAt.get(`${stop.path}\t${line.mine === false ? otherSide(stop.side) : stop.side}\t${line.n}`)).filter(Boolean).map((note) => [...note].length + 2)),
     ...part.stops.filter((stop) => stop.call).map((stop) => [...`${stop.call.verb ?? "uses"} ${stop.name}, below`].length + 2));
   // The code first: the notes wrap, in at most a third of the pane, so the code has the rest to breathe in.
@@ -443,7 +433,7 @@ function showCase() {
     const stop = part.stops[i];
     const markColor = stop.mark === "◆" ? A : stop.mark === "●" ? T : C;
     const head = `${C}${++step}${R} ${markColor}${stop.mark}${R} ${RAISE}${B}${T}${stop.name}${R}`;
-    const place = `${C}in ${stop.where}${stop.inside ? `, inside ${RAISE}${T}${stop.inside}${R}${C}` : ""}${stop.inChange ? "" : ", not in this change"}${R}`;
+    const place = `${C}in ${stop.where}${stop.inside ? `, inside ${RAISE}${T}${stop.inside}${R}${C}` : ""}${stop.inChange ? "" : ", not in this change"}${stop.side === "old" ? ", before the change" : ""}${R}`;
     const room = W - 4 - 2 * depth;
     if (width(head) + width(place) + 2 <= room) say(`  ${rail(depth)}${head}  ${place}`);
     else { say(`  ${rail(depth)}${head}`); say(`  ${rail(depth + 1)}${place}`); }
@@ -475,10 +465,17 @@ function showCase() {
       const body = grounded(bodies[at], words[at], ground, line.sign === "+" ? PLUS_WORD : MINUS_WORD);
       // A line the change removed is numbered in red: its number is from before the change.
       const number = `${wrong ? B + X : line.cited ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
-      const value = line.cited ? line.value : calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
-      const style = line.cited ? B + A : C;
-      if (value) { flush(); pending = prose(value, Math.max(8, aside - 2), style).map((one, k) => `   ${k ? " " : line.cited ? `${A}◀${R}` : " "} ${one}`); }
-      if (wrong) { if (!value) flush(); pending.push(...prose(wrong, Math.max(8, aside - 2), B + X).map((one, k) => `   ${k ? " " : `${X}⚑${R}`} ${one}`)); }
+      // Each situation's note, one under another, the first marked; else the call to the stop below.
+      const notes = line.cited ? line.notes : [];
+      const call = !notes.length && calls.length ? `${part.stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${part.stops[k].name}\``).join(" and ")}, below` : "";
+      if (notes.length) {
+        flush();
+        pending = notes.flatMap((note, j) => {
+          const who = lettersOf(note);
+          return prose(note.value, Math.max(8, aside - 2 - width(who)), B + A).map((one, k) => `   ${j || k ? " " : `${A}◀${R}`} ${k ? " ".repeat(width(who)) : `${B}${T}${who}${R}`}${one}`);
+        });
+      } else if (call) { flush(); pending = prose(call, Math.max(8, aside - 2), C).map((one) => `     ${one}`); }
+      if (wrong) { if (!notes.length && !call) flush(); pending.push(...prose(wrong, Math.max(8, aside - 2), B + X).map((one, k) => `   ${k ? " " : `${X}⚑${R}`} ${one}`)); }
       const what = `line\t${stop.path}\t${side}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
       cut(body, code).forEach((piece, k) => {
         say(`  ${lead}${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
@@ -486,14 +483,28 @@ function showCase() {
       // The review's threads on it, under it.
       const here = (line.joined ?? [line.n]).flatMap((n) => threadsAt.get(`${stop.path}\t${side}\t${n}`) ?? []).filter((one) => !drawnThreads.has(one.id));
       if (here.length) { flush(); for (const one of here) drawThread(one, `  ${lead}${" ".repeat(gutter)}`, W - from - 3); }
-      if (calls.length) flush();
-      for (const k of calls) { drawStop(k, depth + 1); drawn.add(k); }
-      return calls.length > 0;
+      return calls;
+    };
+    // The stops a line calls go under it, and under what it took the place of, which is read with it.
+    let waiting = [];
+    const descend = (more) => {
+      if (!waiting.length) return;
+      flush();
+      for (const k of waiting) { drawStop(k, depth + 1); drawn.add(k); }
+      waiting = [];
+      if (more) say(`  ${lead}${prose(`↩ back in \`${stop.name}\``, code, C)[0]}`);
     };
     stop.code.forEach((line, at) => {
-      if (line.gap) { flush(); say(`  ${lead}${" ".repeat(digits - 1)}${C}⋯ ${line.gap} line${line.gap === 1 ? "" : "s"}${R}`); }
-      else if (draw(line, at) && at < stop.code.length - 1) say(`  ${lead}${prose(`↩ back in \`${stop.name}\``, code, C)[0]}`);
+      if (line.mine !== false) descend(true);
+      if (line.gap) {
+        const lines = `${num(line.gap)} line${line.gap === 1 ? "" : "s"}`;
+        // A gap with a sign is the other side's lines in a run: the note beside the line above goes on beside it.
+        if (line.sign) say(`  ${lead}${pad(`${" ".repeat(digits + 1)}${line.sign === "-" ? `${RM}− ${lines} removed` : `${G}+ ${lines} added`}${R}`, gutter + code)}${pending.shift() ?? ""}`);
+        else { flush(); say(`  ${lead}${" ".repeat(digits - 1)}${C}⋯ ${lines}${R}`); }
+      }
+      else waiting.push(...draw(line, at));
     });
+    descend(false);
     flush();
     for (const k of kids[i]) if (!drawn.has(k)) drawStop(k, depth + 1);
   }
@@ -508,7 +519,6 @@ function showCase() {
     drawStop(i, 0);
   });
   if (!part.stops.length) say(`  ${A}no line Claude cited could be found in the code, so there is no route to show${R}`);
-  if (part.stopped) { say(); band("stopped", C, part.stopped, C); }
   elsewhere();
 
   // The tests in the change that run it, by file.
@@ -563,9 +573,9 @@ function yourWords() {
       .split("\n").filter(Boolean).map((line) => line.split("\t"));
   } catch { return []; }
 }
-/** What the case says, in all its words, without the backticks around names. */
-const saidOf = () => [part.text, part.setup, part.where, part.ends, part.stopped, ...part.facts.flatMap((fact) => [fact.what, fact.before, fact.after]),
-  ...part.stops.flatMap((stop) => [stop.is, ...stop.lines.map((line) => line.value)])].join(" ").replace(/`/g, "");
+/** What the path says, in all its words, without the backticks around names. */
+const saidOf = () => [part.text, part.setup, part.where, ...part.inputs.flatMap((input) => [input.title, input.was, input.now]),
+  ...part.stops.flatMap((stop) => [stop.is, ...notesOf(stop).map((note) => note.value)])].join(" ").replace(/`/g, "");
 const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Whether the case uses a word, as a whole word. */
 function uses(word) { return new RegExp(`\\b${escapeRe(word)}\\b`, "i").test(saidOf()); }
