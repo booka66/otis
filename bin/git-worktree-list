@@ -30,8 +30,8 @@ st=$GIT_FZF_STATE
 share=$(cd "$(dirname "$0")/../share" && pwd)
 
 if [ "$1" = --status ]; then
-  # --no-optional-locks: status otherwise takes each worktree's index lock to
-  # refresh it, and a git add or commit an agent runs there meanwhile fails.
+  # Status writes the index back, which keeps fsmonitor's token in it: under
+  # --no-optional-locks it never did, and each one lstat'd every file, 2-4s of CPU.
   git worktree list --porcelain | awk '/^worktree /{ print substr($0, 10) }' | {
     while IFS= read -r p; do
       (
@@ -45,7 +45,7 @@ if [ "$1" = --status ]; then
           elif [ -e "$g/CHERRY_PICK_HEAD" ]; then op=cherry-picking
           elif [ -e "$g/REVERT_HEAD" ]; then op=reverting
           fi
-          n=$(git -C "$p" --no-optional-locks status --porcelain | awk 'END { print NR }')
+          n=$(git -C "$p" status --porcelain | awk 'END { print NR }')
           date=$(git -C "$p" log -1 --format=%ct)
         else
           op=missing
