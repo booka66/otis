@@ -97,12 +97,12 @@ expect pane-wrap/diff-under-code "$( (. "$share/delta.sh"; OTIS_C_ROOT=1; FZF_PR
   "    ⋮  2 │Run it: a menu of short |    ⋮    │guided tours, most of them |    ⋮    │hands-on|"
 rm -rf "$tmp/delta"
 
-# --- share/story-pane.mjs: in a case's route, a line the change removed and
+# --- share/story-pane.mjs: in a case's steps, a line the change removed and
 # the line it became have what changed on the word grounds delta.sh draws it
-# on, here in [ ]; a line put in between them pairs with neither.
+# on, here in [ ]; a line put in between them is not drawn.
 cat > "$tmp/case.json" <<'EOF'
 {"sentences": [{"kind": "case", "text": "A text is cut", "facts": [], "runs": [], "route": 0, "letter": "A"}],
- "routes": [{"text": "a cut", "where": "", "runs": [], "stops": [{"name": "cut", "path": "a.ts", "side": "new", "where": "a.ts", "mark": "◆", "inChange": true, "parent": -1, "lines": [], "by": ["A"], "code": [
+ "routes": [{"text": "a cut", "where": "", "runs": [], "stops": [{"name": "cut", "path": "a.ts", "side": "new", "where": "a.ts", "mark": "◆", "inChange": true, "parent": -1, "lines": [{"n": 3, "sign": "+", "t": "  return truncate(text, MAX);", "notes": [{"of": ["A"], "value": "it cuts"}]}], "by": ["A"], "code": [
   {"n": 1, "sign": " ", "t": "function cut(text) {", "mine": true},
   {"n": 2, "sign": "-", "t": "  return text.slice(0, MAX);", "mine": false},
   {"n": 2, "sign": "+", "t": "  const count = 1;", "mine": true},
@@ -111,14 +111,14 @@ cat > "$tmp/case.json" <<'EOF'
 EOF
 e=$(printf '\033')
 expect story-pane/changed-words "$(FZF_PREVIEW_COLUMNS=80 git-sentences --pane "$tmp/case.json" 1 |
-  sed -E "s/$e\[48;2;(67;131;69|156;53;43)m([^$e]*)$e\[48;2;(38;51;42|60;32;34)m/[\2]/g" | strip | sed -n 's/^ *│ *[0-9]* [−+] *\(.*[^ ]\) *$/\1/p' | tr '\n' '|')" \
-  "return text[.slice(0], MAX);|const count = 1;|return [truncate(]text, MAX);|"
+  sed -E "s/$e\[48;2;(67;131;69|156;53;43)m([^$e]*)$e\[48;2;(38;51;42|60;32;34)m/[\2]/g" | strip | sed -n 's/^ *[0-9]* [−+] *\(.*[^ ]\) *$/\1/p' | tr '\n' '|')" \
+  "return text[.slice(0], MAX);|return [truncate(]text, MAX);|"
 rm -f "$tmp/case.json"
 # A paragraph of a case's pane says in its map how each of its lines goes on from the one above, after a space or
-# inside a word too long for a line, so a selection of it copies as the one line it was: here the author band,
-# where it runs, wrapped, and a test file's path, cut.
+# inside a word too long for a line, so a selection of it copies as the one line it was: here where it runs,
+# wrapped, and a test file's path, cut.
 printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"route":0,"letter":"A","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}],"routes":[{"text":"a row","where":"The page a merchant opens to turn a product on, one row a product.","stops":[],"runs":[]}]}' > "$tmp/case.json"
 expect story-pane/paragraphs "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | awk 'NR == 1 { n = $2; next } NR <= n + 1' | awk -F'\t' '$2 == "text" { print $5 }' | tr '\n' ' ')" \
-  "new word new new word new cut "
+  "new word new cut "
 rm -f "$tmp/case.json"
 
