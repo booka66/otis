@@ -117,7 +117,7 @@ EOF
   cat > "$tmp/stops/claude" <<EOF
 #!/bin/sh
 cat > "$tmp/stops/prompt"
-printf '%s' '{"structured_output":{"stops":[
+printf '%s' '{"structured_output":{"overview":{"does":"Run takes a flag.","before":"It ran once.","after":"It can run twice.","steps":[{"what":"\`run\` reads the flag.","path":"lib.ts","line":2,"code":"export function run(o: Opts, twice: boolean): number {"},{"what":"A step in no place.","path":"lib.ts","line":2,"code":"nothing like this"}]},"stops":[
   {"question":"Should \`run\` take this?","why":"One caller.","path":"lib.ts","line":2,"to":2,"code":"export function run(o: Opts, twice: boolean): number {","note":"look here","noteLine":2,"comment":"Do we need it?"},
   {"question":"Not there","why":"w","path":"lib.ts","line":2,"to":2,"code":"nothing like this","note":"n","noteLine":2,"comment":"c"}]}}'
 EOF
@@ -129,7 +129,10 @@ EOF
   expect stops/dropped "$(jq -r '.stops | length' "$stopkey.json")" "1"
   expect stops/around "$(jq -r '.stops[0] | "\(.line)-\(.to) \(.code | map(select(.new)) | length > 0)"' "$stopkey.json")" "1-5 true"
   drows() { GMR_IID=7 GIT_FZF_STATE=$tmp/stopst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
-  expect stops/first-row "$(drows | awk -F'\t' '$13 == "sent" { print $12 ":" $26 ":" $25; exit }')" "sentence:1001:stop:Should run take this?"
+  expect stops/first-row "$(drows | awk -F'\t' '$13 == "sent" { print $12 ":" $26 ":" $25 }' | head -2 | tr '\n' ' ')" "sentence:1000:overview:What this does sentence:1001:stop:Should run take this? "
+  expect stops/header "$(cat "$tmp/stopst/header")" "Run takes a flag."
+  pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1000 | strip)
+  expect stops/overview "$(printf '%s\n' "$pane" | grep -c -e 'Run takes a flag' -e 'It ran once' -e 'It can run twice' -e 'run reads the flag' -e 'lib.ts:2' -e 'A step in no place' -e 'Should run take this')" "7"
   expect stops/opens "$(drows | awk -F'\t' '$12 == "sentence:1001" { print $16 }')" "3"
   pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1001 | strip)
   expect stops/pane "$(printf '%s\n' "$pane" | grep -c -e 'Should run take this' -e 'One caller' -e '◀ look here' -e 'Do we need it')" "4"

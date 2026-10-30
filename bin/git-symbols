@@ -615,7 +615,7 @@ if [ "$mode" = --preview ]; then
   case $rid in sentence:*'>'*) ;; sentence:*)
     read -r sentf 2>/dev/null < "$st/sentences" || exit 0
     # A stop is told apart from the cases and read the same way (share/stops.mjs).
-    case ${rid#sentence:} in 100[1-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
+    case ${rid#sentence:} in 100[0-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
     [ -n "$GIT_SYMBOLS_MR" ] || exec git-sentences --pane "${sentf%.tsv}.json" "${rid#sentence:}"
     th=$st/case-threads.$$ on=$st/case-on.$$
     trap 'rm -f "$th" "$on"' EXIT
@@ -1190,7 +1190,7 @@ if [ "$mode" = --viewed ]; then
   # v on a sentence takes every row under it, open or not.
   sentf=
   case $rid in sentence:*'>'*) ;; sentence:*) read -r sentf 2>/dev/null < "$st/sentences" ;; esac
-  case $rid in sentence:100[1-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
+  case $rid in sentence:100[0-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
   if [ -n "$sentf" ]; then
     awk -F'\t' -v n="${rid#sentence:}" 'FILENAME == ARGV[1] { if ($1 == "R" && $2 == n) want[$3 == "file" ? $4 : $4 SUBSEP $5 SUBSEP $6] = 1; next }
       $2 == "file" { if ($1 in want) print $1; next }
@@ -1436,7 +1436,7 @@ if [ "$mode" = --rows ]; then
   stopf=/dev/null
   if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
     [ -s "$told.stops.tsv" ] && stopf=$told.stops.tsv
-    if [ ! -e "$told.stops.json" ] && [ ! -e "$st/stops-asked.${now#* }" ]; then
+    if [ ! -e "$st/stops-asked.${now#* }" ]; then
       : > "$st/stops-asked.${now#* }"
       [ "$(git config --get otis.symbolsModel)" = off ] ||
         { otis-detach node "$root/share/stops.mjs" "${now% *}" "${now#* }" --cache "${told%/*}" --table "$table" </dev/null >/dev/null 2>&1 & }
@@ -1627,7 +1627,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[5] { vd[$1] = 1; next }
     FILENAME == ARGV[6] { cm[$1] = $2; next }
     FILENAME == ARGV[7] || FILENAME == ARGV[9] {
-      if ($1 == "S") { sn = $2 + 0; if ($3 == "stop") stopat[++nstop] = sn; else nsent = sn; sfrom[sn] = $3; sorigin[sn] = $4; sadd[sn] = $5 + 0; sdel[sn] = $6 + 0; stext[sn] = $7; stests[sn] = $8 + 0; sgroup[sn] = $9; sending[sn] = $10; schange[sn] = $11; sinput[sn] = $13; if ($3 == "case" || $3 == "also") ncase++ }
+      if ($1 == "S") { sn = $2 + 0; if ($3 == "stop" || $3 == "overview") stopat[++nstop] = sn; else nsent = sn; sfrom[sn] = $3; sorigin[sn] = $4; sadd[sn] = $5 + 0; sdel[sn] = $6 + 0; stext[sn] = $7; stests[sn] = $8 + 0; sgroup[sn] = $9; sending[sn] = $10; schange[sn] = $11; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "M") msummary = $2
       else if ($1 == "H") stopsaid = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
@@ -1884,7 +1884,7 @@ if [ "$mode" = --rows ]; then
         vw = dim ? "all" : (vdn ? vdn "/" vt : "")
         if (n in hide) continue
         if (all && cnt && !(rid in open)) { open[rid] = 1; print rid >> openfile }
-        nw = split(sinput[n] != "" ? sinput[n] : stext[n], words, " "); nl = 0; ln = ""
+        nw = split(stext[n], words, " "); nl = 0; ln = ""
         for (x = 1; x <= nw; x++) {
           if (ln != "" && length(ln " " words[x]) > w) { lines[++nl] = ln; ln = "" }
           ln = (ln == "" ? "" : ln " ") words[x]
@@ -1903,7 +1903,7 @@ if [ "$mode" = --rows ]; then
           (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
         for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
         # A stop says how much there is to read, and where.
-        if (sfrom[n] == "stop") {
+        if (sfrom[n] == "stop" || sfrom[n] == "overview") {
           more(ind GK_CONTEXT sending[n] GK_R (dim ? "  " GK_GOOD "\342\234\223" GK_R : "") (to ? "  " GK_ELSEWHERE "\357\201\265 " to GK_R : "") (td ? "  " GK_YOURS "\342\234\216 " td GK_R : ""), "m", "")
           if (!(rid in open)) continue
         }

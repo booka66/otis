@@ -23,7 +23,9 @@ const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
 // A stop (stops.mjs) is numbered past any case, in a file of its own.
 const stop = outline.stops?.[Number(which) - 1001];
-const part = stop ? { kind: "stop", text: stop.question, ...stop } : outline.sentences?.[Number(which) - 1];
+const part = stop ? { kind: "stop", text: stop.question, ...stop }
+  : outline.stops ? (Number(which) === 1000 && outline.overview ? { kind: "overview", text: "What this does", ...outline.overview } : null)
+    : outline.sentences?.[Number(which) - 1];
 if (which === "same") {
   console.log("\n  These cases end as they did before the change, so they wait until you want them:\n");
   for (const one of outline.sentences.filter((some) => some.change === "the same" && (some.kind === "case" || some.kind === "also"))) console.log(`  ${one.num.padStart(3)}  ${one.text}`);
@@ -358,14 +360,54 @@ function ending(one, room) {
 /** A case: what comes in and how it ended before and ends now, then the route it runs through the code, with what
  * holds on each line it passes, the lines it never runs dim, and the tests that run it. */
 function showCase() {
-  const head = [...prose(part.input || part.text, W - 4, B + T), ...ending(part, W - 4)].map((line) => `  ${line}`);
+  const head = [...prose(part.text, W - 4, B + T), ...ending(part, W - 4)].map((line) => `  ${line}`);
   if (env.OTIS_PANE_MAP) pinned.push(...head, `  ${C}${"─".repeat(W - 4)}${R}`);
   say();
   if (!env.OTIS_PANE_MAP) for (const line of head) say(line);
-  if (part.input) for (const line of prose(part.text, W - 4, C)) say(`  ${line}`);
+  if (part.input) for (const line of prose(part.input, W - 4, C)) say(`  ${line}`);
   if (part.setup) paragraph(wrapped(part.setup, W - 4), "  ");
-  const pins = [...new Set(part.facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where))];
-  if (pins.length) for (const line of prose(`✓ ${pins.join(", ")}`, W - 4, C)) say(`  ${line.replace("✓", `${G}✓${R}${C}`)}`);
+  say();
+  // Where in the system this happens, for a reader who has never seen this code: once, on the first case of its route.
+  if (route.where && part.letter === "A") {
+    say(`  ${C}WHERE THIS RUNS${R}`);
+    paragraph(wrapped(route.where, Math.min(W - 4, 100)), "  ");
+    say();
+  }
+  // Before and after, side by side, the questions worth comparing, read before any code. New code has no before.
+  const facts = part.facts;
+  if (facts.length) {
+    const whatW = Math.min(Math.max(18, Math.floor(W / 4)), 36, Math.max(...facts.map((fact) => [...fact.what.replace(/`/g, "")].length)));
+    // An answer a test asserts says which test line, where the pane has room for it, else only that one does.
+    const pins = facts.filter((fact) => fact.pinned).map((fact) => fact.pinned.where.length);
+    const pinW = !pins.length ? 0 : W - 4 - whatW - 2 - 3 - Math.max(...pins) - 3 >= 40 ? Math.max(...pins) + 3 : 2;
+    const row = (fact, cells) => {
+      const what = prose(fact.what, whatW, C);
+      const tall = Math.max(what.length, ...cells.map((cell) => cell.lines.length));
+      for (let i = 0; i < tall; i++) {
+        const pin = i === 0 && fact.pinned ? `${G}✓${R}${pinW > 2 ? ` ${C}${fact.pinned.where}${R}` : ""}` : "";
+        say(`  ${pad(what[i] ?? "", whatW)}  ${cells.map(({ lines, w, ground }) => `${ground} ${lines[i] ?? ""}${ground}${" ".repeat(Math.max(0, w - width(lines[i] ?? "")))} ${R}`).join(" ")} ${pin}`);
+      }
+    };
+    if (part.fresh) {
+      const nowW = Math.min(W - 4 - whatW - 2 - 4 - pinW, 90);
+      for (const [at, line] of prose("new code: the route starts in code this change adds, so there is no before", nowW - 4, C).entries()) say(`  ${" ".repeat(whatW + 2)}${at ? "     " : `${G} now${R} `}${line}`);
+      for (const fact of facts) row(fact, [{ lines: prose(fact.after || "·", nowW - 2, T, PLUS), w: nowW - 2, ground: PLUS }]);
+    } else {
+      const room = W - 4 - whatW - 2 - 3 - pinW;
+      const beforeW = Math.max(12, Math.floor(room * 0.45)), afterW = Math.max(12, room - beforeW - 2);
+      say(`  ${" ".repeat(whatW + 2)}${X} before${R}${" ".repeat(Math.max(1, beforeW - 6))}${G} after${R}`);
+      for (const fact of facts) {
+        row(fact, [
+          { lines: prose(fact.before || "·", beforeW - 2, T, MINUS), w: beforeW - 2, ground: MINUS },
+          { lines: prose(fact.after || "·", afterW - 3, T, PLUS), w: afterW - 3, ground: PLUS },
+        ]);
+      }
+    }
+    const key = pins.length ? `✓ the test line that asserts it${pins.length < facts.length ? "; the rest is Claude's reading of the code" : ""}`
+      : part.runs.length ? "Claude's reading of the code: no test line here asserts these answers" : "Claude's reading of the code: no test in this change asserts these answers";
+    for (const line of prose(key, W - 4 - whatW - 2, C)) say(`  ${" ".repeat(whatW + 2)}${line.replace("✓", `${G}✓${R}${C}`)}`);
+    say();
+  }
   say();
   if (rewording) { paragraph(wrapped("Claude is telling this case again in your words", W - 4, A), "  "); say(); }
   showFlags();
@@ -599,6 +641,33 @@ function dent(text, n) {
 function indent(text) { let n = 0; for (const ch of text) { if (ch === " ") n++; else break; } return n; }
 
 /** A part of a story told without cases (one a commit, or what no case runs): its words, then its code. */
+/** What the change does, read first: for whom, what happens before and after, how it works in the order it runs, then
+ * what there is to decide, each question being a row under this one. */
+function showOverview() {
+  const room = Math.min(W - 4, 100);
+  say();
+  for (const line of wrap(outline.title || "This change", W - 4)) say(`  ${B}${T}${line}${R}`);
+  say();
+  paragraph(wrapped(part.does, room), "  ");
+  say();
+  if (part.before) band("before", X, part.before, T, MINUS);
+  if (part.after) band("after", G, part.after, T, PLUS);
+  say();
+  say(`  ${C}HOW IT WORKS, as it runs${R}`);
+  part.steps.forEach((step, i) => {
+    say();
+    paragraph(wrapped(step.what, room - 3), "     ", `  ${A}${i + 1}${R}  `);
+    if (step.path) say(`     ${C}${step.path.slice(step.path.lastIndexOf("/") + 1)}:${step.line}${R}`);
+  });
+  say();
+  say(`  ${C}WHAT TO DECIDE, the rows under this one${R}`);
+  say();
+  if (!outline.stops.length) say(`  ${C}Claude found nothing that needs you.${R}`);
+  outline.stops.forEach((one, i) => paragraph(wrapped(one.question, room - 3), "     ", `  ${A}${i + 1}${R}  `));
+  if (outline.said) { say(); say(`  ${C}${outline.said}${R}`); }
+  say();
+}
+
 /** A stop: the question, why it is one, what to say if the answer is no, and the code it is about, the lines the change
  * really brings on green and those that only moved plain. Typed in for you when you comment on one of its lines. */
 function showStop() {
@@ -620,7 +689,7 @@ function showStop() {
     if (noted) pending = prose(part.note, Math.max(8, aside - 2), B + A).map((one, k) => `   ${k ? " " : `${A}◀${R}`} ${one}`);
     const what = `line\t${part.path}\tnew\t${line.n}\t${line.n}\t1\t${from}\t${from + code - 1}\tstop${typed}`;
     const number = `${noted ? B + A : C}${String(line.n).padStart(digits)}${R}${ground} ${line.new ? `${G}+` : " "}${R}${ground} `;
-    cut((line.paint ?? T + line.t).replace(/\t/g, "    ") + ground, code).forEach((piece, k) => {
+    cut(grounded((line.paint ?? T + line.t).replace(/\t/g, "    "), new Set(), ground, ground), code).forEach((piece, k) => {
       say(`  ${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
     });
     for (const one of threadsAt.get(`${part.path}\tnew\t${line.n}`) ?? []) if (!drawnThreads.has(one.id)) { for (const left of pending.splice(0)) say(`  ${" ".repeat(gutter + code)}${left}`); drawThread(one, `  ${" ".repeat(gutter)}`, W - from - 3); }
@@ -715,7 +784,8 @@ elsewhere();
 say();
 }
 
-if (part.kind === "stop") showStop();
+if (part.kind === "overview") showOverview();
+else if (part.kind === "stop") showStop();
 else if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
 if (pinned.length) out.unshift(`\x1epin ${pinned.length}`, ...pinned);
 if (env.OTIS_PANE_MAP && map.length) out.unshift(`\x1emap ${map.length}`, ...map);

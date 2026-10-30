@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// stops.mjs <base> <head> --cache <dir> --table <symbols.tsv>: the few places in a change where a person has to decide
-// something, written beside its cases and read by the same list and pane:
-//   <base>-<head>.stops.json   { stops }, each a question, why it is one, and its code, for the pane (story-pane.mjs)
+// stops.mjs <base> <head> --cache <dir> --table <symbols.tsv>: what a change does, and the few places in it where a
+// person has to decide something, written beside its cases and read by the same list and pane:
+//   <base>-<head>.stops.json   { overview, stops }: what it does and how it works, then each stop's question, why it
+//                              is one, and its code, for the pane (story-pane.mjs)
 //   <base>-<head>.stops.tsv    the list's rows, as a case's are (git-symbols)
 // Lines moved or renamed are counted here, without Claude, and left out of what Claude reads, so a stop is on code the
 // change really brings. A stop is a place to start and never says the rest is fine: on 8 reviews, 5 of 28 people's
@@ -19,8 +20,11 @@ const MAX = 1 << 30, MOST = 5, AROUND = 3;
 const git = (...args) => execFileSync("git", ["-c", "core.quotePath=false", ...args], { encoding: "utf8", maxBuffer: MAX, stdio: ["ignore", "pipe", "ignore"] });
 const config = (name) => { try { return git("config", "--get", name).trim(); } catch { return ""; } };
 
+const VERSION = 2;
 const model = config("otis.stopsModel") || config("otis.sentencesModel") || "claude-opus-5-5";
-if (model === "off" || existsSync(at("json"))) process.exit(0);
+// Kept until the change moves; one kept before it said what the change does is asked again.
+const kept = (() => { try { return JSON.parse(readFileSync(at("json"), "utf8")).version; } catch { return 0; } })();
+if (model === "off" || kept === VERSION) process.exit(0);
 const alive = (path) => { try { process.kill(Number(readFileSync(path, "utf8")), 0); return true; } catch { return false; } };
 if (alive(at("running"))) process.exit(0);
 writeFileSync(at("running"), String(process.pid));
@@ -83,7 +87,7 @@ const shown = [...byFile].map(([path, lines]) => [`## ${path}`, ...lines.map((on
 
 const object = (properties) => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
 const text = { type: "string" };
-const schema = object({ stops: { type: "array", items: object({
+const schema = object({ overview: object({ does: text, before: text, after: text, steps: { type: "array", items: object({ what: text, path: text, line: { type: "integer" }, code: text }) } }), stops: { type: "array", items: object({
   question: text, why: text, path: text, line: { type: "integer" }, to: { type: "integer" }, code: text, note: text, noteLine: { type: "integer" }, comment: text,
 }) } });
 
@@ -102,8 +106,15 @@ function ask(prompt) {
   });
 }
 
-const answer = !fresh.length ? { stops: [] } : await ask([
-  "A reviewer can't read every line of this change. Tests, CI and bots already look for bugs. Your job is to find the few places where a person has to decide something, and hand them over as questions, most important first.",
+const answer = !fresh.length ? { overview: null, stops: [] } : await ask([
+  "A reviewer can't read every line of this change, and has a few minutes to understand it. Tests, CI and bots already look for bugs. You do two things: say what the change does, and find the few places where a person has to decide something.",
+  "",
+  "First, the overview, for someone who has never seen this code:",
+  "- does: what changes and for whom, in at most two plain sentences. What someone can now do or what now happens, never which files moved.",
+  "- before, after: what happens before the change and what happens after it, one short concrete sentence each. Before is empty if it is all new.",
+  "- steps: how it works, in the order it runs when it's used, 3 to 7 of them. what: one plain sentence, naming the function it happens in. path and line: where, in the file after the change. code: the text of that line, copied exactly. Follow the main path; leave out plumbing.",
+  "",
+  "Then the stops, as questions, most important first.",
   "",
   `Ask at most ${MOST}, and fewer is better: a small change may need one, and a change with nothing to decide needs none. Empty is a good answer.`,
   "",
@@ -159,6 +170,11 @@ function placed(stop) {
   return null;
 }
 const stops = answer.stops.slice(0, MOST).map(placed).filter(Boolean).map(({ code, ...stop }) => stop);
+// A step reads without its place, so one Claude misplaced only loses where it is.
+const overview = answer.overview && { ...answer.overview, steps: answer.overview.steps.map(({ what, code, ...step }) => {
+  const at = placed({ ...step, to: step.line, noteLine: step.line, code });
+  return { what, ...(at ? { path: at.path, line: step.line + (at.noteLine - step.line) } : {}) };
+}) };
 
 // Each line colored as its whole file colors it (bat, the theme's), as a case's are.
 const theme = process.env.OTIS_T_BAT;
@@ -188,6 +204,7 @@ const moved = change.added.length - fresh.length;
 const said = [told.length ? "" : "no stops", moved ? `${moved.toLocaleString("en-US")} of ${change.added.length.toLocaleString("en-US")} added lines only moved` : ""].filter(Boolean).join(" · ");
 const rows = [
   ["H", `${told.length} stop${told.length === 1 ? "" : "s"}, ${lineCount} lines`, said],
+  ...(overview ? [["M", clean(overview.does)], ["S", 1000, "overview", "", 0, 0, "What this does", 0, "", `how it works in ${overview.steps.length} step${overview.steps.length === 1 ? "" : "s"}`, "", "", ""]] : []),
   ...told.flatMap((stop, k) => [
     ["S", 1001 + k, "stop", k + 1, 0, 0, clean(stop.question), 0, "", `${stop.code.length} lines in ${name(stop.path)}`, "", "", ""],
     ...under(stop).map((unit) => ["R", 1001 + k, ...unit]),
@@ -195,4 +212,4 @@ const rows = [
 ];
 const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
 write(at("tsv"), rows.map((row) => row.join("\t") + "\n").join(""));
-write(at("json"), JSON.stringify({ version: 1, model, base, head, stops: told }));
+write(at("json"), JSON.stringify({ version: VERSION, model, base, head, title: mr.title ?? "", said, overview, stops: told }));
