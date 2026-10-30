@@ -38,7 +38,8 @@ case $1 in
       while IFS=$'\t' read -r kind id len who what; do
         [[ $kind == Youtube ]] || continue
         [[ $len == NA ]] && len=live
-        print -r -- "https://www.youtube.com/watch?v=$id"$'\t'$C${(l:8:: :)len}$R"  "$EL$who$R"  "$T$what$R
+        # cliamp's own YouTube client can no longer load a video, and a music.youtube.com link goes through yt-dlp.
+        print -r -- "https://music.youtube.com/watch?v=$id"$'\t'$C${(l:8:: :)len}$R"  "$EL$who$R"  "$T$what$R
       done
     exit 0 ;;
   --play|--queue)
