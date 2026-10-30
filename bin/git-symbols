@@ -614,6 +614,8 @@ if [ "$mode" = --preview ]; then
   # a symbol's lines on its side, or its base lines for a removed one; on a file's lines no symbol claims).
   case $rid in sentence:*'>'*) ;; sentence:*)
     read -r sentf 2>/dev/null < "$st/sentences" || exit 0
+    # A stop is told apart from the cases and read the same way (share/stops.mjs).
+    case ${rid#sentence:} in 100[1-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
     [ -n "$GIT_SYMBOLS_MR" ] || exec git-sentences --pane "${sentf%.tsv}.json" "${rid#sentence:}"
     th=$st/case-threads.$$ on=$st/case-on.$$
     trap 'rm -f "$th" "$on"' EXIT
@@ -1188,6 +1190,7 @@ if [ "$mode" = --viewed ]; then
   # v on a sentence takes every row under it, open or not.
   sentf=
   case $rid in sentence:*'>'*) ;; sentence:*) read -r sentf 2>/dev/null < "$st/sentences" ;; esac
+  case $rid in sentence:100[1-9]) sentf=${sentf%.tsv}.stops.tsv ;; esac
   if [ -n "$sentf" ]; then
     awk -F'\t' -v n="${rid#sentence:}" 'FILENAME == ARGV[1] { if ($1 == "R" && $2 == n) want[$3 == "file" ? $4 : $4 SUBSEP $5 SUBSEP $6] = 1; next }
       $2 == "file" { if ($1 in want) print $1; next }
@@ -1428,6 +1431,17 @@ if [ "$mode" = --rows ]; then
       fi
     fi
   fi
+  # The places a person has to decide (share/stops.mjs), asked for once a screen, on their way as soon as the review
+  # opens: they need no cases, and land long before them.
+  stopf=/dev/null
+  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
+    [ -s "$told.stops.tsv" ] && stopf=$told.stops.tsv
+    if [ ! -e "$told.stops.json" ] && [ ! -e "$st/stops-asked.${now#* }" ]; then
+      : > "$st/stops-asked.${now#* }"
+      [ "$(git config --get otis.symbolsModel)" = off ] ||
+        { otis-detach node "$root/share/stops.mjs" "${now% *}" "${now#* }" --cache "${told%/*}" --table "$table" </dev/null >/dev/null 2>&1 & }
+    fi
+  fi
   # Its design red flags (share/flags.mjs), found behind the screen once its cases are told, a case's on its row
   # and in its pane when they land; flags.mjs leaves at once when they are found already. flagf is the list's.
   flagf=/dev/null
@@ -1529,6 +1543,8 @@ if [ "$mode" = --rows ]; then
         printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or an agent's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
       fi
       if [ "$sentf" != /dev/null ]; then
+        printf "${GK_CONTEXT}a stop${GK_R}\n"
+        printf "  a question only you can answer, on the few lines it is about: ${GK_GOOD}green${GK_R} lines are new, plain ones only moved. A place to start, never proof the rest is fine   v marks it read\n"
         printf "${GK_CONTEXT}a case${GK_R}\n"
         printf "  a situation the code meets, under where it comes in, and how it ended before ${GK_CONTEXT}\342\206\222${GK_R} how it ends now: ${GK_ATTENTION}yellow${GK_R} when it ends differently, ${GK_CONTEXT}\302\267 only a label${GK_R} when only what a log, a metric or a stored field reads changed, ${GK_CONTEXT}= the same${GK_R} when it ends as it did\n"
         printf "  its pane: the values to compare, the author's own sentence on it, then its route through the code in the order it runs, each stop's deciding lines with what holds there; ${GK_ATTENTION}\342\227\206${GK_R} changed here, \342\227\217 in code the change touched, ${GK_CONTEXT}\342\227\213${GK_R} not in the change\n"
@@ -1610,9 +1626,10 @@ if [ "$mode" = --rows ]; then
     # callers elsewhere (git-callers): symbol id, path, line, caller id, head, start, end, calls, errors, first error, package
     FILENAME == ARGV[5] { vd[$1] = 1; next }
     FILENAME == ARGV[6] { cm[$1] = $2; next }
-    FILENAME == ARGV[7] {
-      if ($1 == "S") { nsent = $2 + 0; sfrom[nsent] = $3; sorigin[nsent] = $4; sadd[nsent] = $5 + 0; sdel[nsent] = $6 + 0; stext[nsent] = $7; stests[nsent] = $8 + 0; sgroup[nsent] = $9; sending[nsent] = $10; schange[nsent] = $11; sinput[nsent] = $13; if ($3 == "case" || $3 == "also") ncase++ }
+    FILENAME == ARGV[7] || FILENAME == ARGV[9] {
+      if ($1 == "S") { sn = $2 + 0; if ($3 == "stop") stopat[++nstop] = sn; else nsent = sn; sfrom[sn] = $3; sorigin[sn] = $4; sadd[sn] = $5 + 0; sdel[sn] = $6 + 0; stext[sn] = $7; stests[sn] = $8 + 0; sgroup[sn] = $9; sending[sn] = $10; schange[sn] = $11; sinput[sn] = $13; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "M") msummary = $2
+      else if ($1 == "H") stopsaid = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
       else if ($1 == "E") away[$2 == "file" ? $3 : $3 SUBSEP $4 SUBSEP $5] = 1
       next
@@ -1716,7 +1733,7 @@ if [ "$mode" = --rows ]; then
       # The spine, Claude'"'"'s one sentence on the change, wrapped to the
       # list: the picker'"'"'s header, or first rows with no picker to head.
       # Listed by case: the whole change in a sentence or two is the header, read before the cases.
-      if (nsent) { if (header != "" && msummary != "") { print msummary > header; close(header) } bysentence(); print syms + 0, length(files), nsent > counts; exit }
+      if (nsent || nstop) { if (header != "" && msummary != "") { print msummary > header; close(header) } bysentence(); if (nsent) { print syms + 0, length(files), nsent > counts; exit } }
       # The cases tab, in a review: until the cases come, it says why there are none.
       if (tabs) {
         heading("cases", "gk-cases-heading")
@@ -1830,12 +1847,26 @@ if [ "$mode" = --rows ]; then
     }
     # bysentence: each sentence of the author a row, wrapped to the list, its counts under it, and, open,
     # what is filed under it, each row opening as it does in the tree. Whatever none holds comes last.
-    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen) {
+    function bysentence(   n, x, i, k, rid, cnt, w, nw, words, ln, nl, lines, vt, vdn, to, td, vw, dim, pips, meta, id, c, loose, numw, ind, told, also, rest, sup, group, was, now, how, seen, q, nq, order, nsame, same, hide) {
       numw = 1; for (n = 1; n <= nsent; n++) if (length(sorigin[n]) > numw) numw = length(sorigin[n])
+      # What to decide first (share/stops.mjs), then the cases that change something, then those that say nothing
+      # changed, one row until it is opened, with whatever no case runs last.
+      for (q = 1; q <= nstop; q++) order[++nq] = stopat[q]
+      for (n = 1; n <= nsent; n++) { if (schange[n] == "the same" && (sfrom[n] == "case" || sfrom[n] == "also")) same[++nsame] = n; else if (sfrom[n] == "case" || sfrom[n] == "also") order[++nq] = n }
+      if (nsame) { order[++nq] = "same"; for (q = 1; q <= nsame; q++) { order[++nq] = same[q]; if (!("sentence:same" in open)) hide[same[q]] = 1 } }
+      for (n = 1; n <= nsent; n++) if (sfrom[n] != "case" && sfrom[n] != "also") order[++nq] = n
       ind = sprintf("%" (numw + 2) "s", "")
       w = (draw ? draw : gk_list_width(cols)) - 6 - numw - 2; if (w < 20) w = 20
       for (i = 1; i <= m; i++) { if (row[i, 2] == "file") fat[row[i, 1]] = i; else sat[row[i, 1], row[i, 7], row[i, 8]] = i }
-      for (n = 1; n <= nsent; n++) {
+      for (q = 1; q <= nq; q++) {
+        n = order[q]
+        if (n == "same") {
+          more("", "m", "")
+          print "  " nsame (nsame == 1 ? " case says" : " cases say") " nothing changed\t\t\t\t\t\t\t\t\t\t\tsentence:same" \
+            (draw ? "\tsent\t0\t" (("sentence:same" in open) ? "open" : "closed") "\t" nsame "\t\t0\t0\t\t\t\t\t\t" nsame (nsame == 1 ? " case says" : " cases say") " nothing changed\tsame\t" sprintf("%-" numw "s", "") : "")
+          group = ""
+          continue
+        }
         rid = "sentence:" n; cnt = 0; vt = 0; vdn = 0; pips = ""
         split("", hit)
         for (x = 1; x <= nunder[n]; x++) {
@@ -1851,6 +1882,7 @@ if [ "$mode" = --rows ]; then
         to = mr ? tally("open") : ""; td = mr ? tally("draft") : ""
         dim = (vt && vdn == vt) ? 1 : ""
         vw = dim ? "all" : (vdn ? vdn "/" vt : "")
+        if (n in hide) continue
         if (all && cnt && !(rid in open)) { open[rid] = 1; print rid >> openfile }
         nw = split(sinput[n] != "" ? sinput[n] : stext[n], words, " "); nl = 0; ln = ""
         for (x = 1; x <= nw; x++) {
@@ -1860,7 +1892,8 @@ if [ "$mode" = --rows ]; then
         if (ln != "") lines[++nl] = ln
         # Cases under where they come in, the ones the author never named after, what no case runs last; told
         # without cases, the parts of the story under a heading and what serves them under another.
-        if ((sfrom[n] == "case" || sfrom[n] == "also") && sgroup[n] != group) { heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
+        if (sfrom[n] == "stop" && !stopped++) heading(stopsaid, "gk-stops-heading")
+        else if ((sfrom[n] == "case" || sfrom[n] == "also") && sgroup[n] != group) { if (q > 1) more("", "m", ""); heading(sgroup[n] == "" ? "cases" : sgroup[n], "gk-group-" n); group = sgroup[n] }
         else if (sfrom[n] == "case" || sfrom[n] == "also") seen++
         else if (sfrom[n] == "story" && !told++) { seen++; heading("what changed", "gk-story-heading") }
         else if (sfrom[n] == "support" && !sup++) { more("", "m", ""); heading("also changed, to support it", "gk-support-heading") }
@@ -1869,8 +1902,13 @@ if [ "$mode" = --rows ]; then
         print "  " lines[1] "\t\t\t\t\t\t\t\t\t\t\t" rid \
           (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
         for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
+        # A stop says how much there is to read, and where.
+        if (sfrom[n] == "stop") {
+          more(ind GK_CONTEXT sending[n] GK_R (dim ? "  " GK_GOOD "\342\234\223" GK_R : "") (to ? "  " GK_ELSEWHERE "\357\201\265 " to GK_R : "") (td ? "  " GK_YOURS "\342\234\216 " td GK_R : ""), "m", "")
+          if (!(rid in open)) continue
+        }
         # A case says how it ended before and how it ends now; a line each when both will not fit on one.
-        if (sending[n] != "") {
+        else if (sending[n] != "") {
           k = index(sending[n], " \342\206\222 "); was = substr(sending[n], 1, k - 1); now = substr(sending[n], k + 5)
           how = schange[n] == "only a label" ? GK_CONTEXT "  \302\267 only a label" GK_R : schange[n] == "the same" ? GK_CONTEXT "  = the same" GK_R : ""
           # A design red flag on the route it runs, in red after how it ends.
@@ -1895,6 +1933,8 @@ if [ "$mode" = --rows ]; then
           else { id = row[i, 1] "#" row[i, 3]; show(i, 1, rid ">" id, "|" id "|", 0) }
         }
       }
+      # Stops landed before the cases: under them goes the wait for the cases, never the whole change.
+      if (!nsent) return
       # A row of the table no sentence took: shown, so nothing in the change is out of sight, unless the cases say
       # it is read elsewhere (a test, or what a row under a case uses, which opens under it).
       for (i = 1; i <= m; i++) {
@@ -2059,7 +2099,7 @@ if [ "$mode" = --rows ]; then
           "\t" cp[id, x] "\t" cl[id, x] "\tfile\t" cs[id, x] "\t" ce[id, x] "\t\t\t\t\tcaller\t" crid ">" cid[id, x] \
           (draw ? "\tcaller\t" (depth + 2) "\t\t\t\t\t\t\t\t\t\t\t" lab "\t" (cerr[id, x] ? ((cp[id, x] in fixedp) ? "fixed" : "x") : "") : "")
       }
-    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" "$flagf" | highlight |
+    }' "$table" "$order" "$marks" "$callers" "$vw" "$cmarks" "$sentf" "$flagf" "$stopf" | highlight |
     if [ "$sentf" != /dev/null ]; then cat; else OTIS_FOOTER=$tfoot git-test-files filter --section 2 --keep 11 caller,package; fi | tee "$st/rows.last"
   read -r syms nfiles roots < "$counts" 2>/dev/null
   # Whose order the roots are in, for the heading over them (otis-symbols).
@@ -2077,6 +2117,15 @@ if [ "$mode" = --rows ]; then
     [ -n "$sentwait" ] && note="$note · $(printf "${GK_ATTENTION}Claude is following it case by case${GK_R}")"
     # The cases tab says a failed telling in place of its cases; over cases an older otis told, here.
     [ -n "$failed" ] && [ "$sentf" != /dev/null ] && note="$note · $(printf "${GK_BAD}%s${GK_R}" "$failed")"
+    # Its stops (share/stops.mjs, started above): being picked, then how much of the change only moved.
+    if [ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ]; then
+      if read -r spid 2>/dev/null < "$told.stops.running" && kill -0 "$spid" 2>/dev/null; then
+        note="$note · $(printf "${GK_ATTENTION}Claude is picking the stops${GK_R}")"
+      elif [ -s "$told.stops.tsv" ]; then
+        said=$(awk -F'\t' '$1 == "H" { print $3; exit }' "$told.stops.tsv")
+        [ -n "$said" ] && note="$note · $(printf "${GK_CONTEXT}%s${GK_R}" "$said")"
+      fi
+    fi
     # Its red flags (share/flags.mjs, started above): being found, then how many it kept, so a look that kept
     # none is not taken for one that never ran. They land on the case rows.
     if [ "$sentf" != /dev/null ]; then

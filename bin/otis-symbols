@@ -876,6 +876,7 @@ crumb() {
   if (( $#steps > 1 )); then
     for s in $steps[1,-2]; do
       [[ $s == callers ]] && { names+=("callers"); continue; }
+      [[ $s == sentence:100[1-9] ]] && { names+=("stop ${s#sentence:100}"); continue; }
       [[ $s == sentence:* ]] && { (( bycase )) && names+=("case ${s#sentence:}") || names+=("part ${s#sentence:}"); continue; }
       n=${s#*\#}; n=${n#type }; n=${n//+/.}
       names+=("$n")

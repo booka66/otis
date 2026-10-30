@@ -21,7 +21,14 @@ import { basename, dirname, join } from "node:path";
 
 const [file, which] = process.argv.slice(2);
 const outline = JSON.parse(readFileSync(file, "utf8"));
-const part = outline.sentences[Number(which) - 1];
+// A stop (stops.mjs) is numbered past any case, in a file of its own.
+const stop = outline.stops?.[Number(which) - 1001];
+const part = stop ? { kind: "stop", text: stop.question, ...stop } : outline.sentences?.[Number(which) - 1];
+if (which === "same") {
+  console.log("\n  These cases end as they did before the change, so they wait until you want them:\n");
+  for (const one of outline.sentences.filter((some) => some.change === "the same" && (some.kind === "case" || some.kind === "also"))) console.log(`  ${one.num.padStart(3)}  ${one.text}`);
+  process.exit(0);
+}
 if (!part) process.exit(0);
 // The route the case runs: its code, with each case's notes and skips by the case's at. An outline an older otis
 // told has none, and is being told again behind it.
@@ -592,6 +599,36 @@ function dent(text, n) {
 function indent(text) { let n = 0; for (const ch of text) { if (ch === " ") n++; else break; } return n; }
 
 /** A part of a story told without cases (one a commit, or what no case runs): its words, then its code. */
+/** A stop: the question, why it is one, what to say if the answer is no, and the code it is about, the lines the change
+ * really brings on green and those that only moved plain. Typed in for you when you comment on one of its lines. */
+function showStop() {
+  say();
+  for (const line of wrap(part.text.replace(/`/g, ""), W - 4)) say(`  ${B}${T}${line}${R}`);
+  say();
+  paragraph(wrapped(part.why, Math.min(W - 4, 100)), "  ");
+  if (part.comment) { say(); band("say", YOURS, part.comment, T); }
+  say();
+  for (const line of wrap(`${part.path}:${part.line}`, W - 4)) say(`  ${C}${line}${R}`);
+  const digits = String(part.to).length, gutter = digits + 3, from = 3 + gutter;
+  const aside = part.note ? Math.min(Math.max(24, [...part.note].length + 2), Math.floor(W * 0.3)) : 0;
+  const code = W - 3 - gutter - (aside ? aside + 3 : 0);
+  const typed = part.comment ? `\t${part.comment.replace(/[\t\n]/g, " ")}` : "";
+  let pending = [];
+  for (const line of part.code) {
+    const ground = line.new ? PLUS : "";
+    const noted = line.n === part.noteLine;
+    if (noted) pending = prose(part.note, Math.max(8, aside - 2), B + A).map((one, k) => `   ${k ? " " : `${A}◀${R}`} ${one}`);
+    const what = `line\t${part.path}\tnew\t${line.n}\t${line.n}\t1\t${from}\t${from + code - 1}\tstop${typed}`;
+    const number = `${noted ? B + A : C}${String(line.n).padStart(digits)}${R}${ground} ${line.new ? `${G}+` : " "}${R}${ground} `;
+    cut((line.paint ?? T + line.t).replace(/\t/g, "    ") + ground, code).forEach((piece, k) => {
+      say(`  ${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what);
+    });
+    for (const one of threadsAt.get(`${part.path}\tnew\t${line.n}`) ?? []) if (!drawnThreads.has(one.id)) { for (const left of pending.splice(0)) say(`  ${" ".repeat(gutter + code)}${left}`); drawThread(one, `  ${" ".repeat(gutter)}`, W - from - 3); }
+  }
+  for (const left of pending) say(`  ${" ".repeat(gutter + code)}${left}`);
+  say();
+}
+
 function showPart() {
 // The part: its title, and the story beside nothing else.
 say();
@@ -678,7 +715,8 @@ elsewhere();
 say();
 }
 
-if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
+if (part.kind === "stop") showStop();
+else if (part.kind === "case" || part.kind === "also") { showCase(); retell(); } else showPart();
 if (pinned.length) out.unshift(`\x1epin ${pinned.length}`, ...pinned);
 if (env.OTIS_PANE_MAP && map.length) out.unshift(`\x1emap ${map.length}`, ...map);
 process.stdout.write(out.join("\n") + "\n");

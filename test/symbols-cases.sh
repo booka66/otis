@@ -111,6 +111,54 @@ EOF
   (cd "$tmp/routes" && SEAM_CLAUDE=false node "$root/share/flags.mjs" r.json --now)
   expect sentences/flags-on-route "$(cut -f1 "$tmp/routes/r.flags.tsv"):$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 1 | strip | grep -c 'SHALLOW MODULE'):$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 3 | strip | grep -c 'SHALLOW MODULE')" "a pick:1:0"
   rm -rf "$tmp/routes"
+  # Stops: what a person has to decide, asked of Claude with moved lines left out, shown over the cases. A stop on a
+  # line that is not there is dropped, and one on a single line comes with the lines around it.
+  mkdir -p "$tmp/stops" "$tmp/stopst"
+  cat > "$tmp/stops/claude" <<EOF
+#!/bin/sh
+cat > "$tmp/stops/prompt"
+printf '%s' '{"structured_output":{"stops":[
+  {"question":"Should \`run\` take this?","why":"One caller.","path":"lib.ts","line":2,"to":2,"code":"export function run(o: Opts, twice: boolean): number {","note":"look here","noteLine":2,"comment":"Do we need it?"},
+  {"question":"Not there","why":"w","path":"lib.ts","line":2,"to":2,"code":"nothing like this","note":"n","noteLine":2,"comment":"c"}]}}'
+EOF
+  chmod +x "$tmp/stops/claude"
+  stops() { git config --local --unset otis.sentencesModel; SEAM_CLAUDE=$tmp/stops/claude node "$root/share/stops.mjs" "$base" "$head" --cache "$told_dir" --table "$(git-symbols --table "$base..$head")"; git config otis.sentencesModel off; }
+  told_dir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences
+  stops
+  stopkey=$told_dir/$(git rev-parse "$base")-$(git rev-parse "$head").stops
+  expect stops/dropped "$(jq -r '.stops | length' "$stopkey.json")" "1"
+  expect stops/around "$(jq -r '.stops[0] | "\(.line)-\(.to) \(.code | map(select(.new)) | length > 0)"' "$stopkey.json")" "1-5 true"
+  drows() { GMR_IID=7 GIT_FZF_STATE=$tmp/stopst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
+  expect stops/first-row "$(drows | awk -F'\t' '$13 == "sent" { print $12 ":" $26 ":" $25; exit }')" "sentence:1001:stop:Should run take this?"
+  expect stops/opens "$(drows | awk -F'\t' '$12 == "sentence:1001" { print $16 }')" "3"
+  pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1001 | strip)
+  expect stops/pane "$(printf '%s\n' "$pane" | grep -c -e 'Should run take this' -e 'One caller' -e '◀ look here' -e 'Do we need it')" "4"
+  expect stops/comment-typed-in "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1001 | grep -c "line.lib.ts.new.2.2.1.*.stop.Do we need it?")" "1"
+  GIT_FZF_STATE=$tmp/stopst git-symbols --viewed "$base..$head" toggle sentence:1001
+  expect stops/viewed "$(drows | awk -F'\t' '$12 == "sentence:1001" { print $20 }')" "all"
+  GIT_FZF_STATE=$tmp/stopst git-symbols --viewed "$base..$head" toggle sentence:1001
+  # A moved line is left out of what Claude reads, and a run with nothing new asks no one.
+  git switch -q -c stops-move "$head"
+  git mv lib.ts moved.ts && git commit -qm move
+  mv "$stopkey.json" "$stopkey.json.kept"
+  movedkey=$told_dir/$head-$(git rev-parse HEAD).stops
+  git config --local --unset otis.sentencesModel
+  SEAM_CLAUDE=false node "$root/share/stops.mjs" "$(git rev-parse "$head")" "$(git rev-parse HEAD)" --cache "$told_dir"
+  git config otis.sentencesModel off
+  expect stops/move-asks-no-one "$(jq -r '.stops | length' "$movedkey.json"):$(awk -F'\t' '$1 == "H" { print $3 }' "$movedkey.tsv")" "0:no stops · 20 of 20 added lines only moved"
+  git switch -q - && git branch -qD stops-move
+  mv "$stopkey.json.kept" "$stopkey.json"
+  # The cases that say nothing changed are one row until it is opened; their symbols stay theirs.
+  rm -f "$stopkey.tsv"
+  kept=$(ls "$told_dir"/*-"$(git rev-parse "$head")".tsv | head -1)
+  awk -F'\t' 'BEGIN { OFS = "\t" } $1 == "S" { $3 = "case"; $11 = "the same"; $10 = "a → a" } { print }' "$kept" > "$kept.new" && cp "$kept" "$kept.was" && mv "$kept.new" "$kept"
+  mkdir -p "$tmp/samest"
+  frows() { GMR_IID=7 GIT_FZF_STATE=$tmp/samest OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
+  expect stops/same-folded "$(frows | awk -F'\t' '$13 == "sent" { print $12 ":" $15 }' | tr '\n' ' ')" "sentence:same:closed "
+  expect stops/same-no-loose "$(frows | grep -c 'under no sentence')" "0"
+  GIT_FZF_STATE=$tmp/samest git-symbols --open sentence:same
+  expect stops/same-opens "$(frows | awk -F'\t' '$13 == "sent" { print $12 }' | tr '\n' ' ')" "sentence:same sentence:1 "
+  mv "$kept.was" "$kept"
   # What comes in and how it ends are pinned to the top of a case's pane, so they stay while the rest scrolls, and
   # are said once.
   printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","input":"","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"runs":[],"route":0,"letter":"A"}],"routes":[{"text":"a retry","where":"","stops":[],"runs":[]}]}' > "$tmp/case.json"
@@ -135,8 +183,8 @@ printf '%s\n' '{"type":"result","is_error":true,"result":"You have hit your limi
 EOF
   chmod +x "$tmp/limit/claude"
   cache=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache
-  lrows() { SEAM_CLAUDE=$tmp/limit/claude GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub \
-    GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub GMR_IID=7 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols "$@" | strip; }
+  lrows() { SEAM_CLAUDE=$tmp/limit/claude GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub \
+    GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub GIT_CONFIG_KEY_2=otis.stopsModel GIT_CONFIG_VALUE_2=off GMR_IID=7 OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols "$@" | strip; }
   # settle <n>: Claude asked n times, and the runs that asked it ended (a run's pid file goes last).
   settle() {
     for _ in $(seq 100); do [ "$(cat "$tmp/limit/calls" 2>/dev/null | wc -l)" -ge "$1" ] && break; sleep 0.1; done
