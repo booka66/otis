@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // story-pane.mjs <outline.json> <n>: case n of a change (sentences.mjs) as the symbol view's pane,
-// FZF_PREVIEW_COLUMNS wide: what comes in, how it ended before and how it ends now, then what happens to it in the order
-// it runs, a sentence and the line it happens on, and the tests that run it. Nothing it never reaches is drawn: its
-// functions whole are under its row, its route on its page. A part told without cases is its words and its code.
+// FZF_PREVIEW_COLUMNS wide: what comes in, how it ended before and how it ends now, then each function it reaches, once,
+// the code around what happens there with the note beside it, and the tests that run it. Nothing it never reaches is
+// drawn: its functions whole are under its row, its route on its page. A part told without cases is its words and its code.
 //
 // In a review, OTIS_CASE_THREADS is the MR's threads as git-mr-threads --json places them: each is drawn under the
 // line of the route it sits on, and those on the rest of the case's code (OTIS_CASE_ON, their ids, one a line)
@@ -404,57 +404,94 @@ function showCase() {
   showFlags();
   if (part.quote) band("the author", C, `“${part.quote}”`, C + I);
 
-  // What happens to this case, in the order it runs: a sentence and the line it happens on, nothing it never reaches.
-  // The functions whole are a key away, under the case's row and on its page.
+  // What happens to this case: each function it reaches once, caller before callee, the lines around what happens there
+  // with the note beside them. The functions whole are a key away, under the case's row and on its page.
   const kids = stops.map(() => []), roots = [];
   stops.forEach((stop, i) => (stop.parent >= 0 ? kids[stop.parent] : roots).push(i));
-  const steps = [];
-  const walk = (i) => {
-    const calls = [...kids[i]].sort((x, y) => stops[x].call.n - stops[y].call.n);
-    for (const line of stops[i].lines) {
-      while (calls.length && stops[calls[0]].call.n < line.n) walk(calls.shift());
-      if (line.notes.some(mine)) steps.push({ i, line });
-    }
-    calls.forEach(walk);
+  const reached = (i) => stops[i].lines.some((line) => line.notes.some(mine));
+  const order = (i) => [...(reached(i) ? [i] : []), ...[...kids[i]].sort((x, y) => stops[x].call.n - stops[y].call.n).flatMap(order)];
+  const steps = roots.flatMap(order);
+  const sideOf = (stop, line) => (line.mine === false ? otherSide(stop.side) : stop.side);
+  const flagOn = (stop, line) => (line.joined ?? [line.n]).map((n) => flaggedAt.get(`${stop.path}\t${sideOf(stop, line)}\t${n}`)).find(Boolean);
+  const threadsOn = (stop, line) => (line.joined ?? [line.n]).flatMap((n) => threadsAt.get(`${stop.path}\t${sideOf(stop, line)}\t${n}`) ?? []);
+  const notesOn = (line) => (line.cited ? line.notes.filter(mine) : []);
+  // The stops a line calls that the case also reaches, drawn further down.
+  const callsFrom = (i) => {
+    const at = new Map();
+    for (const k of kids[i]) if (order(k).length && stops[k].call) at.set(stops[k].call.n, [...(at.get(stops[k].call.n) ?? []), k]);
+    return at;
   };
-  roots.forEach(walk);
+  // What of a function is drawn: its first line, CONTEXT lines around each line something happens on, and what that line
+  // replaced above it. A run left out is one row, unless it is so short the row would save nothing.
+  const CONTEXT = 3;
+  const shown = (i) => {
+    const { code } = stops[i], calls = callsFrom(i), keep = new Set([0]);
+    code.forEach((line, at) => {
+      if (line.gap) return;
+      if (!notesOn(line).length && !flagOn(stops[i], line) && !threadsOn(stops[i], line).length && !(line.mine && calls.has(line.n))) return;
+      for (let k = at - CONTEXT; k <= at + CONTEXT; k++) keep.add(k);
+      for (let k = at - 1; k >= 0 && code[k].mine === false; k--) keep.add(k);
+    });
+    const rows = [];
+    let left = [];
+    const close = () => { if (left.length > CONTEXT) rows.push({ left: left.reduce((sum, one) => sum + (one.gap && !one.sign ? one.gap : one.gap ? 0 : 1), 0) }); else rows.push(...left); left = []; };
+    code.forEach((line, at) => { if (keep.has(at)) { close(); rows.push(line); } else left.push(line); });
+    close();
+    return rows;
+  };
+  const drawnOf = steps.map(shown);
+  const texts = (rows) => rows.filter((line) => !line.gap && line.left === undefined && line.t?.trim()).map((line) => line.t.replace(/\t/g, "    "));
+  const shared = drawnOf.map((rows) => Math.min(...texts(rows).map(indent)));
+  const digits = Math.max(3, ...drawnOf.flat().map((line) => String(line.n ?? 0).length));
+  const gutter = digits + 3;
+  const callNote = (i, line) => {
+    const calls = line.mine ? callsFrom(i).get(line.n) ?? [] : [];
+    return calls.length ? `${stops[calls[0]].call.verb ?? "uses"} ${calls.map((k) => `\`${stops[k].name}\``).join(" and ")}, below` : "";
+  };
+  const longest = Math.max(0, ...drawnOf.flatMap((rows, s) => texts(rows).map((t) => [...t].length - shared[s])));
+  const noted = Math.max(0, ...steps.flatMap((i, s) => drawnOf[s].flatMap((line) => line.left !== undefined || line.gap ? [] : [...notesOn(line).map((note) => [...note.value].length + 2), [...(flagOn(stops[i], line) ?? "")].length + 2, [...callNote(i, line)].length + 2])));
+  // The code first: the notes wrap, in at most a third of the pane, so the code has the rest to breathe in.
+  const room = noted > 2 ? Math.max(24, Math.min(noted, 48, Math.floor(W * 0.3))) + 3 : 0;
+  const code = Math.min(W - 4 - room, gutter + longest + 1) - gutter, aside = W - 4 - gutter - code - 3;
+  const from = 3 + gutter;
   say();
   say(`  ${C}WHAT HAPPENS${R}`);
-  const digits = Math.max(3, ...steps.map(({ line }) => String(line.n).length));
-  const gutter = digits + 3, from = 6 + gutter, code = W - 5 - gutter - 1;
-  const drawLine = (line, stop, i, side, lit) => {
-    const ground = line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
-    const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
-    const number = `${line.sign === "-" ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
-    const what = `line\t${stop.path}\t${side}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
-    cut(grounded((line.paint ?? T + line.t).replace(/\t/g, "    "), lit, ground, line.sign === "+" ? PLUS_WORD : MINUS_WORD), code).forEach((piece, k) => {
-      say(`     ${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}`, what);
-    });
-  };
-  let at = -1;
-  steps.forEach(({ i, line }, k) => {
+  steps.forEach((i, s) => {
     const stop = stops[i];
-    if (i !== at) {
-      say();
-      const place = `${C}in ${stop.where}${stop.side === "old" ? ", before the change" : ""}${R}`;
-      say(`  ${B}${T}${stop.name}${R}  ${place}`);
-      if (stop.is) paragraph(wrapped(stop.is.replace(new RegExp(`^\`?${stop.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`?\\s+`), ""), Math.min(W - 4, 100), C), "  ");
-      at = i;
-    }
     say();
-    const said = line.notes.filter(mine).map((note) => note.value).join("; ");
-    paragraph(wrapped(said, Math.min(W - 7, 100), B + A), "     ", `  ${A}${String(k + 1).padEnd(3)}${R}`);
-    // What this line took the place of, the removed lines of its run of changes, read with it, what changed lit.
-    const where = stop.code.findIndex((one) => one.n === line.n && one.mine !== false);
-    const gone = [];
-    for (let j = where - 1; j >= 0 && stop.code[j].sign && stop.code[j].sign !== " " && !stop.code[j].gap; j--) if (stop.code[j].mine === false) gone.unshift(stop.code[j]);
-    const plain = (one) => [one.sign, (one.paint ?? one.t).replace(ANSI, "")];
-    const lit = changedWords([...gone, line].map(plain));
-    gone.forEach((old, j) => drawLine(old, stop, i, otherSide(stop.side), lit[j]));
-    drawLine(line, stop, i, stop.side, lit[gone.length]);
-    const wrong = flaggedAt.get(`${stop.path}\t${stop.side}\t${line.n}`);
-    if (wrong) for (const one of prose(`⚑ ${wrong}`, Math.min(W - 7, 100), B + X)) say(`     ${one}`);
-    for (const one of threadsAt.get(`${stop.path}\t${stop.side}\t${line.n}`) ?? []) if (!drawnThreads.has(one.id)) drawThread(one, `     ${" ".repeat(gutter)}`, W - from - 3);
+    say(`  ${B}${T}${stop.name}${R}  ${C}in ${stop.where}${stop.side === "old" ? ", before the change" : ""}${R}`);
+    if (stop.is) paragraph(wrapped(stop.is.replace(new RegExp(`^\`?${stop.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\`?\\s+`), ""), Math.min(W - 4, 100), C), "  ");
+    // A note's lines beside the row it is on and the rows after it; on rows of their own when the next note comes first.
+    let pending = [];
+    const flush = () => { for (const one of pending) say(`  ${" ".repeat(gutter + code)}${one}`); pending = []; };
+    const rows = drawnOf[s];
+    const bodies = rows.map((line) => (line.gap || line.left !== undefined ? "" : dent((line.paint ?? T + line.t).replace(/\t/g, "    "), shared[s])));
+    const words = changedWords(rows.map((line, at) => (line.gap || line.left !== undefined ? null : [line.sign, bodies[at].replace(ANSI, "")])));
+    rows.forEach((line, at) => {
+      if (line.left !== undefined) { say(`  ${pad(`${" ".repeat(digits - 1)}${C}⋯ ${num(line.left)} line${line.left === 1 ? "" : "s"}${R}`, gutter + code)}${pending.shift() ?? ""}`); return; }
+      if (line.gap) {
+        const lines = `${num(line.gap)} line${line.gap === 1 ? "" : "s"}`;
+        if (line.sign) say(`  ${pad(`${" ".repeat(digits + 1)}${line.sign === "-" ? `${RM}− ${lines} removed` : `${G}+ ${lines} added`}${R}`, gutter + code)}${pending.shift() ?? ""}`);
+        else { flush(); say(`  ${" ".repeat(digits - 1)}${C}⋯ ${lines}${R}`); }
+        return;
+      }
+      const notes = notesOn(line), wrong = flagOn(stop, line), call = notes.length ? "" : callNote(i, line), lit = notes.length || wrong;
+      if (notes.length) {
+        flush();
+        pending = notes.flatMap((note, j) => prose(note.value, Math.max(8, aside - 2), B + A).map((one, k) => `   ${j || k ? " " : `${A}◀${R}`} ${one}`));
+      } else if (call) { flush(); pending = prose(call, Math.max(8, aside - 2), C).map((one) => `     ${one}`); }
+      if (wrong) { if (!notes.length && !call) flush(); pending.push(...prose(wrong, Math.max(8, aside - 2), B + X).map((one, k) => `   ${k ? " " : `${X}⚑${R}`} ${one}`)); }
+      const ground = lit ? (line.sign === "+" ? PLUS_EMPH : line.sign === "-" ? MINUS_EMPH : LIFT) : line.sign === "+" ? PLUS : line.sign === "-" ? MINUS : RAISE;
+      const mark = line.sign === "+" ? `${G}+` : line.sign === "-" ? `${X}−` : " ";
+      // A line this case never runs is dim, as a debugger greys what it steps over.
+      const body = line.off?.includes(part.letter) ? `${ground}${C}${bodies[at].replace(ANSI, "")}` : grounded(bodies[at], words[at], ground, line.sign === "+" ? PLUS_WORD : MINUS_WORD);
+      const number = `${wrong ? B + X : notes.length ? B + A : line.mine === false ? X : C}${String(line.n).padStart(digits)}${R}${ground} ${mark}${R}${ground} `;
+      const what = `line\t${stop.path}\t${sideOf(stop, line)}\t${line.n}\t${line.to ?? line.n}\t${stop.inChange ? 1 : 0}\t${from}\t${from + code - 1}\t${i}`;
+      cut(body, code).forEach((piece, k) => say(`  ${ground}${k ? " ".repeat(gutter) : number}${ground}${pad(piece, code)}${R}${pending.shift() ?? ""}`, what));
+      const here = threadsOn(stop, line).filter((one) => !drawnThreads.has(one.id));
+      if (here.length) { flush(); for (const one of here) drawThread(one, `  ${" ".repeat(gutter)}`, W - from - 3); }
+    });
+    flush();
   });
   if (!steps.length) {
     const through = stops.filter((stop) => stop.by.includes(part.letter)).map((stop) => stop.name);

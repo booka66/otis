@@ -101,10 +101,10 @@ EOF
   expect sentences/route-notes "$(jq -r '.routes[0].stops[1].lines | map("\(.n)=" + (.notes | map("\(.of | join("+")):\(.value)") | join("/"))) | join(" ")' "$tmp/routes/r.json")" \
     "14=A:the comment says one 17= 18=A+B:one more than before"
   expect sentences/route-untouched "$(jq -r '.routes[0].stops[0].code | map(if .gap then "⋯\(.gap)" else .n end) | join(",")' "$tmp/routes/r.json")" "1,⋯8,10,11"
-  # A case's pane is what happens to it: what holds on a line for it alone, and no line it never runs.
+  # A case's pane is the code around what happens to it: what holds on a line for it alone, and a line it never runs dim.
   pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 2 | strip)
-  expect sentences/trace-own "$(printf '%s\n' "$pane" | grep -c -e '^  \[1, 2\]$' -e '^  1  one more than before' -e 'pick  in '):$(printf '%s\n' "$pane" | grep -c -e 'the comment says one' -e 'it asks pick')" "3:0"
-  expect sentences/trace-skipped "$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 3 | strip | grep -c "return first + 2;")" "0"
+  expect sentences/trace-own "$(printf '%s\n' "$pane" | grep -c -e '^  \[1, 2\]$' -e '◀ one more than before' -e 'pick  in '):$(printf '%s\n' "$pane" | grep -c -e 'the comment says one' -e 'it asks pick')" "3:0"
+  expect sentences/trace-skipped "$(OTIS_T_CONTEXT=7 FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$tmp/routes/r.json" 3 | grep -c "$(printf '\033')\[7m *return first + 2;")" "1"
   # A flag filed on a route is on the pane of every case that runs it; one filed on a case when each case was told
   # on its own moves to its route, with no one asked.
   printf '%s' '{"version":1,"flags":[{"case":"a list has two","flag":"shallow","claim":"pick only adds","cost":"c","smaller":"s","comment":"","line":{"path":"a.ts","side":"new","line":18,"code":"  return first + 2;","note":"n"},"caller":{"path":"a.ts","side":"new","line":10,"code":"  return pick(list);","note":"m"}}]}' > "$tmp/routes/r.flags.json"
