@@ -17,9 +17,9 @@
 # git-symbols --stage <path> <side> <start> <end> <old start> <old end> <staged> <unstaged>
 #                                            ga's space: stage the symbol, or unstage it
 # git-symbols --edit <path> <line>           ga's enter
-# git-symbols --viewed <rev> <toggle|add> <row id>
+# git-symbols --viewed <rev> toggle <row id>
 #                                            v: the row and everything under it viewed, or, all of it
-#                                            viewed already, none; add: the row alone, a review's enter
+#                                            viewed already, none
 # git-symbols --viewed <rev> warm            every symbol's diff hashed ahead of v, behind the first list
 # git-symbols --page <rev> [row id]          G: seam's page for the change, in the browser, open on the row;
 #                                            dagger's, with otis.engine dagger
@@ -1183,7 +1183,7 @@ if [ "$mode" = --viewed ]; then
   # Not a heading, the spine, or callers elsewhere, which the change did not touch.
   case $rid in ''|gk-*|*'>callers'|*'>callers>'*) exit 0 ;; esac
   key=${rid##*>}
-  # What v takes: the row, and for toggle everything under it as the tree
+  # What v takes: the row and everything under it as the tree
   # has it open or not: a class's members and the changed symbols it uses,
   # bottom up (b) what uses it, all the way down.
   keys=$st/vkeys.$$ now=$st/vnow.$$
@@ -1196,7 +1196,7 @@ if [ "$mode" = --viewed ]; then
       $2 == "file" { if ($1 in want) print $1; next }
       (($1 SUBSEP $7 SUBSEP $8) in want) { print $1 "#" ($4 != "" ? $4 "+" : "") $3 }' "$sentf" "$table" > "$keys"
   else
-  awk -F'\t' -v k="$key" -v deep="$([ "$verb" = toggle ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" '
+  awk -F'\t' -v k="$key" -v up="$([ -e "$st/up" ] && echo 1)" '
     $2 == "file" { fr[$1] = 1; next }
     { id = $1 "#" ($4 != "" ? $4 "+" : "") $3; ok[id] = 1; uses[id] = $18
       if ($4 == "") top[id] = 1; else mem[$1 "#" $4] = mem[$1 "#" $4] "|" id }
@@ -1208,7 +1208,6 @@ if [ "$mode" = --viewed ]; then
       while (sp) {
         id = stack[sp--]; if (id in seen) continue
         seen[id] = 1; print id
-        if (!deep) continue
         n = split(mem[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] != "") stack[++sp] = u[i]
         n = split(up ? users[id] : uses[id], u, "|"); for (i = 1; i <= n; i++) if (u[i] in top) stack[++sp] = u[i]
       }
@@ -1224,7 +1223,7 @@ if [ "$mode" = --viewed ]; then
   # diff as it is now.
   all=$(awk -F'\t' 'FILENAME == ARGV[1] { h[$1] = $2; n++; next } ($1 in h) && h[$1] == $2 { c++ } END { print (c == n) }' "$now" "$vstore")
   { awk -F'\t' 'FILENAME == ARGV[1] { d[$1] = 1; next } !($1 in d)' "$now" "$vstore"
-    [ "$verb" = toggle ] && [ "$all" = 1 ] || cat "$now"; } > "$vstore.new"
+    [ "$all" = 1 ] || cat "$now"; } > "$vstore.new"
   mv "$vstore.new" "$vstore"
   # A review's file marks follow: a file is viewed once every symbol in it
   # is, and its row for what no symbol claims if it has one.

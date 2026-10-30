@@ -465,5 +465,35 @@ EOF
   expect symbols/moving-head "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..HEAD" | strip | grep -c 'const late')" "1"
   git reset -q --hard "$head"
   git checkout -q main && git branch -qD sym
+  # Going to a row is not reading it: enter leaves no mark, nor ]r in nvim, on to the next file.
+  git switch -q -c only-v
+  printf 'export function one() {\n  return 1;\n}\n' > a1.ts
+  printf 'export function two() {\n  return 1;\n}\n' > a2.ts
+  git add a1.ts a2.ts && git commit -qm "Only v, before"
+  obase=$(git rev-parse HEAD)
+  sed -i.bak 's/return 1/return 2/' a1.ts a2.ts && rm a1.ts.bak a2.ts.bak
+  git commit -qam "Only v, after"
+  ohead=$(git rev-parse HEAD)
+  mkdir "$tmp/onlyv"
+  printf '#!/bin/sh\nexit 1\n' > "$tmp/onlyv/glab"
+  printf '#!/bin/sh\necho "$*" >> "$ONLYV/opened"\n' > "$tmp/onlyv/git-commit-open"
+  chmod +x "$tmp/onlyv/"*
+  : > "$common/otis-viewed"
+  PATH=$tmp/onlyv:$PATH ONLYV=$tmp/onlyv TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob; zpty -b p "stty rows 40 cols 140; git-mr-files 7 $1 url review"; out=
+    upto() { for _ in {1..200}; do while zpty -rt p buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"$1"* ]] && break; sleep 0.1; done; out=; }
+    upto "open in"; zpty -wn p $'"'"'\t'"'"'; upto "symbols in"
+    zpty -wn p $'"'"'\r'"'"'; for _ in {1..200}; do grep -q " a" "$ONLYV/opened" 2>/dev/null && break; while zpty -rt p buf; do :; done; sleep 0.1; done; upto "symbols in"
+    zpty -wn p q; for _ in {1..100}; do zpty -t p || break; while zpty -rt p buf; do :; done; sleep 0.1; done' - "$obase..$ohead" >/dev/null 2>&1
+  expect symbols/enter-marks-nothing "$(grep -c ' a' "$tmp/onlyv/opened"):$(wc -l < "$common/otis-viewed" | tr -d ' ')" "1:0"
+  cat > "$tmp/next-file.lua" <<'LUA'
+vim.cmd.edit("a1.ts")
+vim.api.nvim_exec_autocmds("User", { pattern = "OtisFrameOpen" })
+vim.fn.maparg("]r", "n", false, true).callback()
+vim.wait(500)
+print(vim.fn.expand("%:t"))
+vim.cmd("qa!")
+LUA
+  expect symbols/next-file-marks-nothing "$(GMR_IID=7 GMR_KIND=review GMR_RANGE="$obase..$ohead" NVIM_DIFF_BASE="$obase" nvim --clean --headless -c "luafile $root/share/mr-comments.lua" -c "luafile $tmp/next-file.lua" 2>&1 | grep -o 'a[12].ts' | tail -1):$(git-mr-viewed list 7 "$ohead")" "a2.ts:"
+  git checkout -q main && git branch -qD only-v
 fi
 

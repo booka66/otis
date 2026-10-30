@@ -8,8 +8,8 @@
 # way the preview and nvim show the MR's
 # comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
 # and nvim opens on the file, its diff against the range's base a <leader>mb
-# away, with ]r and [r for the next and previous file. Opening a file marks it viewed, v flips that and
-# moves on (git-mr-viewed); on a case, v marks all of its symbols, and a file
+# away, with ]r and [r for the next and previous file. Only v marks a file viewed, since going to one
+# says nothing about reading it (git-mr-viewed); on a case, v marks all of its symbols, and a file
 # is viewed once all its symbols are (git-symbols --viewed). o lists the threads on no line: the MR's overview,
 # whole files, outdated ones (git-mr-threads).
 #
@@ -69,9 +69,10 @@ if [ "$1" = --list ]; then
   printf '%s\n' "$footer" > "$st/footer.$$.new" && mv -f "$st/footer.$$.new" "${OTIS_SAID:-$st}/footer"
   exit 0
 fi
-# --viewed <add|toggle> <iid> <range> <path> <row id>: enter's mark and v,
-# on the file by file, on the symbol by symbol.
+# --viewed toggle <iid> <range> <path> <row id>: v, on the file by file, on
+# the symbol by symbol. A screen opened before enter and c stopped marking still sends add.
 if [ "$1" = --viewed ]; then
+  [ "$2" = toggle ] || exit 0
   if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then exec git-mr-viewed "$2" "$3" "${4#*..}" "$5"; fi
   exec git-symbols --viewed "$4" "$2" "$6"
 fi
@@ -151,7 +152,7 @@ out=$(otis-frame -S "$(cd "$(dirname "$0")/../share" && pwd)/mr-comments.lua" ot
   --bind "start:reload($list | tee \"\$GIT_FZF_STATE/bg.shown\")" \
   --bind "t:execute-silent(git-test-files toggle)+reload($list)" \
   --bind "y:transform(git-symbols --copy {12})" \
-  --bind "enter:transform(otis-frame --enter {2} -- $open)+execute-silent(git-mr-files --viewed add $iid $range {2} {12})+$refresh" \
+  --bind "enter:transform(otis-frame --enter {2} -- $open)+$refresh" \
   --show "$open" \
   --bind "v:execute-silent(git-mr-files --viewed toggle $iid $range {2} {12})+reload($light note)" \
   --bind "tab:execute-silent(git-mr-files --toggle)+reload($list)+refresh-preview" \
@@ -169,7 +170,7 @@ out=$(otis-frame -S "$(cd "$(dirname "$0")/../share" && pwd)/mr-comments.lua" ot
   --bind "P:transform(git-symbols --publish)" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
-  --bind "c:execute-silent(git-mr-files --viewed add $iid $range {2} {12})+execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
+  --bind "c:execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
   --bind "m:execute(gl $range)" \
   --bind "r:execute-silent(git-symbols --again $range)+reload($list)" \
   --bind "w:transform(otis-open --fzf '$url')" \

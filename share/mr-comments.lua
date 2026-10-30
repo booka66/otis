@@ -756,9 +756,9 @@ local function submit()
 end
 
 -- ]r and [r: the next or previous file in the MR, in the file picker's order
--- (tests hidden or shown, as there), at its first change, marked viewed, and
--- in the same two-pane diff against the base when that was showing (nvim
--- opens on the file alone, <leader>mb shows its base beside it). The base
+-- (tests hidden or shown, as there), at its first change, and in the same
+-- two-pane diff against the base when that was showing (nvim opens on the
+-- file alone, <leader>mb shows its base beside it). The base
 -- pane is built here from git rather than through gitsigns, which attaches to
 -- a new buffer asynchronously; for a file the MR adds it is empty, so the
 -- layout holds and every line shows as added. A file the MR deletes is the
@@ -913,7 +913,6 @@ local function goto_file(step)
     pcall(vim.api.nvim_win_set_cursor, win, { line, 0 })
   end
   vim.cmd("normal! zz")
-  vim.system({ "git-mr-viewed", "add", iid, range:match("%.%.(.+)$"), path }, { cwd = root })
   notify(("%d of %d  %s%s"):format(to, #files, path, target.deleted and "  (deleted)" or ""))
 end
 
