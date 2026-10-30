@@ -118,9 +118,7 @@ draw() {
   fr+=("")
   # Where it is in the track, a line as long as the track.
   if (( $#mstate && mstate[3] > 0 )); then
-    typeset -F at=$mstate[2]
-    [[ $mstate[1] == playing ]] && (( at += EPOCHREALTIME - mat ))
-    (( at > mstate[3] )) && at=$mstate[3]
+    clock_at; typeset -F at=$REPLY
     clock $at; local l=$REPLY; clock $mstate[3]; local r=$REPLY
     integer bw=$(( W - 8 - ${#l} - ${#r} )) done
     (( done = bw * at / mstate[3] ))
@@ -148,9 +146,35 @@ draw() {
   shown_rows=("${fr[@]}")
   print -rnu $tty -- $body
 }
+# Seeking a stream restarts yt-dlp, seconds of silence that hold the player, one
+# after another for every seek it is sent. So an arrow moves the clock at once
+# and the player hears only where you stopped: seekto is there, -1 for none,
+# seeksend when to tell it, seekgive when the clock stops waiting for it.
+typeset -F seekto=-1 seeksend=0 seekgive=0
+# clock_at: how far into the track the clock stands.
+clock_at() {
+  typeset -F at=$mstate[2]
+  [[ $mstate[1] == playing ]] && (( at += EPOCHREALTIME - mat ))
+  (( seekto >= 0 )) && at=$seekto
+  (( at > mstate[3] )) && at=$mstate[3]
+  REPLY=$at
+}
+# seek <key> <label> <seconds>: on or back from where the clock stands.
+seek() {
+  keys_used "$1" "$2"
+  (( $#mstate && mstate[3] > 0 )) || return
+  clock_at
+  (( seekto = REPLY + $3, seekto < 0 ? (seekto = 0) : 0, seekto > mstate[3] - 1 ? (seekto = mstate[3] - 1) : 0 ))
+  (( seeksend = EPOCHREALTIME + 0.4 ))
+}
+seek_send() {
+  (( seeksend )) || return
+  (( seeksend = 0, seekgive = EPOCHREALTIME + 10 ))
+  { cliamp remote call seek.absolute --params "{\"value\":${seekto%.*}}" >/dev/null 2>&1 } &!
+}
 # act <key> <label> <cliamp's arguments...>: a key's command, behind the
 # screen, the footer saying it until the player has changed, or for a second
-# and a half where nothing it shows does (a seek).
+# and a half where nothing it shows does.
 act() {
   keys_used "$1" "$2"
   flash="$2…" flashend=$(( EPOCHREALTIME + 1.5 ))
@@ -172,11 +196,14 @@ search() {
 }
 handle() {
   case $1 in
+    $e'[D'|h) seek left 'back ten seconds' -10; return ;;
+    $e'[C'|l) seek right 'on ten seconds' 10; return ;;
+  esac
+  seek_send
+  case $1 in
     ' ') act space $tog toggle ;;
     n) act n next next ;;
     p) act p 'the one before' prev ;;
-    $e'[D'|h) act left 'back ten seconds' remote call seek --params '{"value":-10}' ;;
-    $e'[C'|l) act right 'on ten seconds' remote call seek --params '{"value":10}' ;;
     +|=) act + louder remote call volume.adjust --params '{"value":2}' ;;
     -) act - quieter remote call volume.adjust --params '{"value":-2}' ;;
     s) act s shuffle shuffle ;;
@@ -212,5 +239,7 @@ while :; do
       was="$mstate[1] $mstate[4] $mstate[6] $mstate[8] $mstate[9] $mnext[1]"
       flash=; draw
     fi
+    if (( seeksend )); then (( EPOCHREALTIME > seeksend )) && seek_send
+    elif (( seekto >= 0 && (mstate[2] - seekto < 5 && seekto - mstate[2] < 5 || EPOCHREALTIME > seekgive) )); then seekto=-1; draw; fi
   fi
 done

@@ -52,3 +52,15 @@ expect music/M-on-its-results "$(PATH=$tmp/yt:$PATH TERM=xterm-256color zsh -fc 
   out=; zpty -wn s M; upto "searches YouTube" && print -n back; sleep 0.5; zpty -wn s q
   for _ in {1..30}; do while zpty -rt s buf; do :; done; zpty -t s || { print -n " left"; break }; sleep 0.1; done
   zpty -d s 2>/dev/null')" "back left"
+
+# Holding an arrow moves the clock at once and tells the player once, where you stopped: each seek restarts a stream.
+mkdir -p "$tmp/seek"; : > "$tmp/seek/calls"
+printf '#!/bin/sh\necho "$*" >> "%s"\n' "$tmp/seek/calls" > "$tmp/seek/cliamp"
+printf '#!/bin/sh\nwhile :; do printf "s\\tpaused\\t100\\t1000\\tA set\\t\\t0\\t1\\t0\\tfalse\\nf\\n"; sleep 0.1; done\n' > "$tmp/seek/otis-music-feed"; chmod +x "$tmp/seek/"*
+expect music/seek-once-where-you-stop "$(PATH=$tmp/seek:$PATH TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob
+  zpty -b s "stty rows 30 cols 150; otis-music"
+  upto() { for _ in {1..60}; do while zpty -rt s buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *$1* ]] && return 0; sleep 0.05; done; return 1 }
+  upto "1:40"; out=
+  for _ in 1 2 3 4 5; do zpty -wn s l; done
+  upto "2:30" && print -n "clock moved, $(wc -l < $1 | tr -d " ") sent; "
+  sleep 0.8; while zpty -rt s buf; do :; done; zpty -wn s q; sleep 0.2; zpty -d s 2>/dev/null' - "$tmp/seek/calls")$(grep seek "$tmp/seek/calls")" 'clock moved, 0 sent; remote call seek.absolute --params {"value":150}'
