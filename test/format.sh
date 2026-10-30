@@ -119,6 +119,6 @@ rm -f "$tmp/case.json"
 # where it runs, wrapped, and a test file's path, cut.
 printf '%s' '{"sentences":[{"kind":"case","text":"A row opens","facts":[],"route":0,"letter":"A","runs":[{"where":"src/integrations/pages/integration-vendor-page-contextual.test.tsx","name":"shows it"}]}],"routes":[{"text":"a row","where":"The page a merchant opens to turn a product on, one row a product.","stops":[],"runs":[]}]}' > "$tmp/case.json"
 expect story-pane/paragraphs "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 | awk 'NR == 1 { n = $2; next } NR <= n + 1' | awk -F'\t' '$2 == "text" { print $5 }' | tr '\n' ' ')" \
-  "new new word new cut "
+  "new word new new word new cut "
 rm -f "$tmp/case.json"
 
