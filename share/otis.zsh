@@ -36,19 +36,19 @@ _g_cd() {
 # detached or removed first (_g_goto_branch), so this checkout is where you
 # work and worktrees are for what runs beside it. W leaves this checkout alone
 # and opens the branch in a worktree of its own, or goes to the one it is in.
-# d deletes the marked branches, or the one under the cursor, and M marks the
+# d deletes the marked branches, or the one under the cursor, and S marks the
 # ones that lose nothing (git-branch-delete); one checked out anywhere stays.
 # p force-pushes the branch with gp, asked first (git-branch-push).
 gb() {
   _g_repo || return 1
   local sel
-  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,M=mark safe to delete,n=open an MR for it or a stack (asks first),w=open it in the browser,y=copy its link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
+  sel=$(git-fzf 'branch ' 'enter=switch to it,c=its commits,C=propose fixes,V=verify in Cursor Cloud (pushes it first if origin is behind),p=force-push it with gp (asks first),W=open in its own worktree,space=mark,d=delete,S=mark safe to delete,n=open an MR for it or a stack (asks first),w=open it in the browser,y=copy its link,t=tests,l=labels,a=reviewers,u=refresh' --multi --ansi --track \
       --delimiter=$'\t' --with-nth=1 --id-nth=2 --keys-from 'otis-keys branch {2} {3} {4} {5} {6}' \
       --bind 'start:reload(git-branch-list --switch | tee "$GIT_FZF_STATE/bg.shown")' \
       --bind 'u:execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 'W:print(worktree)+accept' \
       --bind 'space:toggle' \
-      --bind 'M:transform(git-branch-list --safe)' \
+      --bind 'S:transform(git-branch-list --safe)' \
       --bind 'result:unbind(result)+transform(git-branch-list --safe-after)' \
       --bind 'd:execute(git-branch-delete {+2})+clear-multi+execute-silent(git-fzf-bg git-branch-list --switch --refresh)' \
       --bind 'c:execute(git-branch-log {2})' \

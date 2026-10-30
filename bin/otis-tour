@@ -1035,7 +1035,7 @@ part_branches_gb() {
   say "${k}gb${r} lists branches, main first. The demo has three besides main: the restocking fee, a receipt tweak, and tour/old-idea, which you are done with."
   look 1 "Each row: whether $who is working there or has fixes waiting, the MR's state (none here, with no GitLab), how far it has drifted from origin/main, then the name, its prefix dimmed. ${k}?${r} names every glyph."
   look 2 "${k}enter${r} switches to it; a branch checked out in a worktree takes you there instead. ${k}c${r} is its commits in gl. ${k}W${r} opens it in a worktree of its own."
-  look 3 "${k}d${r} on tour/old-idea deletes it, or every branch marked with ${k}space${r}, leaving anything checked out. In your repo ${k}M${r} marks the ones safe to delete: their MR merged or closed, with nothing committed since."
+  look 3 "${k}d${r} on tour/old-idea deletes it, or every branch marked with ${k}space${r}, leaving anything checked out. In your repo ${k}S${r} marks the ones safe to delete: their MR merged or closed, with nothing committed since."
   look 4 "In your repo: ${k}n${r} opens an MR for it, ${k}C${r} has $who propose fixes before there is one, ${k}V${r} verifies it in Cursor Cloud, pushing it first if origin is behind."
   launch gb
 }

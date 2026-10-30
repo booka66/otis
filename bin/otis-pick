@@ -690,7 +690,7 @@ helplines() {
   P+=("")
   for k v in j/k move g/G "top, bottom" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" "]/[" "next, previous change in the preview" \
-    drag "in the preview: its text, copied" "?" "these keys" "q/esc" "back"; do
+    drag "in the preview: its text, copied" M music "?" "these keys" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
   (( multi )) && P+=("  ${A}${(r:9:: :)${:-space/tab}}$R ${C}mark a row; the keys that take marked rows take them all$R")
@@ -1117,6 +1117,7 @@ handle() {
     esc) if [[ -n $query ]]; then query=; requery; else code=130; quit 130; fi ;;
     /) searching=1 ;;
     '?') help=$(( !help )) poff=0 ;;
+    M) music_open ;;
     ctrl-d) scroll $(( (ph - phd) / 2 )) ;;
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
     ctrl-e) scroll 1 ;;

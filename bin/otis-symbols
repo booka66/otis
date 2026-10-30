@@ -958,7 +958,7 @@ helplines() {
     numbers "in a review, drag down a diff's line numbers, or tap one: those lines; c opens a box under them to write in, a flag's line with its comment typed in" \
     comment "in a case's pane, click one: c replies and e edits yours in a box under it, d deletes yours, r resolves it or opens it again" \
     ctrl-a "show or hide Claude's panel, where a asks it" \
-    "?" "these keys" "q/esc" "back"; do
+    M music "?" "these keys" "q/esc" "back"; do
     P+=("  ${A}${(r:9:: :)k}$R ${C}$v$R")
   done
   P+=("" "  ${B}${T}a row$R" ""
@@ -2073,6 +2073,7 @@ handle() {
     q) quit 130 ;;
     esc) if [[ -n $query ]]; then query= dirty=1; else quit 130; fi ;;
     /) searching=1 dirty=1 ;;
+    M) music_open ;;
     '?') help=$(( !help )) poff=0 ;;
     J) headscroll 3 ;;
     K) headscroll -3 ;;

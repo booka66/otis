@@ -217,6 +217,12 @@ mbuf= mbars= mlab= mrule=
 # mnext, the titles that play next.
 typeset -a mstate mnext
 float mat=0
+# music_open: M on any screen: the music screen over this one, and back to it.
+music_open() {
+  keys_used M music
+  local bykey=music
+  run_tty otis-music
+}
 # music_start: the feed, once, as the screen is first on. It holds nothing of
 # the screen's: not the port, which a screen opened after this one binds.
 music_start() {

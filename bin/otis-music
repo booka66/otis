@@ -1,6 +1,6 @@
 #!/usr/bin/env -S zsh -f
-# otis-music: what cliamp is playing, on a screen of its own (M on the
-# board): its title, its bars big (cliamp's ClassicPeak, as every screen has
+# otis-music: what cliamp is playing, on a screen of its own (M on any
+# screen): its title, its bars big (cliamp's ClassicPeak, as every screen has
 # under its rows), where it is in the track, and what plays next. space
 # pauses and plays, n and p skip, the arrows seek, + and - turn it up and
 # down, s shuffles, and / searches YouTube: enter on a result plays it, a
@@ -163,7 +163,7 @@ search() {
   [[ -n ${q// } ]] || { draw; return }
   local title="♪ $q " load="start:reload(otis-music --search ${(q)q})"
   run_tty "OTIS_SCREEN=youtube git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
-    --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' > ${(q)st}/pick" sh
+    --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' --bind 'M:abort' > ${(q)st}/pick" sh
   pick=$(<$st/pick) 2>/dev/null; rm -f $st/pick
   # Until it plays, which takes yt-dlp a few seconds to find its audio.
   if [[ -n $pick ]]; then flash="starting it…" flashend=$(( EPOCHREALTIME + 20 )); { otis-music --play ${pick%%$'\t'*} } >/dev/null 2>&1 &!; fi

@@ -1677,7 +1677,7 @@ handle() {
     d) removable && { remove; return; }
        flash="nothing on this row can be removed" ;;
     G) (( $#id )) && { go $#id; vis $cur || step -1; } ;;
-    M) keys_used M "$KL[M]"; bykey=$KL[M]; run_tty otis-music; bykey= ;;
+    M) music_open ;;
     # A thread of Claude's on the workspace (otis-thread): on the branch of
     # yours the row is, else on one of its own.
     t) local tb=

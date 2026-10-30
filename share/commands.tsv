@@ -11,7 +11,7 @@ look	otis	otis			the board: every change a row that says its next move, and ente
 look	gs	gs			status	
 look	gl	gl		[range]	log; enter reads a commit by symbol, o opens its files, f folds staged changes in, r rewords	gl origin/main..
 look	gdm	gdm		[base]	this branch's changes as one diff, file by file	enter opens your editor
-look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens an MR for it, d deletes (M marks the safe ones)	
+look	gb	gb			branches, main first; enter switches (a branch in a worktree comes here), W opens one in its own worktree, n opens an MR for it, d deletes (S marks the safe ones)	
 change	ga	ga			what you changed, by symbol: space stages one, c commits, enter opens your editor; f opens the files, where p stages hunks, d discards, P parks in a stash	ga <path>
 change	gcm	gcm			commit in your editor with the diff below	gcm "subject" for a one-liner
 change	gam	gam			fold staged changes into the last commit, restacking branches above	gam "subject", gam -e to rewrite it
@@ -22,7 +22,7 @@ clean up and undo	gst	gst			apply or drop a stash
 other	gg	gg			every command there is, on one screen	
 other	otis-config	otis-config			otis's settings, each with where it comes from; enter sets one here, E everywhere, x back to the default	
 other	otis-theme	otis-theme			the colors otis draws in, each previewed on otis's own rows and a diff	
-other	otis-music	otis-music			what cliamp is playing, its bars big: space pauses, n and p skip, / searches YouTube and plays what you pick	M on the board
+other	otis-music	otis-music			what cliamp is playing, its bars big: space pauses, n and p skip, / searches YouTube and plays what you pick	M on any screen
 other	otis-usage	otis-usage		[days]	what you use: each screen's keys by how often and how lately you press them, the ones you never do, what came before each refresh, and the commands you don't run	
 other	otis-setup	otis-setup			check what otis needs, install what is missing, and set it up	
 other	otis-update	otis-update			bring otis, and seam, up to their newest releases (the curl install)	

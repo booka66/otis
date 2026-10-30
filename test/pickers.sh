@@ -16,10 +16,10 @@ if picker_open "gb"; then
   expect gb/search "$(picker_state | jq -c '[.query, .matchCount]')" '["feat",1]'
   picker_key "$(printf '\033')"
   expect gb/esc-keeps-query "$(picker_state | jq -r .query)" "feat"
-  # M with the search still there clears it, then marks the merged branch
+  # S with the search still there clears it, then marks the merged branch
   # by where it sits in the whole list, not in what the search left.
-  picker_key M; sleep 1
-  expect gb/M-after-search "$(picker_state | jq -c '[.query, ([.matches[] | select(.text | test("\tstale\t"))] | length), (.selected // [] | map(.text | split("\t")[1]))]')" '["",1,["stale"]]'
+  picker_key S; sleep 1
+  expect gb/S-after-search "$(picker_state | jq -c '[.query, ([.matches[] | select(.text | test("\tstale\t"))] | length), (.selected // [] | map(.text | split("\t")[1]))]')" '["",1,["stale"]]'
   picker_close
 else
   expect gb/opens "no picker on port $port" "opened"

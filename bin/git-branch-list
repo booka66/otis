@@ -1,7 +1,7 @@
 #!/bin/sh
 # git-branch-list --switch [--refresh]   rows for gb
-# git-branch-list --safe                fzf actions marking rows safe to delete (M)
-# git-branch-list --safe-after          the same, once a search M cleared is gone
+# git-branch-list --safe                fzf actions marking rows safe to delete (S)
+# git-branch-list --safe-after          the same, once a search S cleared is gone
 #
 # A row is what you see, then tab-separated branch, kind, worktree path, MR
 # iid, place, ahead, behind and what Claude has here ("fixing", a count of
@@ -9,7 +9,7 @@
 # which also keeps the MR cache fresh. place is where the branch is checked
 # out, if anywhere: here (a mark at the start of the row), or worktree, which
 # names the worktree in blue after the branch ("in mine", "in main checkout");
-# both keep d and M away from it. The preview (git-branch-preview) is handed
+# both keep d and S away from it. The preview (git-branch-preview) is handed
 # these fields, so moving through the list never asks git or GitLab again.
 #
 # The fixed zone is the state you act on and is never cut: the mark, whether
@@ -32,7 +32,7 @@ share=$(cd "$(dirname "$0")/../share" && pwd)
 # (share/claude-run.sh), in a subshell so its helpers stay out of this script.
 ( . "$share/claude-run.sh" && resume_all )
 
-# M marks by position in the whole list, and a search filters it: so with a
+# S marks by position in the whole list, and a search filters it: so with a
 # search the list is cleared first, and the marking waits for the cleared
 # list to be there (fzf's result event, bound in gb to --safe-after).
 case $mode in
@@ -78,7 +78,7 @@ case $verify in
   *) verify=$(jq -r 'to_entries[] | [.key, (.value.verifying | tostring), .value.status, .value.verdict, .value.head] | @tsv' "$f.verify" 2>/dev/null) ;;
 esac
 
-# The rows go to the list's file, for M, and to the picker.
+# The rows go to the list's file, for S, and to the picker.
 GK_MARKS="$marks" GK_VERIFY="$verify" awk -F'\t' -v cols="$cols" -v out="$st/branches" \
      "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
   BEGIN {

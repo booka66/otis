@@ -32,7 +32,7 @@ mkdir $st/pv
 trace=${OTIS_AGENT_TRACE:-${XDG_CACHE_HOME:-$HOME/.cache}/otis/agent.log}
 mkdir -p ${trace:h} 2>/dev/null; : > $trace
 . ${0:A:h:h}/share/screen.zsh
-keys_open run 'x=stop it,r=run it again,y=copy it for Claude,o=the tester in Cursor,a=artifacts,w=open it in the browser,p=link the report from the MR,?=these keys'
+keys_open run 'x=stop it,r=run it again,y=copy it for Claude,o=the tester in Cursor,a=artifacts,w=open it in the browser,p=link the report from the MR,M=music,?=these keys'
 screen_start
 integer code=0
 at_quit() { exit $code; }
@@ -464,7 +464,7 @@ draw() {
     P=("  ${B}${T}keys$R" "") pshown=
     local k v
     for k v in j/k "move" g/G "top; bottom, and follow the newest" x "stop it" r "run it again" y "copy it for Claude" \
-      o "the tester in Cursor" a "artifacts" w "open it in the browser" p "link the report from the MR" "?" "these keys" q "back"; do
+      o "the tester in Cursor" a "artifacts" w "open it in the browser" p "link the report from the MR" M "music" "?" "these keys" q "back"; do
       P+=("  ${A}${(r:7:: :)k}$R ${C}$v$R")
     done
     panewrap $(( W - 3 ))
@@ -589,6 +589,7 @@ handle() {
     a) act "artifacts" --artifacts $d ;;
     w) act "open it in the browser" --html $d ;;
     p) act "link the report from the MR" --attach $d ;;
+    M) music_open; pshown= ;;
     '?') help=$(( !help )) poff=0 ;;
     # With ? up, q and esc close it rather than the screen.
     q|esc) (( help )) && { help=0 poff=0; return; } ;|
