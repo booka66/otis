@@ -17,8 +17,9 @@ local gutter = { number = false, relativenumber = false, signcolumn = "no", stat
 -- The list's window options: no gutter, and a width it keeps whatever the
 -- windows around it do (winfixwidth: closing a split beside the code, or a
 -- config evening the windows out on a resize, leaves it be). A split made
--- from it takes them, and the code window gives them back.
-local list_opts = vim.tbl_extend("force", gutter, { spell = false, winfixwidth = true, wrap = false, list = false })
+-- from it takes them, and the code window gives them back. No sidescrolloff:
+-- a config's slid the list sideways as you left it, its cursor near the edge.
+local list_opts = vim.tbl_extend("force", gutter, { spell = false, winfixwidth = true, wrap = false, list = false, sidescrolloff = 0 })
 
 -- set(win, opts): the options for what the window shows now, not its own
 -- defaults (a window's "global" values are its own in nvim, copied by a

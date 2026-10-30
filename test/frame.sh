@@ -84,6 +84,13 @@ helper(Cart)
 helper Cart
 new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)
 new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
+  # The list stays put when its cursor sits at a row's end, where a config's
+  # sidescrolloff slid it sideways as you left it for the code.
+  printf 'printf %%046d 0; exec sleep 9\n' > "$tmp/frun2"
+  mkdir -p "$tmp/uf2"
+  expect frame/list-stays "$(SHARE=$share OTIS_NVIM_FRAME=$tmp/uf2 OTIS_NVIM_FRAME_RUN=$tmp/frun2 OTIS_NVIM_FRAME_STATUS=$tmp/uf2/status nvim --clean --headless -c 'set sidescrolloff=8 noshowmode' -c "lua local f = dofile('$share/frame.lua'); f.start(); local l = vim.t.otis_list
+    vim.wait(2000, function() return #vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(l), 0, 1, false)[1] >= 46 end)
+    vim.api.nvim_win_set_cursor(l, { 1, 45 }); vim.cmd('redraw'); io.stdout:write(vim.api.nvim_win_call(l, vim.fn.winsaveview).leftcol)" -c 'qa!' 2>&1)" "0"
   # A row with no file shows its preview there, less the lines the picker
   # marks for itself.
   printf '\036pin 1\nhello there\nworld\n' > "$tmp/pv.txt"
