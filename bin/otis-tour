@@ -1017,7 +1017,7 @@ EOF
   look 1 "${k}ga${r}, then ${k}space${r} on feeWaived only, and ${k}q${r}. ${k}gam${r} folds what is staged into the last commit (on a stack, it restacks the branches above)."
   look 2 "${k}ga${r} again, stage daysSince, ${k}q${r}. ${k}gl${r} is the log: ${k}f${r} on \"Charge a restocking fee\" folds what is staged into it. The edit goes into the commit that made daysSince, and the one above it is replayed on top."
   look 3 "${k}gl${r} again: ${k}r${r} rewords the commit under the cursor. Try a subject like \"feat: stuff\" to meet the message rules: no type prefix, 72 characters, no em dash."
-  look 4 "${k}gwip${r} sets everything aside as a commit, not a stash, which every worktree shares; ${k}gunwip${r} brings it back."
+  look 4 "${k}gwip${r} sets everything aside off the branch, where no push can send it, and out of the stash list every worktree shares; ${k}gunwip${r} brings it back."
   say "Also: ${k}gcm${r} commits in your editor with the diff below, in ${k}ga${r}'s file panel (${k}f${r}) ${k}d${r} discards a file (asks first) and ${k}P${r} parks it in a stash instead, which ${k}gst${r} brings back, ${k}gp${r} pushes, refusing to overwrite commits you have not seen."
   shell
   demo_reset
@@ -1113,7 +1113,7 @@ part_cheatsheet() {
   print
   print -r -- "  ${m}history${r}"
   key "gam" "fold staged into the last commit (gl's f: into an earlier one)"
-  key "gwip gunwip" "set work aside as a commit; bring it back"
+  key "gwip gunwip" "set work aside off the branch; bring it back"
 }
 
 # --- run

@@ -388,23 +388,48 @@ _g_stack_top() {
     fi
   done
   if ! git diff --quiet; then
-    print -u2 "gam: unstaged changes, and restacking the branches above needs a clean tree; stage them or set them aside with gwip"
+    print -u2 "gam: unstaged changes, and restacking the branches above needs a clean tree; stage them first"
     return 1
   fi
   print -r -- $top
 }
 
-# Setting work aside: a WIP commit beats a stash here, since the stash stack is
-# shared across every worktree and other sessions push to it.
+# Setting work aside, untracked files too, under refs/otis/wip/<branch>: off
+# the branch, so no push sends it (gp, lazygit, any), and out of the stash
+# list, which every worktree and session shares. gunwip brings it back onto
+# wherever the branch is by then, as a stash would.
 gwip() {
   _g_repo || return 1
-  git add -A && git commit -qm "wip: ${*:-$(date +%H:%M)}" && git log -1 --oneline
+  local b=$(git branch --show-current) c n
+  [[ -n $b ]] || { print -u2 "gwip: not on a branch (detached HEAD); commit, or park files with ga's P (gst brings them back)"; return 1 }
+  git rev-parse -q --verify refs/otis/wip/$b >/dev/null && { print -u2 "gwip: $b has work set aside already; gunwip, then gwip again"; return 1 }
+  git add -A && c=$(git stash create) || return
+  [[ -n $c ]] || { print -u2 "gwip: nothing to set aside"; return 1 }
+  n=$(git diff --name-only HEAD $c | wc -l | tr -d ' ')
+  git update-ref refs/otis/wip/$b $c && git reset -q --hard &&
+    print -r -- "set aside $n file${${n:#1}:+s}; gunwip on $b brings it back"
 }
 
 gunwip() {
   _g_repo || return 1
-  [[ $(git log -1 --format=%s) == wip:* ]] || { print -u2 "HEAD is not a wip commit"; return 1 }
-  git reset --soft HEAD~1 && git status --short
+  local b=$(git branch --show-current)
+  local ref=refs/otis/wip/$b
+  # A wip commit on top is how gwip set work aside before it kept a ref.
+  if [[ -z $b ]] || ! git rev-parse -q --verify $ref >/dev/null; then
+    if [[ $(git log -1 --format=%s) != wip:* ]]; then
+      # A branch renamed or deleted since leaves its work under its old name.
+      local -a on=(${(f)"$(git for-each-ref --format='%(refname:lstrip=3)' refs/otis/wip)"})
+      print -u2 "gunwip: nothing set aside on ${b:-this detached HEAD}${on:+ (there is on ${(j:, :)on})}"
+      return 1
+    fi
+    git reset --soft HEAD~1 && git status --short
+    return
+  fi
+  local c=$(git rev-parse --short $ref) clash=
+  # Conflicts mean it is back, markers and all, so the ref goes either way.
+  git stash apply -q $ref || { clash=$(git diff --name-only --diff-filter=U); [[ -n $clash ]] || return 1 }
+  git update-ref -d $ref && git status --short
+  [[ -z $clash ]] || { print -u2 "gunwip: it came back with conflicts to fix (it was $c)"; return 1 }
 }
 
 # The terminal as it should be after a full-screen program that died in it:

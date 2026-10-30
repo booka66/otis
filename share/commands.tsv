@@ -15,7 +15,7 @@ look	gb	gb			branches, main first; enter switches (a branch in a worktree comes 
 change	ga	ga			what you changed, by symbol: space stages one, c commits, enter opens your editor; f opens the files, where p stages hunks, d discards, P parks in a stash	ga <path>
 change	gcm	gcm			commit in your editor with the diff below	gcm "subject" for a one-liner
 change	gam	gam			fold staged changes into the last commit, restacking branches above	gam "subject", gam -e to rewrite it
-change	gwip	gwip	gunwip		set work aside as a commit, and bring it back	
+change	gwip	gwip	gunwip		set work aside off the branch, and bring it back	
 branch and push	gup	gup			rebase onto a fresh origin/main	prints how to undo it
 branch and push	gp	gp			push, refusing to overwrite commits you have not seen; a first push offers to create its MR (y/N)	
 clean up and undo	gst	gst			apply or drop a stash	

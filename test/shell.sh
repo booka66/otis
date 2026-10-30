@@ -12,6 +12,28 @@ expect mr-new/no-forge "$(GIT_FZF_STATE=$tmp/dash git-mr-new --check feature >/d
 GIT_FZF_STATE=$tmp/dash git-mr-new --ask feature </dev/null >/dev/null 2>&1
 expect mr-new/not-pushed "$(GIT_FZF_STATE=$tmp/dash git-mr-new --said >/dev/null; strip < "$tmp/dash/note")" "feature is not pushed yet; gp pushes it and offers the MR"
 
+# --- gwip sets work aside off the branch, where no push can send it, and
+# gunwip brings it back onto wherever the branch is by then
+git switch -q -c aside main && printf 'w\n' > w.ts && printf 'a3\n' > a.ts && gwip >/dev/null
+expect wip/clean "$(git status --short)$(git log -1 --format=%s)" "Second"
+git push -q origin aside 2>/dev/null
+expect wip/not-pushed "$(git -C "$tmp/origin" ls-tree -r --name-only aside | grep -c w.ts)" "0"
+printf 'z\n' > z.ts
+expect wip/once "$(gwip 2>&1 >/dev/null)$(git status --short)" "gwip: aside has work set aside already; gunwip, then gwip again?? z.ts"
+rm z.ts && git switch -q main
+expect wip/elsewhere "$(gunwip 2>&1)" "gunwip: nothing set aside on main (there is on aside)"
+git switch -q aside && printf 'b2\n' > b.spec.ts && git commit -qam "Moved on" && gunwip >/dev/null
+expect wip/back "$(git status --short | sort | tr '\n' ' ')$(git rev-parse -q --verify refs/otis/wip/aside)" " M a.ts A  w.ts "
+git commit -qam "Took it back" && printf 'mine\n' > a.ts && gwip >/dev/null
+printf 'theirs\n' > a.ts && git commit -qam "Same line"
+c=$(git rev-parse --short refs/otis/wip/aside)
+expect wip/conflict "$(gunwip 2>&1 >/dev/null | tail -1)$(git rev-parse -q --verify refs/otis/wip/aside)" "gunwip: it came back with conflicts to fix (it was $c)"
+git reset -q --hard
+# and a wip commit from before gwip kept a ref still comes back
+printf 'old\n' > a.ts && git commit -qam "wip: 09:00" && gunwip >/dev/null
+expect wip/old-commit "$(git log -1 --format=%s)|$(git status --short)" "Same line|M  a.ts"
+git reset -q --hard && git switch -q main && git branch -qD aside && git push -q origin --delete aside 2>/dev/null
+
 # --- gb's enter brings a branch here from its worktree (_g_goto_branch)
 goto() { zsh -fc "source '$root/share/otis.zsh'; _g_goto_branch $* >/dev/null 2>&1 && git rev-parse --show-toplevel" 2>/dev/null; }
 git branch -q away main

@@ -17,6 +17,12 @@ expect sweep/ignored-kept "$(cat "$trash"/old-*/.env 2>/dev/null)" "secret"
 expect sweep/dirty-kept "$([ -d "$tmp/repo/.claude/worktrees/keep" ] && echo kept) $(git branch --list keep | tr -d ' +')" "kept keep"
 expect sweep/open-kept "$([ -d "$tmp/repo/.claude/worktrees/live" ] && echo kept)" "kept"
 git worktree remove --force "$tmp/repo/.claude/worktrees/keep" && git worktree remove "$tmp/repo/.claude/worktrees/live" && git branch -qD keep live && rm -f "$cache"
+# Work gwip set aside on a merged branch is new work, as its wip commit was.
+git branch -q aside main && git-worktree-add aside aside >/dev/null 2>&1
+printf 'aside\tmerged\t10\t%s\tmine\tmain\n' "$(git rev-parse aside)" > "$cache"
+(cd "$tmp/repo/.claude/worktrees/aside" && printf 'w\n' > w.ts && gwip >/dev/null)
+expect sweep/set-aside-kept "$(git-worktree-sweep)$(git branch --list aside | tr -d ' +')" "aside"
+git worktree remove --force "$tmp/repo/.claude/worktrees/aside" && git branch -qD aside && git update-ref -d refs/otis/wip/aside && rm -f "$cache"
 
 # --- otis-bazel-sweep: Bazel's builds of checkouts that are gone go too
 bz=$tmp/Library/Caches/bazel

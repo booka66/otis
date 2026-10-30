@@ -13,7 +13,7 @@ if [ "$1" = --check ]; then
   if git diff --cached --quiet; then
     echo "nothing staged to fold in; stage it with ga first" >&2
   elif ! git diff --quiet; then
-    echo "there are unstaged changes too. stage them, or set them aside with gwip first" >&2
+    echo "there are unstaged changes too. stage them first" >&2
   elif [ -z "$(git rev-list -1 "$base..HEAD" 2>/dev/null)" ]; then
     echo "this branch has no commits of its own on top of $base to fix up" >&2
   elif [ -n "$sha" ] && { ! git merge-base --is-ancestor "$sha" HEAD || git merge-base --is-ancestor "$sha" "$base"; }; then
