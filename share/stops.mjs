@@ -3,7 +3,8 @@
 // person has to decide something, written beside its cases and read by the same list and pane:
 //   <base>-<head>.stops.json   { overview, stops }: what it does and how it works, then each stop's question, why it
 //                              is one, and its code, for the pane (story-pane.mjs)
-//   <base>-<head>.stops.tsv    the list's rows, as a case's are (git-symbols)
+//   <base>-<head>.stops.tsv    the list's rows, as a case's are, each stop's opening its file at its line (git-symbols);
+//                              in a review's nvim the question is written above that line (mr-comments.lua)
 // Lines moved or renamed are counted here, without Claude, and left out of what Claude reads, so a stop is on code the
 // change really brings. A stop is a place to start and never says the rest is fine: on 8 reviews, 5 of 28 people's
 // comments landed on one. In a review (GMR_IID) Claude reads its description. otis.stopsModel picks the model, off for none.
@@ -20,11 +21,11 @@ const MAX = 1 << 30, MOST = 5, AROUND = 3;
 const git = (...args) => execFileSync("git", ["-c", "core.quotePath=false", ...args], { encoding: "utf8", maxBuffer: MAX, stdio: ["ignore", "pipe", "ignore"] });
 const config = (name) => { try { return git("config", "--get", name).trim(); } catch { return ""; } };
 
-const VERSION = 2;
+const VERSION = 3;
 const model = config("otis.stopsModel") || config("otis.sentencesModel") || "claude-opus-5-5";
 // Kept until the change moves; one kept before it said what the change does is asked again.
-const kept = (() => { try { return JSON.parse(readFileSync(at("json"), "utf8")).version; } catch { return 0; } })();
-if (model === "off" || kept === VERSION) process.exit(0);
+const kept = (() => { try { return JSON.parse(readFileSync(at("json"), "utf8")); } catch { return {}; } })();
+if (model === "off" || kept.version === VERSION) process.exit(0);
 const alive = (path) => { try { process.kill(Number(readFileSync(path, "utf8")), 0); return true; } catch { return false; } };
 if (alive(at("running"))) process.exit(0);
 writeFileSync(at("running"), String(process.pid));
@@ -71,6 +72,8 @@ const table = (() => { try { return readFileSync(opt("--table"), "utf8").split("
 const change = changes();
 const fresh = leftover(change);
 const isNew = new Set(fresh.map((one) => `${one.path}\t${one.n}`));
+// Told before a stop's row said where it opens: what Claude said stands, and only the rows change.
+if (kept.version === 2) { publish(kept); process.exit(0); }
 
 const root = git("rev-parse", "--show-toplevel").trim();
 const mr = (() => {
@@ -164,7 +167,7 @@ function placed(stop) {
   for (let d = 0; d <= 25; d++) for (const n of [stop.line - d, stop.line + d]) {
     if (n >= 1 && lines[n - 1] != null && squash(lines[n - 1]).includes(squash(stop.code))) {
       const shift = n - stop.line, to = Math.max(n, stop.to + shift);
-      return { ...stop, line: Math.max(1, n - AROUND), to: Math.min(lines.length, to + AROUND), noteLine: stop.noteLine + shift };
+      return { ...stop, line: Math.max(1, n - AROUND), to: Math.min(lines.length, to + AROUND), noteLine: Math.min(Math.max(stop.noteLine + shift, n), to) };
     }
   }
   return null;
@@ -196,20 +199,24 @@ function under(stop) {
   return table.some((row) => row[0] === stop.path && row[1] === "file") ? [["file", stop.path, "", ""]] : [];
 }
 
-// The list's rows, in the shape it reads a case's: a stop is numbered past any case, stop k as 1000 + k.
-const clean = (s) => s.replace(/`/g, "").replace(/[\t\n]/g, " ");
-const name = (path) => path.slice(path.lastIndexOf("/") + 1);
-const lineCount = told.reduce((sum, stop) => sum + stop.code.length, 0);
-const moved = change.added.length - fresh.length;
-const said = [told.length ? "" : "no stops", moved ? `${moved.toLocaleString("en-US")} of ${change.added.length.toLocaleString("en-US")} added lines only moved` : ""].filter(Boolean).join(" · ");
-const rows = [
-  ["H", `${told.length} stop${told.length === 1 ? "" : "s"}, ${lineCount} lines`, said],
-  ...(overview ? [["M", clean(overview.does)], ["S", 1000, "overview", "", 0, 0, "What this does", 0, "", `how it works in ${overview.steps.length} step${overview.steps.length === 1 ? "" : "s"}`, "", "", ""]] : []),
-  ...told.flatMap((stop, k) => [
-    ["S", 1001 + k, "stop", k + 1, 0, 0, clean(stop.question), 0, "", `${stop.code.length} lines in ${name(stop.path)}`, "", "", ""],
-    ...under(stop).map((unit) => ["R", 1001 + k, ...unit]),
-  ]),
-];
-const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
-write(at("tsv"), rows.map((row) => row.join("\t") + "\n").join(""));
-write(at("json"), JSON.stringify({ version: VERSION, model, base, head, title: mr.title ?? "", said, overview, stops: told }));
+// The list's rows, in the shape it reads a case's: a stop is numbered past any case, stop k as 1000 + k, with the place
+// its row opens after them.
+function publish({ title, overview, stops: told }) {
+  const clean = (s) => s.replace(/`/g, "").replace(/[\t\n]/g, " ");
+  const name = (path) => path.slice(path.lastIndexOf("/") + 1);
+  const lineCount = told.reduce((sum, stop) => sum + stop.code.length, 0);
+  const moved = change.added.length - fresh.length;
+  const said = [told.length ? "" : "nothing to decide", moved ? `${moved.toLocaleString("en-US")} of ${change.added.length.toLocaleString("en-US")} added lines only moved` : ""].filter(Boolean).join(" · ");
+  const rows = [
+    ["H", `${told.length} question${told.length === 1 ? "" : "s"} to decide, ${lineCount} lines`, said],
+    ...(overview ? [["M", clean(overview.does)], ["S", 1000, "overview", "", 0, 0, "What this does", 0, "", `how it works in ${overview.steps.length} step${overview.steps.length === 1 ? "" : "s"}`, "", "", ""]] : []),
+    ...told.flatMap((stop, k) => [
+      ["S", 1001 + k, "stop", k + 1, 0, 0, clean(stop.question), 0, "", `${stop.code.length} lines in ${name(stop.path)}`, "", "", "", stop.path, stop.noteLine, stop.line, stop.to],
+      ...under(stop).map((unit) => ["R", 1001 + k, ...unit]),
+    ]),
+  ];
+  const write = (path, body) => { writeFileSync(path + ".new", body); renameSync(path + ".new", path); };
+  write(at("tsv"), rows.map((row) => row.join("\t") + "\n").join(""));
+  write(at("json"), JSON.stringify({ version: VERSION, model, base, head, title, said, overview, stops: told }));
+}
+publish({ title: mr.title ?? "", overview, stops: told });

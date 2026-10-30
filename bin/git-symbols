@@ -1543,8 +1543,8 @@ if [ "$mode" = --rows ]; then
         printf "  ${GK_ELSEWHERE}\357\201\265 2${GK_R} open threads   ${GK_YOURS}\342\234\216 1${GK_R} drafts of yours or an agent's waiting to be submitted   a closed row counts those under it too; a file row, those on lines no symbol claims\n\n"
       fi
       if [ "$sentf" != /dev/null ]; then
-        printf "${GK_CONTEXT}a stop${GK_R}\n"
-        printf "  a question only you can answer, on the few lines it is about: ${GK_GOOD}green${GK_R} lines are new, plain ones only moved. A place to start, never proof the rest is fine   v marks it read\n"
+        printf "${GK_CONTEXT}a question to decide${GK_R}\n"
+        printf "  one only you can answer: its row opens the file on the line it asks about, with the question written above that line, and <leader>mc there starts your comment. A place to start, never proof the rest is fine   v marks it read\n"
         printf "${GK_CONTEXT}a case${GK_R}\n"
         printf "  a situation the code meets, under where it comes in, and how it ended before ${GK_CONTEXT}\342\206\222${GK_R} how it ends now: ${GK_ATTENTION}yellow${GK_R} when it ends differently, ${GK_CONTEXT}\302\267 only a label${GK_R} when only what a log, a metric or a stored field reads changed, ${GK_CONTEXT}= the same${GK_R} when it ends as it did\n"
         printf "  its pane: the values to compare, the author's own sentence on it, then its route through the code in the order it runs, each stop's deciding lines with what holds there; ${GK_ATTENTION}\342\227\206${GK_R} changed here, \342\227\217 in code the change touched, ${GK_CONTEXT}\342\227\213${GK_R} not in the change\n"
@@ -1627,7 +1627,7 @@ if [ "$mode" = --rows ]; then
     FILENAME == ARGV[5] { vd[$1] = 1; next }
     FILENAME == ARGV[6] { cm[$1] = $2; next }
     FILENAME == ARGV[7] || FILENAME == ARGV[9] {
-      if ($1 == "S") { sn = $2 + 0; if ($3 == "stop" || $3 == "overview") stopat[++nstop] = sn; else nsent = sn; sfrom[sn] = $3; sorigin[sn] = $4; sadd[sn] = $5 + 0; sdel[sn] = $6 + 0; stext[sn] = $7; stests[sn] = $8 + 0; sgroup[sn] = $9; sending[sn] = $10; schange[sn] = $11; if ($3 == "case" || $3 == "also") ncase++ }
+      if ($1 == "S") { sn = $2 + 0; if ($3 == "stop" || $3 == "overview") stopat[++nstop] = sn; else nsent = sn; sfrom[sn] = $3; sorigin[sn] = $4; sadd[sn] = $5 + 0; sdel[sn] = $6 + 0; stext[sn] = $7; stests[sn] = $8 + 0; sgroup[sn] = $9; sending[sn] = $10; schange[sn] = $11; spath[sn] = $14; sat[sn] = $15; sfirst[sn] = $16; slast[sn] = $17; if ($3 == "case" || $3 == "also") ncase++ }
       else if ($1 == "M") msummary = $2
       else if ($1 == "H") stopsaid = $2
       else if ($1 == "R") { x = ++nunder[$2 + 0]; ukind[$2 + 0, x] = $3; upath[$2 + 0, x] = $4; uside[$2 + 0, x] = $5; ustart[$2 + 0, x] = $6 }
@@ -1899,7 +1899,8 @@ if [ "$mode" = --rows ]; then
         else if (sfrom[n] == "support" && !sup++) { more("", "m", ""); heading("also changed, to support it", "gk-support-heading") }
         else if (sfrom[n] == "rest" && !rest++) { if (!ncase) more("", "m", ""); heading(ncase ? "on no route, read as a plain diff" : "in the change, in no part", "gk-rest-heading") }
         else more("", "m", "")
-        print "  " lines[1] "\t\t\t\t\t\t\t\t\t\t\t" rid \
+        # A stop opens its file on the line it asks about (share/stops.mjs); a case has no one place.
+        print "  " lines[1] "\t" spath[n] "\t" sat[n] "\t" (spath[n] != "" ? "new" : "") "\t" sfirst[n] "\t" slast[n] "\t\t\t\t\t\t" rid \
           (draw ? "\tsent\t0\t" ((rid in open) ? "open" : "closed") "\t" cnt "\t\t" sadd[n] "\t" sdel[n] "\t" vw "\t" to "\t" td "\t\t" dim "\t" lines[1] "\t" sfrom[n] "\t" sprintf("%-" numw "s", sorigin[n]) : "")
         for (x = 2; x <= nl; x++) more(ind lines[x], "t", dim)
         # A stop says how much there is to read, and where.
@@ -2120,7 +2121,7 @@ if [ "$mode" = --rows ]; then
     # Its stops (share/stops.mjs, started above): being picked, then how much of the change only moved.
     if [ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ]; then
       if read -r spid 2>/dev/null < "$told.stops.running" && kill -0 "$spid" 2>/dev/null; then
-        note="$note · $(printf "${GK_ATTENTION}Claude is picking the stops${GK_R}")"
+        note="$note · $(printf "${GK_ATTENTION}Claude is finding what to decide${GK_R}")"
       elif [ -s "$told.stops.tsv" ]; then
         said=$(awk -F'\t' '$1 == "H" { print $3; exit }' "$told.stops.tsv")
         [ -n "$said" ] && note="$note · $(printf "${GK_CONTEXT}%s${GK_R}" "$said")"

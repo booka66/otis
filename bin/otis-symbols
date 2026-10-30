@@ -876,7 +876,7 @@ crumb() {
   if (( $#steps > 1 )); then
     for s in $steps[1,-2]; do
       [[ $s == callers ]] && { names+=("callers"); continue; }
-      [[ $s == sentence:100[1-9] ]] && { names+=("stop ${s#sentence:100}"); continue; }
+      [[ $s == sentence:100[1-9] ]] && { names+=("question ${s#sentence:100}"); continue; }
       [[ $s == sentence:* ]] && { (( bycase )) && names+=("case ${s#sentence:}") || names+=("part ${s#sentence:}"); continue; }
       n=${s#*\#}; n=${n#type }; n=${n//+/.}
       names+=("$n")
@@ -903,6 +903,8 @@ symkeys() {
       if [[ $fold[i] == open ]]; then rkl[l]="" rkl[h]="close it" rkl[enter]="close it"
       else rkl[h]="" rkl[l]="its symbols: ${kids[i]}" rkl[enter]="its symbols: ${kids[i]}"; fi
       if [[ $vwd[i] == all ]]; then rkl[v]="mark all under it not viewed"; else rkl[v]="mark all under it viewed"; fi
+      # A question to decide is a place in a file: enter and c are a file row's.
+      coderow $i && unset "rkl[enter]" "rkl[c]"
       return ;;
     # A ↑ row points at its symbol, drawn whole above: going there is what it
     # does, and a key left with no label here does nothing on it (handle).
@@ -2049,9 +2051,9 @@ handle() {
   # peeks and a preview for every repeat, and the renders piled up. A
   # repeat is the same key again with no other between: v, j, v quickly is
   # two files marked, and the second v was dropped as if v were held.
-  # A sentence has no file to open: enter opens it, or closes it. A ↑ row's
+  # A sentence with no file to open: enter opens it, or closes it. A ↑ row's
   # enter goes where its l does, to its symbol drawn whole.
-  [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == sent ]] && { [[ $fold[cur] == open ]] && n=h || n=l; }
+  [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == sent ]] && ! coderow $cur && { [[ $fold[cur] == open ]] && n=h || n=l; }
   [[ $n == enter ]] && (( cur )) && [[ $typ[cur] == ref ]] && n=l
   if (( cur )) && [[ $typ[cur] == ref ]]; then
     symkeys

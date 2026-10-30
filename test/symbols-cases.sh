@@ -137,6 +137,47 @@ EOF
   pane=$(FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1001 | strip)
   expect stops/pane "$(printf '%s\n' "$pane" | grep -c -e 'Should run take this' -e 'One caller' -e '◀ look here' -e 'Do we need it')" "4"
   expect stops/comment-typed-in "$(OTIS_PANE_MAP=1 FZF_PREVIEW_COLUMNS=100 git-sentences --pane "$stopkey.json" 1001 | grep -c "line.lib.ts.new.2.2.1.*.stop.Do we need it?")" "1"
+  # Its row is a place in a file, so it opens as a symbol's does; in a review's nvim the question is above that line,
+  # and a comment there starts with what Claude would say. Told before rows had a place: rewritten, Claude not asked.
+  expect stops/row-opens-file "$(drows | awk -F'\t' '$12 == "sentence:1001" { print $2 ":" $3 ":" $4 ":" $5 ":" $6 }')" "lib.ts:2:new:1:5"
+  expect stops/case-opens-nothing "$(drows | awk -F'\t' '$12 == "sentence:1000" { print $2 ":" $3 }')" ":"
+  expect stops/at-its-line "$(OTIS_NVIM_FRAME=$tmp git-symbols --at "$base..$head" lib.ts new 1 5 sentence:1001 2)" "2"
+  cat > "$tmp/stop-marks.lua" <<'LUA'
+vim.cmd.edit(vim.env.FILE)
+vim.api.nvim_exec_autocmds("User", { pattern = "OtisFrameOpen" })
+local ns = vim.api.nvim_create_namespace("gmr_comments")
+local above, numbers = {}, 0
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, { details = true })) do
+  if m[4].virt_lines then
+    for _, l in ipairs(m[4].virt_lines) do
+      table.insert(above, table.concat(vim.tbl_map(function(c) return c[1] end, l)))
+    end
+    above.at = m[2] + 1
+    above.up = m[4].virt_lines_above
+  elseif m[4].number_hl_group then
+    numbers = numbers + 1
+  end
+end
+if vim.env.PRESS then
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  vim.cmd.normal({ "\\mc", bang = false })
+end
+print(("%s|%d|%s|%d|%s"):format(above.at, numbers, above.up, #above, table.concat(above, "|")) .. "|typed:" .. vim.api.nvim_get_current_line())
+vim.cmd("qa!")
+LUA
+  expect stops/above-its-line "$(PRESS=1 FILE=lib.ts GMR_IID=7 GMR_KIND=review GMR_RANGE="$(git rev-parse "$base")..$(git rev-parse "$head")" NVIM_DIFF_BASE="$(git rev-parse "$base")" nvim --clean --headless -c "luafile $root/share/mr-comments.lua" -c "luafile $tmp/stop-marks.lua" 2>&1)" \
+    "2|5|true|4|  ┃ Should run take this?|  ┃ One caller.|  ┃ <leader>mc here starts: Do we need it?|  ┃ ▼ look here|typed:Do we need it?"
+  cp "$stopkey.json" "$tmp/stop.json"
+  jq '.stops[0] |= (.path = "untouched.ts" | .noteLine = 1 | .line = 1 | .to = 1)' "$tmp/stop.json" > "$stopkey.json"
+  expect stops/not-in-the-mr "$(FILE=untouched.ts GMR_IID=7 GMR_KIND=review GMR_RANGE="$(git rev-parse "$base")..$(git rev-parse "$head")" NVIM_DIFF_BASE="$(git rev-parse "$base")" nvim --clean --headless -c "luafile $root/share/mr-comments.lua" -c "luafile $tmp/stop-marks.lua" 2>&1 | grep -c "This file is not in the MR")" "1"
+  cp "$tmp/stop.json" "$stopkey.json"
+  cp "$stopkey.tsv" "$tmp/stop.tsv"
+  jq '.version = 2' "$stopkey.json" > "$stopkey.json.new" && mv "$stopkey.json.new" "$stopkey.json"
+  awk -F'\t' 'BEGIN { OFS = "\t" } $1 == "S" { NF = 13 } { print }' "$tmp/stop.tsv" > "$stopkey.tsv"
+  git config --local --unset otis.sentencesModel
+  SEAM_CLAUDE=false node "$root/share/stops.mjs" "$(git rev-parse "$base")" "$(git rev-parse "$head")" --cache "$told_dir" --table "$(git-symbols --table "$base..$head")"
+  git config otis.sentencesModel off
+  expect stops/rewritten-unasked "$(jq -r '"\(.version):\(.stops | length)"' "$stopkey.json"):$(awk -F'\t' '$2 == 1001 && $1 == "S" { print $14 }' "$stopkey.tsv"):$(awk -F'\t' '$1 == "H" { print $2 }' "$stopkey.tsv")" "3:1:lib.ts:1 question to decide, 5 lines"
   GIT_FZF_STATE=$tmp/stopst git-symbols --viewed "$base..$head" toggle sentence:1001
   expect stops/viewed "$(drows | awk -F'\t' '$12 == "sentence:1001" { print $20 }')" "all"
   GIT_FZF_STATE=$tmp/stopst git-symbols --viewed "$base..$head" toggle sentence:1001
@@ -148,7 +189,7 @@ EOF
   git config --local --unset otis.sentencesModel
   SEAM_CLAUDE=false node "$root/share/stops.mjs" "$(git rev-parse "$head")" "$(git rev-parse HEAD)" --cache "$told_dir"
   git config otis.sentencesModel off
-  expect stops/move-asks-no-one "$(jq -r '.stops | length' "$movedkey.json"):$(awk -F'\t' '$1 == "H" { print $3 }' "$movedkey.tsv")" "0:no stops · 20 of 20 added lines only moved"
+  expect stops/move-asks-no-one "$(jq -r '.stops | length' "$movedkey.json"):$(awk -F'\t' '$1 == "H" { print $3 }' "$movedkey.tsv")" "0:nothing to decide · 20 of 20 added lines only moved"
   git switch -q - && git branch -qD stops-move
   mv "$stopkey.json.kept" "$stopkey.json"
   # The cases that say nothing changed are one row until it is opened; their symbols stay theirs.

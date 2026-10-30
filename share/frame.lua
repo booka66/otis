@@ -333,6 +333,8 @@ function M.open(path, line, col, readonly, symbol)
     end
     vim.t.otis_lit = w[4] and { buf = vim.api.nvim_get_current_buf(), lines = { tonumber(w[1]), tonumber(w[2]) }, base = { tonumber(w[3]), tonumber(w[4]) }, names = names } or nil
   end)
+  -- A row can land while its file already shows, so no window event says it: for what draws on files (mr-comments.lua).
+  vim.api.nvim_exec_autocmds("User", { pattern = "OtisFrameOpen" })
 end
 
 -- A preview's colors, from the SGR codes the picker draws with, as

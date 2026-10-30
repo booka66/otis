@@ -31,6 +31,10 @@
 -- while the file is the one it was written on; one on lines a push has changed
 -- since is outdated, and waits under <leader>mo (git-mr-threads says how that
 -- is decided). Threads refresh after each change.
+--
+-- What Claude asks of the change (share/stops.mjs) is written above the line it
+-- is about, its lines' numbers lit, and <leader>mc on that line starts with the
+-- comment it suggests.
 local iid = vim.env.GMR_IID
 if not iid or iid == "" then
   return
@@ -46,6 +50,7 @@ local reviewing = vim.env.GMR_KIND == "review"
 local drafting = reviewing -- whether new comments and replies are drafts
 local threads = {} -- every thread and draft, placed in the diff of range (git-mr-threads)
 local me -- your GitLab username; only your own comments can be edited or deleted
+local stops -- what Claude asks of this change, nil until it lands
 
 local function notify(msg, level)
   vim.notify("!" .. iid .. ": " .. msg, level or vim.log.levels.INFO)
@@ -197,6 +202,20 @@ local function render(buf)
       table.insert(whys, t.notes[1].why and t.notes[1].why:match("^(.-)\n## ") or t.notes[1].why)
     end
   end
+  local asked = {}
+  for _, s in ipairs(side == "new" and stops or {}) do
+    if s.path == path and s.noteLine <= count then
+      local parts = { "**" .. s.question .. "**", s.why }
+      if s.outside then
+        table.insert(parts, "This file is not in the MR, so GitLab can't take a comment on it.")
+      elseif s.comment ~= "" then
+        table.insert(parts, "`<leader>mc` here starts: " .. s.comment)
+      end
+      table.insert(parts, "▼ " .. s.note)
+      vim.list_extend(bodies, parts)
+      table.insert(asked, { stop = s, parts = parts })
+    end
+  end
   render_markdown(bodies, width)
   render_markdown(whys, width - 2)
   -- Threads on no line of this file are counted on its first line: on the MR's
@@ -256,6 +275,20 @@ local function render(buf)
         { virt_lines = virt, sign_text = t.draft and "✎" or "", sign_hl_group = hl })
     end
   end
+  for _, one in ipairs(asked) do
+    local s, virt = one.stop, {}
+    for _, part in ipairs(one.parts) do
+      for _, chunks in ipairs(markdown_lines(part, width)) do
+        table.insert(virt, vim.list_extend({ { "  ┃ ", "DiagnosticWarn" } }, chunks))
+      end
+    end
+    -- Above a file's first line nvim draws nothing until you scroll past the top.
+    vim.api.nvim_buf_set_extmark(buf, ns, s.noteLine - 1, 0, { virt_lines = virt, virt_lines_above = s.noteLine > 1 })
+    -- The line's number, as the sign column is the change's own (gitsigns).
+    for l = s.line, math.min(s.to, count) do
+      vim.api.nvim_buf_set_extmark(buf, ns, l - 1, 0, { number_hl_group = "DiagnosticWarn" })
+    end
+  end
   if others > 0 then
     vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
       virt_text = { { ("   %d more thread%s on this file, outdated or on the whole file · <leader>mo"):format(others,
@@ -267,6 +300,21 @@ end
 local function render_all()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     render(buf)
+  end
+end
+
+-- Read once they are there: they land a minute or so into a review, and never change for its head.
+local head = range and range:match("%.%.(.+)$")
+local told = head and vim.fn.systemlist({ "git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir", base, head })
+local stops_file = told and ("%s/git-alias-cache/symbols-sentences/%s-%s.stops.json"):format(told[1], told[2], told[3])
+local function load_stops()
+  if not stops and stops_file and vim.fn.filereadable(stops_file) == 1 then
+    stops = vim.json.decode(table.concat(vim.fn.readfile(stops_file), "\n"), { luanil = { object = true } }).stops
+    -- Claude can ask about code the change only reaches, in a file it never touches.
+    for _, s in ipairs(stops) do
+      s.outside = vim.system({ "git", "diff", "--quiet", base, head, "--", s.path }, { cwd = root }):wait().code == 0
+    end
+    render_all()
   end
 end
 
@@ -591,7 +639,10 @@ local function comment(first, last, new)
   end
   local where = first == last and tostring(last) or (first .. "-" .. last)
   local title = ("%s · %s:%s"):format(drafting and "new draft" or "new comment, sent at once", path, where)
-  compose(title, { "" }, nil, drafting and "saves a draft" or "sends", function(text)
+  local asked = vim.iter(side == "new" and stops or {}):find(function(s)
+    return s.path == path and s.noteLine == last and not s.outside
+  end)
+  compose(title, vim.split(asked and asked.comment or "", "\n"), nil, drafting and "saves a draft" or "sends", function(text)
     local refs, problem = comment_refs(buf, path, side, true)
     if not refs then
       notify(problem .. ". Your text is still in the window.", vim.log.levels.WARN)
@@ -946,9 +997,11 @@ vim.api.nvim_create_autocmd({ "BufWinEnter" }, {
     attach(ev.buf)
   end,
 })
+vim.api.nvim_create_autocmd("User", { pattern = "OtisFrameOpen", callback = load_stops })
 for _, buf in ipairs(vim.api.nvim_list_bufs()) do
   attach(buf)
 end
+load_stops()
 
 forge("GET", "user", nil, function(u)
   me = u.username
