@@ -243,16 +243,14 @@ if [ "$mode" = --run ]; then
     # (git-symbols-gloss). Not waited for.
     gf=$(git-symbols-gloss --file "$range" "$table")
     if [ -n "$gf" ]; then jq -r '.order[].id' "$gf" > "$d/order.txt"; else : > "$d/order.txt"; fi
-    # The change by symbol is seam's own markdown (seam --md): every
-    # definition with what happened to it, what it uses and newly uses, and
-    # the gloss and callers seam has kept. With tsgo done, asking seam for the
-    # callers is reading git-callers' cache (share/seam/references/callers).
-    [ "$callers" != /dev/null ] && seam --table "$table" "$range" --callers >/dev/null 2>&1
-    SEAM_KINDS="git-test-files kinds" seam --table "$table" "$range" --md > "$ctx/symbols.md" 2>/dev/null ||
+    # The change by symbol, as markdown (otis-seam md): every definition with
+    # what happened to it, what it uses and newly uses, and the gloss and callers
+    # kept for it.
+    otis-seam md "$range" "$table" > "$ctx/symbols.md" 2>/dev/null ||
       printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"
-    # The shape of it, as s shows the reviewer: the one thing --md leaves out,
+    # The shape of it, as s shows the reviewer: the one thing that leaves out,
     # and the only ground for asking to split the MR or undo a cycle.
-    COLUMNS=100 seam --score --table "$table" "$range" > "$ctx/shape.md" 2>/dev/null &&
+    COLUMNS=100 otis-seam score "$range" "$table" > "$ctx/shape.md" 2>/dev/null &&
       shape_ctx="- seam's score of the change's shape, what makes it hard to read: $ctx/shape.md"
   else
     printf 'seam could not read this change by symbol: read diff.patch.\n' > "$ctx/symbols.md"

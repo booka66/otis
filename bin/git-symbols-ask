@@ -10,7 +10,7 @@
 #                                    what Claude runs to draft a comment from the conversation
 #
 # A conversation with Claude beside the symbol view, one per change, that
-# knows what the view knows: the change by symbol (seam --md), the shape of
+# knows what the view knows: the change by symbol (otis-seam md), the shape of
 # it (seam --score), the callers elsewhere and what the change breaks in
 # them (git-callers), and what the change says of itself: an MR's
 # description, threads and the drafts Claude's review left (git-mr-claude)
@@ -214,9 +214,8 @@ gather() {
   t=$(table "$rev")
   callers=$(git-callers --file "$rev" 2>/dev/null)
   if [ -s "$t" ]; then
-    [ -n "$callers" ] && seam --table "$t" "$rev" --callers >/dev/null 2>&1
-    SEAM_KINDS="git-test-files kinds" seam --table "$t" "$rev" --md > "$ctx/symbols.md" 2>/dev/null || rm -f "$ctx/symbols.md"
-    COLUMNS=100 seam --score --table "$t" "$rev" > "$ctx/shape.md" 2>/dev/null || rm -f "$ctx/shape.md"
+    otis-seam md "$rev" "$t" > "$ctx/symbols.md" 2>/dev/null || rm -f "$ctx/symbols.md"
+    COLUMNS=100 otis-seam score "$rev" "$t" > "$ctx/shape.md" 2>/dev/null || rm -f "$ctx/shape.md"
   fi
   [ -n "$callers" ] && callers_md "$callers" "$d" > "$ctx/callers.md"
   # Claude's review of this MR, if it has had one: its summary and every

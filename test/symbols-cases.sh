@@ -280,9 +280,8 @@ EOF
   expect symbols/up-new-caller "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | grep 'const fresh' | grep -c '⇢')" "1"
   GIT_FZF_STATE=$tmp/symst git-symbols --flip
   expect symbols/down-again "$(GIT_FZF_STATE=$tmp/symst git-symbols --rows "$base..$head" | strip | awk -F'\t' '$11 != "" && $11 != "file" { print $12 }' | head -1)" "lib.ts#run"
-  # Claude's glosses. The asking is seam's (seam --gloss): --run hands it the
-  # table and keeps the answer in the picker's shape. A stand-in for Claude
-  # answers the schema from the ids seam's prompt gave it.
+  # Claude's glosses: --run asks and keeps the answer in the picker's shape. A
+  # stand-in for Claude answers the schema from the ids the prompt gave it.
   gdir=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-gloss
   mkdir -p "$gdir" "$tmp/stub"
   cat > "$tmp/stub/claude" <<'EOF'
@@ -299,10 +298,21 @@ EOF
   expect gloss/run-through-seam "$(jq -r '.spine' "$gdir/$base-$head.json")" "the spine of it"
   expect gloss/run-every-symbol "$(jq -r '.symbols | length' "$gdir/$base-$head.json")" "$(awk -F'\t' '$2 != "file"' "$tmp/symst/symbols.tsv" | wc -l | tr -d ' ')"
   expect gloss/run-shape "$(jq -r --arg id "$firstdef" '(.symbols[] | select(.id == $id) | .does), (.order[0].id == $id), (.edges[0].from == $id)' "$gdir/$base-$head.json" | tr '\n' ' ')" "does 1 true true "
+  # What otis keeps, handed to seam: the markdown, the score and the page all carry the
+  # notes, and git-callers' rows reach them as seam's callers.
+  sdir=$tmp/seam-with && mkdir -p "$sdir"
+  expect seam/md-reads "$(otis-seam md "$base..$head" "$tmp/symst/symbols.tsv" | grep -c '^Read this way, at most')" "1"
+  expect seam/md-has-the-gloss "$(otis-seam md "$base..$head" "$tmp/symst/symbols.tsv" | grep -c '^the spine of it$')" "1"
+  expect seam/md-has-does "$(otis-seam md "$base..$head" "$tmp/symst/symbols.tsv" | grep -c '^does: does 1$')" "1"
+  expect seam/score "$(COLUMNS=100 SEAM_COLOR=0 otis-seam score "$base..$head" "$tmp/symst/symbols.tsv" | grep -c 'stories')" "1"
+  page=$(TMPDIR=$sdir otis-seam page "$base..$head" "$tmp/symst/symbols.tsv" "$firstdef")
+  data() { sed -n '/id="seam-data"/s/.*application\/json">//p' "$page" | sed 's|<\\/|</|g'; }
+  expect seam/page-is-a-page "$(head -1 "$page")" "<!doctype html>"
+  expect seam/page-has-the-gloss "$(data | jq -r .gloss.spine)" "the spine of it"
+  expect seam/page-opens-on-it "$(data | jq -r .at)" "$firstdef"
   rm -f "$gdir/$base-$head.json"
   # A run that fails is kept failed, with Claude's reason: the list, which asks for the gloss every time, does
-  # not start it again (it would say running), and r (--again) does. seam keeps the answer it had too.
-  rm -f "$(git rev-parse --path-format=absolute --git-common-dir)/seam-gloss/$base-$head.json"
+  # not start it again (it would say running), and r (--again) does.
   SEAM_CLAUDE=$tmp/limit/claude git-symbols-gloss --run "$base..$head" "$tmp/symst/symbols.tsv"
   gon() { GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub git-symbols-gloss "$@"; }
   expect gloss/failed "$(SEAM_CLAUDE=$tmp/limit/claude gon "$base..$head" "$tmp/symst/symbols.tsv")" "failed Claude did not gloss this: You have hit your limit · resets 5pm"

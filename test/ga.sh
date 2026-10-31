@@ -15,7 +15,7 @@ TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; zpty -b g "stty rows 40 cols 140
   git diff --cached --name-only > $2.unstaged
   zpty -wn g q; sleep 0.3; zpty -d g 2>/dev/null' - "$root" "$tmp/ga"
 expect ga/rows "$(screen < "$tmp/ga.screen" | grep -c 'FILES, AND WHAT NO SYMBOL CLAIMS')" "1"
-expect ga/space-stages "$(cat "$tmp/ga.staged")" "d.ts"
+expect ga/space-stages "$(cat "$tmp/ga.staged")" "a.ts"
 expect ga/U-unstages "$(cat "$tmp/ga.unstaged")" ""
 # Each key it acted on is a line in the key log (otis-usage), with what ga
 # says it is for; the keys it offers, as it opened.

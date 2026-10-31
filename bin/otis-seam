@@ -1,0 +1,80 @@
+#!/bin/sh
+# otis-seam md <rev> <table>           the change by definition as markdown, for an agent
+# otis-seam score <rev> <table>        seam's score of it, callers it breaks included
+# otis-seam page <rev> <table> [<id>]  seam's page, open on that definition; prints where it wrote it
+#
+# seam reads a change and asks nobody anything. What Claude says about it
+# (git-symbols-gloss) and what tsgo finds outside it (git-callers) are otis's, so
+# this hands seam whatever of them is kept. The page never waits: what is still
+# being found it fills in when it lands, from a file written beside it.
+share=$(cd "$(dirname "$0")/../share" && pwd)
+PATH=$(cd "$(dirname "$0")" && pwd):$PATH
+export SEAM_KINDS="git-test-files kinds"
+
+gloss_json() { # the gloss otis keeps for the picker, as seam's page reads it
+  jq -c '{spine, order,
+    defs: (.symbols | map({key: .id, value: {does, gloss}}) | from_entries),
+    edges: (.edges | map({key: "\(.from)>\(.to)", value: .gloss}) | from_entries)}' "$1"
+}
+callers_json() { # a caller a row: git-callers' columns, as seam's graph carries them
+  awk -F'\t' 'BEGIN { OFS = "\t" } {
+      first = $10; sub(/^[0-9]+: /, "", first)
+      note = $9 > 0 ? first : ($1 == "-" ? "" : $8 " call" ($8 == 1 ? "" : "s"))
+      print $4, $1, note, $3, ($9 > 0 ? 1 : "")
+    }' "$1" |
+    jq -R -s -c 'split("\n") | map(select(length > 0) | split("\t") | {from: .[0], to: .[1], facet: "body",
+      note: (if (.[2] // "") == "" then null else .[2] end), via: "callers",
+      line: ((.[3] // "") | tonumber? // null), breaks: ((.[4] // "") == "1")})'
+}
+
+case $1 in
+  --wait) # --wait gloss|callers <rev> <table> <js>: what a page is waiting for, once it has landed
+    what=$2 rev=$3 table=$4 js=$5
+    case $what in
+      gloss) fn=seamGloss tool=git-symbols-gloss ;;
+      callers) fn=seamCallers tool=git-callers ;;
+    esac
+    waited=0
+    while [ "$("$tool" --state "$rev" "$table")" = running ] && [ "$waited" -lt 1800 ]; do sleep 1; waited=$((waited + 1)); done
+    f=$("$tool" --file "$rev" "$table")
+    if [ -s "$f" ] && answer=$("${what}_json" "$f"); then printf '%s(%s)\n' "$fn" "$answer" > "$js.tmp"
+    else printf '%s(null)\n' "$fn" > "$js.tmp"; fi
+    mv "$js.tmp" "$js"
+    exit 0 ;;
+esac
+
+what=$1 rev=$2 table=$3 id=$4
+[ -n "$rev" ] && [ -s "$table" ] || { echo "usage: otis-seam md|score|page <rev> <table> [<id>]" >&2; exit 2; }
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+
+gf=$(git-symbols-gloss --file "$rev" "$table" 2>/dev/null)
+cf=$(git-callers --file "$rev" "$table" 2>/dev/null)
+g=null c=null
+[ -s "$gf" ] && g=$(gloss_json "$gf")
+[ -s "$cf" ] && c=$(callers_json "$cf")
+
+if [ "$what" = page ]; then
+  name=otis-seam-$(printf '%s' "$rev" | tr -c 'A-Za-z0-9._-' '-')
+  page=${TMPDIR:-/tmp}/$name.html
+  page=$(printf '%s' "$page" | sed 's|//*|/|g')
+  rm -f "${page%.html}.gloss.js" "${page%.html}.callers.js"
+  gfrom= cfrom=
+  # A gloss is started by the list it belongs to, not here, since it spends Claude;
+  # the callers are started here, as they spend only this machine.
+  if [ "$g" = null ] && [ "$(git-symbols-gloss --state "$rev" "$table" 2>/dev/null)" = running ]; then gfrom=$name.gloss.js; fi
+  if [ "$c" = null ] && [ "$(git-callers "$rev" "$table" 2>/dev/null)" = running ]; then cfrom=$name.callers.js; fi
+  [ -z "$gfrom" ] || otis-detach otis-seam --wait gloss "$rev" "$table" "${page%.html}.gloss.js" </dev/null >/dev/null 2>&1 &
+  [ -z "$cfrom" ] || otis-detach otis-seam --wait callers "$rev" "$table" "${page%.html}.callers.js" </dev/null >/dev/null 2>&1 &
+fi
+
+jq -n --argjson g "$g" --argjson c "$c" --arg gfrom "${gfrom:-}" --arg cfrom "${cfrom:-}" '
+  (if $g != null then {gloss: $g} else {} end) + (if $c != null then {callers: $c} else {} end)
+  + (if $gfrom != "" then {glossFrom: $gfrom} else {} end) + (if $cfrom != "" then {callersFrom: $cfrom} else {} end)' > "$tmp/with"
+
+case $what in
+  md) seam --table "$table" "$rev" --json --with "$tmp/with" | jq -r -f "$share/symbols-md.jq" ;;
+  score) seam --table "$table" "$rev" --score --with "$tmp/with" ;;
+  page) seam --table "$table" "$rev" --html --with "$tmp/with" ${id:+--at "$id"} > "$page" && printf '%s\n' "$page" ;;
+  *) echo "usage: otis-seam md|score|page <rev> <table> [<id>]" >&2; exit 2 ;;
+esac

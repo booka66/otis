@@ -371,14 +371,14 @@ pkgof() {
 { cut -f2 "$tmp/refs"; cut -f1 "$tmp/diags"; } | sort -u > "$tmp/files"
 while read -r p; do printf '%s\t%s\n' "$p" "$(pkgof "$p")"; done < "$tmp/files" > "$tmp/pkgs"
 # The same declarations the table is built from, so a reference lands in the
-# same definition seam would have named (seam --rules, seam's share/decls.jq).
-rules=$(seam --rules) seamshare=$(seam --share)
+# same definition seam would have named (seam --rules, share/decls.jq).
+rules=$(seam --rules)
 mkdir "$tmp/tree"
 while read -r p; do
   if [ -n "$head" ] && grep -qxF "$p" "$tmp/touched"; then mkdir -p "$tmp/tree/$(dirname "$p")"; git show "$head:$p" > "$tmp/tree/$p" 2>/dev/null
   elif [ -f "$p" ]; then mkdir -p "$tmp/tree/$(dirname "$p")"; cp "$p" "$tmp/tree/$p"; fi
 done < "$tmp/files"
-(cd "$tmp/tree" && ast-grep scan --json=compact --inline-rules "$rules" . 2>/dev/null) | jq -r --arg side new -f "$seamshare/decls.jq" > "$tmp/decls"
+(cd "$tmp/tree" && ast-grep scan --json=compact --inline-rules "$rules" . 2>/dev/null) | jq -r --arg side new -f "$share/decls.jq" > "$tmp/decls"
 
 # Each reference to the innermost declaration holding it, a member named
 # with its class; none for an import line. Then one row a caller, the

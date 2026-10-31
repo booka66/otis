@@ -3,8 +3,8 @@
 # <base> to the worktree when there is no head, as seam's table (seam's README
 # says its columns), read by dagger rather than by seam. otis.engine dagger
 # (otis-config engine) has git-symbols build its table here, and everything
-# that reads a table (the symbol view, and seam's --score, --split, --md,
-# --gloss and --callers over it) reads this one the same way.
+# that reads a table (the symbol view, seam's --score and --split, and otis-seam
+# over it) reads this one the same way.
 #
 # What dagger decides: which definitions changed, whether a change is to the
 # signature (the compiler's contract, from the language server, where it has
@@ -21,7 +21,7 @@
 base=$1 head=$2
 [ -n "$base" ] || { echo "usage: otis-dagger-table <base> [<head>]" >&2; exit 2; }
 command -v dagger >/dev/null 2>&1 || { echo "dagger is not on your PATH" >&2; exit 2; }
-share=$(seam --share) || exit 1
+share=$(cd "$(dirname "$0")/../share" && pwd)
 cd "$(git rev-parse --show-toplevel)" || exit 1
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT

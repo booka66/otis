@@ -14,11 +14,10 @@
 # header; the two under each ↳ note), which entry point to read first and
 # why (the roots reorder when it lands; the why heads the preview), what each
 # new call (⇢ in the list) does with what it calls, above the preview, and
-# the spine: one sentence on what the change introduces, at the top. The
-# asking is seam's (seam --gloss: the prompt, the schema, Haiku with no tools
-# reading the table and each definition's diff, nothing posted); this is when
-# to ask, where otis keeps the answer, and its shape for the picker. Haiku 4.5
-# unless git config otis.symbolsModel names another; off turns it off.
+# the spine: one sentence on what the change introduces, at the top. Haiku with
+# no tools and an empty directory for a cwd reads seam's graph and each
+# definition's own diff and answers against a schema; nothing is posted. Haiku
+# 4.5 unless git config otis.symbolsModel names another; off turns it off.
 #
 # Lazy: the picker never waits for it. git-symbols starts this on every
 # list of a review's (git-mr-files), and git-mr-prefetch ahead of one: a
@@ -83,17 +82,63 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 echo $$ > "$lock/pid"
 echo $$ > "$running"
-trap 'rm -rf "$running" "$lock" "$file.new"' EXIT
-# seam answers by definition id (defs and edges keyed, the order a list);
-# the picker reads symbols, edges and order as lists, the way this wrote them
-# before seam did the asking.
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=seam.glossModel GIT_CONFIG_VALUE_0=$model \
-  seam --table "$table" "$rev" --gloss 2>>"$dir/$key.err" |
-  jq -e '{symbols: (.defs | to_entries | map({id: .key, does: .value.does, gloss: .value.gloss})),
-          edges: (.edges | to_entries | map((.key | split(">")) as $k | {from: $k[0], to: $k[1], gloss: .value})),
-          order: .order, spine: .spine}' > "$file.new" 2>>"$dir/$key.err" && mv "$file.new" "$file"
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$running" "$lock" "$file.new" "$tmp"' EXIT
+ask() {
+  claude=${SEAM_CLAUDE:-claude}
+  command -v "$claude" >/dev/null 2>&1 || { echo "git-symbols-gloss: glossing wants Claude Code on the PATH" >&2; return 1; }
+  SEAM_KINDS="git-test-files kinds" seam --table "$table" "$rev" --json --diffs > "$tmp/graph.json" || return 1
+  # Each definition goes by sN, which costs the model a few tokens where a path
+  # costs twenty and which it cannot get wrong: the schema makes every id an
+  # enum of them, and the answer is mapped back.
+  {
+    cat <<'PROMPT'
+You are glossing a code change for a reviewer, who reads it one definition at a time. For each definition below, say two things. First, does: in at most ten words, what the definition itself does, as the change leaves it (as it was, for a removed one), as if the change did not matter: its job in the code, never a restatement of its name or signature ("resolves a return's refund amount from its items"). Second, gloss: in at most eight words, what THIS CHANGE does to it: the intent, not the mechanics. Lead with a verb where one fits ("retries on timeout instead of failing", "widens options with a batch size"). One only touched by wiring gets a plain gloss ("passes the new proxy through"); a new one says what the change adds it for, not what does already said. Where a definition says "newly uses", gloss each of those edges too, in at most eight words and lower case: what it now does with the one it uses ("passes the facts into the send result"). Then put the entry points (marked root) in the order a reader should take them, with one short sentence each on why that one comes first. Then the spine: one sentence, for a reviewer who has read nothing yet, on what the change introduces and why. In the id fields, name each definition by its id, the s and number after ##; in the words you write, by its name, never by its id.
+
+PROMPT
+    base=$(jq -r '.base // ""' "$tmp/graph.json") head=$(jq -r '.head // ""' "$tmp/graph.json")
+    if [ -n "$head" ]; then printf 'The commits, newest first:\n'; git log --format='  %s' "$base..$head" 2>/dev/null | head -30
+    else printf 'The change is uncommitted work in the working tree.\n'; fi
+    echo
+    jq -r '
+      (.definitions | to_entries | map({key: .value.id, value: "s\(.key + 1)"}) | from_entries) as $s
+      | (.edges | map(select(.new)) | group_by(.from) | map({key: .[0].from, value: map(.to)}) | from_entries) as $new
+      | .definitions[]
+      | "## \($s[.id]) \(.id)\n\(.change), +\(.added // 0) -\(.removed // 0)\(if .root then ", root" else "" end)\n\(.head // "")"
+        + (($new[.id] // []) | map(select($s[.])) | if length > 0 then "\nnewly uses: " + (map("\($s[.]) \(.)") | join(", ")) else "" end)
+        + "\n" + (((.diff // [])[:40]) | map("    \(.mark)\(.text)") | join("\n")) + "\n"' "$tmp/graph.json"
+  } > "$tmp/prompt"
+  jq -c '[.definitions | keys[] | "s\(. + 1)"] as $ids | {type: "object", additionalProperties: false, required: ["symbols", "edges", "order", "spine"], properties: {
+      symbols: {type: "array", items: {type: "object", additionalProperties: false, required: ["id", "does", "gloss"],
+        properties: {id: {enum: $ids}, does: {type: "string"}, gloss: {type: "string"}}}},
+      edges: {type: "array", items: {type: "object", additionalProperties: false, required: ["from", "to", "gloss"],
+        properties: {from: {enum: $ids}, to: {enum: $ids}, gloss: {type: "string"}}}},
+      order: {type: "array", items: {type: "object", additionalProperties: false, required: ["id", "why"],
+        properties: {id: {enum: $ids}, why: {type: "string"}}}},
+      spine: {type: "string"}}}' "$tmp/graph.json" > "$tmp/schema"
+  mkdir -p "$tmp/empty"
+  # No thinking: the CLI turns it on for Haiku too, and a gloss thought about
+  # takes four times as long and says the same.
+  (cd "$tmp/empty" && MAX_THINKING_TOKENS=0 "$claude" -p --model "$model" --restricted --tools "" --strict-mcp-config \
+    --disable-slash-commands --no-session-persistence --permission-prompts none --output-format json \
+    --json-schema "$(cat "$tmp/schema")" < "$tmp/prompt") > "$tmp/answer" 2> "$tmp/answer.err"
+  # Why not, in Claude's words when it gave some ("You've hit your limit · resets 5pm").
+  jq -e '(.is_error | not) and .structured_output != null' "$tmp/answer" >/dev/null 2>&1 || {
+    why=$(jq -r '.result // empty' "$tmp/answer" 2>/dev/null | grep -m1 .)
+    printf 'git-symbols-gloss: Claude did not gloss this: %s\n' "${why:-$(head -c 300 "$tmp/answer.err" "$tmp/answer" | tr '\n' ' ')}" >&2; return 1; }
+  jq -c --slurpfile g "$tmp/graph.json" '
+    ($g[0].definitions | map(.id)) as $m | def full: $m[.[1:] | tonumber - 1];
+    # An sN that slipped into the words is put back as the name it stands for.
+    def named: gsub("\\bs(?<n>[0-9]+)\\b"; (.n | tonumber) as $k | if $k >= 1 and $k <= ($m | length) then $m[$k - 1] | sub("^[^#]*#"; "") else "s\(.n)" end);
+    .structured_output as $o
+    | {symbols: ($o.symbols | map({id: (.id | full), does: (.does | named), gloss: (.gloss | named)})),
+       edges: ($o.edges | map({from: (.from | full), to: (.to | full), gloss: (.gloss | named)})),
+       order: ($o.order | map({id: (.id | full), why: (.why | named)})),
+       spine: ($o.spine | named)}' "$tmp/answer" > "$file.new" && mv "$file.new" "$file"
+}
+ask 2>>"$dir/$key.err"
 rm -rf "$dir/$key.table"
-# A failure is kept with seam's last word on why ("seam: Claude did not gloss this: You've hit your
+# A failure is kept with the last word on why ("git-symbols-gloss: Claude did not gloss this: You've hit your
 # limit"); a run killed on the way says nothing, and the next list starts it again.
 if [ -s "$file" ]; then rm -f "$dir/$key.err" "$failed"
 else

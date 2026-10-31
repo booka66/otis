@@ -216,16 +216,8 @@ case $mode in
     case $id in *#*) id=${id%%#*}#$(printf '%s' "${id#*#}" | tr + .) ;; *) id= ;; esac
     t=$st/symbols.tsv
     [ -s "$t" ] || t=$(git-symbols --table "$rev") || exec git-fzf-note "seam could not read the change"
-    # seam opens the page itself, with open (xdg-open), which is always the
-    # desktop browser: those do nothing here, and the page it names goes to
-    # otis-open, so it takes this pane where terminal-browser is on, as h does.
-    noop=$(mktemp -d) || exit 1
-    printf '#!/bin/sh\n' > "$noop/open"; cp "$noop/open" "$noop/xdg-open"; chmod +x "$noop/open" "$noop/xdg-open"
-    err=$(PATH=$noop:$PATH seam --table "$t" "$rev" --html ${id:+--at "$id"} 2>&1 >/dev/tty)
-    ok=$?
-    rm -rf "$noop"
-    [ $ok = 0 ] || exec git-fzf-note "$(printf '%s\n' "$err" | grep -m1 . || echo "seam could not write the page")"
-    exec otis-open --fzf "$(printf '%s\n' "$err" | grep '\.html$' | tail -1)" ;;
+    page=$(otis-seam page "$rev" "$t" "$id" 2>&1) || exec git-fzf-note "$(printf '%s\n' "$page" | grep -m1 . || echo "seam could not write the page")"
+    exec otis-open --fzf "$page" ;;
   # P: the cases page, the one G opens, uploaded to the MR and linked first in its description,
   # in place of the link a last P put there.
   --publish)
@@ -363,13 +355,13 @@ case $mode in
 esac
 
 # Reading a -U0 or -U999999 diff, the same reader seam classifies a change
-# with (seam --awk hunks): per file, which new lines came (add), which old
+# with (share/hunks.awk): per file, which new lines came (add), which old
 # lines went (del), where a deletion sits in new numbering (delat) and an
 # insertion in old numbering (addat), and for each old line that went, the new
 # line where the change now sits (at). Keyed by `which` too, for a program
 # reading two diffs. Staging needs it; the table it comes with already has it
-# applied. Asked for there, since seam starting is a fifth of a preview.
-seam_hunks() { seam --awk hunks; }
+# applied.
+seam_hunks() { cat "$share/hunks.awk"; }
 
 # cut.awk (share): the lines of one hunk that fall inside [s, e] on a side,
 # with a header for what is left; awk -f, so it costs no process to read.

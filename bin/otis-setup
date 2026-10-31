@@ -194,8 +194,8 @@ else
   offer_brew neovim "enter in a review opens the diff with every comment inline beside it" \
     "enter opens your editor, and c in the review picker comments. $(install_hint neovim 'see https://github.com/neovim/neovim/releases')" nvim
 fi
-offer_brew ast-grep "s in a review groups the MR by symbol instead of by file" \
-  "only files are listed. $(install_hint ast-grep 'see https://ast-grep.github.io')" ast-grep
+offer_brew ast-grep "the callers tsgo finds are placed in the definition around them" \
+  "callers are listed by file. $(install_hint ast-grep 'see https://ast-grep.github.io')" ast-grep
 seam_install='curl -fsSL https://raw.githubusercontent.com/booka66/seam/main/install.sh | sh'
 offer_run seam "s in a review reads the change the way seam scores and splits it, by symbol" \
   "only files are listed: $seam_install" "$seam_install" seam
