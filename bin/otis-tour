@@ -579,7 +579,7 @@ part_reading() {
   look 4 "${k}⇢${r} before a row: the mention is new in this change. That is rewiring, as against behavior, and worth knowing apart."
   look 5 "The preview is the whole symbol as the change leaves it, real line numbers, changed lines marked. Changed symbols it uses are in yellow; ${k}p${r} adds a dim ↳ line under the changed line that first uses each, saying what it is. ${k}i${r} shows all of those whole instead. ${k}]${r} and ${k}[${r} jump the preview from change to change."
   look 6 "${k}enter${r} opens your editor on the symbol's name, or on the hunk in view once you have scrolled the preview. Quitting comes back."
-  look 7 "No cases and no gloss here. An MR opened from the board with ${k}o${r} adds Claude's reading: the change told as cases, and Haiku's few words on each symbol, with the entry point to read first."
+  look 7 "No gloss here. An MR opened from the board with ${k}o${r} adds Haiku's few words on each symbol, with the entry point to read first, and ${k}r${r} on its cases tab asks Claude to tell the change as cases."
   say "${k}?${r} in the picker lists every key it has."
   demo_reset
   launch gdm

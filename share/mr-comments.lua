@@ -20,6 +20,9 @@
 --   <leader>mb   the file beside its base, in a diff, or on its own again
 --   ]r  [r       the next or previous file in the MR, at its first change
 --
+-- In the review's frame (share/frame.lua) enter and backspace read on and back through the whole change, <leader>mv
+-- marks the row viewed and <leader>ma approves.
+--
 -- Reviewing, new comments and replies are drafts, shown as ✎ until you submit
 -- them, so the MR's people hear once, not once per comment; on your own MR
 -- they are sent at once. The compose window's title says which. Edits,
@@ -997,6 +1000,14 @@ vim.api.nvim_create_autocmd({ "BufWinEnter" }, {
   end,
 })
 vim.api.nvim_create_autocmd("User", { pattern = "OtisFrameOpen", callback = load_stops })
+-- c in the list (otis-frame --comment): the line the code window is on, from anywhere.
+vim.api.nvim_create_autocmd("User", {
+  pattern = "OtisComment",
+  callback = function()
+    local lnum = vim.fn.line(".")
+    comment(lnum, lnum)
+  end,
+})
 for _, buf in ipairs(vim.api.nvim_list_bufs()) do
   attach(buf)
 end

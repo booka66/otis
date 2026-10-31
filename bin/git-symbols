@@ -27,7 +27,7 @@
 #                                            there (git-mr-prefetch, ahead of a review)
 # git-symbols --copy <row id>               y: "<symbol> in <path>" on the clipboard, a file row its path;
 #                                            prints the footer note's fzf actions
-# git-symbols --again <rev>                  a review's r: Claude asked again for the gloss and the cases, where it failed
+# git-symbols --again <rev>                  a review's r: Claude asked again for the gloss, and on the cases tab for its cases
 # git-symbols --deps <side> <start> <end> <row id>
 #                                            in nvim's frame, the row's symbol for the file its open
 #                                            shows (otis-frame's OTIS_FRAME_UNDERLINE): its lines there
@@ -95,9 +95,9 @@
 # re-parse; the worktree's is rebuilt on every reload, since that is what a
 # reload is for.
 #
-# Claude's readings of the change, its gloss (git-symbols-gloss) and its cases
-# (git-sentences), are a review's alone (GMR_IID: the board's o). gl, gdm and
-# ga read the change as seam does: no cases, no gloss.
+# Claude's readings of the change are a review's alone (GMR_IID: the board's o):
+# its gloss (git-symbols-gloss), and its cases (git-sentences), only when r asks
+# on the cases tab. gl, gdm and ga read the change as seam does: no cases, no gloss.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 root=$(cd "$(dirname "$0")/.." && pwd)
 . "$share/palette.sh"
@@ -191,7 +191,7 @@ case $mode in
   # --at) is the note.
   --page)
     # Listed by sentence, the page is that list's: the same sentences, symbols and lines (git-sentences).
-    if [ ! -e "$st/by-symbol" ] && [ ! -e "$st/by-file" ] && read -r sentf 2>/dev/null < "$st/sentences" && [ -s "${sentf%.tsv}.html" ]; then
+    if [ -e "$st/by-case" ] && read -r sentf 2>/dev/null < "$st/sentences" && [ -s "${sentf%.tsv}.html" ]; then
       exec otis-open --fzf "${sentf%.tsv}.html"
     fi
     rev=$1 id=${2%%>callers*}; id=${id##*>}
@@ -238,12 +238,18 @@ case $mode in
     err=$(git-forge api -X PUT "projects/:fullpath/merge_requests/$GMR_IID" -H 'Content-Type: application/json' --input "$st/publish.json" 2>&1 >/dev/null) ||
       exec git-fzf-note "the page is uploaded but the description was not changed: $(printf '%s' "$err" | head -c 200)"
     exec git-fzf-note "linked first in !$GMR_IID's description as Cases Walkthrough" ;;
-  # A gloss or a telling of the cases that failed (Claude at its usage limit, say) stays failed, and says why,
-  # rather than being asked again on every list; r asks again, for the change the last list was of.
+  # A gloss that failed (Claude at its usage limit, say) stays failed, and says why, rather than being asked again on
+  # every list; r asks again, for the change the last list was of. On the cases tab r is the only thing that asks for
+  # the cases, the stops and their red flags: minutes of Opus nobody wanted on most reviews.
   --again)
     read -r key 2>/dev/null < "$st/key"
     OTIS_SYMBOLS_KEY=$key git-symbols-gloss --again "$1" "$st/symbols.tsv" >/dev/null
-    read -r base head 2>/dev/null < "$st/symbols.tsv.rev" && git-sentences --again "$base..$head" >/dev/null 2>&1
+    [ -e "$st/by-case" ] && [ "$(git config --get otis.symbolsModel)" != off ] || exit 0
+    read -r base head 2>/dev/null < "$st/symbols.tsv.rev" || exit 0
+    git-sentences --again "$base..$head" >/dev/null 2>&1
+    told=$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences
+    otis-detach node "$root/share/stops.mjs" "$base" "$head" --cache "$told" --table "$st/symbols.tsv" </dev/null >/dev/null 2>&1 &
+    [ -s "$told/$base-$head.json" ] && { otis-detach node "$root/share/flags.mjs" "$told/$base-$head.json" --now </dev/null >/dev/null 2>&1 & }
     exit 0 ;;
   # Bottom up: the sinks first, each opening to what uses it. A row's place
   # in the tree is its id, so what was open is closed by the flip.
@@ -1395,50 +1401,23 @@ if [ "$mode" = --rows ]; then
   case $rev in worktree) OTIS_CALLERS_KEY=$(cut -f1-7,13 "$table" | git hash-object --stdin) ;; *) OTIS_CALLERS_KEY=$OTIS_SYMBOLS_KEY ;; esac
   [ -n "$GIT_FZF_STATE" ] && printf '%s\n' "$OTIS_SYMBOLS_KEY" > "$st/key" && printf '%s\n' "$OTIS_CALLERS_KEY" > "$st/callers-key"
   export OTIS_SYMBOLS_KEY OTIS_CALLERS_KEY OTIS_CACHE_ROOT
-  # A review by case, once git-sentences has put the change under them: asked for here, once a head, and never where
-  # otis.symbolsModel off keeps Claude out of it; the symbols tab (by-symbol) is the tree. The cases tab lists
-  # only cases, and says so while they are on their way, or why none will come.
+  # The cases tab (by-case) shows what r asked Claude for (--again), and asks for nothing itself: the symbols tab is
+  # where a review opens and what it is read by. Told by an older otis, they show as they are.
   sentf=/dev/null sentwait= casesoff= failed=
   told=$OTIS_CACHE_ROOT/symbols-sentences/${now% *}-${now#* }
   # Where a case's pane, v and the page find a review's cases: written once, since its range never moves. A reload
   # took it away and put it back, and a case's pane drawn in between, coming back to the cases tab, stayed blank.
   [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/sentences" ] && printf '%s\n' "$told.tsv" > "$st/sentences"
-  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
-    sentf=$told.tsv
-    if [ ! -s "$sentf" ] || [ "$root/share/sentences.mjs" -nt "$sentf" ]; then
-      # Told by an older otis: shown as it is while it is told again behind it, never a wait in place of the
-      # cases you had. The screen reloads when the new ones land.
-      [ -s "$sentf" ] || sentf=/dev/null
-      asked=$st/sentences-asked.${now#* }
-      if [ ! -e "$asked" ]; then
-        : > "$asked"
-        [ "$(git config --get otis.symbolsModel)" = off ] ||
-          { git-sentences --warm "${now% *}..${now#* }" >/dev/null 2>&1; echo asked > "$asked"; }
-      fi
-      [ -s "$asked" ] && sentwait=1 || casesoff=1
-      # A telling that failed, and why (git-sentences), in place of the wait.
-      if [ -n "$sentwait" ] && read -r failed 2>/dev/null < "$told.failed"; then
-        sentwait=
-      fi
-    fi
-  fi
-  # The places a person has to decide (share/stops.mjs), asked for once a screen, on their way as soon as the review
-  # opens: they need no cases, and land long before them.
-  stopf=/dev/null
-  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ ! -e "$st/by-symbol" ]; then
+  stopf=/dev/null flagf=/dev/null
+  if [ -n "$GMR_IID" ] && [ -n "$GIT_FZF_STATE" ] && [ -e "$st/by-case" ]; then
+    [ -s "$told.tsv" ] && sentf=$told.tsv
     [ -s "$told.stops.tsv" ] && stopf=$told.stops.tsv
-    if [ ! -e "$st/stops-asked.${now#* }" ]; then
-      : > "$st/stops-asked.${now#* }"
-      [ "$(git config --get otis.symbolsModel)" = off ] ||
-        { otis-detach node "$root/share/stops.mjs" "${now% *}" "${now#* }" --cache "${told%/*}" --table "$table" </dev/null >/dev/null 2>&1 & }
+    [ -s "$told.flags.tsv" ] && flagf=$told.flags.tsv
+    if [ "$sentf" = /dev/null ]; then
+      if [ "$(git config --get otis.symbolsModel)" = off ]; then casesoff=1
+      elif read -r was 2>/dev/null < "$told.running" && kill -0 "$was" 2>/dev/null; then sentwait=1
+      else read -r failed 2>/dev/null < "$told.failed"; fi
     fi
-  fi
-  # Its design red flags (share/flags.mjs), found behind the screen once its cases are told, a case's on its row
-  # and in its pane when they land; flags.mjs leaves at once when they are found already. flagf is the list's.
-  flagf=/dev/null
-  if [ "$sentf" != /dev/null ]; then
-    [ -s "${sentf%.tsv}.flags.tsv" ] && flagf=${sentf%.tsv}.flags.tsv
-    [ -s "${sentf%.tsv}.json" ] && { otis-detach node "$root/share/flags.mjs" "${sentf%.tsv}.json" --now </dev/null >/dev/null 2>&1 & }
   fi
   # A review's glosses from Claude, once they have landed (git-symbols-gloss),
   # started here. The cache is looked for here, a file test, and the script
@@ -1610,7 +1589,7 @@ if [ "$mode" = --rows ]; then
   # ref (a ↑ row) the id of the row its symbol is drawn whole at.
   # The widths it cut them to go in the state (layout), and how much of the
   # change is viewed (progress), for the bar over the list.
-  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
+  FIXED=$fixed LC_ALL=C awk -F'\t' -v header="$header" -v cols="$cols" -v counts="$counts" -v wt="$([ -z "$head" ] && echo 1)" -v all="$OPEN_ALL" -v openfile="$st/open" -v tabs="$([ -n "$GMR_IID" ] && [ -e "$st/by-case" ] && echo 1)" -v sentwait="$sentwait" -v casesoff="$casesoff" -v failed="$failed" -v mr="$([ -n "$GMR_IID" ] && echo 1)" -v up="$([ -e "$st/up" ] && echo 1)" -v spine="$spine" \
     -v draw="$OTIS_SYMBOLS_WIDTH" -v layout="$said/layout" -v progress="$said/progress" "${OTIS_ROWFMT:-$(cat "$share/rowfmt.awk")}"'
     FILENAME == ARGV[2] { order[++norder] = $1; next }
     FILENAME == ARGV[3] { nmarks++; mp[nmarks] = $1; mside[nmarks] = $2; mline[nmarks] = $3 + 0; mkind[nmarks] = $4; next }
@@ -1729,9 +1708,10 @@ if [ "$mode" = --rows ]; then
       if (tabs) {
         heading("cases", "gk-cases-heading")
         tw = (draw ? draw : gk_list_width(cols)) - 6; if (tw < 20) tw = 20
-        if (failed != "") { flow(failed, "", tw, "", 0, GK_BAD, ""); flow("r asks Claude again · tab shows its files", "", tw, "", 0, GK_CONTEXT, "") }
-        else if (casesoff) { flow("cases need Claude, and git config otis.symbolsModel is off", "", tw, "", 0, GK_CONTEXT, ""); flow("tab shows its files", "", tw, "", 0, GK_CONTEXT, "") }
-        else { flow("Claude is following it case by case, a minute or two the first time", "", tw, "", 0, GK_ATTENTION, ""); flow("tab shows its files meanwhile", "", tw, "", 0, GK_CONTEXT, "") }
+        if (failed != "") { flow(failed, "", tw, "", 0, GK_BAD, ""); flow("r asks Claude again · tab shows its symbols", "", tw, "", 0, GK_CONTEXT, "") }
+        else if (casesoff) { flow("cases need Claude, and git config otis.symbolsModel is off", "", tw, "", 0, GK_CONTEXT, ""); flow("tab shows its symbols", "", tw, "", 0, GK_CONTEXT, "") }
+        else if (sentwait) { flow("Claude is following it case by case, a minute or two the first time", "", tw, "", 0, GK_ATTENTION, ""); flow("tab shows its symbols meanwhile", "", tw, "", 0, GK_CONTEXT, "") }
+        else { flow("r asks Claude to follow it case by case, a minute or two", "", tw, "", 0, GK_ATTENTION, ""); flow("tab shows its symbols", "", tw, "", 0, GK_CONTEXT, "") }
         print syms + 0, length(files), 0 > counts; exit
       }
       if (spine != "") {
@@ -2110,7 +2090,7 @@ if [ "$mode" = --rows ]; then
     # The cases tab says a failed telling in place of its cases; over cases an older otis told, here.
     [ -n "$failed" ] && [ "$sentf" != /dev/null ] && note="$note · $(printf "${GK_BAD}%s${GK_R}" "$failed")"
     # Its stops (share/stops.mjs, started above): being picked, then how much of the change only moved.
-    if [ -n "$GMR_IID" ] && [ ! -e "$st/by-symbol" ]; then
+    if [ -n "$GMR_IID" ] && [ -e "$st/by-case" ]; then
       if read -r spid 2>/dev/null < "$told.stops.running" && kill -0 "$spid" 2>/dev/null; then
         note="$note · $(printf "${GK_ATTENTION}Claude is finding what to decide${GK_R}")"
       elif [ -s "$told.stops.tsv" ]; then

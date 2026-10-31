@@ -1,0 +1,64 @@
+#!/bin/sh
+# git-mr-overview <iid> <base..head> <table>: a review's first row, what the change is from what its author wrote and
+# what seam reads, the same every time and with nobody asked: the MR's title and description, what other code can see
+# change (its exported symbols), what only moved, and how many lines are new, tests and generated.
+iid=$1 rev=$2 table=$3
+share=$(cd "$(dirname "$0")/../share" && pwd)
+. "$share/palette.sh"
+w=${FZF_PREVIEW_COLUMNS:-100}; w=$((w - 4))
+mr=$(git-cached-json "mr-$iid" 60 true -- git-forge api "projects/:fullpath/merge_requests/$iid" 2>/dev/null)
+title= by= words=
+if [ -s "$mr" ]; then
+  title=$(jq -r '.title // ""' "$mr") by=$(jq -r '.author.name // .author.username // ""' "$mr") words=$(jq -r '.description // ""' "$mr")
+fi
+# GitLab out of reach, or the MR says nothing: what its commits say.
+[ -n "$title" ] || title=$(git log -1 --format=%s "${rev#*..}")
+[ -n "$words" ] || words=$(git log --reverse --format='%s' "$rev" | sed '$d')
+wrap() { awk -v w="$w" 'function out(s) { print "  " s } { n = split($0, a, " "); ind = match($0, /[^ ]/) - 1; p = sprintf("%" (ind > 0 ? ind : "") "s", ""); if (ind <= 0) p = ""; l = p; if (!n) { print ""; next }
+    for (i = 1; i <= n; i++) { if (length(l) + length(a[i]) + 1 > w && l != p) { out(l); l = p } l = l (l == p ? "" : " ") a[i] } out(l) }'; }
+printf "${GK_TEXT}\n"
+printf '%s\n' "!$iid $title" | wrap
+printf "${GK_R}"
+[ -n "$by" ] && printf "  ${GK_CONTEXT}by %s${GK_R}\n" "$by"
+[ -n "$words" ] && { echo; printf '%s\n' "$words" | wrap; }
+
+json=$(seam --table "$table" "$rev" --json 2>/dev/null) || exit 0
+base=${rev%%..*} head=${rev#*..}
+moved=$(node "$share/leftover.mjs" "$base" "$head" 2>/dev/null)
+section() { printf "\n  ${GK_ATTENTION}%s${GK_R}\n" "$1"; }
+
+# A name added in one place and removed in another moved; nothing about it changed for what uses it.
+surface=$(printf '%s' "$json" | jq -r '.definitions as $d
+  | ($d | map(select(.change == "removed") | .name) | map({key: ., value: 1}) | from_entries) as $gone
+  | ($d | map(select(.change == "added") | .name) | map({key: ., value: 1}) | from_entries) as $came
+  | ($d | sort_by(.change != "removed"))[] | select(.exported)
+  | (if (.change == "added" and $gone[.name]) or (.change == "removed" and $came[.name]) then "moved"
+     else .change end) as $was
+  | select($was != "body")
+  | [$was, (if .class then "\(.class).\(.name)" else .name end), "\(.path | split("/") | last):\(.start)"] | @tsv')
+if [ -n "$surface" ]; then
+  section "what other code can see"
+  printf '%s\n' "$surface" | awk -F'\t' -v w="$w" -v good="$GK_GOOD" -v att="$GK_ATTENTION" -v gone="$GK_REMOVED" -v dim="$GK_CONTEXT" -v r="$GK_R" '
+    BEGIN { label["signature"] = "~ signature"; label["added"] = "+ new"; label["removed"] = "- removed"; label["moved"] = "  moved"
+      c["signature"] = att; c["added"] = good; c["removed"] = gone; c["moved"] = dim; order[1] = "signature"; order[2] = "removed"; order[3] = "added"; order[4] = "moved" }
+    { n[$1]++; name[$1, n[$1]] = $2; at[$1, n[$1]] = $3 }
+    END { for (o = 1; o <= 4; o++) { k = order[o]
+        for (i = 1; i <= n[k]; i++) {
+          if (k == "moved") { if (name[k, i] == name[k, i + 1]) { at[k, i + 1] = at[k, i] " \342\206\222 " at[k, i + 1]; continue } }
+          printf "  %s%-11s%s %s  %s%s%s\n", c[k], label[k], r, name[k, i], dim, at[k, i], r } } }'
+fi
+
+section "how much of it there is"
+# Each path's lines under what git-test-files says it is, so these agree with the list's headings.
+stat=$(git -c core.quotePath=false diff --numstat --no-renames "$base" "$head")
+st=$(mktemp) && printf '%s\n' "$stat" > "$st"
+printf '%s\n' "$stat" | cut -f3 | git-test-files kinds | awk -F'\t' -v moved="$(printf '%s\n' "$moved" | grep -c '^new')" -v good="$GK_GOOD" -v dim="$GK_CONTEXT" -v r="$GK_R" '
+  FILENAME != "-" { add[$3] = $1; next }
+  { if ($2 == "test") { t += add[$1]; nt++ } else if ($2 == "generated" || $2 == "config") { g += add[$1]; ng++ } else { a += add[$1]; n++ } }
+  END { printf "  %s+%d%s of code in %d file%s", good, a - moved, r, n, (n == 1 ? "" : "s")
+    if (moved) printf ", and %d lines that only moved", moved
+    printf "\n"
+    if (nt) printf "  %s+%d of tests in %d file%s%s\n", dim, t, nt, (nt == 1 ? "" : "s"), r
+    if (ng) printf "  %s+%d generated or config in %d file%s%s\n", dim, g, ng, (ng == 1 ? "" : "s"), r }' "$st" -
+rm -f "$st"
+printf "\n  ${GK_CONTEXT}] reads on from here, every change in the order of the list${GK_R}\n"

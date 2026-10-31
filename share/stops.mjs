@@ -12,6 +12,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { changes, sift } from "./leftover.mjs";
 
 const [base, head, ...rest] = process.argv.slice(2);
 const opt = (name) => { const at = rest.indexOf(name); return at < 0 ? "" : rest[at + 1]; };
@@ -31,46 +32,10 @@ if (alive(at("running"))) process.exit(0);
 writeFileSync(at("running"), String(process.pid));
 process.on("exit", () => { try { unlinkSync(at("running")); } catch { /* gone */ } });
 
-// What nobody reads line by line: generated files, translations, lockfiles and build lists.
-const SKIP = /(^|\/)i18n\/catalogs\/|BUILD\.bazel$|lock(\.\w+)?$|\.snap$|(^|\/)package\.json$|(^|\/)tsconfig[^/]*\.json$/;
-const IDENT = /[A-Za-z_$][A-Za-z0-9_$]*/g;
-
-// Every added line with where it is, every removed line's text: renames off, so a move shows as a delete and an add.
-function changes() {
-  const added = [], removed = [];
-  let path = null, n = 0;
-  for (const line of git("diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", base, head).split("\n")) {
-    if (line.startsWith("+++ ")) path = line.slice(6);
-    else if (line.startsWith("--- ") || line.startsWith("diff ")) continue;
-    else if (line.startsWith("@@")) n = Number(/\+(\d+)/.exec(line)[1]);
-    else if (path && !SKIP.test(path) && line.slice(1).trim()) {
-      if (line[0] === "+") added.push({ path, n, text: line.slice(1).trim() });
-      else if (line[0] === "-") removed.push(line.slice(1).trim());
-    }
-    if (line[0] === "+" && !line.startsWith("+++ ")) n++;
-  }
-  return { added, removed };
-}
-const tally = (texts) => { const seen = new Map(); for (const text of texts) seen.set(text, (seen.get(text) ?? 0) + 1); return seen; };
-const take = (pool, key) => { const left = pool.get(key) ?? 0; if (left) pool.set(key, left - 1); return left > 0; };
-const wordsOf = (texts) => new Set(texts.flatMap((text) => text.match(IDENT) ?? []));
-
-// The added lines left once those moved (the same text removed elsewhere) and those renamed (the same once the words
-// found on one side alone are blanked) are taken out.
-function leftover({ added, removed }) {
-  const pool = tally(removed);
-  const unmoved = added.filter((one) => !take(pool, one.text));
-  const gone = [...pool].flatMap(([text, count]) => Array(count).fill(text));
-  const newWords = wordsOf(unmoved.map((one) => one.text)), oldWords = wordsOf(gone);
-  const blank = (text, keep) => text.replace(IDENT, (word) => (keep.has(word) ? word : "_"));
-  const renamed = tally(gone.map((text) => blank(text, newWords)));
-  return unmoved.filter((one) => !take(renamed, blank(one.text, oldWords)));
-}
-
 // The table is the screen's, and gone if you leave before Claude answers.
 const table = (() => { try { return readFileSync(opt("--table"), "utf8").split("\n").map((row) => row.split("\t")); } catch { return []; } })();
-const change = changes();
-const fresh = leftover(change);
+const change = changes(base, head);
+const { fresh } = sift(change);
 const isNew = new Set(fresh.map((one) => `${one.path}\t${one.n}`));
 // Told before a stop's row said where it opens: what Claude said stands, and only the rows change.
 if (kept.version === 2) { publish(kept); process.exit(0); }

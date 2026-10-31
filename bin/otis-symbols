@@ -202,7 +202,7 @@ load() {
 typeset -A rview vat vtop vofs
 viewnow() {
   if [[ -e $st/by-file ]]; then REPLY=files
-  elif [[ -n $GMR_IID && ! -e $st/by-symbol ]]; then REPLY=cases
+  elif [[ -e $st/by-case ]]; then REPLY=cases
   else REPLY=symbols; fi
 }
 viewnow; view=$REPLY
@@ -470,11 +470,11 @@ headline() {
   if [[ $t == !* ]]; then put "$A" "${t%% *}"; put "" "  "; t=${${t#${t%% *}}# }; fi
   [[ $view == files ]] && t="by file"
   if [[ -n $GMR_IID ]]; then
-    # A review's three tabs, the change's cases, its symbols and its files: the one shown lit, tab for the next.
+    # A review's three tabs, the change's symbols, its files and its cases: the one shown lit, tab for the next.
     local tb
-    for tb in cases symbols files; do
+    for tb in symbols files cases; do
       [[ $tb == $view ]] && { put "$B$T" "$tb"; line+=$UB; } || put "$C" "$tb"
-      [[ $tb != files ]] && put "" "  "
+      [[ $tb != cases ]] && put "" "  "
     done
     # What tab does, beside them where it fits, else on the line under them.
     hint="tab next · shift-tab back"
@@ -592,15 +592,19 @@ settle_cur() {
 }
 # unviewed <1|-1>: the next or the previous symbol not yet viewed, from the
 # cursor; none left, the footer says so.
-unviewed() {
+# walk <1|-1>: the next row of the change there is to read, in the order the list has them, or the one before. On, it
+# passes what you marked viewed; back, it does not, since going back is to read again. ] comes here past a row's last
+# change, so one key reads the whole change. A ↑ row is drawn whole elsewhere; callers are not in the change.
+walk() {
   local at=${vis[(Ie)$cur]} i n
   (( $#vis )) || return
-  for (( n = 1; n < $#vis; n++ )); do
-    (( i = ((at - 1 + $1 * n) % $#vis + $#vis) % $#vis + 1 ))
-    i=$vis[i]
-    [[ $typ[i] == sym && $vwd[i] != all ]] && { go $i; return; }
+  for (( n = at + $1; n >= 1 && n <= $#vis; n += $1 )); do
+    i=$vis[n]
+    [[ $typ[i] == (sym|file|sent|plain) ]] || continue
+    (( $1 > 0 )) && [[ $vwd[i] == all ]] && continue
+    go $i; return
   done
-  flash="every symbol is viewed"
+  if (( $1 > 0 )); then flash="that is all of it"; else flash="this is the first of it"; fi
 }
 step() {
   local at=${vis[(Ie)$cur]}
@@ -999,6 +1003,34 @@ framepush() {
   { unlisten; zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
   fpid=$!
   print -r -- "$EPOCHREALTIME frame $what" >> $trace
+}
+# follow: you moved in the code (frame.lua leaves where in $OTIS_NVIM_FRAME/at), so the list moves to the row you
+# are in: the narrowest symbol there that it shows, else the file's row. The row's open then runs to underline what
+# it uses and keep ] in it, with the cursor left alone (OTIS_FRAME_STAY).
+fat=
+follow() {
+  (( framed )) && [[ -s $OTIS_NVIM_FRAME/at ]] || return 1
+  local a=$(<$OTIS_NVIM_FRAME/at) i best=0 fr=0
+  [[ $a == $fat ]] && return 1
+  fat=$a
+  local p=${a%%$'\t'*} l=${a##*$'\t'}
+  integer w bw=0
+  for i in $vis; do
+    [[ $typ[i] == (sym|file) ]] || continue
+    fields $i
+    [[ $fld[2] == $p ]] || continue
+    [[ $typ[i] == file ]] && { fr=$i; continue }
+    [[ $fld[4] == new && $fld[5] == <-> && $fld[6] == <-> ]] && (( fld[5] <= l && l <= fld[6] )) || continue
+    (( w = fld[6] - fld[5] ))
+    (( ! best || w < bw )) && { best=$i bw=$w }
+  done
+  (( best )) || best=$fr
+  (( best && best != cur )) || return 1
+  go $best
+  fshown="row $rid[best]"
+  subst "$show" $best
+  local cmd=$REPLY
+  { unlisten; OTIS_FRAME_STAY=1 zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
 }
 draw() {
   local t0=$EPOCHREALTIME
@@ -1928,7 +1960,7 @@ box_tick() {
 
 # What this screen's own keys are for, as the key log says it (keys_used);
 # the keys a caller offers say so themselves.
-typeset -A own=(']' 'next change' '[' 'previous change' . 'next one not viewed' , 'previous one not viewed'
+typeset -A own=(']' 'read on' '[' 'read back' . 'next row not viewed' , 'the row before'
   / 'search the rows' '?' 'these keys' ctrl-a "Claude's panel")
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
@@ -2086,10 +2118,10 @@ handle() {
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
     ctrl-e) scroll 1 ;;
     ctrl-y) scroll -1 ;;
-    ']') hunk 1 ;;
-    '[') hunk -1 ;;
-    '.') unviewed 1 ;;
-    ',') unviewed -1 ;;
+    ']') hunk 1 || walk 1 ;;
+    '[') hunk -1 || walk -1 ;;
+    '.') walk 1 ;;
+    ',') walk -1 ;;
     ctrl-c) quit 130 ;;
   esac
 }
@@ -2205,6 +2237,7 @@ while :; do
     if (( hold )); then
       if holding; then changed=0; else hold=0 changed=1; fi
     fi
+    follow && changed=1
     (( changed )) && draw
     (( ! help && ! settle )) && want
     framepush

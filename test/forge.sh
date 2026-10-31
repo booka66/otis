@@ -201,4 +201,5 @@ expect forge/board-first-is-local "$(PATH=$ghp GIT_FZF_STATE=$gst otis-board | a
 for _ in $(seq 1 40); do [ -s "$(git rev-parse --git-common-dir)/git-alias-cache/ci-mine.json" ] && break; sleep 0.25; done
 expect forge/board-row "$(PATH=$ghp GIT_FZF_STATE=$gst otis-list > "$gst/rows"; PATH=$ghp GIT_FZF_STATE=$gst otis-board | awk -F'\t' '$18 == "mine" { print $9, $12 }')" "5 feat"
 cd "$here"
-
+# The prefetch reads ahead with seam and never asks Claude for a review's cases: those wait for r on their tab.
+expect prefetch/no-cases "$(grep -c 'git-sentences\|sentences.mjs\|stops.mjs' "$root/bin/git-mr-prefetch")" "0"

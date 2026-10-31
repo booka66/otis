@@ -3,7 +3,7 @@
 # The picker over an MR's diff, run from the worktree nvim should open files
 # in: gmr's review worktree for an MR you review (git-mr-review), your
 # branch's own checkout for one of yours (git-mr-mine). It lists the change
-# by case (git-symbols, from git-sentences), tab by symbol and by file,
+# by symbol (git-symbols, from seam), tab by file and by Claude's cases (r asks for those),
 # each with the open threads and drafts on its lines. Either
 # way the preview and nvim show the MR's
 # comment threads under their lines (git-mr-file-preview, share/mr-comments.lua),
@@ -17,8 +17,8 @@
 # the path second and the row's identity last, so every key here works on
 # either: a file row has its state third, which enter takes for no line.
 #
-# --list <iid> <range>: the rows, by case, by symbol or by file (the by-symbol
-# and by-file flags in the picker's state). --toggle [back]: tab, the next of the three; shift-tab, the one before. --preview: the preview
+# --list <iid> <range>: the rows, by symbol, by file or by case (the by-file
+# and by-case flags in the picker's state). --toggle [back]: tab, the next of the three; shift-tab, the one before. --preview: the preview
 # for either kind of row.
 #
 # c comments without nvim: the file (or the symbol's file) as a list of its
@@ -33,14 +33,14 @@
 # reopens there.
 #
 st=${GIT_FZF_STATE:-${TMPDIR:-/tmp}}
-# tab [back]: the cases, then the symbols, then the files, then the cases again; back, the other way. A flag
-# each for the two after the cases (by-symbol, by-file), which the lists read, and otis-symbols for which view a
-# list is (viewnow).
+# tab [back]: the symbols, then the files, then the cases, then the symbols again; back, the other way. A flag each
+# for the two after the symbols (by-file, by-case), which the lists read, and otis-symbols for which view a list is
+# (viewnow).
 if [ "$1" = --toggle ]; then
-  on=cases; [ -e "$st/by-symbol" ] && on=symbols; [ -e "$st/by-file" ] && on=files
-  case $on:$2 in cases:) to=symbols ;; symbols:) to=files ;; files:) to=cases ;; cases:back) to=files ;; files:back) to=symbols ;; symbols:back) to=cases ;; esac
-  rm -f "$st/by-symbol" "$st/by-file"
-  case $to in symbols) : > "$st/by-symbol" ;; files) : > "$st/by-file" ;; esac
+  on=symbols; [ -e "$st/by-file" ] && on=files; [ -e "$st/by-case" ] && on=cases
+  case $on:$2 in symbols:) to=files ;; files:) to=cases ;; cases:) to=symbols ;; symbols:back) to=cases ;; cases:back) to=files ;; files:back) to=symbols ;; esac
+  rm -f "$st/by-file" "$st/by-case"
+  case $to in files) : > "$st/by-file" ;; cases) : > "$st/by-case" ;; esac
   exit 0
 fi
 if [ "$1" = --list ]; then
@@ -48,6 +48,12 @@ if [ "$1" = --list ]; then
   if [ -e "$st/by-file" ] || [ -e "$st/since" ]; then
     git-mr-file-preview --files "$iid" "$range" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; if ($2 != "") $13 = "plain"; print }'
     exit 0
+  fi
+  # A review's tree opens open: the rows are the map of the change, and l and h were a third of the keys pressed in one.
+  # Over it, what the change is (git-mr-overview).
+  if [ ! -e "$st/by-case" ]; then
+    [ -e "$st/opened" ] || { : > "$st/opened"; export OPEN_ALL=1; }
+    printf 'The change\t\t\t\t\t\t\t\t\t\t\tchange:\n'
   fi
   # By symbol: the open threads and drafts on each symbol'"'"'s lines, then the
   # rows, then the MR'"'"'s footer note after the view'"'"'s own.
@@ -95,6 +101,7 @@ if [ "$1" = --light ]; then
 fi
 if [ "$1" = --preview ]; then
   iid=$2 range=$3 path=$4 side=$5 s=$6 e=$7 rid=$8 kind=$9
+  [ "$rid" = change: ] && exec git-mr-overview "$iid" "$range" "$st/symbols.tsv"
   # A file row of the by-file list (plain) is the file's whole diff. In the
   # symbol view git-symbols cuts it to what no symbol claims, and a file it
   # read no symbols from comes back whole from there too.
@@ -132,9 +139,9 @@ open="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\" git-c
 
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
-opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='open in nvim'
-first="tab=cases / symbols / files,shift-tab=the tab before,enter=$opens,c=comment on its lines,v=viewed,S=submit drafts,a=ask Claude about it"
-rest='l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude again,u=refresh'
+opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='code'
+first="]=read,c=comment,v=viewed"
+rest='[=read back,shift-tab=the tab before,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude: its cases there,u=refresh'
 set --
 if [ "$kind" = review ]; then
   first="$first,A=approve"
@@ -143,7 +150,7 @@ if [ "$kind" = review ]; then
 else
   set -- --bind "u:$refresh+refresh-preview"
 fi
-keys="$first,|,$rest"
+keys="$first,enter=$opens,S=submit drafts,tab=symbols / files / cases,a=ask Claude about it,|,$rest"
 # Drawn by hand (otis-symbols), by symbol or by file, inside nvim with the
 # MR's comments loaded, so what enter opens shows beside the list with its
 # threads under their lines (otis-frame).
@@ -170,7 +177,7 @@ out=$(otis-frame -S "$(cd "$(dirname "$0")/../share" && pwd)/mr-comments.lua" ot
   --bind "P:transform(git-symbols --publish)" \
   --bind "S:execute(git-mr-submit $iid $range $kind)+$refresh+refresh-preview" \
   --bind "a:execute(git-symbols-ask $range {2} {4} {5} {6} {12})+$refresh+refresh-preview" \
-  --bind "c:execute(git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))+$refresh" \
+  --bind "c:transform(otis-frame --comment {2} -- git-mr-lines $iid $range {2} \$(git-symbols --at $range {2} {4} {5} {6} {12} {3}))" \
   --bind "m:execute(gl $range)" \
   --bind "r:execute-silent(git-symbols --again $range)+reload($list)" \
   --bind "w:transform(otis-open --fzf '$url')" \

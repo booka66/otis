@@ -20,7 +20,9 @@
 #                                                     (otis-edit), read only;
 #                                                     OTIS_FRAME_UNDERLINE,
 #                                                     the row's symbol there
-#                                                     (git-symbols --deps)
+#                                                     (git-symbols --deps);
+#                                                     OTIS_FRAME_STAY, the cursor
+#                                                     stays where it is
 # otis-frame --text <file> [<key>]                    a preview on the right,
 #                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right
@@ -29,6 +31,9 @@
 # otis-frame --key <ctrl-d|ctrl-u|ctrl-e|ctrl-y|]|[>  a key of the picker's
 #                                                     pane, pressed in the
 #                                                     list, done in the code
+# otis-frame --comment <path> -- <command...>         c's action, for a picker's
+#   transform: in a frame, a comment in the code on the line you are on (OtisComment,
+#   mr-comments.lua); on a row with no file, or outside a frame, the command.
 # Each does nothing outside a frame, and the keys stay with the list.
 # otis-frame --enter <path> -- <open command...>      enter's action, for a
 #   picker's transform: in a frame, the open beside the list and then into
@@ -42,11 +47,18 @@ remote() {
   exec nvim --server "$NVIM" --remote-expr "luaeval('dofile(_A[1]).$1', [$(vs "$share/frame.lua")$2])" >/dev/null
 }
 case $1 in
-  --open) remote "open(_A[2], _A[3], _A[4], _A[5], _A[6])" ", $(vs "$2"), $3, $4, v:$5, $(vs "$OTIS_FRAME_UNDERLINE")" ;;
+  --open) remote "open(_A[2], _A[3], _A[4], _A[5], _A[6], _A[7])" ", $(vs "$2"), $3, $4, v:$5, $(vs "$OTIS_FRAME_UNDERLINE"), v:$([ -n "$OTIS_FRAME_STAY" ] && echo true || echo false)" ;;
   --text) remote "text(_A[2], _A[3])" ", $(vs "$2")${3+, $(vs "$3")}" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;
   --key) remote "key(_A[2])" ", $(vs "$2")" ;;
+  --comment-here) remote "comment()" ;;
+  --comment)
+    p=$2; shift 3
+    w=; for a; do w="$w '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done
+    if [ -n "$OTIS_NVIM_FRAME" ] && [ -n "$p" ]; then echo 'execute-silent(otis-frame --comment-here)'
+    else printf 'execute(%s)\n' "${w# }"; fi
+    exit 0 ;;
   --enter)
     p=$2; shift 3
     w=; for a; do w="$w '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done

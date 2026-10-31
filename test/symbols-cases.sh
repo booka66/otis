@@ -10,14 +10,12 @@ if command -v ast-grep >/dev/null 2>&1 && command -v seam >/dev/null 2>&1; then
   # By sentence (git-sentences): with no model a sentence is a commit's subject, and the change is under it.
   git config otis.sentencesModel off
   git-sentences "$base..$head" >/dev/null 2>&1
-  mkdir -p "$tmp/sentst"
+  mkdir -p "$tmp/sentst"; : > "$tmp/sentst/by-case"
   srows() { GMR_IID=7 GIT_FZF_STATE=$tmp/sentst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
   expect sentences/first-row "$(srows | awk -F'\t' '$13 == "sent" { print $12 ":" $13 ":" $15 ":" $25 }')" "sentence:1:sent:closed:Head"
-  # Told by an older otis, the cases still show while they are told again (otis.symbolsModel off here, so
-  # nothing is told again behind the tests that follow).
+  # Told by an older otis, the cases still show, and nothing tells them again but r.
   for f in "$(git rev-parse --path-format=absolute --git-common-dir)"/git-alias-cache/symbols-sentences/*.tsv; do touch -t 200001010000 "$f"; done
   expect sentences/stale-shown "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off srows | awk -F'\t' '$13 == "sent" { print $12 }')" "sentence:1"
-  rm -f "$tmp/sentst/sentences-asked."*
   git-sentences "$base..$head" >/dev/null 2>&1
   # The whole change in a sentence or two, when the cases came with one, heads the list.
   for f in "$(git rev-parse --path-format=absolute --git-common-dir)"/git-alias-cache/symbols-sentences/*.tsv; do { printf 'M\tThe whole change, said once.\n'; cat "$f"; } > "$f.new" && mv -f "$f.new" "$f"; done
@@ -113,7 +111,7 @@ EOF
   rm -rf "$tmp/routes"
   # Stops: what a person has to decide, asked of Claude with moved lines left out, shown over the cases. A stop on a
   # line that is not there is dropped, and one on a single line comes with the lines around it.
-  mkdir -p "$tmp/stops" "$tmp/stopst"
+  mkdir -p "$tmp/stops" "$tmp/stopst"; : > "$tmp/stopst/by-case"
   cat > "$tmp/stops/claude" <<EOF
 #!/bin/sh
 cat > "$tmp/stops/prompt"
@@ -196,7 +194,7 @@ LUA
   rm -f "$stopkey.tsv"
   kept=$(ls "$told_dir"/*-"$(git rev-parse "$head")".tsv | head -1)
   awk -F'\t' 'BEGIN { OFS = "\t" } $1 == "S" { $3 = "case"; $11 = "the same"; $10 = "a → a" } { print }' "$kept" > "$kept.new" && cp "$kept" "$kept.was" && mv "$kept.new" "$kept"
-  mkdir -p "$tmp/samest"
+  mkdir -p "$tmp/samest"; : > "$tmp/samest/by-case"
   frows() { GMR_IID=7 GIT_FZF_STATE=$tmp/samest OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head"; }
   expect stops/same-folded "$(frows | awk -F'\t' '$13 == "sent" { print $12 ":" $15 }' | tr '\n' ' ')" "sentence:same:closed "
   expect stops/same-no-loose "$(frows | grep -c 'under no sentence')" "0"
@@ -212,14 +210,14 @@ LUA
   printf '%s' '{"sentences":[{"kind":"case","text":"A retry runs out","was":"it hangs","now":"it gives up","change":"ends differently","facts":[],"stops":[],"code":[],"tests":[],"links":[],"runs":[]}]}' > "$tmp/case.json"
   expect sentences/older-outline "$(FZF_PREVIEW_COLUMNS=60 git-sentences --pane "$tmp/case.json" 1 2>&1 | strip | grep -c 'being told again')" "1"
   expect sentences/all-placed "$(srows | grep -c 'gk-loose-heading')" "0"
-  # A screen with tabs lists cases, never the tree: before they come, it says why there are none.
+  # The cases tab lists cases, never the tree: before they come, it says why there are none.
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences"
-  mkdir -p "$tmp/tabst"
+  mkdir -p "$tmp/tabst"; : > "$tmp/tabst/by-case"
   # (otis.symbolsModel off, so no build starts behind the tests that follow.)
   expect sentences/tabs-none "$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GMR_IID=7 GIT_FZF_STATE=$tmp/tabst OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-symbols --rows "$base..$head" | strip | awk -F'\t' '$13 == "sym" { n++ } /cases need Claude/ { w++ } END { print n + 0 ":" w + 0 }')" "0:1"
-  # Claude failing (its usage limit, say) tells no cases and glosses nothing: the screen says why, and nothing
-  # asks again but r. A stand-in for Claude at its limit counts the times it is asked.
-  mkdir -p "$tmp/limit" "$tmp/failst"
+  # Claude is asked for cases by r on their tab and by nothing else; failing (its usage limit, say) it tells none and
+  # glosses nothing: the screen says why. A stand-in for Claude at its limit counts the times it is asked.
+  mkdir -p "$tmp/limit" "$tmp/failst"; : > "$tmp/failst/by-case"
   cat > "$tmp/limit/claude" <<EOF
 #!/bin/sh
 cat >/dev/null; echo asked >> "$tmp/limit/calls"
@@ -238,16 +236,38 @@ EOF
   mkdir -p "$tmp/plainst"
   expect symbols/no-claude-outside-review "$(SEAM_CLAUDE=$tmp/limit/claude GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=stub \
     GIT_CONFIG_KEY_1=otis.sentencesModel GIT_CONFIG_VALUE_1=stub GIT_FZF_STATE=$tmp/plainst git-symbols --rows "$base..$head" | grep -c 'cases'):$(ls "$tmp/plainst"/sentences-asked.* "$cache/symbols-gloss/$base-$head".* 2>/dev/null | wc -l | tr -d ' ')" "0:0"
-  GIT_FZF_STATE=$tmp/failst lrows --rows "$base..$head" >/dev/null; settle 2
+  noask=$(GIT_FZF_STATE=$tmp/failst lrows --rows "$base..$head"); settle 1; sleep 0.5
+  expect sentences/never-unasked "$(printf '%s\n' "$noask" | grep -c 'r asks Claude to follow it'):$(ls "$cache/symbols-sentences" 2>/dev/null | wc -l | tr -d ' '):$(grep -c . "$tmp/limit/calls")" "1:0:1"
+  GIT_FZF_STATE=$tmp/failst lrows --again "$base..$head" >/dev/null; settle 3
   expect sentences/failed-kept "$(cat "$cache/symbols-sentences/$base-$head.failed"):$(ls "$cache/symbols-sentences" | grep -c '\.tsv$')" \
     "Claude could not tell its cases: You have hit your limit · resets 5pm:0"
   # Opened again, a list asks neither again: the cases tab says why, the gloss in the line under the bar.
-  mkdir -p "$tmp/failst2"
-  failrows=$(GIT_FZF_STATE=$tmp/failst2 lrows --rows "$base..$head"); sleep 1; settle 2
-  expect sentences/failed-shown "$(printf '%s\n' "$failrows" | grep -c -e 'Claude could not tell its cases: You have hit your limit' -e 'r asks Claude again · tab shows its files'):$(strip < "$tmp/failst2/footer" | grep -c 'Claude did not gloss this: You have hit your limit · resets 5pm · r asks Claude again')" "2:1"
-  expect sentences/failed-not-asked "$(grep -c . "$tmp/limit/calls")" "2"
-  GIT_FZF_STATE=$tmp/failst2 lrows --again "$base..$head" >/dev/null; settle 4
-  expect sentences/again "$(grep -c . "$tmp/limit/calls")" "4"
+  mkdir -p "$tmp/failst2"; : > "$tmp/failst2/by-case"
+  failrows=$(GIT_FZF_STATE=$tmp/failst2 lrows --rows "$base..$head"); sleep 1; settle 3
+  expect sentences/failed-shown "$(printf '%s\n' "$failrows" | grep -c -e 'Claude could not tell its cases: You have hit your limit' -e 'r asks Claude again · tab shows its symbols'):$(strip < "$tmp/failst2/footer" | grep -c 'Claude did not gloss this: You have hit your limit · resets 5pm · r asks Claude again')" "2:1"
+  expect sentences/failed-not-asked "$(grep -c . "$tmp/limit/calls")" "3"
+  GIT_FZF_STATE=$tmp/failst2 lrows --again "$base..$head" >/dev/null; settle 5
+  expect sentences/again "$(grep -c . "$tmp/limit/calls")" "5"
+  # On the symbols tab r asks for the gloss alone.
+  mkdir -p "$tmp/failst3"
+  GIT_FZF_STATE=$tmp/failst3 lrows --rows "$base..$head" >/dev/null
+  GIT_FZF_STATE=$tmp/failst3 lrows --again "$base..$head" >/dev/null; settle 6; sleep 0.3
+  expect sentences/again-symbols "$(grep -c . "$tmp/limit/calls")" "6"
+  # otis.symbolsModel off keeps r from asking too.
+  mkdir -p "$tmp/failst4"; : > "$tmp/failst4/by-case"
+  GIT_FZF_STATE=$tmp/failst4 lrows --rows "$base..$head" >/dev/null
+  rm -f "$cache/symbols-sentences/$base-$head.failed"
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GMR_IID=7 GIT_FZF_STATE=$tmp/failst4 git-symbols --again "$base..$head" >/dev/null 2>&1; sleep 0.3
+  expect sentences/off-stays-off "$(ls "$cache/symbols-sentences" | grep -c 'running\|failed')" "0"
+  # A review opens on seam's tree, whole, under what the change is; tab goes on to its files, then its cases.
+  rm -rf "$tmp/opens"; mkdir -p "$tmp/opens"
+  ol() { GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GIT_CONFIG_KEY_1=otis.callers GIT_CONFIG_VALUE_1=off GMR_IID=7 GIT_FZF_STATE=$tmp/opens OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-mr-files "$@"; }
+  first=$(ol --list 7 "$base..$head" 2>/dev/null | strip)
+  expect review/opens-on-the-change "$(printf '%s\n' "$first" | head -1 | cut -f1,12)" "The change	change:"
+  expect review/tree-open "$(printf '%s\n' "$first" | awk -F'\t' '$12 ~ />/ { n++ } END { print (n > 0) }'):$(ls "$tmp/opens"/sentences-asked.* "$tmp/opens"/stops-asked.* 2>/dev/null | wc -l | tr -d ' ')" "1:0"
+  tabs=; for _ in 1 2 3; do ol --toggle; tabs="$tabs$(ls "$tmp/opens" | grep -E '^by-(file|case)$' | tr -d '\n') "; done
+  expect review/tab-order "$tabs" "by-file by-case  "
+  ol --toggle back; expect review/tab-back "$(ls "$tmp/opens" | grep -E '^by-(file|case)$')" "by-case"; ol --toggle
   rm -f "$cache/symbols-gloss/$base-$head.failed"
   rm -rf "$(git rev-parse --path-format=absolute --git-common-dir)/git-alias-cache/symbols-sentences" "$tmp/sentst"
   git config --unset otis.sentencesModel
@@ -491,7 +511,7 @@ EOF
   : > "$common/otis-viewed"
   PATH=$tmp/onlyv:$PATH ONLYV=$tmp/onlyv TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob; zpty -b p "stty rows 40 cols 140; git-mr-files 7 $1 url review"; out=
     upto() { for _ in {1..200}; do while zpty -rt p buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *"$1"* ]] && break; sleep 0.1; done; out=; }
-    upto "open in"; zpty -wn p $'"'"'\t'"'"'; upto "symbols in"
+    upto "symbols in"; zpty -wn p j; sleep 0.3
     zpty -wn p $'"'"'\r'"'"'; for _ in {1..200}; do grep -q " a" "$ONLYV/opened" 2>/dev/null && break; while zpty -rt p buf; do :; done; sleep 0.1; done; upto "symbols in"
     zpty -wn p q; for _ in {1..100}; do zpty -t p || break; while zpty -rt p buf; do :; done; sleep 0.1; done' - "$obase..$ohead" >/dev/null 2>&1
   expect symbols/enter-marks-nothing "$(grep -c ' a' "$tmp/onlyv/opened"):$(wc -l < "$common/otis-viewed" | tr -d ' ')" "1:0"

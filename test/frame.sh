@@ -121,6 +121,75 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   printf 'a\n\033[48;2;1;2;3mcode\033[m\n\033[48;2;0;50;0m+new\033[m\nb\n\033[48;2;50;0;0m-old\033[m\n' > "$tmp/pv3.txt"
   expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 3 "
 fi
+if command -v nvim >/dev/null 2>&1; then
+  # The change drawn on the file (diffmarks.lua): new lines on the diff's ground, the word that changed brighter, what
+  # was taken out one dim line until the cursor is on it, then whole. Lines moved from elsewhere stay plain.
+  ( mkdir -p "$tmp/dm" && cd "$tmp/dm" && seq 1 40 | sed 's/$/ original line of text/' > n.txt && seq 100 120 | sed 's/$/ this block of words will move away/' > moved.txt &&
+    git init -q . && git add . && git -c user.email=t@t -c user.name=t commit -qm base &&
+    { sed -e '5s/original/changed/' -e '20,22d' n.txt; seq 100 120 | sed 's/$/ this block of words will move away/'; echo 'brand new line'; } > n.new && mv n.new n.txt && : > moved.txt &&
+    git add . && git -c user.email=t@t -c user.name=t commit -qm change )
+  dmb=$(git -C "$tmp/dm" rev-parse HEAD~1) dmh=$(git -C "$tmp/dm" rev-parse HEAD)
+  cat > "$tmp/dm.lua" <<'EOF'
+local marks = dofile(vim.env.SHARE .. "/diffmarks.lua")
+vim.cmd("edit n.txt")
+local buf = vim.api.nvim_get_current_buf()
+marks.attach(buf)
+vim.wait(3000, function() return vim.iter(marks.hunks(buf)):any(function(h) return h.moved end) end, 20)
+local function report()
+  local new, moved, word, old = {}, {}, {}, {}
+  for _, ns in ipairs({ "otis_diffmarks", "otis_diffmarks_old" }) do
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace(ns), 0, -1, { details = true })) do
+      local d = m[4]
+      if d.line_hl_group then new[#new + 1] = m[2] + 1 end
+      if d.sign_text then moved[#moved + 1] = m[2] + 1 end
+      if d.hl_group == "OtisDiffNewWord" then word[#word + 1] = (m[2] + 1) .. ":" .. m[3] .. "-" .. d.end_col end
+      if d.virt_lines then
+        local ls = {}
+        for _, l in ipairs(d.virt_lines) do ls[#ls + 1] = vim.trim(l[1][1]) end
+        old[#old + 1] = table.concat(ls, "/")
+      end
+    end
+  end
+  return ("new %s; moved %d; word %s; old %s"):format(table.concat(new, ","), #moved, table.concat(word, ","), table.concat(old, " | "))
+end
+io.stdout:write(report(), "\n")
+vim.api.nvim_win_set_cursor(0, { 20, 0 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = buf })
+io.stdout:write(report(), "\n")
+local runs = {}
+for _, h in ipairs(marks.hunks(buf)) do runs[#runs + 1] = (h.moved and "moved" or "new") .. ":" .. h[1] .. "-" .. h[2] end
+io.stdout:write(table.concat(runs, " "), "\n")
+vim.cmd("qa!")
+EOF
+  dm=$(cd "$tmp/dm" && SHARE=$share NVIM_DIFF_BASE=$dmb GMR_RANGE="$dmb..$dmh" nvim --clean --headless -c "luafile $tmp/dm.lua" 2>&1 | tr -d '\r')
+  printf '%s\n' "$dm" > "$tmp/dm.out"
+  expect diffmarks/moved-is-no-stop "$(sed -n 3p "$tmp/dm.out")" "new:5-5 new:19-19 new:59-59"
+  expect diffmarks/drawn "$(sed -n 1p "$tmp/dm.out")" "new 5,59; moved 21; word 5:2-9; old − 1 line | − 3 lines"
+  expect diffmarks/whole-at-the-cursor "$(sed -n 2p "$tmp/dm.out" | sed 's/.*old //')" "− 1 line | 20 original line of text/21 original line of text/22 original line of text"
+  # leftover.mjs says which lines only moved, a lone } never one of them.
+  expect leftover/moved "$(cd "$tmp/dm" && node "$share/leftover.mjs" "$dmb" "$dmh" | cut -f1,2 | sort | uniq -c | awk '{ print $2 ":" $3 ":" $1 }' | tr '\n' ' ')" "new:n.txt:21 old:moved.txt:21 "
+  # ] past the row's last change goes on: the list is told to move, as if . was pressed there; [ the other way. A
+  # run taller than the window is read a screen at a time first.
+  cat > "$tmp/dmk.lua" <<'EOF'
+local f = dofile(vim.env.SHARE .. "/frame.lua")
+vim.t.otis_code_opts = {}
+vim.cmd("terminal sh -c 'stty raw; exec cat > " .. vim.env.SENT .. "'")
+vim.t.otis_list = vim.api.nvim_get_current_win()
+f.open(vim.env.TALL, 1, 0, false)
+local code = vim.t.otis_code
+vim.api.nvim_win_set_height(code, 10)
+local seen = {}
+for _ = 1, 3 do f.key("]"); seen[#seen + 1] = vim.api.nvim_win_get_cursor(code)[1]; vim.wait(50) end
+io.stdout:write(table.concat(seen, " "), "\n")
+for _ = 1, 40 do f.key("]"); vim.wait(5) end
+vim.wait(300)
+vim.cmd("qa!")
+EOF
+  ( mkdir -p "$tmp/tl" && cd "$tmp/tl" && echo start > t.txt && git init -q . && git add . && git -c user.email=t@t -c user.name=t commit -qm base && { echo start; seq 1 60; } > t.txt )
+  dmk=$(cd "$tmp/tl" && SHARE=$share SENT=$tmp/sent TALL=$tmp/tl/t.txt OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c "luafile $tmp/dmk.lua" 2>&1 | tr -d '\r')
+  expect frame/key-pages-a-tall-run "$(printf '%s' "$dmk" | awk '{ print ($1 == 2 && $2 > $1 && $3 > $2) }')" "1"
+  expect frame/key-tells-the-list "$(tr -dc '.' < "$tmp/sent" | wc -c | awk '{ print ($1 >= 1) }')" "1"
+fi
 # F on the board (otis-find): nvim opened straight into your own fuzzy finder
 # (share/find.lua), which reads what git config otis.finder names.
 expect find/nvim "$(OTIS_EDITOR=$tmp/eds/nvim otis-find)" "-c luafile $root/share/find.lua"
