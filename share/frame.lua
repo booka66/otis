@@ -385,11 +385,16 @@ end
 -- none, where ] and [ stay, and the changed symbols it uses, underlined in
 -- its lines while the file shows here. how: "stay", the cursor is already where you want it (the list following you,
 -- not you following the list), so it does not move; "last", you came back to this row with [, so on its last change,
--- as ] left it. line is the row's first stop either way (otis_home), where [ comes to before it leaves the row.
+-- as ] left it; "here", enter, so if this row already shows you stay on what you are looking at. line is the row's first
+-- stop either way (otis_home), where [ comes to before it leaves the row.
 function M.open(path, line, col, readonly, symbol, how)
   local code = M.code()
   vim.api.nvim_win_call(code, function()
     local full = vim.fn.fnamemodify(path, ":p")
+    if how == "here" and vim.api.nvim_buf_get_name(0) == full and vim.t.otis_asked == line then
+      return
+    end
+    vim.t.otis_asked = line
     if vim.api.nvim_buf_get_name(0) ~= full then
       local fresh = vim.fn.bufexists(full) == 0
       local ok, err = pcall(vim.cmd, "silent keepalt edit " .. vim.fn.fnameescape(path))

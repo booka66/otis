@@ -120,6 +120,8 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   expect frame/key-removed "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false, '0 0 20 20')")" "19 19 19 1 1 "
   # Come back to with [, a row opens on its last change; where it opened is a stop on the way back out.
   expect frame/key-back-to-last "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46', 'last')")" "39 39 39 19 10 "
+  # Enter stays on what you are looking at when the row already shows; on another row it opens that one.
+  expect frame/enter-stays "$(OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); local c = function() return vim.api.nvim_win_get_cursor(vim.t.otis_code)[1] end; f.open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46'); f.key(']'); vim.wait(260); f.open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46', 'here'); io.stdout:write(c(), ' '); f.open('$tmp/fk/n.txt', 30, 0, false, '30 45 30 46', 'here'); io.stdout:write(c())" -c 'qa!' 2>&1)" "19 30"
   # A removed symbol's row opens on no line of the file: [ goes on to the row before, and is no error.
   expect frame/key-removed-back "$(fkeys "open('$tmp/fk/n.txt', 0, 0, false, '0 0 70 70')")" "1 1 1 1 1 "
   printf 'a\n\033[48;2;1;2;3mcode\033[m\n\033[48;2;0;50;0m+new\033[m\nb\n\033[48;2;50;0;0m-old\033[m\n' > "$tmp/pv3.txt"

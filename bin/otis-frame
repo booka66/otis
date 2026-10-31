@@ -23,7 +23,8 @@
 #                                                     (git-symbols --deps);
 #                                                     OTIS_FRAME_HOW, stay: the
 #                                                     cursor stays where it is;
-#                                                     last: on the row's last change
+#                                                     last: on the row's last change;
+#                                                     here: enter's (--enter)
 # otis-frame --text <file> [<key>]                    a preview on the right,
 #                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right
@@ -39,8 +40,9 @@
 # otis-frame --enter <path> -- <open command...>      enter's action, for a
 #   picker's transform: in a frame, the open beside the list and then into
 #   the code, the list never giving up the terminal (which redrew it whole,
-#   and asked the terminal a question nvim's answered late, as keys), and
-#   nothing on a row with no path; elsewhere the open, taking the terminal.
+#   and asked the terminal a question nvim's answered late, as keys), staying
+#   on what you are looking at when the row already shows, and on a row with
+#   no path, into its preview; elsewhere the open, taking the terminal.
 share=$(cd "$(dirname "$0")/../share" && pwd)
 vs() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 remote() {
@@ -64,7 +66,8 @@ case $1 in
     p=$2; shift 3
     w=; for a; do w="$w '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"; done
     if [ -z "$OTIS_NVIM_FRAME" ]; then printf 'execute(%s)\n' "${w# }"
-    elif [ -n "$p" ]; then printf 'execute-silent(%s; otis-frame --focus)\n' "${w# }"; fi
+    elif [ -n "$p" ]; then printf 'execute-silent(OTIS_FRAME_HOW=here %s; otis-frame --focus)\n' "${w# }"
+    else echo 'execute-silent(otis-frame --focus)'; fi
     exit 0 ;;
 esac
 src=
