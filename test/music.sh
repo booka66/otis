@@ -65,7 +65,7 @@ cat > "$tmp/no/cliamp" <<'EOF'
 exit 1
 EOF
 chmod +x "$tmp/no/cliamp"
-expect music/refusal-is-a-line "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no otis-music --play x 2>&1 >/dev/null; echo "exit $?")" "YouTube asked if this machine is a bot and would not play it. yt-dlp can use your browser's sign-in: put --cookies-from-browser <browser> in ~/.config/yt-dlp/config.
+expect music/refusal-is-a-line "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no otis-music --play x 2>&1 >/dev/null; echo "exit $?")" "YouTube asked if this machine is a bot and would not play it. yt-dlp needs your browser's YouTube sign-in: be signed in there, with --cookies-from-browser <browser> in ~/.config/yt-dlp/config.
 exit 1"
 expect music/other-refusal-is-its-reason "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no REFUSAL='Video unavailable' otis-music --queue x 2>&1 >/dev/null)" "That would not play: Video unavailable"
 printf '#!/bin/sh\nprintf "Youtube\\tabc\\t1:00\\tDJ\\tA set\\n"\n' > "$tmp/no/yt-dlp"; chmod +x "$tmp/no/yt-dlp"

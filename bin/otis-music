@@ -50,7 +50,7 @@ case $1 in
     why=$(cliamp remote call url.load --params "$(jq -cn --arg p "$2" --argjson now $now '{path: $p, play: $now}')" --wait 2>&1 >/dev/null) && exit 0
     # cliamp's error carries all of yt-dlp's stderr, warnings first, inside parentheses.
     case $why in
-      *"not a bot"*) print -ru2 -- "YouTube asked if this machine is a bot and would not play it. yt-dlp can use your browser's sign-in: put --cookies-from-browser <browser> in ~/.config/yt-dlp/config." ;;
+      *"not a bot"*) print -ru2 -- "YouTube asked if this machine is a bot and would not play it. yt-dlp needs your browser's YouTube sign-in: be signed in there, with --cookies-from-browser <browser> in ~/.config/yt-dlp/config." ;;
       *ERROR:*) why=${${why##*ERROR: }%\)}; print -ru2 -- "That would not play: ${why#\[*\] *: }" ;;
       *) print -ru2 -- "That would not play: ${why:-cliamp gave no reason}" ;;
     esac
