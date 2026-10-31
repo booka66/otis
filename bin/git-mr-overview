@@ -24,7 +24,9 @@ printf "${GK_R}"
 if [ -n "$words" ]; then
   echo
   if command -v glow >/dev/null 2>&1; then
-    printf '%s\n' "$words" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | cat -s
+    # Without glow's backgrounds, which ] would take for changes to stop at.
+    esc=$(printf '\033')
+    printf '%s\n' "$words" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed -E "s/;48;5;[0-9]+//g; s/$esc\[48;5;[0-9]+;?/$esc[/g" | sed '/[^[:space:]]/,$!d' | cat -s
   else printf '%s\n' "$words" | wrap; fi
 fi
 

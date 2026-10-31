@@ -98,5 +98,5 @@ expect edit/under-a-screen "$(OTIS_FRAME=$tmp/frame OTIS_EDITOR=$tmp/eds/nvim ot
 expect frame/focus-outside "$(OTIS_FRAME=$tmp/frame otis-frame --focus; echo "rc=$?")" "rc=0"
 # In otis-frame's picker, the file opens in the frame's nvim.
 mkdir -p "$tmp/nvs" && printf '#!/bin/sh\necho "$@" > "%s"\n' "$tmp/nvs.args" > "$tmp/nvs/nvim" && chmod +x "$tmp/nvs/nvim"
-expect edit/inside-nvim "$(OTIS_NVIM_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5], _A[6], _A[7])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true, '', v:false])"
+expect edit/inside-nvim "$(OTIS_NVIM_FRAME=1 NVIM=/s.sock PATH=$tmp/nvs:$PATH OTIS_EDITOR= otis-edit -R +12:5 -- a.ts; cat "$tmp/nvs.args")" "--server /s.sock --remote-expr luaeval('dofile(_A[1]).open(_A[2], _A[3], _A[4], _A[5], _A[6], _A[7])', ['$share/frame.lua', '$PWD/a.ts', 12, 5, v:true, '', ''])"
 

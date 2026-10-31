@@ -21,8 +21,9 @@
 #                                                     OTIS_FRAME_UNDERLINE,
 #                                                     the row's symbol there
 #                                                     (git-symbols --deps);
-#                                                     OTIS_FRAME_STAY, the cursor
-#                                                     stays where it is
+#                                                     OTIS_FRAME_HOW, stay: the
+#                                                     cursor stays where it is;
+#                                                     last: on the row's last change
 # otis-frame --text <file> [<key>]                    a preview on the right,
 #                                                     where <key> was left
 # otis-frame --run <ex command> <arg>                 a command on the right
@@ -47,7 +48,7 @@ remote() {
   exec nvim --server "$NVIM" --remote-expr "luaeval('dofile(_A[1]).$1', [$(vs "$share/frame.lua")$2])" >/dev/null
 }
 case $1 in
-  --open) remote "open(_A[2], _A[3], _A[4], _A[5], _A[6], _A[7])" ", $(vs "$2"), $3, $4, v:$5, $(vs "$OTIS_FRAME_UNDERLINE"), v:$([ -n "$OTIS_FRAME_STAY" ] && echo true || echo false)" ;;
+  --open) remote "open(_A[2], _A[3], _A[4], _A[5], _A[6], _A[7])" ", $(vs "$2"), $3, $4, v:$5, $(vs "$OTIS_FRAME_UNDERLINE"), $(vs "$OTIS_FRAME_HOW")" ;;
   --text) remote "text(_A[2], _A[3])" ", $(vs "$2")${3+, $(vs "$3")}" ;;
   --run) remote "run(_A[2], _A[3])" ", $(vs "$2"), $(vs "$3")" ;;
   --focus) remote "focus()" ;;

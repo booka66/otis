@@ -252,6 +252,14 @@ local function draw_old(buf, r, at)
       end
       if row < vim.api.nvim_buf_line_count(buf) then
         vim.api.nvim_buf_set_extmark(buf, old_ns, row, 0, { virt_lines = virt, virt_lines_above = above })
+        -- Above the first line, nvim shows them only if the view is told to.
+        if row == 0 and above and win then
+          vim.api.nvim_win_call(win, function()
+            if vim.fn.line("w0") == 1 then
+              vim.fn.winrestview({ topfill = #virt })
+            end
+          end)
+        end
       end
     end
   end

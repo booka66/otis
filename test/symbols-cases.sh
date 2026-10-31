@@ -253,6 +253,14 @@ EOF
   GIT_FZF_STATE=$tmp/failst3 lrows --rows "$base..$head" >/dev/null
   GIT_FZF_STATE=$tmp/failst3 lrows --again "$base..$head" >/dev/null; settle 6; sleep 0.3
   expect sentences/again-symbols "$(grep -c . "$tmp/limit/calls")" "6"
+  # The change row draws no backgrounds, which ] would stop at, a description's code spans included.
+  if command -v glow >/dev/null 2>&1; then
+    mkdir -p "$tmp/ovb"; jq -n '{title: "T", description: "uses `run` here"}' > "$tmp/ovb/mr.json"
+    printf '#!/bin/sh\ncat "%s/ovb/mr.json"\n' "$tmp" > "$tmp/ovb/git-forge"; chmod +x "$tmp/ovb/git-forge"
+    ovt=$(git-symbols --table "$base..$head")
+    ov=$(PATH=$tmp/ovb:$PATH git-mr-overview 8 "$base..$head" "$ovt" 2>/dev/null)
+    expect review/overview-no-stops "$(printf '%s' "$ov" | grep -c '\[48;'):$(printf '%s' "$ov" | strip | grep -c 'uses.*run.*here')" "0:1"
+  fi
   # otis.symbolsModel off keeps r from asking too.
   mkdir -p "$tmp/failst4"; : > "$tmp/failst4/by-case"
   GIT_FZF_STATE=$tmp/failst4 lrows --rows "$base..$head" >/dev/null

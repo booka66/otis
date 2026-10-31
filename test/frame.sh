@@ -116,8 +116,12 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[', '[' }) do f.key(k); vim.wait(260); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
   ( mkdir -p "$tmp/fk" && cd "$tmp/fk" && seq 1 60 > n.txt && git init -q . && git add n.txt && git -c user.email=t@t -c user.name=t commit -qm n && sed -i.bak -e '5s/.*/a/' -e 20d -e '40s/.*/x/' n.txt )
   expect frame/key-file "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false)")" "5 19 39 19 5 "
-  expect frame/key-symbol "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46')")" "19 39 39 19 19 "
-  expect frame/key-removed "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false, '0 0 20 20')")" "19 19 19 19 19 "
+  expect frame/key-symbol "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46')")" "19 39 39 19 10 "
+  expect frame/key-removed "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false, '0 0 20 20')")" "19 19 19 1 1 "
+  # Come back to with [, a row opens on its last change; where it opened is a stop on the way back out.
+  expect frame/key-back-to-last "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46', 'last')")" "39 39 39 19 10 "
+  # A removed symbol's row opens on no line of the file: [ goes on to the row before, and is no error.
+  expect frame/key-removed-back "$(fkeys "open('$tmp/fk/n.txt', 0, 0, false, '0 0 70 70')")" "1 1 1 1 1 "
   printf 'a\n\033[48;2;1;2;3mcode\033[m\n\033[48;2;0;50;0m+new\033[m\nb\n\033[48;2;50;0;0m-old\033[m\n' > "$tmp/pv3.txt"
   expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 3 "
 fi
