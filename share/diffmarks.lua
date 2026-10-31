@@ -1,13 +1,16 @@
 -- diffmarks.lua: what a change did, drawn on the real file in the frame's nvim, so reading a change is reading the
 -- file: its syntax, your motions and your language server all still there. New lines on the diff's green, the words
 -- a line changed brighter, lines that only moved plain with a ⇄ in the gutter. What was taken out is one dim line
--- until the cursor comes to it, then whole, so old and new are never shuffled together.
+-- until the cursor comes to it, then whole, so old and new are never shuffled together. Where you are stands out from
+-- the rest of the green: the change you are on brighter, a ▶ on your line, and on arriving, a pulse to catch the eye.
 --   attach(buf)  draw on a file's buffer, and keep it drawn as it is edited and the cursor moves
 --   hunks(buf)   what to read in it, in order: { first, last, base_first, base_last, moved = bool, count, base_count }
 --   redraw(buf)  again, after a window went into or out of a diff (which shows all this itself)
+--   point(buf, line)  you are on this line; land(buf, line) the same, for when something took you there
 local M = {}
 local lines_ns = vim.api.nvim_create_namespace("otis_diffmarks")
 local old_ns = vim.api.nvim_create_namespace("otis_diffmarks_old")
+local here_ns = vim.api.nvim_create_namespace("otis_diffmarks_here")
 local kept = {} -- buf -> { tick, hunks, base, at }: a file is diffed once per edit, not on every key
 
 local function colors()
@@ -26,6 +29,10 @@ local function colors()
   vim.api.nvim_set_hl(0, "OtisDiffOldWord", { bg = bg("OTIS_T_MINUS_WORD", "DiffDelete") })
   vim.api.nvim_set_hl(0, "OtisDiffGone", { fg = faint, italic = true })
   vim.api.nvim_set_hl(0, "OtisDiffMoved", { fg = faint })
+  vim.api.nvim_set_hl(0, "OtisDiffHere", { bg = bg("OTIS_T_PLUS_EMPH", "DiffText") })
+  local mark = vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false }).fg
+  vim.api.nvim_set_hl(0, "OtisDiffHereSign", { fg = mark, bold = true })
+  vim.api.nvim_set_hl(0, "OtisDiffHereLine", {})
 end
 
 -- The change's moved lines, from the diff alone (leftover.mjs), a review's only: only a review has the two ends.
@@ -254,6 +261,88 @@ colors()
 -- A colorscheme's :hi clear takes them.
 vim.api.nvim_create_autocmd("ColorScheme", { callback = colors })
 
+-- draw_here(buf, r, at, line): the change you are on, the new lines of hunk at, and your line.
+local function draw_here(buf, r, at, line)
+  vim.api.nvim_buf_clear_namespace(buf, here_ns, 0, -1)
+  local h = at and r.hunks[at]
+  for i = h and h.first or 1, h and h.first + h.count - 1 or 0 do
+    if not h.lines[i] then
+      vim.api.nvim_buf_set_extmark(buf, here_ns, i - 1, 0, { line_hl_group = "OtisDiffHere", priority = 6 })
+    end
+  end
+  if line <= vim.api.nvim_buf_line_count(buf) then
+    vim.api.nvim_buf_set_extmark(buf, here_ns, line - 1, 0, {
+      sign_text = "▶",
+      sign_hl_group = "OtisDiffHereSign",
+      number_hl_group = "OtisDiffHereSign",
+      line_hl_group = not (h and h.count > 0) and "OtisDiffHereLine" or nil,
+      priority = 7,
+    })
+  end
+end
+
+function M.point(buf, line)
+  local r = kept[buf]
+  if not r or in_a_diff(buf) then
+    return
+  end
+  local at = hunk_at(r, line)
+  if at ~= r.at then
+    r.at = at
+    draw_old(buf, r, at)
+  end
+  draw_here(buf, r, at, line)
+end
+
+-- pulse(): the change you landed on, bright and settling, or your line where you landed on no change.
+local pulsing
+local function pulse(at)
+  if pulsing then
+    pulsing:stop()
+    pulsing:close()
+    pulsing = nil
+  end
+  local function rgb(hex)
+    return tonumber(hex:sub(2, 3), 16), tonumber(hex:sub(4, 5), 16), tonumber(hex:sub(6, 7), 16)
+  end
+  local function mix(a, b, t)
+    local ar, ag, ab = rgb(a)
+    local br, bg, bb = rgb(b)
+    return ("#%02x%02x%02x"):format(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t)
+  end
+  local env = vim.env
+  local group = at and "OtisDiffHere" or "OtisDiffHereLine"
+  local from, to = at and env.OTIS_T_PLUS_WORD or env.OTIS_T_RULE, at and env.OTIS_T_PLUS_EMPH or env.OTIS_T_GROUND
+  if not (from and to and from:match("^#%x%x%x%x%x%x$") and to:match("^#%x%x%x%x%x%x$")) then
+    return
+  end
+  local step, steps = 0, 12
+  pulsing = vim.uv.new_timer()
+  pulsing:start(0, 40, vim.schedule_wrap(function()
+    if not pulsing then
+      return
+    end
+    step = step + 1
+    if step > steps then
+      pulsing:stop()
+      pulsing:close()
+      pulsing = nil
+      colors()
+      return
+    end
+    vim.api.nvim_set_hl(0, group, { bg = mix(from, to, step / steps) })
+  end))
+end
+
+function M.land(buf, line)
+  if not vim.b[buf].otis_diffmarks then
+    return
+  end
+  M.point(buf, line)
+  local r = kept[buf]
+  pulse(r and r.at and r.hunks[r.at].count > 0)
+end
+
 function M.redraw(buf)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
@@ -261,13 +350,16 @@ function M.redraw(buf)
   if in_a_diff(buf) then
     vim.api.nvim_buf_clear_namespace(buf, lines_ns, 0, -1)
     vim.api.nvim_buf_clear_namespace(buf, old_ns, 0, -1)
+    vim.api.nvim_buf_clear_namespace(buf, here_ns, 0, -1)
     return
   end
   local r = read(buf)
   draw_new(buf, r)
   local win = vim.fn.win_findbuf(buf)[1]
-  r.at = win and hunk_at(r, vim.api.nvim_win_get_cursor(win)[1]) or nil
+  local line = win and vim.api.nvim_win_get_cursor(win)[1] or 1
+  r.at = hunk_at(r, line)
   draw_old(buf, r, r.at)
+  draw_here(buf, r, r.at, line)
 end
 
 function M.attach(buf)
@@ -285,15 +377,7 @@ function M.attach(buf)
   vim.api.nvim_create_autocmd("CursorMoved", {
     buffer = buf,
     callback = function()
-      local r = kept[buf]
-      if not r or in_a_diff(buf) then
-        return
-      end
-      local at = hunk_at(r, vim.fn.line("."))
-      if at ~= r.at then
-        r.at = at
-        draw_old(buf, r, at)
-      end
+      M.point(buf, vim.fn.line("."))
     end,
   })
   M.redraw(buf)

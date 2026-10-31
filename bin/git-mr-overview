@@ -20,9 +20,15 @@ printf "${GK_TEXT}\n"
 printf '%s\n' "!$iid $title" | wrap
 printf "${GK_R}"
 [ -n "$by" ] && printf "  ${GK_CONTEXT}by %s${GK_R}\n" "$by"
-[ -n "$words" ] && { echo; printf '%s\n' "$words" | wrap; }
+# The description as it reads on GitLab, its tables and code marked, with glow where there is one.
+if [ -n "$words" ]; then
+  echo
+  if command -v glow >/dev/null 2>&1; then
+    printf '%s\n' "$words" | glow -s "${OTIS_T_GLOW:-dark}" -w "$w" - 2>/dev/null | sed '/[^[:space:]]/,$!d' | cat -s
+  else printf '%s\n' "$words" | wrap; fi
+fi
 
-json=$(seam --table "$table" "$rev" --json 2>/dev/null) || exit 0
+json=$(SEAM_KINDS="git-test-files kinds" seam --table "$table" "$rev" --json 2>/dev/null) || exit 0
 base=${rev%%..*} head=${rev#*..}
 moved=$(node "$share/leftover.mjs" "$base" "$head" 2>/dev/null)
 section() { printf "\n  ${GK_ATTENTION}%s${GK_R}\n" "$1"; }
@@ -31,7 +37,7 @@ section() { printf "\n  ${GK_ATTENTION}%s${GK_R}\n" "$1"; }
 surface=$(printf '%s' "$json" | jq -r '.definitions as $d
   | ($d | map(select(.change == "removed") | .name) | map({key: ., value: 1}) | from_entries) as $gone
   | ($d | map(select(.change == "added") | .name) | map({key: ., value: 1}) | from_entries) as $came
-  | ($d | sort_by(.change != "removed"))[] | select(.exported)
+  | ($d | sort_by(.change != "removed"))[] | select(.exported and .box.kind == "source")
   | (if (.change == "added" and $gone[.name]) or (.change == "removed" and $came[.name]) then "moved"
      else .change end) as $was
   | select($was != "body")
@@ -54,7 +60,7 @@ stat=$(git -c core.quotePath=false diff --numstat --no-renames "$base" "$head")
 st=$(mktemp) && printf '%s\n' "$stat" > "$st"
 printf '%s\n' "$stat" | cut -f3 | git-test-files kinds | awk -F'\t' -v moved="$(printf '%s\n' "$moved" | grep -c '^new')" -v good="$GK_GOOD" -v dim="$GK_CONTEXT" -v r="$GK_R" '
   FILENAME != "-" { add[$3] = $1; next }
-  { if ($2 == "test") { t += add[$1]; nt++ } else if ($2 == "generated" || $2 == "config") { g += add[$1]; ng++ } else { a += add[$1]; n++ } }
+  { if ($2 == "tests") { t += add[$1]; nt++ } else if ($2 != "") { g += add[$1]; ng++ } else { a += add[$1]; n++ } }
   END { printf "  %s+%d%s of code in %d file%s", good, a - moved, r, n, (n == 1 ? "" : "s")
     if (moved) printf ", and %d lines that only moved", moved
     printf "\n"

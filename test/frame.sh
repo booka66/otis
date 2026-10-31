@@ -113,7 +113,7 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   # file's since the base (5 and 40 changed, 20 taken out), a symbol's own on
   # its row (lines 10 to 45, never 5), a removed one's where it was, and a
   # preview's on a diff's background but the code's own.
-  fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[', '[' }) do f.key(k); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
+  fkeys() { OTIS_NVIM_FRAME=$tmp OTIS_T_CODEBG='48;2;1;2;3' nvim --clean --headless -c terminal -c 'let t:otis_list = win_getid() | let t:otis_code_opts = {}' -c "lua local f = dofile('$share/frame.lua'); f.$1; for _, k in ipairs({ ']', ']', ']', '[', '[' }) do f.key(k); vim.wait(260); io.stdout:write(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], ' ') end" -c 'qa!' 2>&1; }
   ( mkdir -p "$tmp/fk" && cd "$tmp/fk" && seq 1 60 > n.txt && git init -q . && git add n.txt && git -c user.email=t@t -c user.name=t commit -qm n && sed -i.bak -e '5s/.*/a/' -e 20d -e '40s/.*/x/' n.txt )
   expect frame/key-file "$(fkeys "open('$tmp/fk/n.txt', 1, 0, false)")" "5 19 39 19 5 "
   expect frame/key-symbol "$(fkeys "open('$tmp/fk/n.txt', 10, 0, false, '10 45 10 46')")" "19 39 39 19 19 "
@@ -161,11 +161,32 @@ for _, h in ipairs(marks.hunks(buf)) do runs[#runs + 1] = (h.moved and "moved" o
 io.stdout:write(table.concat(runs, " "), "\n")
 vim.cmd("qa!")
 EOF
-  dm=$(cd "$tmp/dm" && SHARE=$share NVIM_DIFF_BASE=$dmb GMR_RANGE="$dmb..$dmh" nvim --clean --headless -c "luafile $tmp/dm.lua" 2>&1 | tr -d '\r')
+  dm=$(cd "$tmp/dm" && SHARE=$share NVIM_DIFF_BASE=$dmb GMR_RANGE="$dmb..$dmh" nvim --clean --headless -c "luafile $tmp/dm.lua" -c "qa!" 2>&1 | tr -d '\r')
   printf '%s\n' "$dm" > "$tmp/dm.out"
   expect diffmarks/moved-is-no-stop "$(sed -n 3p "$tmp/dm.out")" "new:5-5 new:19-19 new:59-59"
   expect diffmarks/drawn "$(sed -n 1p "$tmp/dm.out")" "new 5,59; moved 21; word 5:2-9; old − 1 line | − 3 lines"
   expect diffmarks/whole-at-the-cursor "$(sed -n 2p "$tmp/dm.out" | sed 's/.*old //')" "− 1 line | 20 original line of text/21 original line of text/22 original line of text"
+  # Pressed in the list, with no cursor to see: the change you land on lit, its old lines open, a ▶ on your line.
+  cat > "$tmp/dmh.lua" <<'EOF'
+local f = dofile(vim.env.SHARE .. "/frame.lua")
+vim.t.otis_code_opts = {}
+vim.cmd("terminal")
+vim.t.otis_list = vim.api.nvim_get_current_win()
+f.open(vim.fn.getcwd() .. "/n.txt", 1, 0, false)
+local buf = vim.api.nvim_win_get_buf(vim.t.otis_code)
+f.key("]"); f.key("]"); vim.wait(260)
+local lit, sign, old = {}, nil, {}
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace("otis_diffmarks_here"), 0, -1, { details = true })) do
+  if m[4].line_hl_group == "OtisDiffHere" then lit[#lit + 1] = m[2] + 1 end
+  if m[4].sign_text then sign = m[2] + 1 end
+end
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace("otis_diffmarks_old"), 0, -1, { details = true })) do
+  old[#old + 1] = #m[4].virt_lines
+end
+io.stdout:write(("line %d lit %s sign %s old %s"):format(vim.api.nvim_win_get_cursor(vim.t.otis_code)[1], table.concat(lit, ","), tostring(sign), table.concat(old, ",")))
+vim.cmd("qa!")
+EOF
+  expect diffmarks/landing-from-the-list "$(cd "$tmp/dm" && SHARE=$share OTIS_NVIM_FRAME=$tmp NVIM_DIFF_BASE=$dmb nvim --clean --headless -c "luafile $tmp/dmh.lua" -c "qa!" 2>&1 | tr -d '\r')" "line 19 lit  sign 19 old 1,3"
   # leftover.mjs says which lines only moved, a lone } never one of them.
   expect leftover/moved "$(cd "$tmp/dm" && node "$share/leftover.mjs" "$dmb" "$dmh" | cut -f1,2 | sort | uniq -c | awk '{ print $2 ":" $3 ":" $1 }' | tr '\n' ' ')" "new:n.txt:21 old:moved.txt:21 "
   # ] past the row's last change goes on: the list is told to move, as if . was pressed there; [ the other way. A
@@ -179,14 +200,14 @@ f.open(vim.env.TALL, 1, 0, false)
 local code = vim.t.otis_code
 vim.api.nvim_win_set_height(code, 10)
 local seen = {}
-for _ = 1, 3 do f.key("]"); seen[#seen + 1] = vim.api.nvim_win_get_cursor(code)[1]; vim.wait(50) end
+for _ = 1, 3 do f.key("]"); vim.wait(260); seen[#seen + 1] = vim.api.nvim_win_get_cursor(code)[1] end
 io.stdout:write(table.concat(seen, " "), "\n")
 for _ = 1, 40 do f.key("]"); vim.wait(5) end
 vim.wait(300)
 vim.cmd("qa!")
 EOF
   ( mkdir -p "$tmp/tl" && cd "$tmp/tl" && echo start > t.txt && git init -q . && git add . && git -c user.email=t@t -c user.name=t commit -qm base && { echo start; seq 1 60; } > t.txt )
-  dmk=$(cd "$tmp/tl" && SHARE=$share SENT=$tmp/sent TALL=$tmp/tl/t.txt OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c "luafile $tmp/dmk.lua" 2>&1 | tr -d '\r')
+  dmk=$(cd "$tmp/tl" && SHARE=$share SENT=$tmp/sent TALL=$tmp/tl/t.txt OTIS_NVIM_FRAME=$tmp nvim --clean --headless -c "luafile $tmp/dmk.lua" -c "qa!" 2>&1 | tr -d '\r')
   expect frame/key-pages-a-tall-run "$(printf '%s' "$dmk" | awk '{ print ($1 == 2 && $2 > $1 && $3 > $2) }')" "1"
   expect frame/key-tells-the-list "$(tr -dc '.' < "$tmp/sent" | wc -c | awk '{ print ($1 >= 1) }')" "1"
 fi

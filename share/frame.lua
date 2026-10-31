@@ -384,12 +384,17 @@ function M.open(path, line, col, readonly, symbol, stay)
       vim.bo.readonly = true
       vim.bo.modifiable = false
     end
+    if vim.env.NVIM_DIFF_BASE then
+      marks().attach(vim.api.nvim_get_current_buf())
+    end
     if not stay then
       pcall(vim.api.nvim_win_set_cursor, 0, { line, math.max(col - 1, 0) })
       if col == 0 then
         vim.cmd("normal! ^")
       end
       vim.cmd("normal! zz")
+      -- A move inside the code window from here is no CursorMoved: you are in the list.
+      marks().land(vim.api.nvim_get_current_buf(), vim.fn.line("."))
     end
     local w, names = vim.split(symbol or "", " ", { trimempty = true }), {}
     for i = 5, #w do
@@ -624,6 +629,47 @@ local function changes(win)
   return runs
 end
 
+-- glide(win, lnum, top): the window's view there, the code sliding rather than jumping so your eye can follow it. A key
+-- pressed meanwhile finishes it at once (package.loaded.otis_glide, this file being loaded afresh on every call).
+local function glide(win, lnum, top)
+  local from = vim.api.nvim_win_call(win, function()
+    return vim.fn.line("w0")
+  end)
+  local function place(t, l)
+    vim.api.nvim_win_call(win, function()
+      vim.fn.winrestview({ lnum = l, col = 0, topline = t })
+    end)
+  end
+  if from == top then
+    place(top, lnum)
+    return
+  end
+  local timer, step, steps = vim.uv.new_timer(), 0, 8
+  local function finish()
+    package.loaded.otis_glide = nil
+    timer:stop()
+    timer:close()
+    if valid(win) then
+      place(top, lnum)
+    end
+  end
+  package.loaded.otis_glide = finish
+  local h = vim.api.nvim_win_get_height(win)
+  timer:start(0, 20, vim.schedule_wrap(function()
+    if package.loaded.otis_glide ~= finish then
+      return
+    end
+    step = step + 1
+    if step >= steps or not valid(win) then
+      finish()
+      return
+    end
+    local t = step / steps
+    local at = math.floor(from + (top - from) * (1 - (1 - t) ^ 2))
+    place(at, math.max(math.min(lnum, at + h - 1), at))
+  end))
+end
+
 -- What the list's scrolling keys are in the code window: nvim's own.
 local scrolls = { ["ctrl-d"] = "\4", ["ctrl-u"] = "\21", ["ctrl-e"] = "\5", ["ctrl-y"] = "\25" }
 
@@ -635,21 +681,27 @@ function M.key(name)
   if not valid(code) then
     return
   end
+  if package.loaded.otis_glide then
+    package.loaded.otis_glide()
+  end
   if scrolls[name] then
     vim.api.nvim_win_call(code, function()
       vim.cmd("normal! " .. scrolls[name])
     end)
     return
   end
+  local b = vim.api.nvim_win_get_buf(code)
   local at, to, runs = vim.api.nvim_win_get_cursor(code)[1], nil, changes(code)
-  local bottom = vim.api.nvim_win_call(code, function()
-    return vim.fn.line("w$")
-  end)
+  local top = vim.fn.line("w0", code)
+  local bottom = vim.fn.line("w$", code)
+  -- Where you end up lit at once; the code comes to it.
+  local function arrive(lnum, want_top)
+    marks().land(b, lnum)
+    glide(code, lnum, want_top)
+  end
   for _, r in ipairs(runs) do
     if name == "]" and at >= r[1] and at <= r[2] and r[2] > bottom then
-      vim.api.nvim_win_call(code, function()
-        vim.fn.winrestview({ lnum = bottom, col = 0, topline = math.max(bottom - 2, 1) })
-      end)
+      arrive(bottom, math.max(bottom - 2, 1))
       return
     end
     if name == "]" and r[1] > at and not to or name == "[" and r[1] < at then
@@ -665,12 +717,14 @@ function M.key(name)
     end
     return
   end
-  -- From near the top when it is taller than the window, as the pane put it.
+  -- Already in view, the code stays still and only the light moves. Else in the middle, or from near the top when it
+  -- is taller than the window, as the pane put it.
   local h = vim.api.nvim_win_get_height(code)
-  local top = to[2] - to[1] < h and math.floor((to[1] + to[2] - h) / 2) + 1 or to[1] - 3
-  vim.api.nvim_win_call(code, function()
-    vim.fn.winrestview({ lnum = to[1], col = 0, topline = math.max(top, 1) })
-  end)
+  local want = top
+  if to[1] < top or to[2] > bottom then
+    want = math.max(to[2] - to[1] < h and math.floor((to[1] + to[2] - h) / 2) + 1 or to[1] - 3, 1)
+  end
+  arrive(to[1], want)
 end
 
 -- comment(): into the code and a comment on the line you are on (mr-comments.lua), the box under that line.
