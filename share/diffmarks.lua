@@ -1,17 +1,11 @@
--- diffmarks.lua: what a change did, drawn on the real file in the frame's nvim, so reading a change is reading the
--- file: its syntax, your motions and your language server all still there. New lines on the diff's green, the words
--- a line changed brighter, lines that only moved plain with a ⇄ in the gutter. What was taken out is one dim line
--- until the cursor comes to it, then whole, so old and new are never shuffled together. Where you are stands out from
--- the rest of the green: the change you are on brighter, a ▶ on your line, and on arriving, a pulse to catch the eye.
---   attach(buf)  draw on a file's buffer, and keep it drawn as it is edited and the cursor moves
---   hunks(buf)   what to read in it, in order: { first, last, base_first, base_last, moved = bool, count, base_count }
---   redraw(buf)  again, after a window went into or out of a diff (which shows all this itself)
---   point(buf, line)  you are on this line; land(buf, line) the same, for when something took you there
+-- diffmarks.lua: what a change did, drawn on the real file in the frame's nvim: new lines on the diff's green, the words
+-- a line changed brighter, and what was taken out on red where it was.
+--   attach(buf)  draw on a file's buffer, and keep it drawn as it is edited; a window in a diff shows all this itself
+--   hunks(buf)   its changes in order: { first, last, base_first, base_last, count = new lines, base_count = old lines }
 local M = {}
-local lines_ns = vim.api.nvim_create_namespace("otis_diffmarks")
-local old_ns = vim.api.nvim_create_namespace("otis_diffmarks_old")
-local here_ns = vim.api.nvim_create_namespace("otis_diffmarks_here")
-local kept = {} -- buf -> { tick, hunks, base, at }: a file is diffed once per edit, not on every key
+local ns = vim.api.nvim_create_namespace("otis_diffmarks")
+local kept = {} -- buf -> { tick, hunks, base }: a file is diffed once per edit, not on every key
+local drawn_in_diff = {} -- buf -> whether it was in a diff when last drawn
 
 local function colors()
   local function bg(env, group)
@@ -22,51 +16,11 @@ local function colors()
     local had = vim.api.nvim_get_hl(0, { name = group, link = false }).bg
     return had and ("#%06x"):format(had) or nil
   end
-  local faint = vim.api.nvim_get_hl(0, { name = "Comment", link = false }).fg
   vim.api.nvim_set_hl(0, "OtisDiffNew", { bg = bg("OTIS_T_PLUS", "DiffAdd") })
   vim.api.nvim_set_hl(0, "OtisDiffNewWord", { bg = bg("OTIS_T_PLUS_WORD", "DiffText") })
   vim.api.nvim_set_hl(0, "OtisDiffOld", { bg = bg("OTIS_T_MINUS", "DiffDelete") })
   vim.api.nvim_set_hl(0, "OtisDiffOldWord", { bg = bg("OTIS_T_MINUS_WORD", "DiffDelete") })
-  vim.api.nvim_set_hl(0, "OtisDiffGone", { fg = faint, italic = true })
-  vim.api.nvim_set_hl(0, "OtisDiffMoved", { fg = faint })
-  vim.api.nvim_set_hl(0, "OtisDiffHere", { bg = bg("OTIS_T_PLUS_EMPH", "DiffText") })
-  local mark = vim.api.nvim_get_hl(0, { name = "DiagnosticWarn", link = false }).fg
-  vim.api.nvim_set_hl(0, "OtisDiffHereSign", { fg = mark, bold = true })
-  vim.api.nvim_set_hl(0, "OtisDiffHereLine", {})
-end
-
--- The change's moved lines, from the diff alone (leftover.mjs), a review's only: only a review has the two ends.
--- Behind the first file, drawn again when they land. moved.new[path][line], moved.old[path][line].
-local moved = { new = {}, old = {} }
-local asked = false
-local function ask_moved()
-  local range = vim.env.GMR_RANGE
-  if asked or not range then
-    return
-  end
-  asked = true
-  local base, head = range:match("^(.-)%.%.(.*)$")
-  local script = vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/leftover.mjs"
-  pcall(vim.system, { "node", script, base, head }, { text = true }, function(res)
-    vim.schedule(function()
-      for side, path, line in (res.stdout or ""):gmatch("(%l+)\t([^\t\n]+)\t(%d+)") do
-        moved[side][path] = moved[side][path] or {}
-        moved[side][path][tonumber(line)] = true
-      end
-      kept = {}
-      for _, b in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.b[b].otis_diffmarks and vim.api.nvim_buf_is_loaded(b) then
-          M.redraw(b)
-        end
-      end
-    end)
-  end)
-end
-
-local function repo_path(name)
-  local top = vim.system({ "git", "-C", vim.fs.dirname(name), "rev-parse", "--show-toplevel" }, { text = true }):wait().stdout:gsub("%s+$", "")
-  local real = vim.fn.resolve(name)
-  return real:sub(1, #top + 1) == top .. "/" and real:sub(#top + 2) or real
+  vim.api.nvim_set_hl(0, "OtisDiffTooLong", { fg = vim.api.nvim_get_hl(0, { name = "Comment", link = false }).fg, italic = true })
 end
 
 local function read(buf)
@@ -80,57 +34,20 @@ local function read(buf)
   local base = vim.system({ "git", "-C", vim.fs.dirname(name), "show", ref .. ":./" .. vim.fs.basename(name) }, { text = true }):wait()
   local before = base.code == 0 and base.stdout or ""
   local now = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n") .. "\n"
-  local path = repo_path(name)
-  local new_moved, old_moved = moved.new[path] or {}, moved.old[path] or {}
   local hunks = {}
   for _, h in ipairs((vim.text and vim.text.diff or vim.diff)(before, now, { result_type = "indices" })) do
-    local one = { first = h[3], count = h[4], base_first = h[1], base_count = h[2], lines = {} }
-    -- A hunk is moved when nothing in it is new. A blank line goes with the moved line above it.
-    local all = true
-    for i = one.first, one.first + one.count - 1 do
-      local blank = (vim.api.nvim_buf_get_lines(buf, i - 1, i, false)[1] or ""):match("^%s*$") ~= nil
-      one.lines[i] = new_moved[i] or (blank and one.lines[i - 1]) or false
-      all = all and (one.lines[i] or blank)
-    end
-    for i = one.base_first, one.base_first + one.base_count - 1 do
-      all = all and old_moved[i] == true
-    end
-    one.moved = all
-    table.insert(hunks, one)
+    table.insert(hunks, { first = h[3], count = h[4], base_first = h[1], base_count = h[2] })
   end
   kept[buf] = { tick = tick, hunks = hunks, base = vim.split(before, "\n", { plain = true }) }
   return kept[buf]
 end
 
--- Runs of lines to go to: a hunk's new lines here, those it only moved left out; or for lines only taken out, the line
--- they were under. A hunk with nothing new is one run, marked moved, for what wants to pass it.
+-- Lines only taken out are a run on the line they were under.
 function M.hunks(buf)
   local out = {}
   for _, h in ipairs(read(buf).hunks) do
     local first = math.max(h.first, 1)
-    local function run(a, b, count, base_count, was_moved)
-      table.insert(out, { a, b, h.base_first, h.base_first + h.base_count - 1, moved = was_moved, count = count, base_count = base_count })
-    end
-    local from, base_left, found = nil, h.base_count, false
-    local function close(last)
-      if from then
-        run(from, last, last - from + 1, base_left, false)
-        from, base_left, found = nil, 0, true
-      end
-    end
-    if not h.moved then
-      for i = h.first, h.first + h.count - 1 do
-        if h.lines[i] then
-          close(i - 1)
-        else
-          from = from or i
-        end
-      end
-      close(h.first + h.count - 1)
-    end
-    if not found then
-      run(first, math.max(h.first + h.count - 1, first), h.count, h.base_count, h.moved)
-    end
+    table.insert(out, { first, math.max(h.first + h.count - 1, first), h.base_first, h.base_first + h.base_count - 1, count = h.count, base_count = h.base_count })
   end
   return out
 end
@@ -161,31 +78,24 @@ local function in_a_diff(buf)
   return false
 end
 
-local function draw_new(buf, r)
-  vim.api.nvim_buf_clear_namespace(buf, lines_ns, 0, -1)
-  for _, h in ipairs(r.hunks) do
-    for i = h.first, h.first + h.count - 1 do
-      if h.lines[i] then
-        vim.api.nvim_buf_set_extmark(buf, lines_ns, i - 1, 0, { sign_text = "⇄", sign_hl_group = "OtisDiffMoved", priority = 5 })
-      else
-        vim.api.nvim_buf_set_extmark(buf, lines_ns, i - 1, 0, { line_hl_group = "OtisDiffNew", priority = 5 })
-      end
-    end
-    if h.count == h.base_count then
-      for n = 0, h.count - 1 do
-        local now = vim.api.nvim_buf_get_lines(buf, h.first + n - 1, h.first + n, false)[1] or ""
-        local s, _, e = middle(r.base[h.base_first + n] or "", now)
-        if s and e > s and not h.lines[h.first + n] then
-          vim.api.nvim_buf_set_extmark(buf, lines_ns, h.first + n - 1, s, { end_col = e, hl_group = "OtisDiffNewWord", priority = 5 })
-        end
+local function draw_new(buf, r, h)
+  for i = h.first, h.first + h.count - 1 do
+    vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, { line_hl_group = "OtisDiffNew", priority = 5 })
+  end
+  if h.count == h.base_count then
+    for n = 0, h.count - 1 do
+      local now = vim.api.nvim_buf_get_lines(buf, h.first + n - 1, h.first + n, false)[1] or ""
+      local s, _, e = middle(r.base[h.base_first + n] or "", now)
+      if s and e > s then
+        vim.api.nvim_buf_set_extmark(buf, ns, h.first + n - 1, s, { end_col = e, hl_group = "OtisDiffNewWord", priority = 5 })
       end
     end
   end
 end
 
--- whole(buf, r, h, width): the lines a hunk took out, each on the diff's red to the window's edge, and the words it
--- changed brighter. The tabs as the buffer shows them, since a virtual line draws one as a single cell.
-local function whole(buf, r, h, width)
+-- old_lines(buf, r, h): what a hunk took out, each on the diff's red to the window's edge, the words it changed
+-- brighter. The tabs as the buffer shows them, since a virtual line draws one as a single cell.
+local function old_lines(buf, r, h)
   local tab = (" "):rep(vim.bo[buf].tabstop)
   local out = {}
   for n = 0, h.base_count - 1 do
@@ -193,8 +103,7 @@ local function whole(buf, r, h, width)
     local chunks = {}
     local s, e
     if h.count == h.base_count then
-      local now = vim.api.nvim_buf_get_lines(buf, h.first + n - 1, h.first + n, false)[1] or ""
-      s, e = middle(was, now)
+      s, e = middle(was, vim.api.nvim_buf_get_lines(buf, h.first + n - 1, h.first + n, false)[1] or "")
     end
     local function part(from, to, group)
       if to > from then
@@ -208,59 +117,38 @@ local function whole(buf, r, h, width)
     else
       part(0, #was, "OtisDiffOld")
     end
-    local shown = vim.fn.strdisplaywidth(was:gsub("\t", tab), 0)
-    table.insert(chunks, { (" "):rep(math.max(width - shown, 0)), "OtisDiffOld" })
+    table.insert(chunks, { (" "):rep(vim.o.columns), "OtisDiffOld" })
     table.insert(out, chunks)
   end
   return out
 end
 
--- The hunk the cursor is on: on its lines, or for lines only taken out, on the line under them.
-local function hunk_at(r, line)
-  for i, h in ipairs(r.hunks) do
-    local last = h.first + h.count - 1
-    if h.count > 0 and line >= h.first and line <= last or h.count == 0 and (line == h.first or line == h.first + 1) then
-      return i
-    end
+local function draw_old(buf, r, h, height)
+  -- A virtual line cannot scroll: more than the window would never be seen whole.
+  local virt = h.base_count > height - 4 and { { { ("− %d lines, more than fits here: <leader>mb puts the file beside its base"):format(h.base_count), "OtisDiffTooLong" } } } or old_lines(buf, r, h)
+  -- Above the first line of what replaced them, or under the line they were after.
+  local row, above = math.max(h.first - 1, 0), h.count > 0 or h.first == 0
+  if row < vim.api.nvim_buf_line_count(buf) then
+    vim.api.nvim_buf_set_extmark(buf, ns, row, 0, { virt_lines = virt, virt_lines_above = above })
   end
 end
 
-local function draw_old(buf, r, at)
-  vim.api.nvim_buf_clear_namespace(buf, old_ns, 0, -1)
+local function draw(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  drawn_in_diff[buf] = in_a_diff(buf)
+  if drawn_in_diff[buf] then
+    return
+  end
   local win = vim.fn.win_findbuf(buf)[1]
-  local width, height = win and vim.api.nvim_win_get_width(win) or 80, win and vim.api.nvim_win_get_height(win) or 40
-  for i, h in ipairs(r.hunks) do
+  local height = win and vim.api.nvim_win_get_height(win) or 40
+  local r = read(buf)
+  for _, h in ipairs(r.hunks) do
+    draw_new(buf, r, h)
     if h.base_count > 0 then
-      local plural = h.base_count == 1 and "" or "s"
-      local virt
-      if h.moved then
-        virt = { { { ("− %d line%s moved"):format(h.base_count, plural), "OtisDiffGone" } } }
-      elseif i ~= at then
-        virt = { { { ("− %d line%s"):format(h.base_count, plural), "OtisDiffGone" } } }
-      elseif h.base_count > height - 4 then
-        -- A virtual line cannot scroll: more than the window would never be seen whole.
-        virt = { { { ("− %d lines, more than fits here: <leader>mb puts the file beside its base"):format(h.base_count), "OtisDiffGone" } } }
-      else
-        virt = whole(buf, r, h, width)
-      end
-      -- Above the first line of what replaced them, or under the line they were after.
-      local row, above = h.first - 1, true
-      if h.count == 0 and h.first > 0 then
-        row, above = h.first - 1, false
-      elseif h.first == 0 then
-        row, above = 0, true
-      end
-      if row < vim.api.nvim_buf_line_count(buf) then
-        vim.api.nvim_buf_set_extmark(buf, old_ns, row, 0, { virt_lines = virt, virt_lines_above = above })
-        -- Above the first line, nvim shows them only if the view is told to.
-        if row == 0 and above and win then
-          vim.api.nvim_win_call(win, function()
-            if vim.fn.line("w0") == 1 then
-              vim.fn.winrestview({ topfill = #virt })
-            end
-          end)
-        end
-      end
+      draw_old(buf, r, h, height)
     end
   end
 end
@@ -269,126 +157,32 @@ colors()
 -- A colorscheme's :hi clear takes them.
 vim.api.nvim_create_autocmd("ColorScheme", { callback = colors })
 
--- draw_here(buf, r, at, line): the change you are on, the new lines of hunk at, and your line.
-local function draw_here(buf, r, at, line)
-  vim.api.nvim_buf_clear_namespace(buf, here_ns, 0, -1)
-  local h = at and r.hunks[at]
-  for i = h and h.first or 1, h and h.first + h.count - 1 or 0 do
-    if not h.lines[i] then
-      vim.api.nvim_buf_set_extmark(buf, here_ns, i - 1, 0, { line_hl_group = "OtisDiffHere", priority = 6 })
-    end
-  end
-  if line <= vim.api.nvim_buf_line_count(buf) then
-    vim.api.nvim_buf_set_extmark(buf, here_ns, line - 1, 0, {
-      sign_text = "▶",
-      sign_hl_group = "OtisDiffHereSign",
-      number_hl_group = "OtisDiffHereSign",
-      line_hl_group = not (h and h.count > 0) and "OtisDiffHereLine" or nil,
-      priority = 7,
-    })
-  end
-end
-
-function M.point(buf, line)
-  local r = kept[buf]
-  if not r or in_a_diff(buf) then
-    return
-  end
-  local at = hunk_at(r, line)
-  if at ~= r.at then
-    r.at = at
-    draw_old(buf, r, at)
-  end
-  draw_here(buf, r, at, line)
-end
-
--- pulse(): the change you landed on, bright and settling, or your line where you landed on no change.
-local pulsing
-local function pulse(at)
-  if pulsing then
-    pulsing:stop()
-    pulsing:close()
-    pulsing = nil
-  end
-  local function rgb(hex)
-    return tonumber(hex:sub(2, 3), 16), tonumber(hex:sub(4, 5), 16), tonumber(hex:sub(6, 7), 16)
-  end
-  local function mix(a, b, t)
-    local ar, ag, ab = rgb(a)
-    local br, bg, bb = rgb(b)
-    return ("#%02x%02x%02x"):format(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t)
-  end
-  local env = vim.env
-  local group = at and "OtisDiffHere" or "OtisDiffHereLine"
-  local from, to = at and env.OTIS_T_PLUS_WORD or env.OTIS_T_RULE, at and env.OTIS_T_PLUS_EMPH or env.OTIS_T_GROUND
-  if not (from and to and from:match("^#%x%x%x%x%x%x$") and to:match("^#%x%x%x%x%x%x$")) then
-    return
-  end
-  local step, steps = 0, 12
-  pulsing = vim.uv.new_timer()
-  pulsing:start(0, 40, vim.schedule_wrap(function()
-    if not pulsing then
-      return
-    end
-    step = step + 1
-    if step > steps then
-      pulsing:stop()
-      pulsing:close()
-      pulsing = nil
-      colors()
-      return
-    end
-    vim.api.nvim_set_hl(0, group, { bg = mix(from, to, step / steps) })
-  end))
-end
-
-function M.land(buf, line)
-  if not vim.b[buf].otis_diffmarks then
-    return
-  end
-  M.point(buf, line)
-  local r = kept[buf]
-  pulse(r and r.at and r.hunks[r.at].count > 0)
-end
-
-function M.redraw(buf)
-  if not vim.api.nvim_buf_is_valid(buf) then
-    return
-  end
-  if in_a_diff(buf) then
-    vim.api.nvim_buf_clear_namespace(buf, lines_ns, 0, -1)
-    vim.api.nvim_buf_clear_namespace(buf, old_ns, 0, -1)
-    vim.api.nvim_buf_clear_namespace(buf, here_ns, 0, -1)
-    return
-  end
-  local r = read(buf)
-  draw_new(buf, r)
-  local win = vim.fn.win_findbuf(buf)[1]
-  local line = win and vim.api.nvim_win_get_cursor(win)[1] or 1
-  r.at = hunk_at(r, line)
-  draw_old(buf, r, r.at)
-  draw_here(buf, r, r.at, line)
-end
-
 function M.attach(buf)
   if vim.b[buf].otis_diffmarks or vim.bo[buf].buftype ~= "" or vim.api.nvim_buf_get_name(buf) == "" then
     return
   end
   vim.b[buf].otis_diffmarks = true
-  ask_moved()
   vim.api.nvim_create_autocmd({ "TextChanged", "InsertLeave", "BufWritePost" }, {
     buffer = buf,
     callback = function()
-      M.redraw(buf)
+      draw(buf)
     end,
   })
-  vim.api.nvim_create_autocmd("CursorMoved", {
-    buffer = buf,
-    callback = function()
-      M.point(buf, vim.fn.line("."))
-    end,
-  })
-  M.redraw(buf)
+  draw(buf)
 end
+
+-- A window going into or out of a diff (<leader>mb, your own), where virtual lines would push the two sides apart: no
+-- autocommand says so for :diffthis or :diffoff, so its next redraw notices.
+vim.api.nvim_set_decoration_provider(ns, {
+  on_win = function(_, _, buf)
+    if vim.b[buf].otis_diffmarks and drawn_in_diff[buf] ~= in_a_diff(buf) then
+      drawn_in_diff[buf] = in_a_diff(buf)
+      vim.schedule(function()
+        draw(buf)
+      end)
+    end
+    return false
+  end,
+})
 
 return M

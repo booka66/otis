@@ -140,8 +140,8 @@ open="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\" git-c
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='code'
-first="]=read,c=comment,v=viewed"
-rest='[=read back,shift-tab=the tab before,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude: its cases there,u=refresh'
+first="]=next change,c=comment,v=viewed"
+rest='[=previous change,shift-tab=the tab before,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude: its cases there,u=refresh'
 set --
 if [ "$kind" = review ]; then
   first="$first,A=approve"

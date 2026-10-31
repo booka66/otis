@@ -69,4 +69,3 @@ printf '%s\n' "$stat" | cut -f3 | git-test-files kinds | awk -F'\t' -v moved="$(
     if (nt) printf "  %s+%d of tests in %d file%s%s\n", dim, t, nt, (nt == 1 ? "" : "s"), r
     if (ng) printf "  %s+%d generated or config in %d file%s%s\n", dim, g, ng, (ng == 1 ? "" : "s"), r }' "$st" -
 rm -f "$st"
-printf "\n  ${GK_CONTEXT}] reads on from here, every change in the order of the list${GK_R}\n"

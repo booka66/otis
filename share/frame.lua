@@ -292,23 +292,13 @@ function M.start()
       end
     end,
   })
-  -- Where a change has a base: what it did drawn on each file that shows, however you got there (diffmarks.lua).
-  -- And in the code, the same walk the list has, so reading on never means leaving the file: enter on and backspace
-  -- back, as in a pager, where neither does anything a reader misses.
+  -- What the change did drawn on each file that shows, however you got there (diffmarks.lua).
   vim.api.nvim_create_autocmd("BufWinEnter", {
     callback = function(ev)
       if ev.buf == buf or vim.fn.win_gettype() ~= "" then
         return
       end
-      if vim.env.NVIM_DIFF_BASE then
-        marks().attach(ev.buf)
-      end
-      vim.keymap.set("n", "<CR>", function()
-        M.key("]")
-      end, { buffer = ev.buf, desc = "otis: read on" })
-      vim.keymap.set("n", "<BS>", function()
-        M.key("[")
-      end, { buffer = ev.buf, desc = "otis: read back" })
+      marks().attach(ev.buf)
       vim.keymap.set("n", "<leader>mv", function()
         tell_list("v")
       end, { buffer = ev.buf, desc = "otis: this row viewed" })
@@ -316,26 +306,6 @@ function M.start()
         vim.api.nvim_set_current_win(vim.t.otis_list)
         tell_list("A")
       end, { buffer = ev.buf, desc = "otis: approve" })
-    end,
-  })
-  -- Moving in the code moves the list: gd into a helper the change touches and its row lights up. Only from the code,
-  -- or a row you just left would come back and take the cursor from you. Asked for a moment after you stop.
-  local timer = vim.uv.new_timer()
-  vim.api.nvim_create_autocmd({ "CursorMoved", "BufEnter" }, {
-    callback = function()
-      timer:start(120, 0, vim.schedule_wrap(function()
-        local code = vim.t.otis_code
-        if not valid(code) or vim.api.nvim_get_current_win() ~= code then
-          return
-        end
-        local b = vim.api.nvim_win_get_buf(code)
-        if vim.bo[b].buftype ~= "" then
-          return
-        end
-        local at = vim.env.OTIS_NVIM_FRAME .. "/at"
-        vim.fn.writefile({ vim.fn.fnamemodify(vim.api.nvim_buf_get_name(b), ":.") .. "\t" .. vim.api.nvim_win_get_cursor(code)[1] }, at .. ".new")
-        vim.uv.fs_rename(at .. ".new", at)
-      end))
     end,
   })
   -- What the change did, marked down the side of the code as its preview
@@ -351,8 +321,8 @@ function M.start()
   vim.cmd.startinsert()
 end
 
--- changes(win): the runs of lines to read in the window, { first, last } in order: a preview's, found as it was drawn
--- (text), or a file's since the change's base (NVIM_DIFF_BASE, else HEAD), less those that only moved. In the lit
+-- changes(win): the runs of lines the window's change made, { first, last, old lines drawn above first } in order: a
+-- preview's, found as it was drawn (text), or a file's since the change's base (NVIM_DIFF_BASE, else HEAD). In the lit
 -- row's file, its symbol's alone: those that touch its lines here or in the base, cut to its lines here.
 local function changes(win)
   local b = vim.api.nvim_win_get_buf(win)
@@ -365,14 +335,12 @@ local function changes(win)
     return n > 0 and at <= lines[2] and at + n > lines[1]
   end
   for _, h in ipairs(marks().hunks(b)) do
-    if not h.moved then
-      if not lit then
-        table.insert(runs, { h[1], h[2] })
-      elseif meets(h[1], h.count, lit.lines) then
-        table.insert(runs, { math.max(h[1], lit.lines[1]), math.min(h[2], lit.lines[2]) })
-      elseif meets(h[3], h.base_count, lit.base) then
-        table.insert(runs, { h[1], h[2] })
-      end
+    if not lit then
+      table.insert(runs, { h[1], h[2], h.base_count })
+    elseif meets(h[1], h.count, lit.lines) then
+      table.insert(runs, { math.max(h[1], lit.lines[1]), math.min(h[2], lit.lines[2]), h.base_count })
+    elseif meets(h[3], h.base_count, lit.base) then
+      table.insert(runs, { h[1], h[2], h.base_count })
     end
   end
   return runs
@@ -383,15 +351,12 @@ end
 -- symbol, "<first> <last> <base first> <base last> <name>...", is the row's
 -- (git-symbols --deps): its lines here and in the change's base, 0 0 for
 -- none, where ] and [ stay, and the changed symbols it uses, underlined in
--- its lines while the file shows here. how: "stay", the cursor is already where you want it (the list following you,
--- not you following the list), so it does not move; "last", you came back to this row with [, so on its last change,
--- as ] left it; "here", enter, so if this row already shows you stay on what you are looking at. line is the row's first
--- stop either way (otis_home), where [ comes to before it leaves the row.
-function M.open(path, line, col, readonly, symbol, how)
+-- its lines while the file shows here. here, enter's: if this row already shows, you stay on what you are looking at.
+function M.open(path, line, col, readonly, symbol, here)
   local code = M.code()
   vim.api.nvim_win_call(code, function()
     local full = vim.fn.fnamemodify(path, ":p")
-    if how == "here" and vim.api.nvim_buf_get_name(0) == full and vim.t.otis_asked == line then
+    if here and vim.api.nvim_buf_get_name(0) == full and vim.t.otis_asked == line then
       return
     end
     vim.t.otis_asked = line
@@ -417,34 +382,17 @@ function M.open(path, line, col, readonly, symbol, how)
       vim.bo.readonly = true
       vim.bo.modifiable = false
     end
-    if vim.env.NVIM_DIFF_BASE then
-      marks().attach(vim.api.nvim_get_current_buf())
+    marks().attach(vim.api.nvim_get_current_buf())
+    pcall(vim.api.nvim_win_set_cursor, 0, { line, math.max(col - 1, 0) })
+    if col == 0 then
+      vim.cmd("normal! ^")
     end
-    if how ~= "stay" then
-      pcall(vim.api.nvim_win_set_cursor, 0, { line, math.max(col - 1, 0) })
-      if col == 0 then
-        vim.cmd("normal! ^")
-      end
-      vim.cmd("normal! zz")
-    end
-    -- A removed symbol's row asks for line 0: home is where that left you.
-    vim.t.otis_home = how == "stay" and math.max(line, 1) or vim.fn.line(".")
+    vim.cmd("normal! zz")
     local w, names = vim.split(symbol or "", " ", { trimempty = true }), {}
     for i = 5, #w do
       names[w[i]] = true
     end
     vim.t.otis_lit = w[4] and { buf = vim.api.nvim_get_current_buf(), lines = { tonumber(w[1]), tonumber(w[2]) }, base = { tonumber(w[3]), tonumber(w[4]) }, names = names } or nil
-    if how == "last" then
-      local runs = changes(code)
-      if #runs > 0 then
-        pcall(vim.api.nvim_win_set_cursor, 0, { runs[#runs][1], 0 })
-        vim.cmd("normal! zz")
-      end
-    end
-    -- A move inside the code window from here is no CursorMoved: you are in the list.
-    if how ~= "stay" then
-      marks().land(vim.api.nvim_get_current_buf(), vim.fn.line("."))
-    end
   end)
   -- A row can land while its file already shows, so no window event says it: for what draws on files (mr-comments.lua).
   vim.api.nvim_exec_autocmds("User", { pattern = "OtisFrameOpen" })
@@ -586,7 +534,6 @@ function M.text(file, key)
   local lines, marks = render(raw)
   -- The lit row is no symbol's: nothing underlined, whatever comes back here.
   vim.t.otis_lit = nil
-  vim.t.otis_home = nil
   -- From the code window, the buffer shown before anything is set on it, in
   -- the one redraw: what nvim does to a buffer in no window (an option set)
   -- it does through a window of its own as wide as the screen, which from
@@ -647,61 +594,16 @@ function M.focus()
   end
 end
 
--- glide(win, lnum, top): the window's view there, the code sliding rather than jumping so your eye can follow it. A key
--- pressed meanwhile finishes it at once (package.loaded.otis_glide, this file being loaded afresh on every call).
-local function glide(win, lnum, top)
-  local from = vim.api.nvim_win_call(win, function()
-    return vim.fn.line("w0")
-  end)
-  local function place(t, l)
-    vim.api.nvim_win_call(win, function()
-      vim.fn.winrestview({ lnum = l, col = 0, topline = t })
-    end)
-  end
-  if from == top then
-    place(top, lnum)
-    return
-  end
-  local timer, step, steps = vim.uv.new_timer(), 0, 8
-  local function finish()
-    package.loaded.otis_glide = nil
-    timer:stop()
-    timer:close()
-    if valid(win) then
-      place(top, lnum)
-    end
-  end
-  package.loaded.otis_glide = finish
-  local h = vim.api.nvim_win_get_height(win)
-  timer:start(0, 20, vim.schedule_wrap(function()
-    if package.loaded.otis_glide ~= finish then
-      return
-    end
-    step = step + 1
-    if step >= steps or not valid(win) then
-      finish()
-      return
-    end
-    local t = step / steps
-    local at = math.floor(from + (top - from) * (1 - (1 - t) ^ 2))
-    place(at, math.max(math.min(lnum, at + h - 1), at))
-  end))
-end
-
 -- What the list's scrolling keys are in the code window: nvim's own.
 local scrolls = { ["ctrl-d"] = "\4", ["ctrl-u"] = "\21", ["ctrl-e"] = "\5", ["ctrl-y"] = "\25" }
 
--- key(name): a key of the picker's pane, done in the code window: ctrl-d, ctrl-u, ctrl-e and ctrl-y scroll it, and ]
--- and [ read on and back, each the exact way back of the other. A row's stops are where it opened and then its runs; ]
--- is the next screen of a run too long for the window, else the next stop, put in the middle. Past the row's last stop
--- the list goes on to its next row (its . and ,), so one key reads the whole change.
+-- key(name): a key of the picker's pane, pressed in the list, done in the code window: ctrl-d, ctrl-u, ctrl-e and ctrl-y
+-- scroll it, and ] and [ put the next or the last change after or before its cursor in its middle, old lines and all, a
+-- symbol's own on its row.
 function M.key(name)
   local code = vim.t.otis_code
   if not valid(code) then
     return
-  end
-  if package.loaded.otis_glide then
-    package.loaded.otis_glide()
   end
   if scrolls[name] then
     vim.api.nvim_win_call(code, function()
@@ -709,45 +611,22 @@ function M.key(name)
     end)
     return
   end
-  local b = vim.api.nvim_win_get_buf(code)
-  local at, to, runs = vim.api.nvim_win_get_cursor(code)[1], nil, changes(code)
-  local top = vim.fn.line("w0", code)
-  local bottom = vim.fn.line("w$", code)
-  -- Where you end up lit at once; the code comes to it.
-  local function arrive(lnum, want_top)
-    marks().land(b, lnum)
-    glide(code, lnum, want_top)
-  end
-  for _, r in ipairs(runs) do
-    if name == "]" and at >= r[1] and at <= r[2] and r[2] > bottom then
-      arrive(bottom, math.max(bottom - 2, 1))
-      return
-    end
+  local at, to = vim.api.nvim_win_get_cursor(code)[1], nil
+  for _, r in ipairs(changes(code)) do
     if name == "]" and r[1] > at and not to or name == "[" and r[1] < at then
       to = r
     end
   end
-  local home = vim.t.otis_home
-  if name == "[" and home and home < at and (not to or home > to[1]) then
-    to = { home, home }
-  end
   if not to then
-    -- Held down, one row at a time: the next row is still being opened.
-    local now = vim.uv.now()
-    if now - (vim.t.otis_went or 0) > 150 then
-      vim.t.otis_went = now
-      tell_list(name == "]" and "." or ",")
-    end
     return
   end
-  -- Already in view, the code stays still and only the light moves. Else in the middle, or from near the top when it
-  -- is taller than the window, as the pane put it.
-  local h = vim.api.nvim_win_get_height(code)
-  local want = top
-  if to[1] < top or to[2] > bottom then
-    want = math.max(to[2] - to[1] < h and math.floor((to[1] + to[2] - h) / 2) + 1 or to[1] - 3, 1)
-  end
-  arrive(to[1], want)
+  -- From near the top when it is taller than the window, as the pane put it. Above a file's first line old lines show
+  -- only if the view is told to.
+  local h, old = vim.api.nvim_win_get_height(code), to[3] or 0
+  local top = math.max(to[2] - to[1] + old < h and math.floor((to[1] + to[2] - h - old) / 2) + 1 or to[1] - 3, 1)
+  vim.api.nvim_win_call(code, function()
+    vim.fn.winrestview({ lnum = to[1], col = 0, topline = top, topfill = top == to[1] and old or 0 })
+  end)
 end
 
 -- comment(): into the code and a comment on the line you are on (mr-comments.lua), the box under that line.

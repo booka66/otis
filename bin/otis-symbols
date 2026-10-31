@@ -592,26 +592,20 @@ settle_cur() {
 }
 # unviewed <1|-1>: the next or the previous symbol not yet viewed, from the
 # cursor; none left, the footer says so.
-# walk <1|-1>: the next row of the change there is to read, in the order the list has them, or the one before. On, it
-# passes what you marked viewed; back, it does not, since going back is to read again. ] comes here past a row's last
-# change, so one key reads the whole change. A ↑ row is drawn whole elsewhere; callers are not in the change.
-walk() {
+unviewed() {
   local at=${vis[(Ie)$cur]} i n
   (( $#vis )) || return
-  for (( n = at + $1; n >= 1 && n <= $#vis; n += $1 )); do
-    i=$vis[n]
-    [[ $typ[i] == (sym|file|sent|plain) ]] || continue
-    (( $1 > 0 )) && [[ $vwd[i] == all ]] && continue
-    (( flast = $1 < 0 ))
-    go $i; return
+  for (( n = 1; n < $#vis; n++ )); do
+    (( i = ((at - 1 + $1 * n) % $#vis + $#vis) % $#vis + 1 ))
+    i=$vis[i]
+    [[ $typ[i] == sym && $vwd[i] != all ]] && { go $i; return; }
   done
-  if (( $1 > 0 )); then flash="that is all of it"; else flash="this is the first of it"; fi
+  flash="every symbol is viewed"
 }
 step() {
   local at=${vis[(Ie)$cur]}
   (( $#vis )) || return
   (( at += $1, at < 1 ? (at = 1) : 0, at > $#vis ? (at = $#vis) : 0 ))
-  flast=0
   go $vis[at]
 }
 # go <row>: the cursor there, the preview's scroll put aside for the row it
@@ -984,7 +978,7 @@ helplines() {
 # frame shows it beside the list) and any other its preview, or ? the keys.
 # One at a time: a row passed while one is out is skipped, and the newest
 # shows once it lands.
-integer fpid=0 flast=0
+integer fpid=0
 fshown=
 coderow() { [[ -n $show ]] && fields $1 && [[ -n $fld[2] ]]; }
 framepush() {
@@ -1002,40 +996,9 @@ framepush() {
     # A row drawn again as something lands keeps nvim's scroll, by its key.
     cmd="otis-frame --text ${(qq)${what#text }} ${(qq)key}"
   fi
-  # Come back to with [: on its last change (walk), so back is the way ] came.
-  local how=; (( flast )) && how=last
-  flast=0
-  { unlisten; OTIS_FRAME_HOW=$how zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
+  { unlisten; zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
   fpid=$!
   print -r -- "$EPOCHREALTIME frame $what" >> $trace
-}
-# follow: you moved in the code (frame.lua leaves where in $OTIS_NVIM_FRAME/at), so the list moves to the row you
-# are in: the narrowest symbol there that it shows, else the file's row. The row's open then runs to underline what
-# it uses and keep ] in it, with the cursor left alone (OTIS_FRAME_HOW).
-fat=
-follow() {
-  (( framed )) && [[ -s $OTIS_NVIM_FRAME/at ]] || return 1
-  local a=$(<$OTIS_NVIM_FRAME/at) i best=0 fr=0
-  [[ $a == $fat ]] && return 1
-  fat=$a
-  local p=${a%%$'\t'*} l=${a##*$'\t'}
-  integer w bw=0
-  for i in $vis; do
-    [[ $typ[i] == (sym|file) ]] || continue
-    fields $i
-    [[ $fld[2] == $p ]] || continue
-    [[ $typ[i] == file ]] && { fr=$i; continue }
-    [[ $fld[4] == new && $fld[5] == <-> && $fld[6] == <-> ]] && (( fld[5] <= l && l <= fld[6] )) || continue
-    (( w = fld[6] - fld[5] ))
-    (( ! best || w < bw )) && { best=$i bw=$w }
-  done
-  (( best )) || best=$fr
-  (( best && best != cur )) || return 1
-  go $best
-  fshown="row $rid[best]"
-  subst "$show" $best
-  local cmd=$REPLY
-  { unlisten; OTIS_FRAME_HOW=stay zsh -fc "$cmd" </dev/null >/dev/null 2>&1 } &!
 }
 draw() {
   local t0=$EPOCHREALTIME
@@ -1288,6 +1251,8 @@ landed() {
   (( cur )) || cur=$fall
   (( cur > $#raw )) && cur=$#raw
   list; settle_cur
+  # A review opens in the code: on the first symbol, The change the row over it.
+  [[ -z $was && $rid[cur] == change: ]] && step 1
   # Still on the row it was on: its scroll as you left it a moment ago, not
   # as it was when you came onto it (offs is kept when you leave a row), or
   # every landing in the background sent the preview back to the top.
@@ -1965,7 +1930,7 @@ box_tick() {
 
 # What this screen's own keys are for, as the key log says it (keys_used);
 # the keys a caller offers say so themselves.
-typeset -A own=(']' 'read on' '[' 'read back' . 'next row not viewed' , 'the row before'
+typeset -A own=(']' 'next change' '[' 'previous change' . 'next one not viewed' , 'previous one not viewed'
   / 'search the rows' '?' 'these keys' ctrl-a "Claude's panel")
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.
@@ -2123,10 +2088,10 @@ handle() {
     ctrl-u) scroll $(( - (ph - phd) / 2 )) ;;
     ctrl-e) scroll 1 ;;
     ctrl-y) scroll -1 ;;
-    ']') hunk 1 || walk 1 ;;
-    '[') hunk -1 || walk -1 ;;
-    '.') walk 1 ;;
-    ',') walk -1 ;;
+    ']') hunk 1 ;;
+    '[') hunk -1 ;;
+    '.') unviewed 1 ;;
+    ',') unviewed -1 ;;
     ctrl-c) quit 130 ;;
   esac
 }
@@ -2242,7 +2207,6 @@ while :; do
     if (( hold )); then
       if holding; then changed=0; else hold=0 changed=1; fi
     fi
-    follow && changed=1
     (( changed )) && draw
     (( ! help && ! settle )) && want
     framepush

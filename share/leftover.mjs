@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // leftover.mjs <base> <head>: the lines of a change that only moved or were renamed, found from the diff alone, one a
-// line as <new|old>, path, line. The review's nvim leaves them off the green (share/diffmarks.lua) and ] passes them.
-// stops.mjs imports the same sorting, for what it leaves out of what Claude reads.
+// line as <new|old>, path, line. The change row counts them (git-mr-overview); stops.mjs imports the same sorting, for
+// what it leaves out of what Claude reads.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 

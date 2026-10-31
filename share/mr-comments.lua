@@ -20,8 +20,7 @@
 --   <leader>mb   the file beside its base, in a diff, or on its own again
 --   ]r  [r       the next or previous file in the MR, at its first change
 --
--- In the review's frame (share/frame.lua) enter and backspace read on and back through the whole change, <leader>mv
--- marks the row viewed and <leader>ma approves.
+-- In the review's frame (share/frame.lua) <leader>mv marks the row viewed and <leader>ma approves.
 --
 -- Reviewing, new comments and replies are drafts, shown as ✎ until you submit
 -- them, so the MR's people hear once, not once per comment; on your own MR
