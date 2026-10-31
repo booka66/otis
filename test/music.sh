@@ -53,6 +53,30 @@ expect music/M-on-its-results "$(PATH=$tmp/yt:$PATH TERM=xterm-256color zsh -fc 
   for _ in {1..30}; do while zpty -rt s buf; do :; done; zpty -t s || { print -n " left"; break }; sleep 0.1; done
   zpty -d s 2>/dev/null')" "back left"
 
+# A pick YouTube refuses says why, where the screen said "starting it…" and went quiet.
+# The error is cliamp's own shape around yt-dlp's stderr; the stand-in cliamp plays nothing.
+mkdir -p "$tmp/no"
+zsh -fc 'zmodload zsh/net/socket; zsocket -l "$1"' - "$tmp/no/cliamp.sock" 2>/dev/null
+cat > "$tmp/no/cliamp" <<'EOF'
+#!/bin/sh
+[ "$1" = remote ] || exit 0
+[ -n "$REFUSAL" ] && printf "job failed (internal): internal (yt-dlp: ERROR: [youtube] abc: %s)\n" "$REFUSAL" >&2 ||
+  printf "job failed (internal): internal (yt-dlp: WARNING: [youtube] abc: HTTP Error 429\nERROR: [youtube] abc: Sign in to confirm you’re not a bot. Use --cookies-from-browser)\n" >&2
+exit 1
+EOF
+chmod +x "$tmp/no/cliamp"
+expect music/refusal-is-a-line "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no otis-music --play x 2>&1 >/dev/null; echo "exit $?")" "YouTube asked if this machine is a bot and would not play it. yt-dlp can use your browser's sign-in: put --cookies-from-browser <browser> in ~/.config/yt-dlp/config.
+exit 1"
+expect music/other-refusal-is-its-reason "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no REFUSAL='Video unavailable' otis-music --queue x 2>&1 >/dev/null)" "That would not play: Video unavailable"
+printf '#!/bin/sh\nprintf "Youtube\\tabc\\t1:00\\tDJ\\tA set\\n"\n' > "$tmp/no/yt-dlp"; chmod +x "$tmp/no/yt-dlp"
+expect music/refused-pick-says-why "$(PATH=$tmp/no:$PATH CLIAMP_CONFIG_DIR=$tmp/no TERM=xterm-256color zsh -fc 'zmodload zsh/zpty; setopt extendedglob
+  zpty -b s "stty rows 30 cols 150; otis-music"
+  upto() { for _ in {1..100}; do while zpty -rt s buf; do out+=$buf; done; [[ ${out//$'"'"'\e'"'"'\[[0-9;?]#[A-Za-z]/} == *$1* ]] && return 0; sleep 0.1; done; return 1 }
+  upto "searches YouTube"; sleep 0.3; zpty -wn s /; out=; upto "search YouTube"; sleep 0.3; zpty -wn s $'"'"'set\r'"'"'; out=; upto "A set"; sleep 0.3
+  out=; zpty -wn s $'"'"'\r'"'"'; upto "asked if this machine is a bot" && print -n said; out=
+  zpty -wn s s; sleep 0.5; while zpty -rt s buf; do out+=$buf; done; [[ $out == *$'"'"'\e[6;1H\e[0m\e[K'"'"'* ]] && print -n " cleared"
+  zpty -wn s q; sleep 0.2; zpty -d s 2>/dev/null')" "said cleared"
+
 # Holding an arrow moves the clock at once and tells the player once, where you stopped: each seek restarts a stream.
 mkdir -p "$tmp/seek"; : > "$tmp/seek/calls"
 printf '#!/bin/sh\necho "$*" >> "%s"\n' "$tmp/seek/calls" > "$tmp/seek/cliamp"

@@ -12,6 +12,8 @@
 #                                 each: its link, then how long, who and what
 #   otis-music --play <link>      play it now
 #   otis-music --queue <link>     play it next
+#
+# Those two exit 1 with why on stderr, one line, where it would not load.
 setopt extendedglob no_nomatch typeset_silent
 [[ -n $OTIS_T_NAME && $OTIS_THEME == "$OTIS_T_WANT" ]] || eval "$(otis-theme --env)"
 
@@ -43,10 +45,16 @@ case $1 in
       done
     exit 0 ;;
   --play|--queue)
-    cliamp_up || exit 1
+    cliamp_up || { print -ru2 -- "cliamp did not start."; exit 1 }
     now=true; [[ $1 == --queue ]] && now=false
-    cliamp remote call url.load --params "$(jq -cn --arg p "$2" --argjson now $now '{path: $p, play: $now}')" --wait >/dev/null 2>&1
-    exit ;;
+    why=$(cliamp remote call url.load --params "$(jq -cn --arg p "$2" --argjson now $now '{path: $p, play: $now}')" --wait 2>&1 >/dev/null) && exit 0
+    # cliamp's error carries all of yt-dlp's stderr, warnings first, inside parentheses.
+    case $why in
+      *"not a bot"*) print -ru2 -- "YouTube asked if this machine is a bot and would not play it. yt-dlp can use your browser's sign-in: put --cookies-from-browser <browser> in ~/.config/yt-dlp/config." ;;
+      *ERROR:*) why=${${why##*ERROR: }%\)}; print -ru2 -- "That would not play: ${why#\[*\] *: }" ;;
+      *) print -ru2 -- "That would not play: ${why:-cliamp gave no reason}" ;;
+    esac
+    exit 1 ;;
 esac
 
 unset FZF_PORT FZF_API_KEY
@@ -70,6 +78,9 @@ screen_start
 music_rule() { REPLY=$F${(l:W::─:)}$R }
 flash=
 float flashend=0
+# refused: why the last pick would not load, up until the next key. Picks load
+# behind the screen, which hears through $st/said.
+refused=
 
 # clock <seconds>: as 41:12, or 1:11:45 past an hour.
 clock() {
@@ -108,6 +119,11 @@ draw() {
     fr+=("  ${T}otis plays music through cliamp 2:$R ${EL}https://github.com/bjarneo/cliamp$R")
   else
     fr+=("  ${T}Nothing is playing.$R" "  $C/ searches YouTube, and what you pick plays in cliamp.$R")
+  fi
+  if [[ -n $refused ]]; then
+    fr+=("")
+    whole "$refused" $(( W - 4 ))
+    for s in "${(@)reply}"; do (( $#fr < H - 6 )) && fr+=("  $A$s$R"); done
   fi
   fr+=("")
   # The bars stand under that and over the clock, as tall as there is room.
@@ -186,15 +202,16 @@ search() {
   run_tty "otis-popup text 'search YouTube' > ${(q)st}/q" sh
   q=$(<$st/q) 2>/dev/null; rm -f $st/q
   [[ -n ${q// } ]] || { draw; return }
-  local title="♪ $q " load="start:reload(otis-music --search ${(q)q})"
+  local title="♪ $q " load="start:reload(otis-music --search ${(q)q})" next="a:execute-silent(otis-music --queue {1} 2>>${(q)st}/said)"
   run_tty "OTIS_SCREEN=youtube git-fzf ${(q)title} 'enter=play it,a=play it next' --ansi --delimiter='\t' --with-nth=2 \
-    --bind ${(q)load} --bind 'a:execute-silent(otis-music --queue {1})' --bind 'M:abort' > ${(q)st}/pick" sh
+    --bind ${(q)load} --bind ${(q)next} --bind 'M:abort' > ${(q)st}/pick" sh
   pick=$(<$st/pick) 2>/dev/null; rm -f $st/pick
   # Until it plays, which takes yt-dlp a few seconds to find its audio.
-  if [[ -n $pick ]]; then flash="starting it…" flashend=$(( EPOCHREALTIME + 20 )); { otis-music --play ${pick%%$'\t'*} } >/dev/null 2>&1 &!; fi
+  if [[ -n $pick ]]; then flash="starting it…" flashend=$(( EPOCHREALTIME + 20 )); otis-music --play ${pick%%$'\t'*} >/dev/null 2>>$st/said &!; fi
   draw
 }
 handle() {
+  refused=
   case $1 in
     $e'[D'|h) seek left 'back ten seconds' -10; return ;;
     $e'[C'|l) seek right 'on ten seconds' 10; return ;;
@@ -232,6 +249,7 @@ while :; do
       orphaned && quit 1
       [[ -z $winch ]] && size
       [[ -n $flash ]] && (( EPOCHREALTIME > flashend )) && flash=
+      if [[ -s $st/said ]]; then refused=$(<$st/said) refused=${refused##*$'\n'} flash=; rm -f -- $st/said; fi
       draw
     fi
     # The player has changed (not its clock): what a key asked for is done.
