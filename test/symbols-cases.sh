@@ -267,12 +267,12 @@ EOF
   rm -f "$cache/symbols-sentences/$base-$head.failed"
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GMR_IID=7 GIT_FZF_STATE=$tmp/failst4 git-symbols --again "$base..$head" >/dev/null 2>&1; sleep 0.3
   expect sentences/off-stays-off "$(ls "$cache/symbols-sentences" | grep -c 'running\|failed')" "0"
-  # A review opens on seam's tree, whole, under what the change is; tab goes on to its files, then its cases.
+  # A review opens on seam's tree, a closed row a symbol, under what the change is; tab goes on to its files, then its cases.
   rm -rf "$tmp/opens"; mkdir -p "$tmp/opens"
   ol() { GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=otis.symbolsModel GIT_CONFIG_VALUE_0=off GIT_CONFIG_KEY_1=otis.callers GIT_CONFIG_VALUE_1=off GMR_IID=7 GIT_FZF_STATE=$tmp/opens OTIS_SYMBOLS_WIDTH=80 FZF_COLUMNS=160 git-mr-files "$@"; }
   first=$(ol --list 7 "$base..$head" 2>/dev/null | strip)
   expect review/opens-on-the-change "$(printf '%s\n' "$first" | head -1 | cut -f1,12)" "The change	change:"
-  expect review/tree-open "$(printf '%s\n' "$first" | awk -F'\t' '$12 ~ />/ { n++ } END { print (n > 0) }'):$(ls "$tmp/opens"/sentences-asked.* "$tmp/opens"/stops-asked.* 2>/dev/null | wc -l | tr -d ' ')" "1:0"
+  expect review/tree-closed "$(printf '%s\n' "$first" | awk -F'\t' '$12 ~ />/ { n++ } END { print (n > 0) }'):$(ls "$tmp/opens"/sentences-asked.* "$tmp/opens"/stops-asked.* 2>/dev/null | wc -l | tr -d ' ')" "0:0"
   tabs=; for _ in 1 2 3; do ol --toggle; tabs="$tabs$(ls "$tmp/opens" | grep -E '^by-(file|case)$' | tr -d '\n') "; done
   expect review/tab-order "$tabs" "by-file by-case  "
   ol --toggle back; expect review/tab-back "$(ls "$tmp/opens" | grep -E '^by-(file|case)$')" "by-case"; ol --toggle
@@ -446,7 +446,7 @@ EOF
   for k in l h L H b i p; do
     for f in git-symbols git-mr-files; do
       grep -q "bind \"$k:.*git-symbols" "$root/bin/$f" || expect "symbols/$f-binds-$k" "unbound" "bound"
-      grep -qE "(keys|first|rest)=.*[,']$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
+      grep -qE "(keys|first|rest)=.*[,'\"]$k=" "$root/bin/$f" || expect "symbols/$f-lists-$k" "not in its keys" "listed"
     done
   done
   # In a narrow pane the signature keeps to its one row, on the code

@@ -949,14 +949,14 @@ spun_on() { local was=$spun; spinning && [[ $spun != $was ]]; }
 # in room with used_ columns taken, then ? keys. An action every screen has
 # says its one word there, as on the board: w web, y link.
 foot_keys() {
-  local -A word=('open it in the browser' web 'copy its link' link 'mark it viewed' viewed 'mark it and all under it viewed' viewed 'mark all under it viewed' viewed 'mark it not viewed' unview 'mark all under it not viewed' unview)
+  local -A word=('open it' open 'close it' close 'open it in the browser' web 'copy its link' link 'mark it viewed' viewed 'mark it and all under it viewed' viewed 'mark all under it viewed' viewed 'mark it not viewed' unview 'mark all under it not viewed' unview)
   local n k v
   for (( n = 1; n <= $#hk; n++ )); do
     [[ $hk[n] == enter ]] && continue
     (( hm[n] )) && ! (( ${+rkl[$hk[n]]} )) && continue
     v=$hv[n]; (( ${+rkl[$hk[n]]} )) && v=$rkl[$hk[n]]
     [[ -n $v ]] || continue
-    v=${word[$v]:-$v} k="$hk[n] $v"
+    v=${v%%: * under it} v=${word[$v]:-$v} k="$hk[n] $v"
     (( used_ + ${(m)#k} + 2 > room )) && break
     foot+=$A$hk[n]$R$C" $v  "$R; (( used_ += ${(m)#k} + 2 ))
   done

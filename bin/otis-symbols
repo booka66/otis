@@ -956,7 +956,7 @@ helplines() {
   P+=("")
   for k v in j/k move g/G "top, bottom (unless the list takes them)" / "search the rows" ctrl-d/u "scroll the preview" \
     ctrl-e/y "the preview a line" J/K "the part above the code, when it has more than fits (the wheel over it too)" \
-    "]/[" "next, previous change in the preview" "./," "next, previous symbol not yet viewed" \
+    "]/[" "next, previous hunk of the symbol, in the preview" "./," "next, previous symbol not yet viewed" \
     drag "in the preview: text, copied, a diff's lines without the gutter; a asks Claude about them; a word: y you know it, n you don't, and Claude reads up on it, a say what it is yourself" \
     numbers "in a review, drag down a diff's line numbers, or tap one: those lines; c opens a box under them to write in, a flag's line with its comment typed in" \
     comment "in a case's pane, click one: c replies and e edits yours in a box under it, d deletes yours, r resolves it or opens it again" \
@@ -1930,7 +1930,7 @@ box_tick() {
 
 # What this screen's own keys are for, as the key log says it (keys_used);
 # the keys a caller offers say so themselves.
-typeset -A own=(']' 'next change' '[' 'previous change' . 'next one not viewed' , 'previous one not viewed'
+typeset -A own=(']' 'next hunk' '[' 'previous hunk' . 'next one not viewed' , 'previous one not viewed'
   / 'search the rows' '?' 'these keys' ctrl-a "Claude's panel")
 # handle <key>: one key. The picker's bindings come first, then this
 # screen's own, as git-fzf's came under a caller's.

@@ -49,10 +49,9 @@ if [ "$1" = --list ]; then
     git-mr-file-preview --files "$iid" "$range" | awk -F'\t' 'BEGIN { OFS = "\t" } { id = $4; $4 = ""; $12 = id; if ($2 != "") $13 = "plain"; print }'
     exit 0
   fi
-  # A review's tree opens open: the rows are the map of the change, and l and h were a third of the keys pressed in one.
-  # Over it, what the change is (git-mr-overview).
+  # A review's tree opens closed, a row a symbol: j and k go symbol to symbol, l opens one to what it uses, and ] and [
+  # are the hunks of the one you are on. Over it, what the change is (git-mr-overview).
   if [ ! -e "$st/by-case" ]; then
-    [ -e "$st/opened" ] || { : > "$st/opened"; export OPEN_ALL=1; }
     printf 'The change\t\t\t\t\t\t\t\t\t\t\tchange:\n'
   fi
   # By symbol: the open threads and drafts on each symbol'"'"'s lines, then the
@@ -140,8 +139,8 @@ open="env OTIS_FRAME_UNDERLINE=\"\$(git-symbols --deps {4} {5} {6} {12})\" git-c
 # The first keys are the review itself, and the footer shows those; the
 # rest are behind ?.
 opens='open in your editor'; command -v nvim >/dev/null 2>&1 && opens='code'
-first="]=next change,c=comment,v=viewed"
-rest='[=previous change,shift-tab=the tab before,l=open it,h=close it,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude: its cases there,u=refresh'
+first="l=open it,h=close it,]=next hunk,c=comment,v=viewed"
+rest='[=previous hunk,shift-tab=the tab before,L=open all,H=close all,b=bottom up / top down,i=what it uses,p=peeks on/off,F=make the proposed fix,o=threads on no line,y=copy its name,G=the cases as a page in the browser,P=link that page first in the description,t=tests/config/generated,m=commits view,w=open it in the browser,r=ask Claude: its cases there,u=refresh'
 set --
 if [ "$kind" = review ]; then
   first="$first,A=approve"
