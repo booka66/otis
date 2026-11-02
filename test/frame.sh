@@ -124,23 +124,25 @@ new Cart(); helper(c.helper())|const o = { helper: 1, Cart }|f(...helper)"
   expect frame/key-preview "$(fkeys "text('$tmp/pv3.txt')")" "3 5 5 3 3 "
 fi
 if command -v nvim >/dev/null 2>&1; then
-  # The change drawn on the file (diffmarks.lua): new lines on the diff's ground, the word that changed brighter, what
-  # was taken out on red where it was; one too long for the window says so.
-  ( mkdir -p "$tmp/dm" && cd "$tmp/dm" && seq 1 40 | sed 's/$/ original line of text/' > n.txt &&
+  # The change drawn on the file (diffmarks.lua): new lines on the diff's ground, the word that changed brighter on
+  # screen too, what was taken out on red where it was, wrapped as the window wraps a line; one too long for the window
+  # says so.
+  ( mkdir -p "$tmp/dm" && cd "$tmp/dm" && seq 1 40 | sed -e 's/$/ original line of text/' -e "12s/.*/12 $(printf 'word %.0s' $(seq 20))/" > n.txt &&
     git init -q . && git add . && git -c user.email=t@t -c user.name=t commit -qm base &&
-    { sed -e '5s/original/changed/' -e '20,22d' -e '30,39d' n.txt; echo 'brand new line'; } > n.new && mv n.new n.txt )
+    { sed -e '5s/original/changed/' -e '12s/.*/12 short/' -e '20,22d' -e '30,39d' n.txt; echo 'brand new line'; } > n.new && mv n.new n.txt )
   dmb=$(git -C "$tmp/dm" rev-parse HEAD)
   cat > "$tmp/dm.lua" <<'EOF'
 local marks = dofile(vim.env.SHARE .. "/diffmarks.lua")
 vim.cmd("edit n.txt")
 vim.api.nvim_win_set_height(0, 12)
+vim.wo.linebreak = true
 local buf = vim.api.nvim_get_current_buf()
 marks.attach(buf)
 local function report()
   local new, word, old = {}, {}, {}
   for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespace("otis_diffmarks"), 0, -1, { details = true })) do
     local d = m[4]
-    if d.line_hl_group then new[#new + 1] = m[2] + 1 end
+    if d.hl_group == "OtisDiffNew" then new[#new + 1] = m[2] + 1 end
     if d.hl_group == "OtisDiffNewWord" then word[#word + 1] = (m[2] + 1) .. ":" .. m[3] .. "-" .. d.end_col end
     if d.virt_lines then
       local ls = {}
@@ -153,6 +155,9 @@ end
 io.stdout:write(report(), "\n")
 -- A redraw notices, with a screen to draw on.
 local function settle() vim.cmd("redraw!"); vim.wait(50) end
+settle()
+local function attr(col) local p = vim.fn.screenpos(0, 5, col); return vim.fn.screenattr(p.row, p.col) end
+io.stdout:write(attr(3) ~= attr(1) and "brighter" or "same", "\n")
 vim.cmd("diffthis"); settle()
 io.stdout:write(report(), "\n")
 vim.cmd("diffoff"); settle()
@@ -160,9 +165,10 @@ io.stdout:write(#vim.api.nvim_buf_get_extmarks(buf, vim.api.nvim_create_namespac
 vim.cmd("qa!")
 EOF
   (cd "$tmp/dm" && SHARE=$share NVIM_DIFF_BASE=$dmb nvim --clean --headless -c "luafile $tmp/dm.lua" -c "qa!" 2>&1 | tr -d '\r' > "$tmp/dm.out")
-  expect diffmarks/drawn "$(sed -n 1p "$tmp/dm.out")" "new 5,28; word 5:2-9; old 5 original line of text | 20 original line of text/21 original line of text/22 original line of text | − 10 lines, more than fits here: <leader>mb puts the file beside its base"
-  expect diffmarks/none-in-a-diff "$(sed -n 2p "$tmp/dm.out")" "new ; word ; old "
-  expect diffmarks/back-after-a-diff "$(sed -n 3p "$tmp/dm.out")" "back"
+  expect diffmarks/drawn "$(sed -n 1p "$tmp/dm.out")" "new 5,12,28; word 5:2-9,12:3-8; old 5 original line of text | 12$(printf ' word%.0s' $(seq 15))/word word word word word | 20 original line of text/21 original line of text/22 original line of text | − 10 lines, more than fits here: <leader>mb puts the file beside its base"
+  expect diffmarks/word-on-screen "$(sed -n 2p "$tmp/dm.out")" "brighter"
+  expect diffmarks/none-in-a-diff "$(sed -n 3p "$tmp/dm.out")" "new ; word ; old "
+  expect diffmarks/back-after-a-diff "$(sed -n 4p "$tmp/dm.out")" "back"
   # leftover.mjs says which lines only moved, a lone } never one of them.
   ( mkdir -p "$tmp/lo" && cd "$tmp/lo" && seq 100 120 | sed 's/$/ this block of words will move away/' > moved.txt && : > n.txt &&
     git init -q . && git add . && git -c user.email=t@t -c user.name=t commit -qm base && mv moved.txt n.txt && : > moved.txt && git add . && git -c user.email=t@t -c user.name=t commit -qm change )

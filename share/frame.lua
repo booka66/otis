@@ -35,6 +35,9 @@ local gutter = { number = false, relativenumber = false, signcolumn = "no", stat
 -- from it takes them, and the code window gives them back. No sidescrolloff:
 -- a config's slid the list sideways as you left it, its cursor near the edge.
 local list_opts = vim.tbl_extend("force", gutter, { spell = false, winfixwidth = true, wrap = false, list = false, sidescrolloff = 0 })
+-- The code window's top row: the path of the file it shows from where otis runs, wherever you went from there, and
+-- empty over a preview, which is no file, so the code never moves a row between the two.
+local path_bar = "%{&buftype ==# '' ? expand('%:.') : ''}"
 
 -- set(win, opts): the options for what the window shows now, not its own
 -- defaults (a window's "global" values are its own in nvim, copied by a
@@ -377,7 +380,7 @@ function M.open(path, line, col, readonly, symbol, here)
     end
     -- A preview there before had the gutter off: a file has yours, and the
     -- line a row opens on lit, as the list lights the row, whatever yours is.
-    set(code, vim.tbl_extend("force", vim.t.otis_code_opts, { cursorline = true }))
+    set(code, vim.tbl_extend("force", vim.t.otis_code_opts, { cursorline = true, winbar = path_bar }))
     if readonly then
       vim.bo.readonly = true
       vim.bo.modifiable = false
@@ -571,7 +574,7 @@ function M.text(file, key)
     vim.b[b].otis_changes = runs
     -- No listchars either: a preview pads its lines with spaces, which a
     -- trail:- drew as dashes. Nor a lit line: its first is no symbol's.
-    set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false, cursorline = false }))
+    set(code, vim.tbl_extend("force", gutter, { wrap = false, list = false, cursorline = false, winbar = path_bar }))
     vim.b[b].otis_key = key
     vim.fn.winrestview(key and (vim.b[b].otis_views or {})[key] or { lnum = 1, col = 0, topline = 1, leftcol = 0 })
   end)
